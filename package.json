@@ -1,14 +1,13 @@
 {
   "name": "free-opencode-proxy",
   "version": "1.0.0",
-  "description": "OpenCode free models as OpenAI/Anthropic APIs, via the genuine opencode binary",
+  "description": "Free model providers (MiniMax Code, Qoder) behind OpenAI/Anthropic compatible APIs",
   "type": "module",
-  "main": "v2-proxy.ts",
+  "main": "router-proxy.ts",
   "scripts": {
-    "start": "node v2-proxy.ts",
-    "serve": "node v2-proxy.ts",
+    "start": "node router-proxy.ts",
+    "serve": "node router-proxy.ts",
     "serve:minimax": "node minimax-proxy.ts",
-    "serve:v1": "node v1-proxy.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

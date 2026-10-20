@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // minimax-proxy.ts — Anthropic-shaped reverse proxy in front of the MiniMax Code
-// LLM gateway, on its own port (6448), independent from v2-proxy.ts.
+// LLM gateway, on its own port (6448), independent from the router.
 //
 // What makes the server treat this as a MiniMax Code client is the OAuth grant
 // itself — client_id `mcode-public`, audience `agent-backend`, scope

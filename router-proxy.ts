@@ -30,7 +30,7 @@ import { anthropicModelsPayload, openaiModelsPayload, QODER_MODELS, qoderLabel, 
 import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
 import { qoderChatCompletion, LimitError } from "./lib/qoder-transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "./lib/qoder-legacy.ts";
-import { qoderStatus, checkAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
+import { qoderStatus, checkAccountHealth, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
 const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
@@ -125,7 +125,7 @@ app.use(express.json({ limit: "64mb" }));
 app.get("/health", async (_req, res) => {
   // The account's own standing is checked live: a valid token still means nothing
   // if the account is not allowed to make requests from here.
-  let qoderHealth: Record<string, unknown>;
+  let qoderHealth: QoderAccountHealth | Record<string, unknown>;
   try {
     qoderHealth = await checkAccountHealth(QODER_REGION);
   } catch (e) {
@@ -651,7 +651,9 @@ async function pipeStream(body: ReadableStream<Uint8Array>, res: express.Respons
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!writeSafe(res, Buffer.from(value))) break;
+      // The bytes go out as they came in: this path forwards the upstream's own
+      // SSE, and decoding it would only risk breaking a character across chunks.
+      if (!writeSafe(res, value)) break;
     }
   } finally {
     reader.releaseLock();
@@ -667,8 +669,8 @@ function sendError(res: express.Response, e: unknown): void {
       return;
     }
     res.status(503).json({
-      error: { type: "api_error", message: err.message },
-      hint: err.detail,
+      error: { type: "api_error", message: e.message },
+      hint: e.detail,
     });
     return;
   }

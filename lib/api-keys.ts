@@ -1,6 +1,6 @@
 // lib/api-keys.ts — the shared front-door API-key check for every proxy here.
 //
-// Same scheme as v1-proxy.mjs / v2-proxy.ts: a flat name→key map in
+// A flat name→key map in
 // api-keys.json, generated on first startup if empty. Default is public mode
 // (any key, or none, passes) because the upstream free tier is gated by the
 // client's own login, not by a client-supplied key. `REQUIRE_API_KEY=true`

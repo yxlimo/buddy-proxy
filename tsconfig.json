@@ -9,5 +9,5 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["v2-proxy.ts", "minimax-proxy.ts", "free-features.ts", "scripts/**/*.ts", "lib/**/*.ts"]
+  "include": ["router-proxy.ts", "minimax-proxy.ts", "scripts/**/*.ts", "lib/**/*.ts"]
 }

@@ -3,8 +3,8 @@ node = "lts"
 pnpm = "latest"
 
 [tasks.serve]
-description = "Run the opencode v2 API proxy (OpenAI/Anthropic compatible)"
-run = "node v2-proxy.ts"
+description = "Run the router proxy (Qoder + MiniMax, OpenAI/Anthropic compatible)"
+run = "node router-proxy.ts"
 
 [tasks.serve-minimax]
 description = "Run the MiniMax Code proxy (Anthropic /v1/messages only, port 6448)"

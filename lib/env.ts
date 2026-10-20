@@ -4,7 +4,7 @@
 // secrets in the same file are never loaded, logged, or exported into the process
 // environment. Precedence: process environment > .env file > fallback.
 //
-// `free-features.ts` builds on this so the whole repo reads `.env` one way.
+// The whole repo reads `.env` one way through this.
 
 import fs from "node:fs";
 import path from "node:path";
