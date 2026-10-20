@@ -9,7 +9,6 @@ free-features.ts
 free_models.json
 tsconfig.json
 mise.toml
-scripts/sync-pi-models.py
 
 # Repo meta
 .git/

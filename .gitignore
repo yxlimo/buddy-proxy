@@ -8,3 +8,7 @@ free_models.json
 # Local notes and tooling state, not part of the project
 docs/
 .cortexkit/
+
+# Helpers for the machine this runs on, not for the service: they rewrite
+# personal client configs and poke at the opencode client's own storage.
+tools/

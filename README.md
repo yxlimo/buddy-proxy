@@ -65,12 +65,7 @@ The opencode **web UI** is separate again: it keeps the picker's contents in the
 browser's `localStorage` (key `opencode.global.dat:model`), and a custom
 provider's models are not in there by default. Open the picker → **Manage
 models** → flip the provider's switch (one switch covers all its models). That
-is per-browser. `scripts/opencode-webui-models.py` prints the same thing as a
-snippet for the browser console:
-
-```bash
-python3 scripts/opencode-webui-models.py --provider minimax-code,minimax-tokenplan,qoder
-```
+is per-browser.
 
 ## MiniMax Code proxy (`minimax-proxy.ts`, port 6448)
 
@@ -334,8 +329,9 @@ Both regions are served by the one router, with the region in the model name:
 | `qoder-cn/glm-5.3` | Chinese account, legacy protocol |
 
 A client model id cannot hold a slash, so the CN models are called
-`cn-glm-5.3` and so on. `scripts/patch-clients-qoder.py` reads the list from
-the router and writes both sets into the opencode and pi configs.
+`cn-glm-5.3` and so on. The client configs list both sets: the router's
+`/v1/models` is the source of truth, and the opencode and pi configs are
+rewritten from it.
 
 Which models are free depends on the account: the usage block reports
 `billable` and `credits`, and on the CN account `Qwen3.8-Flash`, `Cantus` and
