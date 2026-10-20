@@ -1,0 +1,26 @@
+{
+  "name": "free-opencode-proxy",
+  "version": "1.0.0",
+  "description": "OpenCode free models as OpenAI/Anthropic APIs, via the genuine opencode binary",
+  "type": "module",
+  "main": "v2-proxy.ts",
+  "scripts": {
+    "start": "node v2-proxy.ts",
+    "serve": "node v2-proxy.ts",
+    "serve:minimax": "node minimax-proxy.ts",
+    "serve:v1": "node v1-proxy.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

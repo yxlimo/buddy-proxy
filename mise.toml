@@ -1,0 +1,11 @@
+[tools]
+node = "lts"
+pnpm = "latest"
+
+[tasks.serve]
+description = "Run the opencode v2 API proxy (OpenAI/Anthropic compatible)"
+run = "node v2-proxy.ts"
+
+[tasks.serve-minimax]
+description = "Run the MiniMax Code proxy (Anthropic /v1/messages only, port 6448)"
+run = "node minimax-proxy.ts"
