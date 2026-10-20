@@ -1,5 +1,5 @@
 {
-  "name": "free-opencode-proxy",
+  "name": "buddy-proxy",
   "version": "1.0.0",
   "description": "Free model providers (MiniMax Code, Qoder) behind OpenAI/Anthropic compatible APIs",
   "type": "module",

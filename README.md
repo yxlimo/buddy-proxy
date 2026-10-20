@@ -1,4 +1,4 @@
-# free-opencode-proxy
+# buddy-proxy
 
 Two independent proxies in front of free model providers, each its own process
 on its own port:
@@ -158,14 +158,14 @@ The gateway does **not** validate model ids either: an unrecognized name (say
 ### Clients
 
 - **pi** — `~/.pi/agent/models.json` has a `minimax-code` provider
-  (`baseUrl: http://192.168.50.4:6448`, `api: anthropic-messages`) listing both
+  (`baseUrl: http://<proxy-host>:6448`, `api: anthropic-messages`) listing both
   models with `contextWindow: 1000000` / `maxTokens: 128000`, a
   `thinkingLevelMap` (pi's `off|minimal|low|…|max` → the gateway's effort
   values) and `compat.forceAdaptiveThinking: true`, so pi sends the same
   `thinking: {type: "adaptive"}` + `output_config: {effort: …}` the desktop
   client sends. Pick a level with `pi --model MiniMax-M3.1-Flash:high`.
 - **opencode** — `~/.config/opencode/opencode.jsonc` has a `minimax-code`
-  provider (`npm: @ai-sdk/anthropic`, `baseURL: http://192.168.50.4:6448/v1`)
+  provider (`npm: @ai-sdk/anthropic`, `baseURL: http://<proxy-host>:6448/v1`)
   with the same two models and limits. The thinking levels are declared as
   `capabilities.reasoning.effort` — opencode turns that into model variants
   (`low`/`medium`/`high`/`xhigh`/`max`), selectable as
@@ -438,20 +438,20 @@ over the compose network, so there is no host port to configure.
 
 The script runs `podman build --format docker`, exports with
 `podman save --format docker-archive`, copies the tar plus the compose file over
-SSH, runs `docker load`, retags `localhost/code-proxy:latest` to the name the
+SSH, runs `docker load`, retags `localhost/buddy-proxy:latest` to the name the
 compose file uses, deletes any source left on the NAS, and recreates the
 container. `--format docker` matters twice over: podman's default OCI format
 drops `HEALTHCHECK`, and `docker load` needs the docker archive format anyway.
 
 Two details that are easy to get wrong:
 
-- `docker load` tags the image `localhost/code-proxy:latest`, but the compose
-  file says `code-proxy:latest`. Without the retag the compose file keeps
+- `docker load` tags the image `localhost/buddy-proxy:latest`, but the compose
+  file says `buddy-proxy:latest`. Without the retag the compose file keeps
   resolving to the previous image and the new one is silently never used.
 - The build needs the npm registry. When it is slow the `pnpm install` layer
   fails on a download; rerun it, the layer is cached and the retry is quick.
 
-The service is deployed on the NAS at `/vol1/1000/services/code-proxy/`, with
+The service is deployed on the NAS at `/srv/buddy-proxy/`, with
 `./data` mounted at `/data`.
 
 ```bash

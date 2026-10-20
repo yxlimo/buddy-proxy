@@ -1,4 +1,4 @@
-name: code-proxy
+name: buddy-proxy
 
 # The NAS holds no source: the image is built locally, exported with
 # `podman save --format docker-archive` and loaded here with `docker load`.
@@ -12,8 +12,8 @@ name: code-proxy
 # name, so there is no extra hop to configure and no host port dependency.
 services:
   minimax-proxy:
-    image: code-proxy:latest
-    container_name: code-proxy
+    image: buddy-proxy:latest
+    container_name: buddy-proxy
     command: ["node", "minimax-proxy.ts"]
     ports:
       - "6448:6448"
@@ -35,8 +35,8 @@ services:
     restart: unless-stopped
 
   router:
-    image: code-proxy:latest
-    container_name: code-router
+    image: buddy-proxy:latest
+    container_name: buddy-router
     command: ["node", "router-proxy.ts"]
     ports:
       - "6450:6450"

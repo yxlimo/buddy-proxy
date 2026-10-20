@@ -7,13 +7,19 @@
 #
 #   ./scripts/deploy-nas.sh            build, ship, reload
 #   ./scripts/deploy-nas.sh --no-build ship the current local image as-is
+#
+# Where it goes is configuration, not a constant:
+#
+#   REMOTE      ssh alias of the machine        (default nas)
+#   DIR         service directory on it         (default /srv/buddy-proxy)
+#   IMAGE       image name in the compose file  (default buddy-proxy:latest)
 set -euo pipefail
 
 REMOTE=${REMOTE:-nas}
-DIR=${DIR:-/vol1/1000/services/code-proxy}
-IMAGE=${IMAGE:-code-proxy:latest}
-LOCAL_REF=${LOCAL_REF:-localhost/code-proxy:latest}
-HOST=${HOST:-nas}
+DIR=${DIR:-/srv/buddy-proxy}
+IMAGE=${IMAGE:-buddy-proxy:latest}
+LOCAL_REF=${LOCAL_REF:-localhost/buddy-proxy:latest}
+HOST=${HOST:-$REMOTE}
 
 cd "$(dirname "$0")/.."
 
@@ -28,7 +34,7 @@ fi
 
 # podman save refuses to overwrite an existing archive, so each run gets a fresh name.
 STAMP=$(date +%Y%m%d-%H%M%S)
-TAR="/tmp/code-proxy-${STAMP}.tar"
+TAR="/tmp/buddy-proxy-${STAMP}.tar"
 
 echo "==> exporting $IMAGE -> $TAR"
 podman save --format docker-archive -o "$TAR" "$LOCAL_REF"
@@ -38,16 +44,16 @@ trap cleanup EXIT
 
 echo "==> copying to $HOST:$DIR"
 ssh "$HOST" "mkdir -p '$DIR/data'"
-scp -q "$TAR" "$HOST:$DIR/code-proxy-image.tar"
+scp -q "$TAR" "$HOST:$DIR/image.tar"
 scp -q docker-compose.yml "$HOST:$DIR/docker-compose.yml"
 
 echo "==> loading image on $HOST"
-# `docker load` tags the image localhost/code-proxy:latest, but the compose file
-# refers to code-proxy:latest. Without this retag the compose file would keep
-# resolving to the previous image and the new one would never be used.
-ssh "$HOST" "docker load -i '$DIR/code-proxy-image.tar' \
-  && rm -f '$DIR/code-proxy-image.tar' \
-  && docker tag localhost/code-proxy:latest $IMAGE \
+# `docker load` tags the image localhost/buddy-proxy:latest, but the compose
+# file refers to buddy-proxy:latest. Without this retag the compose file would
+# keep resolving to the previous image and the new one would never be used.
+ssh "$HOST" "docker load -i '$DIR/image.tar' \
+  && rm -f '$DIR/image.tar' \
+  && docker tag localhost/buddy-proxy:latest $IMAGE \
   && docker image inspect $IMAGE --format 'loaded: {{.Id}}'"
 
 # The NAS keeps the compose file and the data directory, and nothing else. Any

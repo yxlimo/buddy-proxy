@@ -5,7 +5,7 @@
 模型名用裸名，router 按目录自己认上游（Qoder 优先，认不出再找 MiniMax）。
 
 环境变量：
-  ROUTER_URL      router 地址，默认 http://192.168.50.4:6450
+  ROUTER_URL      router 地址，默认 http://<proxy-host>:6450
   ROUTER_API_KEY  客户端 api key。router 默认跑 public 模式（不校验 key），
                   所以默认填 "public"；只有开了 REQUIRE_API_KEY 才需要真 key。
 """
@@ -14,7 +14,7 @@ import os
 import pathlib
 import urllib.request
 
-ROUTER = os.environ.get("ROUTER_URL", "http://192.168.50.4:6450").rstrip("/")
+ROUTER = os.environ.get("ROUTER_URL", "http://<proxy-host>:6450").rstrip("/")
 API_KEY = os.environ.get("ROUTER_API_KEY", "public")
 
 CONTEXT = 200000
