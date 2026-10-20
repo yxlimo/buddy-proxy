@@ -104,10 +104,15 @@ Two sources, picked by `MINIMAX_AUTH_MODE` (`lib/minimax-auth.ts` dispatches):
 
 **`oauth`** (default, required in Docker) — the proxy owns its own session:
 
-- One-time device-flow login (`scripts/minimax-login.ts`): it prints an
-  authorization URL and a user code, you approve in a browser, and the credential
-  is written as a single JSON file (`~/.minimax-proxy/minimax-session.json`, or
-  `/data/minimax-session.json` in the container).
+- The proxy logs itself in: with no session file it runs the device flow at
+  startup, printing an authorization URL and a user code. You approve in a
+  browser and the credential is written as a single JSON file
+  (`~/.minimax-proxy/minimax-session.json`, or `/data/minimax-session.json` in
+  the container). The server keeps serving while you approve, so a request in
+  the meantime gets a clear 503 rather than a hang.
+- `BUDDY_PROXY_MINIMAX_LOGIN=true` forces a fresh login at startup, replacing
+  the stored session. The default (`auto`) only logs in when there is no
+  session; `off` never does.
 - After that the proxy refreshes itself every hour, with PKCE (S256) and a file
   lock. The refresh token rotates on every refresh, so the file must be persisted
   — losing it means logging in again.
@@ -220,7 +225,7 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_AUTH_MODE` | `oauth` | `oauth` (proxy's own session) or `file` (read-only app store) |
 | `MINIMAX_DATA_DIR` | `~/.minimax-proxy` | where the oauth session file lives (`/data` in Docker) |
 | `MINIMAX_CREDENTIAL_FILE` | — | explicit session file path, overrides `MINIMAX_DATA_DIR` |
-| `MINIMAX_AUTO_LOGIN` | `true` | start the device flow at boot when there is no session |
+| `BUDDY_PROXY_MINIMAX_LOGIN` | `auto` | `auto` logs in when there is no session, `true` forces a fresh one, `off` never |
 | `MINIMAX_LOG_BODY` | `false` | log the thinking / effort fields of every request |
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
 | `MINIMAX_REFRESH_BUFFER_MS` | `300000` | refresh this far before expiry |
@@ -386,14 +391,17 @@ failure. The session is the proxy's own — it refreshes itself, and the refresh
 token rotates on every refresh, so the file must be persisted.
 
 ```bash
-node scripts/qoder-login.ts --region global   # qoder.com
-node scripts/qoder-login.ts --region cn       # qoder.cn
-node scripts/qoder-login.ts --status
+# The router logs in by itself: with no session for a region it runs the device
+# flow at startup and prints the URL to approve. Force one with:
+BUDDY_PROXY_QODER_LOGIN=global node router-proxy.ts   # qoder.com
+BUDDY_PROXY_QODER_LOGIN=cn     node router-proxy.ts   # qoder.cn
 ```
 
 The two regions need separate logins; the credentials live in separate files
 (`qoder-session.global.json`, `qoder-session.cn.json`). An access token is good
-for about 30 days, so the refresh path is barely ever taken.
+for about 30 days, so the refresh path is barely ever taken. `BUDDY_PROXY_QODER_LOGIN`
+takes `auto` (the default: log in a region that has no session), `global`, `cn`,
+`all` (force a fresh login) or `off`.
 
 The account's own standing is checked on `/health`: Qoder can hold an account
 back for reasons a valid token does not reveal (an IP the account may not be
@@ -407,6 +415,7 @@ used from, a disabled app, a lapsed login).
 | `MINIMAX_UPSTREAM_URL` | `http://127.0.0.1:6448` | where the MiniMax proxy is |
 | `QODER_REGION` | `global` | which Qoder region to talk to (`cn` / `global`) |
 | `QODER_DATA_DIR` | `~/.qoder-proxy` | where the session file lives (`/data` in Docker) |
+| `BUDDY_PROXY_QODER_LOGIN` | `auto` | `auto` logs in a region with no session, `global`/`cn`/`all` force a fresh one, `off` never |
 | `QODER_AUTH_CACHE_MS` | `5000` | how long a read of the session is reused |
 | `QODER_AUTH_WARN_MS` | `604800000` | warning window before expiry (a Qoder token lasts ~30 days) |
 | `QODER_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
@@ -428,16 +437,14 @@ The compose file runs two services from that one image: `minimax-proxy` on
 over the compose network, so there is no host port to configure.
 
 ```bash
-./scripts/deploy-nas.sh              # build, export, load on the NAS, reload
-./scripts/deploy-nas.sh --no-build   # ship the current local image as-is
+podman build --format docker -t localhost/buddy-proxy:latest .
+podman save --format docker-archive -o buddy-proxy.tar localhost/buddy-proxy:latest
+scp buddy-proxy.tar docker-compose.yml <host>:/path/to/service/
+ssh <host> 'cd /path/to/service && docker load && docker tag localhost/buddy-proxy:latest buddy-proxy:latest && docker compose up -d'
 ```
 
-The script runs `podman build --format docker`, exports with
-`podman save --format docker-archive`, copies the tar plus the compose file over
-SSH, runs `docker load`, retags `localhost/buddy-proxy:latest` to the name the
-compose file uses, deletes any source left on the NAS, and recreates the
-container. `--format docker` matters twice over: podman's default OCI format
-drops `HEALTHCHECK`, and `docker load` needs the docker archive format anyway.
+`--format docker` matters twice over: podman's default OCI format drops
+`HEALTHCHECK`, and `docker load` needs the docker archive format anyway.
 
 Two details that are easy to get wrong:
 
@@ -447,19 +454,19 @@ Two details that are easy to get wrong:
 - The build needs the npm registry. When it is slow the `pnpm install` layer
   fails on a download; rerun it, the layer is cached and the retry is quick.
 
-The service is deployed on the NAS at `/srv/buddy-proxy/`, with
-`./data` mounted at `/data`.
+The service directory holds the compose file and a `./data` directory mounted at
+`/data`, and nothing else.
+
+The login is the only step that needs a human, and the services do it
+themselves: with no session in `./data`, each one runs the device flow at
+startup and prints the authorization URL and user code to its log. Approve it in
+a browser and the credential lands in `./data`. Every later refresh is done by
+the proxy itself. To force a fresh login, set `BUDDY_PROXY_MINIMAX_LOGIN=true`
+or `BUDDY_PROXY_QODER_LOGIN=global|cn|all` in the compose file and restart.
 
 ```bash
-docker compose exec minimax-proxy node scripts/minimax-login.ts   # one-time, prints URL + user code
-docker compose exec minimax-proxy node scripts/minimax-login.ts --status
-docker compose exec router node scripts/qoder-login.ts --region global
+docker compose logs -f          # the authorization URL shows up here
 ```
-
-The login is the only step that needs a human: it prints an authorization URL and
-a user code, you approve in a browser, and the credential lands in `./data`. Every
-later refresh is done by the proxy itself. `MINIMAX_AUTO_LOGIN` is set to `false`
-in the compose file so the code is read from the login command rather than the logs.
 
 `./data` must survive rebuilds — the refresh token rotates on every refresh, so a
 lost file means logging in again.

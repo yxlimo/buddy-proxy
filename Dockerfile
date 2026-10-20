@@ -11,12 +11,11 @@ RUN corepack enable && pnpm install --frozen-lockfile --prod
 
 # Only what the proxies actually load. minimax-proxy.ts and router-proxy.ts both
 # import from lib/; the rest of lib/ comes along because minimax-auth statically
-# imports the file store too.
+# imports the file store too. There is no login program: the proxies run the
+# device flow themselves when their credential is missing.
 COPY minimax-proxy.ts ./
 COPY router-proxy.ts ./
 COPY lib/ ./lib/
-COPY scripts/minimax-login.ts ./scripts/minimax-login.ts
-COPY scripts/qoder-login.ts ./scripts/qoder-login.ts
 
 # The OAuth session is a credential, not configuration: it lives in a named volume
 # mounted at /data, so a container rebuild does not lose the login. Created here with

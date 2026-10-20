@@ -31,6 +31,7 @@ import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
 import { qoderChatCompletion, LimitError } from "./lib/qoder-transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "./lib/qoder-legacy.ts";
 import { qoderStatus, checkAccountHealth, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
+import { ensureQoderSession, qoderLoginPlan } from "./lib/login.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
 const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
@@ -704,5 +705,23 @@ app.listen(PORT, HOST, () => {
   console.log(`    minimax  ${MINIMAX_BASE}  models=${MINIMAX_MODELS.length}`);
   console.log(`  auth: ${REQUIRE_API_KEY ? "api key required" : "public"}`);
   console.log("");
+
+  // The server owns the credentials. A region with no session runs the device flow
+  // here, in the background: the URL goes to the log and the operator approves it.
+  // The two regions are separate accounts, so each is decided on its own.
+  const plan = qoderLoginPlan();
+  for (const region of plan.regions) {
+    void ensureQoderSession(region, plan.mode)
+      .then((outcome) => {
+        const s = qoderStatus(region);
+        console.log(
+          outcome === "logged-in"
+            ? `  [AUTH] qoder ${region}: logged in`
+            : `  [AUTH] qoder ${region}: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
+        );
+      })
+      .catch((e) => console.warn(`  [AUTH] qoder ${region} login failed: ${(e as Error).message}`));
+  }
+
   void PING_MS;
 });

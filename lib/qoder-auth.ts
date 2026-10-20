@@ -107,8 +107,8 @@ export function sessionPath(region: QoderRegion = REGION): string {
 
 function loginHint(region: QoderRegion = REGION): string {
   return (
-    `还没有登录 Qoder（${region} 区域）。跑一次登录：node scripts/qoder-login.ts --region ${region}` +
-    `（容器里：docker compose exec router node scripts/qoder-login.ts --region ${region}）。` +
+    `还没有登录 Qoder（${region} 区域）。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
+    `也可以设置 BUDDY_PROXY_QODER_LOGIN=${region} 强制重新登录后重启。` +
     `凭据写在 ${sessionPath(region)}，之后自动刷新。`
   );
 }
@@ -275,7 +275,7 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
     if (r.status === 401 || r.status === 403) {
       throw new AuthError(
         `refresh rejected (${code})`,
-        `Qoder 拒绝了刷新（${code}）。重新登录：node scripts/qoder-login.ts --region ${region}`,
+        `Qoder 拒绝了刷新（${code}）。设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
         503,
       );
     }
@@ -317,7 +317,7 @@ export async function ensureCredential(force = false, region: QoderRegion = REGI
   if (cred.remainingMs <= 0) {
     throw new AuthError(
       `access token expired (generation ${cred.generation})`,
-      `Qoder token 已过期且刷新没成功。重新登录：node scripts/qoder-login.ts --region ${region}`,
+      `Qoder token 已过期且刷新没成功。设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
       503,
     );
   }
@@ -502,7 +502,7 @@ export async function checkAccountHealth(region: QoderRegion = REGION): Promise<
       authorized: false,
       usable: false,
       reason: "login expired",
-      hint: `登录已失效，重新登录：node scripts/qoder-login.ts --region ${region}`,
+      hint: `登录已失效，设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
     };
   }
   if (whitelistStatus === "NoIpPermission") {
@@ -529,7 +529,7 @@ export async function checkAccountHealth(region: QoderRegion = REGION): Promise<
       userId,
       userType,
       reason: "login expired",
-      hint: `登录已过期，重新登录：node scripts/qoder-login.ts --region ${region}`,
+      hint: `登录已过期，设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
     };
   }
   return { region, authorized: true, usable: true, whitelistStatus, userId, userType };

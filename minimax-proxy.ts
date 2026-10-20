@@ -30,7 +30,7 @@ import crypto from "node:crypto";
 import { authenticate, loadKeys, REQUIRE_API_KEY } from "./lib/api-keys.ts";
 import { readEnvFlag, readEnvNumber, readEnvString } from "./lib/env.ts";
 import { AUTH_MODE, AuthError, credentialStatus, readCredential } from "./lib/minimax-auth.ts";
-import { hasSession, login } from "./lib/minimax-oauth.ts";
+import { ensureMinimaxSession, minimaxLoginMode } from "./lib/login.ts";
 import { modelsPayload } from "./lib/minimax-models.ts";
 
 const PORT = readEnvNumber("MINIMAX_PORT", 6448);
@@ -50,13 +50,10 @@ const BASE_URL = readEnvString(
 const UPSTREAM = `${BASE_URL}/messages`;
 
 // What to tell the operator when the credential is unusable. It depends on who owns the
-// session: only the oauth source can be re-logged-in from the command line.
+// session: only the oauth source can be re-logged-in from here.
 const RELOGIN_HINT = AUTH_MODE === "oauth"
-  ? "会话被服务端拒绝。检查登录是否还有效：node scripts/minimax-login.ts --status，必要时重新登录。"
+  ? "会话被服务端拒绝。重启并设置 BUDDY_PROXY_MINIMAX_LOGIN=true 可以重新登录。"
   : "MiniMax Code 的登录被服务端拒绝。打开桌面 App 重新登录，等它刷新后重试。";
-// First start with no session runs the device flow in the background, so a container
-// prints the authorization URL and the operator only has to click it.
-const AUTO_LOGIN = readEnvFlag("MINIMAX_AUTO_LOGIN", true);
 // Log the thinking / effort fields of every request — the only way to see what a
 // client actually asked for, since the gateway does not echo them back.
 const LOG_BODY = readEnvFlag("MINIMAX_LOG_BODY", false);
@@ -285,16 +282,20 @@ app.listen(PORT, "0.0.0.0", async () => {
   console.log(`    Health     ${base}/health`);
   console.log("");
 
-  // Fail fast with an actionable message instead of waiting for the first request.
-  if (AUTH_MODE === "oauth" && !hasSession()) {
-    if (!AUTO_LOGIN) {
-      console.warn("  [AUTH] no session yet.");
+  // The server owns the credential: no session means the device flow runs here,
+  // in the background, so the container prints the URL and the operator clicks it.
+  if (AUTH_MODE === "oauth") {
+    const mode = minimaxLoginMode();
+    if (mode === "off") {
+      console.warn("  [AUTH] no session yet, and login on startup is off.");
       console.warn(`         ${RELOGIN_HINT}`);
     } else {
-      // Background, so the server still answers (503) while the browser approval lands.
-      console.log("  [AUTH] no session yet — starting the device flow");
-      login()
-        .then((s) => console.log(`  [AUTH] logged in: generation ${s.generation}, expires in ${Math.round((s.expiresAtMs - Date.now()) / 60000)} min`))
+      void ensureMinimaxSession()
+        .then(async (outcome) => {
+          const c = await readCredential();
+          const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
+          console.log(outcome === "logged-in" ? `  [AUTH] logged in: ${state}` : `  token ok: ${state}`);
+        })
         .catch((e) => console.warn(`  [AUTH] login failed: ${(e as AuthError).message}`));
     }
   } else {

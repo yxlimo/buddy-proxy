@@ -21,9 +21,9 @@ services:
       # The proxy owns its session in a container: it logs in once and refreshes itself.
       MINIMAX_AUTH_MODE: oauth
       MINIMAX_DATA_DIR: /data
-      # Login is a one-time human step, run explicitly so the URL and user code are
-      # visible: docker compose exec minimax-proxy node scripts/minimax-login.ts
-      MINIMAX_AUTO_LOGIN: "false"
+      # With no session, the proxy runs the device flow itself and prints the URL to
+      # approve. Set this to "true" to force a fresh login instead.
+      BUDDY_PROXY_MINIMAX_LOGIN: "auto"
       TZ: Asia/Shanghai
       # The image's app directory is read-only for the non-root user, so writable
       # state goes to the volume: the credential and the key store.
@@ -48,6 +48,9 @@ services:
       # Which Qoder region to talk to. The two regions need separate logins.
       QODER_REGION: global
       QODER_DATA_DIR: /data
+      # "auto" (default) logs in a region that has no session yet; "global", "cn" or
+      # "all" force a fresh login for that region; "off" never logs in.
+      BUDDY_PROXY_QODER_LOGIN: "auto"
       # The image healthcheck reads the port from here.
       HEALTH_PORT: "6450"
       TZ: Asia/Shanghai

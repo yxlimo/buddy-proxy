@@ -90,7 +90,8 @@ export function sessionPath(): string {
 }
 
 function loginHint(): string {
-  return `还没有登录。跑一次登录：node scripts/minimax-login.ts（容器里：docker compose exec minimax-proxy node scripts/minimax-login.ts）。` +
+  return `还没有登录。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
+    `也可以设置 BUDDY_PROXY_MINIMAX_LOGIN=true 强制重新登录后重启。` +
     `凭据写在 ${sessionPath()}，之后每小时自动刷新。`;
 }
 
@@ -288,7 +289,7 @@ export async function refreshSession(force = false): Promise<Session> {
     if (code === "invalid_grant" || code === "invalid_token" || r.status === 401) {
       throw new AuthError(
         `refresh rejected (${code})`,
-        `这个会话被服务端拒绝了（${code}）。重新登录：node scripts/minimax-login.ts`,
+        `这个会话被服务端拒绝了（${code}）。设置 BUDDY_PROXY_MINIMAX_LOGIN=true 后重启服务即可重新登录。`,
         503,
       );
     }
@@ -315,7 +316,7 @@ export async function ensureCredential(force = false): Promise<Credential> {
   if (cred.remainingMs <= 0) {
     throw new AuthError(
       `access token expired (generation ${cred.generation})`,
-      `token 已过期且刷新没成功。重新登录：node scripts/minimax-login.ts`,
+      `token 已过期且刷新没成功。设置 BUDDY_PROXY_MINIMAX_LOGIN=true 后重启服务即可重新登录。`,
       503,
     );
   }
