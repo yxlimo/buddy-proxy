@@ -1,0 +1,61 @@
+name: code-proxy
+
+# The NAS holds no source: the image is built locally, exported with
+# `podman save --format docker-archive` and loaded here with `docker load`.
+# This file is the only thing that lives on the NAS beside ./data.
+#
+# Two services, one image:
+#   minimax-proxy  the MiniMax Code gateway, Anthropic dialect, port 6448
+#   router         the single entry point, both dialects, port 6450
+#
+# The router talks to the minimax proxy over the compose network by service
+# name, so there is no extra hop to configure and no host port dependency.
+services:
+  minimax-proxy:
+    image: code-proxy:latest
+    container_name: code-proxy
+    command: ["node", "minimax-proxy.ts"]
+    ports:
+      - "6448:6448"
+    environment:
+      # The proxy owns its session in a container: it logs in once and refreshes itself.
+      MINIMAX_AUTH_MODE: oauth
+      MINIMAX_DATA_DIR: /data
+      # Login is a one-time human step, run explicitly so the URL and user code are
+      # visible: docker compose exec minimax-proxy node scripts/minimax-login.ts
+      MINIMAX_AUTO_LOGIN: "false"
+      TZ: Asia/Shanghai
+      # The image's app directory is read-only for the non-root user, so writable
+      # state goes to the volume: the credential and the key store.
+      KEYS_FILE: /data/api-keys.json
+    volumes:
+      # The OAuth session is a credential, not configuration. This directory must survive
+      # rebuilds — the refresh token rotates on every refresh, so a lost file means re-login.
+      - ./data:/data
+    restart: unless-stopped
+
+  router:
+    image: code-proxy:latest
+    container_name: code-router
+    command: ["node", "router-proxy.ts"]
+    ports:
+      - "6450:6450"
+    environment:
+      # Anthropic and OpenAI dialects, routed per model name.
+      ROUTER_PORT: "6450"
+      # The MiniMax upstream, by service name on the compose network.
+      MINIMAX_UPSTREAM_URL: http://minimax-proxy:6448
+      # Which Qoder region to talk to. The two regions need separate logins.
+      QODER_REGION: global
+      QODER_DATA_DIR: /data
+      # The image healthcheck reads the port from here.
+      HEALTH_PORT: "6450"
+      TZ: Asia/Shanghai
+      KEYS_FILE: /data/api-keys.json
+    volumes:
+      # Same volume as the minimax proxy: the Qoder session file lives next to the
+      # MiniMax one, and both are credentials that must survive a rebuild.
+      - ./data:/data
+    depends_on:
+      - minimax-proxy
+    restart: unless-stopped

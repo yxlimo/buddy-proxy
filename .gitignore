@@ -2,3 +2,9 @@ node_modules/
 api-keys.json
 oc-workspace/
 *.log
+.env
+free_models.json
+
+# Local notes and tooling state, not part of the project
+docs/
+.cortexkit/
