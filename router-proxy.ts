@@ -31,12 +31,21 @@ import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
 import { qoderChatCompletion, LimitError } from "./lib/qoder-transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "./lib/qoder-legacy.ts";
 import { qoderStatus, checkAccountHealth, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
-import { ensureQoderSession, qoderLoginPlan } from "./lib/login.ts";
+import { ensureQoderSession } from "./lib/login.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
 const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
 const MINIMAX_BASE = readEnvString("MINIMAX_UPSTREAM_URL", "http://127.0.0.1:6448").replace(/\/+$/, "");
-const QODER_REGION = (readEnvString("QODER_REGION", "global").trim().toLowerCase() === "cn" ? "cn" : "global") as QoderRegion;
+// Which upstreams this router serves. Each flag turns on one reverse proxy; an
+// upstream that is off is not looked at at all — no credential read, no login,
+// no models advertised, and a request for one is refused with a clear message.
+const ENABLED_MINIMAX = readEnvFlag("MINIMAX_CODE", false);
+const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
+const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
+const QODER_REGIONS: QoderRegion[] = [
+  ...(ENABLED_QODER_GLOBAL ? (["global"] as QoderRegion[]) : []),
+  ...(ENABLED_QODER_CN ? (["cn"] as QoderRegion[]) : []),
+];
 const PING_MS = readEnvNumber("MINIMAX_PING_MS", 15000);
 // The legacy endpoint queues models and reports 429 while a request waits. The
 // CLI retries these, so the proxy does too — with the same shape.
@@ -51,16 +60,18 @@ type Dialect = "anthropic" | "openai";
 type Upstream = "qoder" | "minimax";
 
 const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
+const MINIMAX_VISIBLE = ENABLED_MINIMAX ? MINIMAX_MODELS : [];
 // Only the models each region can actually serve are advertised. The rest stay
 // in the catalog so a request for one gets a clear "not available here"
-// instead of being sent to an upstream that will not answer.
-const QODER_GLOBAL = qoderModelsForRegion("global");
-const QODER_CN = qoderModelsForRegion("cn");
-const QODER_VISIBLE = qoderModelsForRegion(QODER_REGION);
+// instead of being sent to an upstream that will not answer. A region that is
+// not enabled contributes no models at all.
+const QODER_GLOBAL = ENABLED_QODER_GLOBAL ? qoderModelsForRegion("global") : [];
+const QODER_CN = ENABLED_QODER_CN ? qoderModelsForRegion("cn") : [];
+const QODER_VISIBLE = [...QODER_GLOBAL, ...QODER_CN];
 const QODER_MODEL_IDS = new Set(QODER_VISIBLE.map((m) => m.id));
 const QODER_HIDDEN_IDS = new Set(QODER_MODELS.filter((m) => !QODER_MODEL_IDS.has(m.id)).map((m) => m.id));
-const GLOBAL_QODER_IDS = new Set(QODER_GLOBAL.map((m) => m.id));
-const CN_QODER_IDS = new Set(QODER_CN.map((m) => m.id));
+const GLOBAL_QODER_IDS = new Set(qoderModelsForRegion("global").map((m) => m.id));
+const CN_QODER_IDS = new Set(qoderModelsForRegion("cn").map((m) => m.id));
 
 interface Route {
   upstream: Upstream;
@@ -75,13 +86,24 @@ export function resolveRoute(model: string): Route {
   const raw = String(model ?? "").trim();
   if (raw.startsWith("qoder-cn/")) return qoderRoute(raw.slice("qoder-cn/".length), "cn");
   if (raw.startsWith("qoder/")) return qoderRoute(raw.slice("qoder/".length), "global");
-  if (raw.startsWith("minimax/")) return { upstream: "minimax", model: raw.slice("minimax/".length) };
+  if (raw.startsWith("minimax/")) {
+    if (!ENABLED_MINIMAX) throw disabledUpstream("minimax");
+    return { upstream: "minimax", model: raw.slice("minimax/".length) };
+  }
   // Client-side name for the CN region: the client cannot put a slash in a
   // model id, so `qoder-cn/glm-5.3` is called `cn-glm-5.3` there.
   if (raw.startsWith("cn-")) return qoderRoute(raw.slice("cn-".length), "cn");
-  if (MINIMAX_MODEL_IDS.has(raw)) return { upstream: "minimax", model: raw };
-  if (GLOBAL_QODER_IDS.has(raw)) return { upstream: "qoder", model: raw, region: "global" };
-  if (CN_QODER_IDS.has(raw)) return { upstream: "qoder", model: raw, region: "cn" };
+  if (MINIMAX_MODEL_IDS.has(raw)) {
+    if (!ENABLED_MINIMAX) throw disabledUpstream("minimax");
+    return { upstream: "minimax", model: raw };
+  }
+  if (GLOBAL_QODER_IDS.has(raw) || CN_QODER_IDS.has(raw)) {
+    // Known to a region. Prefer one that is enabled; if the only region that has
+    // it is off, say so rather than calling it unknown.
+    if (ENABLED_QODER_GLOBAL && GLOBAL_QODER_IDS.has(raw)) return { upstream: "qoder", model: raw, region: "global" };
+    if (ENABLED_QODER_CN && CN_QODER_IDS.has(raw)) return { upstream: "qoder", model: raw, region: "cn" };
+    throw disabledUpstream(GLOBAL_QODER_IDS.has(raw) ? "qoder-global" : "qoder-cn");
+  }
   if (QODER_HIDDEN_IDS.has(raw)) throw unavailableQoderModel(raw);
   throw new AuthError(
     `unknown model "${raw}"`,
@@ -90,22 +112,44 @@ export function resolveRoute(model: string): Route {
   );
 }
 
+/** An upstream that this router is not serving, because it was not enabled. */
+function disabledUpstream(which: "minimax" | "qoder-global" | "qoder-cn"): AuthError {
+  const flag = which === "minimax" ? "MINIMAX_CODE" : which === "qoder-cn" ? "QODER_CN" : "QODER_GLOBAL";
+  const what =
+    which === "minimax" ? "MiniMax Code" : which === "qoder-cn" ? "Qoder 中国区" : "Qoder 全球区";
+  return new AuthError(
+    `${which} is not enabled`,
+    `${what}没有启用。设置 ${flag}=true 后重启 router。`,
+    400,
+  );
+}
+
 /** A model the catalog knows, but no region can serve. */
 function unavailableQoderModel(id: string): AuthError {
+  const global = [...GLOBAL_QODER_IDS].join("、");
+  const cn = [...CN_QODER_IDS].join("、");
+  const hints = [
+    ENABLED_QODER_GLOBAL ? `可用（全球区）：${global}` : null,
+    ENABLED_QODER_CN ? `可用（中国区）：${cn}` : null,
+  ].filter(Boolean);
   return new AuthError(
     `model "${id}" is not available`,
-    `Qoder 的 ${id} 目前没有可用的区域：全球区的新协议不认它，老协议被限流/额度卡住；中国区把它排进了队列。可用：${[...GLOBAL_QODER_IDS].join("、")}（全球区），CN 前缀走中国区。`,
+    `Qoder 的 ${id} 目前没有可用的区域：全球区的新协议不认它，老协议被限流/额度卡住；中国区把它排进了队列。${hints.join("；") || "当前没有启用任何 Qoder 区域。"}`,
     400,
   );
 }
 
 function qoderRoute(id: string, region: QoderRegion): Route {
+  if (!(region === "cn" ? ENABLED_QODER_CN : ENABLED_QODER_GLOBAL)) {
+    throw disabledUpstream(region === "cn" ? "qoder-cn" : "qoder-global");
+  }
   const known = region === "cn" ? CN_QODER_IDS : GLOBAL_QODER_IDS;
   if (known.has(id)) return { upstream: "qoder", model: id, region };
   if (QODER_HIDDEN_IDS.has(id)) throw unavailableQoderModel(id);
   // Known to the other region but not to this one: point at it.
   const other = region === "cn" ? "global" : "cn";
   if ((region === "cn" ? GLOBAL_QODER_IDS : CN_QODER_IDS).has(id)) {
+    if (!(other === "cn" ? ENABLED_QODER_CN : ENABLED_QODER_GLOBAL)) throw disabledUpstream(other === "cn" ? "qoder-cn" : "qoder-global");
     throw new AuthError(
       `model "${id}" is not available in the ${region} region`,
       `这个模型只在 ${other} 区有。用 ${region === "cn" ? "qoder/" : "cn-"} 前缀指定另一个区域。`,
@@ -125,28 +169,33 @@ app.use(express.json({ limit: "64mb" }));
 
 app.get("/health", async (_req, res) => {
   // The account's own standing is checked live: a valid token still means nothing
-  // if the account is not allowed to make requests from here.
-  let qoderHealth: QoderAccountHealth | Record<string, unknown>;
-  try {
-    qoderHealth = await checkAccountHealth(QODER_REGION);
-  } catch (e) {
-    qoderHealth = { region: QODER_REGION, usable: false, reason: (e as Error)?.message };
+  // if the account is not allowed to make requests from here. A region that is
+  // not enabled is not looked at at all.
+  const regions: Record<string, unknown> = {};
+  for (const region of QODER_REGIONS) {
+    let account: QoderAccountHealth | Record<string, unknown>;
+    try {
+      account = await checkAccountHealth(region);
+    } catch (e) {
+      account = { region, usable: false, reason: (e as Error)?.message };
+    }
+    regions[region] = {
+      models: region === "cn" ? QODER_CN.length : QODER_GLOBAL.length,
+      credential: qoderStatus(region),
+      account,
+    };
   }
   res.json({
     status: "ok",
     dialects: ["anthropic", "openai"],
+    enabled: {
+      minimax: ENABLED_MINIMAX,
+      qoderGlobal: ENABLED_QODER_GLOBAL,
+      qoderCn: ENABLED_QODER_CN,
+    },
     upstreams: {
-      minimax: { base: MINIMAX_BASE, models: MINIMAX_MODELS.length },
-      qoder: {
-        region: QODER_REGION,
-        models: QODER_VISIBLE.length,
-        credential: qoderStatus(QODER_REGION),
-        account: qoderHealth,
-        regions: {
-          global: { models: QODER_GLOBAL.length, credential: qoderStatus("global") },
-          cn: { models: QODER_CN.length, credential: qoderStatus("cn") },
-        },
-      },
+      minimax: ENABLED_MINIMAX ? { base: MINIMAX_BASE, models: MINIMAX_VISIBLE.length } : { enabled: false },
+      qoder: { regions },
     },
     auth: REQUIRE_API_KEY ? "api-key" : "public",
   });
@@ -164,7 +213,7 @@ function openaiCatalog() {
   const data = [
     ...QODER_GLOBAL.map((m) => ({ id: `qoder/${m.id}`, object: "model", created, owned_by: "qoder", name: qoderLabel(m) })),
     ...QODER_CN.map((m) => ({ id: `qoder-cn/${m.id}`, object: "model", created, owned_by: "qoder-cn", name: qoderLabel(m) })),
-    ...MINIMAX_MODELS.map((m) => ({ id: `minimax/${m.id}`, object: "model", created, owned_by: "minimax" })),
+    ...MINIMAX_VISIBLE.map((m) => ({ id: `minimax/${m.id}`, object: "model", created, owned_by: "minimax" })),
   ];
   return { object: "list", data };
 }
@@ -189,7 +238,7 @@ function anthropicCatalog() {
   const data = [
     ...QODER_GLOBAL.map((m) => qoderEntry(m, "qoder/")),
     ...QODER_CN.map((m) => qoderEntry(m, "qoder-cn/")),
-    ...MINIMAX_MODELS.map((m) => ({
+    ...MINIMAX_VISIBLE.map((m) => ({
       id: `minimax/${m.id}`,
       type: "model",
       display_name: m.display_name,
@@ -288,7 +337,7 @@ async function toQoder(
   // Anthropic spelling (`output_config.effort`), and that is where opencode and
   // pi put it.
   const effort = extractEffort(body);
-  const region = route.region ?? QODER_REGION;
+  const region = route.region ?? QODER_REGIONS[0] ?? "global";
   const { model, key } = resolveModelRoute(route.model, effort, region);
   if (LOG_ROUTE) {
     console.log(`[ROUTE] model=${route.model} region=${region} effort=${effort ?? "-"} -> upstream key=${key}`);
@@ -701,17 +750,21 @@ app.listen(PORT, HOST, () => {
   console.log(`    Health     ${base}/health`);
   console.log("");
   console.log(`  upstreams:`);
-  console.log(`    qoder    global=${QODER_GLOBAL.length}  cn=${QODER_CN.length}`);
-  console.log(`    minimax  ${MINIMAX_BASE}  models=${MINIMAX_MODELS.length}`);
+  console.log(
+    `    qoder    global=${ENABLED_QODER_GLOBAL ? `${QODER_GLOBAL.length} models` : "off"}` +
+      `  cn=${ENABLED_QODER_CN ? `${QODER_CN.length} models` : "off"}`,
+  );
+  console.log(
+    `    minimax  ${ENABLED_MINIMAX ? `${MINIMAX_BASE}  models=${MINIMAX_VISIBLE.length}` : "off"}`,
+  );
   console.log(`  auth: ${REQUIRE_API_KEY ? "api key required" : "public"}`);
   console.log("");
 
-  // The server owns the credentials. A region with no session runs the device flow
-  // here, in the background: the URL goes to the log and the operator approves it.
-  // The two regions are separate accounts, so each is decided on its own.
-  const plan = qoderLoginPlan();
-  for (const region of plan.regions) {
-    void ensureQoderSession(region, plan.mode)
+  // The server owns the credentials. An enabled region with no session runs the
+  // device flow here, in the background: the URL goes to the log and the operator
+  // approves it. A region that is off is never looked at.
+  for (const region of QODER_REGIONS) {
+    void ensureQoderSession(region)
       .then((outcome) => {
         const s = qoderStatus(region);
         console.log(

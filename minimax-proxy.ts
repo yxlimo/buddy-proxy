@@ -30,7 +30,7 @@ import crypto from "node:crypto";
 import { authenticate, loadKeys, REQUIRE_API_KEY } from "./lib/api-keys.ts";
 import { readEnvFlag, readEnvNumber, readEnvString } from "./lib/env.ts";
 import { AUTH_MODE, AuthError, credentialStatus, readCredential } from "./lib/minimax-auth.ts";
-import { ensureMinimaxSession, minimaxLoginMode } from "./lib/login.ts";
+import { ensureMinimaxSession } from "./lib/login.ts";
 import { modelsPayload } from "./lib/minimax-models.ts";
 
 const PORT = readEnvNumber("MINIMAX_PORT", 6448);
@@ -49,10 +49,14 @@ const BASE_URL = readEnvString(
 );
 const UPSTREAM = `${BASE_URL}/messages`;
 
+// Whether this reverse proxy is switched on. A disabled proxy is not looked at:
+// no credential read, no login, no models, and requests are refused.
+const ENABLED = readEnvFlag("MINIMAX_CODE", false);
+
 // What to tell the operator when the credential is unusable. It depends on who owns the
 // session: only the oauth source can be re-logged-in from here.
 const RELOGIN_HINT = AUTH_MODE === "oauth"
-  ? "会话被服务端拒绝。重启并设置 BUDDY_PROXY_MINIMAX_LOGIN=true 可以重新登录。"
+  ? "会话被服务端拒绝。删掉 data 目录里的 minimax-session.json 再重启，会自动重新登录。"
   : "MiniMax Code 的登录被服务端拒绝。打开桌面 App 重新登录，等它刷新后重试。";
 // Log the thinking / effort fields of every request — the only way to see what a
 // client actually asked for, since the gateway does not echo them back.
@@ -115,6 +119,15 @@ app.post("/v1/messages", async (req: any, res: any) => {
   const who = authenticate(req, keys);
   if (!who) {
     return res.status(401).json(errorBody("authentication_error", "invalid api key"));
+  }
+  if (!ENABLED) {
+    return res.status(503).json(
+      errorBody(
+        "api_error",
+        "the MiniMax Code proxy is not enabled",
+        "设置 MINIMAX_CODE=true 后重启服务。",
+      ),
+    );
   }
 
   let cred;
@@ -254,18 +267,21 @@ app.post("/v1/messages", async (req: any, res: any) => {
 app.get("/v1/models", (req: any, res: any) => {
   const who = authenticate(req, keys);
   if (!who) return res.status(401).json(errorBody("authentication_error", "invalid api key"));
+  if (!ENABLED) return res.json({ data: [] });
   res.json(modelsPayload());
 });
 
 app.get("/health", (_req: any, res: any) => {
   res.json({
     status: "ok",
+    enabled: ENABLED,
     upstream: BASE_URL,
     dialect: "anthropic",
     attributionHeaders: ATTRIBUTION,
-    models: modelsPayload().data.length,
+    models: ENABLED ? modelsPayload().data.length : 0,
     auth: REQUIRE_API_KEY ? "required" : "public",
-    credential: credentialStatus(),
+    // A disabled proxy has no credential to report, and does not look for one.
+    ...(ENABLED ? { credential: credentialStatus() } : {}),
   });
 });
 
@@ -284,20 +300,16 @@ app.listen(PORT, "0.0.0.0", async () => {
 
   // The server owns the credential: no session means the device flow runs here,
   // in the background, so the container prints the URL and the operator clicks it.
-  if (AUTH_MODE === "oauth") {
-    const mode = minimaxLoginMode();
-    if (mode === "off") {
-      console.warn("  [AUTH] no session yet, and login on startup is off.");
-      console.warn(`         ${RELOGIN_HINT}`);
-    } else {
-      void ensureMinimaxSession()
-        .then(async (outcome) => {
-          const c = await readCredential();
-          const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
-          console.log(outcome === "logged-in" ? `  [AUTH] logged in: ${state}` : `  token ok: ${state}`);
-        })
-        .catch((e) => console.warn(`  [AUTH] login failed: ${(e as AuthError).message}`));
-    }
+  if (!ENABLED) {
+    console.log("  [AUTH] the MiniMax Code proxy is disabled (MINIMAX_CODE is not true).");
+  } else if (AUTH_MODE === "oauth") {
+    void ensureMinimaxSession()
+      .then(async (outcome) => {
+        const c = await readCredential();
+        const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
+        console.log(outcome === "logged-in" ? `  [AUTH] logged in: ${state}` : `  token ok: ${state}`);
+      })
+      .catch((e) => console.warn(`  [AUTH] login failed: ${(e as AuthError).message}`));
   } else {
     try {
       const c = await readCredential();

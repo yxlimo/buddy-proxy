@@ -11,6 +11,24 @@ on its own port:
 The router is the one to point a client at when you want both providers behind
 one base URL — see [Router](#router-router-proxyts-port-6450).
 
+## What is switched on
+
+There are three reverse proxies behind this, and each has a switch. All three
+are **off by default**; turn on the ones you actually use.
+
+| Switch | Turns on |
+|--------|----------|
+| `MINIMAX_CODE=true` | the MiniMax Code gateway (port 6448) |
+| `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
+| `QODER_CN=true` | the Qoder China account (qoder.cn) |
+
+A proxy that is switched off is not looked at: no credential is read, no login
+is attempted, no models are advertised, and a request for one is refused with a
+message saying which switch to flip. The two Qoder regions are separate
+accounts, so they are switched on separately.
+
+The router reads all three; the MiniMax proxy reads `MINIMAX_CODE`.
+
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
 behaviour under a proxy never settled down, and the code that existed for it
@@ -20,8 +38,8 @@ has been removed rather than left to rot.
 
 ```bash
 npm install
-node router-proxy.ts    # :6450, the one to point a client at
-node minimax-proxy.ts   # :6448, the MiniMax gateway on its own
+MINIMAX_CODE=true QODER_GLOBAL=true node router-proxy.ts   # :6450, the one to point a client at
+MINIMAX_CODE=true node minimax-proxy.ts                     # :6448, the MiniMax gateway on its own
 ```
 
 API keys live in `api-keys.json` (auto-generated on first run if missing).
@@ -110,9 +128,10 @@ Two sources, picked by `MINIMAX_AUTH_MODE` (`lib/minimax-auth.ts` dispatches):
   (`~/.minimax-proxy/minimax-session.json`, or `/data/minimax-session.json` in
   the container). The server keeps serving while you approve, so a request in
   the meantime gets a clear 503 rather than a hang.
-- `BUDDY_PROXY_MINIMAX_LOGIN=true` forces a fresh login at startup, replacing
-  the stored session. The default (`auto`) only logs in when there is no
-  session; `off` never does.
+- This only happens when the proxy is switched on (`MINIMAX_CODE=true`). A
+  disabled proxy never looks for a credential at all.
+- To log in again, remove the session file and restart — the next start runs the
+  device flow.
 - After that the proxy refreshes itself every hour, with PKCE (S256) and a file
   lock. The refresh token rotates on every refresh, so the file must be persisted
   — losing it means logging in again.
@@ -225,7 +244,7 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_AUTH_MODE` | `oauth` | `oauth` (proxy's own session) or `file` (read-only app store) |
 | `MINIMAX_DATA_DIR` | `~/.minimax-proxy` | where the oauth session file lives (`/data` in Docker) |
 | `MINIMAX_CREDENTIAL_FILE` | — | explicit session file path, overrides `MINIMAX_DATA_DIR` |
-| `BUDDY_PROXY_MINIMAX_LOGIN` | `auto` | `auto` logs in when there is no session, `true` forces a fresh one, `off` never |
+| `MINIMAX_CODE` | `false` | switch this reverse proxy on; a disabled one serves nothing and looks for no credential |
 | `MINIMAX_LOG_BODY` | `false` | log the thinking / effort fields of every request |
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
 | `MINIMAX_REFRESH_BUFFER_MS` | `300000` | refresh this far before expiry |
@@ -391,17 +410,16 @@ failure. The session is the proxy's own — it refreshes itself, and the refresh
 token rotates on every refresh, so the file must be persisted.
 
 ```bash
-# The router logs in by itself: with no session for a region it runs the device
-# flow at startup and prints the URL to approve. Force one with:
-BUDDY_PROXY_QODER_LOGIN=global node router-proxy.ts   # qoder.com
-BUDDY_PROXY_QODER_LOGIN=cn     node router-proxy.ts   # qoder.cn
+# The router logs in by itself: an enabled region with no session runs the device
+# flow at startup and prints the URL to approve.
+QODER_GLOBAL=true node router-proxy.ts   # qoder.com
+QODER_CN=true     node router-proxy.ts   # qoder.cn
 ```
 
 The two regions need separate logins; the credentials live in separate files
 (`qoder-session.global.json`, `qoder-session.cn.json`). An access token is good
-for about 30 days, so the refresh path is barely ever taken. `BUDDY_PROXY_QODER_LOGIN`
-takes `auto` (the default: log in a region that has no session), `global`, `cn`,
-`all` (force a fresh login) or `off`.
+for about 30 days, so the refresh path is barely ever taken. To log in again,
+remove that region's session file and restart.
 
 The account's own standing is checked on `/health`: Qoder can hold an account
 back for reasons a valid token does not reveal (an IP the account may not be
@@ -413,9 +431,10 @@ used from, a disabled app, a lapsed login).
 |----------|---------|------|
 | `ROUTER_PORT` | `6450` | router port |
 | `MINIMAX_UPSTREAM_URL` | `http://127.0.0.1:6448` | where the MiniMax proxy is |
-| `QODER_REGION` | `global` | which Qoder region to talk to (`cn` / `global`) |
+| `MINIMAX_CODE` | `false` | switch the MiniMax Code upstream on |
+| `QODER_GLOBAL` | `false` | switch the Qoder global region on |
+| `QODER_CN` | `false` | switch the Qoder China region on |
 | `QODER_DATA_DIR` | `~/.qoder-proxy` | where the session file lives (`/data` in Docker) |
-| `BUDDY_PROXY_QODER_LOGIN` | `auto` | `auto` logs in a region with no session, `global`/`cn`/`all` force a fresh one, `off` never |
 | `QODER_AUTH_CACHE_MS` | `5000` | how long a read of the session is reused |
 | `QODER_AUTH_WARN_MS` | `604800000` | warning window before expiry (a Qoder token lasts ~30 days) |
 | `QODER_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
@@ -458,11 +477,11 @@ The service directory holds the compose file and a `./data` directory mounted at
 `/data`, and nothing else.
 
 The login is the only step that needs a human, and the services do it
-themselves: with no session in `./data`, each one runs the device flow at
-startup and prints the authorization URL and user code to its log. Approve it in
-a browser and the credential lands in `./data`. Every later refresh is done by
-the proxy itself. To force a fresh login, set `BUDDY_PROXY_MINIMAX_LOGIN=true`
-or `BUDDY_PROXY_QODER_LOGIN=global|cn|all` in the compose file and restart.
+themselves: a switched-on proxy with no session in `./data` runs the device
+flow at startup and prints the authorization URL and user code to its log.
+Approve it in a browser and the credential lands in `./data`. Every later
+refresh is done by the proxy itself. To log in again, remove the session file
+from `./data` and restart.
 
 ```bash
 docker compose logs -f          # the authorization URL shows up here
