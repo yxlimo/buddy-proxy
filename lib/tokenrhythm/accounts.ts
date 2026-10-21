@@ -176,13 +176,17 @@ export interface TokenRhythmGift {
   sourceLabel: string;
   remainingCny: number;
   expiresAt: string | null;
+  /** Whether this lot of money never runs out. */
+  permanent: boolean;
   status: string;
 }
 
 export interface TokenRhythmCredits {
-  /** The gift money that is running out. */
+  /** The gift money that really does run out. */
   expiringCny: number;
-  /** When the next of it runs out. */
+  /** The gift money that never runs out. */
+  permanentCny: number;
+  /** When the running-out money runs out. */
   nextExpiryAt: string | null;
   list: TokenRhythmGift[];
 }
@@ -243,6 +247,21 @@ export async function wallet(session: TokenRhythmSession): Promise<TokenRhythmWa
   };
 }
 
+/**
+ * A date far enough away that it means "never".
+ *
+ * The platform marks the money that does not expire with a date in 2099 rather
+ * than with nothing, so the date has to be read for what it is.
+ */
+const PERMANENT_FAR_FUTURE = Date.parse("2099-01-01T00:00:00Z");
+
+/** Whether a lot of money ever runs out. */
+function isPermanent(expiresAt: string | null): boolean {
+  if (!expiresAt) return true;
+  const t = Date.parse(expiresAt);
+  return !Number.isFinite(t) || t >= PERMANENT_FAR_FUTURE;
+}
+
 export async function credits(session: TokenRhythmSession): Promise<TokenRhythmCredits> {
   const data = await apiGet<any>(
     "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
@@ -254,13 +273,28 @@ export async function credits(session: TokenRhythmSession): Promise<TokenRhythmC
     sourceLabel: String(row?.sourceLabel ?? ""),
     remainingCny: num(row?.remainingCny),
     expiresAt: row?.expiresAt ?? null,
+    permanent: isPermanent(row?.expiresAt ?? null),
     status: String(row?.status ?? ""),
   }));
-  return {
-    expiringCny: num(data?.summary?.expiringBalanceCny),
-    nextExpiryAt: data?.summary?.nextExpiryAt ?? null,
-    list,
-  };
+
+  // The platform's own summary counts the money that never expires as money
+  // that runs out, so the amounts are counted here instead: the lots are what
+  // the account actually holds.
+  let expiringCny = 0;
+  let permanentCny = 0;
+  let nextExpiryAt: string | null = null;
+  for (const lot of list) {
+    if (lot.remainingCny <= 0) continue;
+    if (isPermanent(lot.expiresAt)) {
+      permanentCny += lot.remainingCny;
+      continue;
+    }
+    expiringCny += lot.remainingCny;
+    if (!nextExpiryAt || Date.parse(lot.expiresAt!) < Date.parse(nextExpiryAt)) {
+      nextExpiryAt = lot.expiresAt;
+    }
+  }
+  return { expiringCny, permanentCny, nextExpiryAt, list };
 }
 
 /* ------------------------------------------------------------------ *
@@ -322,8 +356,8 @@ export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTena
 
   const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
   const pool = withGift.length ? withGift : usable;
-  // The soonest expiry first. A tenant without one never expires, so it sorts
-  // last among the gift money.
+  // The soonest expiry first. Money that never expires sorts last, so it is
+  // only spent when there is nothing else left.
   const expiry = (s: TokenRhythmTenantStatus): number => {
     const at = s.credits?.nextExpiryAt;
     if (!at) return Number.POSITIVE_INFINITY;

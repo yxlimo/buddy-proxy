@@ -660,9 +660,22 @@ money is the last resort. The balance and the expiry of every account are in
   "account": "175***32",
   "hasKey": true,
   "wallet": { "availableCny": 100.43, "giftAvailableCny": 50.43, "rechargeCny": 50 },
-  "credits": { "expiringCny": 50.43, "nextExpiryAt": "2026-11-19T04:28:10.883Z" }
+  "credits": {
+    "expiringCny": 0.43,
+    "permanentCny": 50,
+    "nextExpiryAt": "2026-11-19T04:28:10.883Z",
+    "list": [
+      { "sourceLabel": "充值活动赠额", "remainingCny": 50, "permanent": true },
+      { "sourceLabel": "实名认证奖励", "remainingCny": 0.43, "expiresAt": "2026-11-19T04:28:10.883Z" }
+    ]
+  }
 }
 ```
+
+The amounts are counted from the lots rather than taken from the platform's
+summary: the summary counts the money that never expires as money that runs
+out, so a permanent lot would look like an expiring one. The platform marks
+such a lot with a date in 2099, which is read as "permanent".
 
 ### The thinking rule
 
