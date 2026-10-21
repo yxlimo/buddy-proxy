@@ -146,6 +146,9 @@ export const QODER_MODELS: QoderModel[] = [
 
   // Named models the new protocol accepts.
   { id: "qwen3.7-plus", name: "Qwen3.7-Plus", multiplier: "0.1×", key: "qmodel", protocol: "new", reasoning: false, backend: "bailian-qwen3.7-plus", context: 1000000, maxOutput: 131072, kind: "model" },
+  // The client's catalogue has no `max_input_tokens` for this one, so it sends
+  // no context window at all and the gateway applies its own. The number below
+  // is the conservative one.
   { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", protocol: "new", reasoning: false, backend: "oem-kimi-k2.7-code", context: 180000, maxOutput: 32768, kind: "model" },
   { id: "glm-5.3", name: "GLM-5.3", multiplier: "0.8×", key: "gmodel", protocol: "new", reasoning: true, backend: "oem-glm-5", context: 180000, maxOutput: 131072, kind: "model" },
   { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", multiplier: "0.5×", key: "dmodel", protocol: "new", reasoning: true, backend: "oem-deepseek-v4-pro", context: 1000000, maxOutput: 393216, kind: "model" },
@@ -212,12 +215,18 @@ export const QODER_CONTEXT_WINDOW = 200000;
 /**
  * The limit the official client sends upstream.
  *
- * The client's own catalog carries a `max_output_tokens` per model, and that is
- * the number it puts in the request — the same one its own model list shows.
- * The gateway ignores it (it cuts the answer at the model's real limit), so
- * this is about looking like the client, not about what the model can do.
+ * The client's catalogue has no `max_output_tokens` at all — not one model
+ * carries it — so the client falls back to a constant of its own. Decrypted
+ * from the client's own catalogue file and confirmed on the wire (a real
+ * request, decoded: `parameters.max_tokens` = 32000, over 1800 requests and
+ * 15 models): the fallback is 32000 for every model, and the client's
+ * `--max-output-tokens` flag does not change it.
+ *
+ * The gateway ignores the number and cuts the answer at the model's real
+ * limit, so this is about looking like the client, not about what the model
+ * can do.
  */
-export const QODER_CLIENT_MAX_TOKENS = 4096;
+export const QODER_CLIENT_MAX_TOKENS = 32000;
 
 /** Largest context window any model in the catalog advertises. */
 export const QODER_MAX_CONTEXT = 1000000;

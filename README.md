@@ -143,7 +143,7 @@ WorkBuddy app each put in their requests:
 
 | Upstream | The limit it sends |
 |---|---|
-| Qoder | the one from its own catalogue (4096), whatever the agent asked for |
+| Qoder | 32000, whatever the agent asked for — the client's own fallback, its catalogue has no such field |
 | MiniMax | the agent's, or the model's own when the agent named none |
 | WorkBuddy | the agent's, or the model's own when the agent named none |
 
