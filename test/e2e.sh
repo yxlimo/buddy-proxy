@@ -81,7 +81,22 @@ u = d.get("usage") or {}
 # The dialects name the input tokens differently.
 key = "prompt_tokens" if dialect == "openai" else "input_tokens"
 has_content = bool(d.get("content")) or bool(d.get("choices"))
-print("ok" if has_content and u.get(key, 0) > 0 else "bad")
+# The reasoning belongs in its own channel, not in front of the answer:
+# an answer that starts with the reasoning is not an answer.
+leaked = ""
+if dialect == "openai":
+    msg = (d.get("choices") or [{}])[0].get("message", {})
+    reasoning = msg.get("reasoning_content")
+    answer = msg.get("content") or ""
+    if isinstance(reasoning, str) and reasoning and reasoning in answer:
+        leaked = "leaked reasoning"
+else:
+    blocks = d.get("content") or []
+    thinking = "".join(b.get("thinking", "") for b in blocks if b.get("type") == "thinking")
+    answer = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    if thinking and thinking in answer:
+        leaked = "leaked reasoning"
+print("ok" if has_content and u.get(key, 0) > 0 and not leaked else (leaked or "bad"))
 ' 2>/dev/null)
     report "$group/$model $dialect non-stream" "ok" "$got"
 

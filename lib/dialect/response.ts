@@ -72,7 +72,13 @@ export function anthropicToOpenAIResponse(body: Json, model: string): Json {
       });
     }
   }
-  const text = content.map((c) => c.text).join("");
+  // Only the text blocks are the answer. A thinking block is the model's
+  // reasoning, which belongs in `reasoning_content` — concatenating it into
+  // the answer puts the reasoning in front of the text the caller asked for.
+  const text = content
+    .filter((c) => c.type === "text")
+    .map((c) => c.text)
+    .join("");
   const reasoning = content
     .filter((c) => c.type === "reasoning_content")
     .map((c) => c.text)
