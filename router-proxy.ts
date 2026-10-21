@@ -217,6 +217,7 @@ function upstreamContext(): UpstreamContext {
     legacyRetryMs: LEGACY_RETRY_MS,
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
+    workbuddyMaxOutput: (model: string) => WORKBUDDY_CN.find((m) => m.id === model)?.maxOutput ?? 64000,
   };
 }
 

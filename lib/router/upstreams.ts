@@ -48,6 +48,8 @@ export interface UpstreamContext {
   qoderMaxAttempts: number;
   /** Whether a request is written to the log. */
   logRoute: boolean;
+  /** The output limit of a WorkBuddy model, as its own catalogue says. */
+  workbuddyMaxOutput(model: string): number;
 }
 
 /**
@@ -71,6 +73,12 @@ export async function toWorkBuddy(
   const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
   const model = upstreamModel(route);
   openaiBody.model = model;
+  // The desktop client sends the limit its session asks for, and that is the
+  // model's own output limit unless the user changed it. The upstream cuts the
+  // answer there, so the number matters.
+  if (typeof openaiBody.max_tokens !== "number") {
+    openaiBody.max_tokens = ctx.workbuddyMaxOutput(model);
+  }
   if (ctx.logRoute) {
     console.log(`[ROUTE] workbuddy model=${route.model} stream=${stream}`);
   }

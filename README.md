@@ -137,6 +137,19 @@ GLM, DeepSeek's pricing table, MiniMax's documentation.
 The context windows are the gateway's own, because those are what the gateway
 enforces.
 
+What goes upstream is a separate question, and the answer is the desktop
+client's own behaviour — what the Qoder CLI, the MiniMax Code client and the
+WorkBuddy app each put in their requests:
+
+| Upstream | The limit it sends |
+|---|---|
+| Qoder | the one from its own catalogue (4096), whatever the agent asked for |
+| MiniMax | the agent's, or the model's own when the agent named none |
+| WorkBuddy | the agent's, or the model's own when the agent named none |
+
+The Qoder gateway ignores the number and cuts the answer at the model's real
+limit; the WorkBuddy gateway cuts the answer there.
+
 Each upstream is a provider of its own, so the model ids are the real ones:
 
 | Provider | Base URL | Upstream |
