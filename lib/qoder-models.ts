@@ -209,6 +209,16 @@ export function qoderProtocolForRegion(model: QoderModel, region: QoderRegion): 
 /** Context window and output cap, as the CLI advertises them. */
 export const QODER_CONTEXT_WINDOW = 200000;
 
+/**
+ * The limit the official client sends upstream.
+ *
+ * The client's own catalog carries a `max_output_tokens` per model, and that is
+ * the number it puts in the request — the same one its own model list shows.
+ * The gateway ignores it (it cuts the answer at the model's real limit), so
+ * this is about looking like the client, not about what the model can do.
+ */
+export const QODER_CLIENT_MAX_TOKENS = 4096;
+
 /** Largest context window any model in the catalog advertises. */
 export const QODER_MAX_CONTEXT = 1000000;
 

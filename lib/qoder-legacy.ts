@@ -266,7 +266,9 @@ export function buildLegacyBody(req: LegacyRequestBody): Json {
     source: 1,
     version: "3",
     chat_prompt: "",
-    parameters: { max_tokens: req.maxTokens ?? 32768 },
+    // Only what the client asked for: the gateway has its own default, and a
+    // number we invented is a number that can be wrong.
+    parameters: req.maxTokens ? { max_tokens: req.maxTokens } : {},
     aliyun_user_type: "personal_standard",
     session_type: "qodercli",
     agent_id: "agent_common",

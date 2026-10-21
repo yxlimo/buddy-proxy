@@ -145,8 +145,13 @@ export function budgetFromEffort(effort: unknown): number {
   }
 }
 
-/** OpenAI → Anthropic messages request. */
-export function openaiToAnthropic(body: Json): Json {
+/**
+ * OpenAI → Anthropic messages request.
+ *
+ * The Anthropic dialect insists on a limit, so one has to be there; the
+ * caller says which number to use when the client did not name one.
+ */
+export function openaiToAnthropic(body: Json, defaultMaxTokens: number): Json {
   const out: Json = {};
   if (body.model) out.model = body.model;
   out.max_tokens =
@@ -154,7 +159,7 @@ export function openaiToAnthropic(body: Json): Json {
       ? body.max_tokens
       : typeof body.max_completion_tokens === "number"
         ? body.max_completion_tokens
-        : 4096;
+        : defaultMaxTokens;
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.top_p === "number") out.top_p = body.top_p;
   if (typeof body.stop === "string") out.stop_sequences = [body.stop];

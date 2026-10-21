@@ -13,6 +13,7 @@ import { anthropicToOpenAI, effortFromBudget, openaiToAnthropic } from "../diale
 import {
   qoderProtocolForRegion,
   resolveModelRoute,
+  QODER_CLIENT_MAX_TOKENS,
   type QoderModel,
 } from "../qoder-models.ts";
 import { qoderChatCompletion, LimitError } from "../qoder-transport.ts";
@@ -148,6 +149,10 @@ export async function toQoder(
   }
 
   openaiBody.model = key;
+  // The official client sends the limit from its own catalog, whatever the
+  // caller asked for; the gateway ignores it and cuts the answer at the
+  // model's real limit.
+  openaiBody.max_tokens = QODER_CLIENT_MAX_TOKENS;
   const upstream = await qoderWithRetry(
     () => qoderChatCompletion(openaiBody, { stream, region }),
     ctx.qoderMaxAttempts,
@@ -187,8 +192,8 @@ export async function toQoderLegacy(
           tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
           modelKey: model.key,
           displayName: model.name,
-          // The gateway does not enforce the cap, but the answer is cut at it.
-          maxTokens: typeof openaiBody.max_tokens === "number" ? openaiBody.max_tokens : model.maxOutput,
+          // The same number the official client sends.
+          maxTokens: QODER_CLIENT_MAX_TOKENS,
           reasoning: model.reasoning,
           contextWindow: model.context,
         },
@@ -338,15 +343,12 @@ export async function toMinimax(
   stream: boolean,
   res: express.Response,
 ): Promise<void> {
-  // MiniMax speaks Anthropic natively.
-  const anthropicBody = dialect === "anthropic" ? { ...body } : openaiToAnthropic(body);
+  // MiniMax speaks Anthropic natively. The Anthropic dialect insists on a
+  // limit, so when the client did not name one the model's own is used.
+  const anthropicBody =
+    dialect === "anthropic" ? { ...body } : openaiToAnthropic(body, minimaxMaxOutput(upstreamModel(route)));
   anthropicBody.model = upstreamModel(route);
   anthropicBody.stream = stream;
-  // The Anthropic dialect requires a limit; when the client did not name one,
-  // the model's own is used rather than a guess.
-  if (typeof anthropicBody.max_tokens !== "number") {
-    anthropicBody.max_tokens = minimaxMaxOutput(upstreamModel(route));
-  }
 
   const r = await fetch(`${ctx.minimaxBase}/v1/messages`, {
     method: "POST",
