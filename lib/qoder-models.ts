@@ -160,7 +160,11 @@ export const QODER_MODELS: QoderModel[] = [
   // backend it actually used as oem-minimax-m2.5 — a different generation. The
   // id keeps Qoder's wording (that is the name the tier is selected by); the
   // display name says what runs.
-  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 180000, maxOutput: 131072, kind: "model" },
+  // The context window is the vendor's own number for MiniMax-M3.1-Flash
+  // (1M). The Qoder client advertises 180000 for it, which is the smaller
+  // number its backend takes; the vendor's number is what agents expect, and
+  // it is what the model itself supports.
+  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 1000000, maxOutput: 131072, kind: "model" },
 
   // Version-pinned models — the legacy protocol only.
   { id: "deepseek-flash", name: "DeepSeek-Flash", multiplier: "0×", key: "dfmodel", protocol: "legacy", reasoning: true, context: 1000000, maxOutput: 393216, kind: "model" },
