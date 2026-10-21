@@ -11,6 +11,12 @@ identity.salt
 # Local notes and tooling state, not part of the project
 docs/
 .cortexkit/
+problem.md
+
+# Material from reversing the Qoder client: the decrypted catalogue carries
+# the account's own model list, and the captured requests are the account's
+# traffic. Both stay on this machine.
+reference/qoder/
 
 # Helpers for the machine this runs on, not for the service: they rewrite
 # personal client configs and poke at the opencode client's own storage.
