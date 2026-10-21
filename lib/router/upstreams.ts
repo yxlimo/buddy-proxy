@@ -434,9 +434,30 @@ export async function toTokenRhythm(
 
   if (!stream) {
     const json = await response.json();
+    const reason = json?.choices?.[0]?.finish_reason;
+    if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
     deliverJson(res, dialect, "openai", json, model);
     return;
   }
 
-  await deliverOpenAIStream(res, response.body!, dialect, model);
+  await deliverOpenAIStream(res, response.body!, dialect, model, (reason) => {
+    if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
+  });
+}
+
+/**
+ * Say that an answer was cut short because the client asked for a very small
+ * number of tokens.
+ *
+ * pi warms its prompt cache with a request for a single token, and the upstream
+ * duly answers with a single token and says it stopped there. The client then
+ * treats the answer as broken, and from the outside it looks like the gateway
+ * truncated something. The log says where the number came from.
+ */
+function noteTruncation(body: Record<string, any>, model: string, tenant: number): void {
+  const asked = typeof body.max_tokens === "number" ? body.max_tokens : null;
+  console.log(
+    `[TRUNCATED] model=${model} tenant=${tenant} asked_for=${asked ?? "unset"} tokens — ` +
+      `the upstream stopped at the limit the client set`,
+  );
 }

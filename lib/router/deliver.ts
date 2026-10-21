@@ -107,6 +107,25 @@ export function deliverJson(
 }
 
 /**
+ * Watch the chunks for the upstream's finish reason.
+ *
+ * A client that asked for a handful of tokens gets a handful of tokens and an
+ * upstream that says it stopped there. That is what the client asked for, but
+ * from the outside it looks like a broken answer, so the reason is handed to
+ * whoever wants to say so in the log.
+ */
+async function* watchFinish(
+  chunks: AsyncIterable<Record<string, any>>,
+  onFinish?: (reason: string) => void,
+): AsyncGenerator<Record<string, any>> {
+  for await (const chunk of chunks) {
+    const reason = chunk?.choices?.[0]?.finish_reason;
+    if (reason && onFinish) onFinish(String(reason));
+    yield chunk;
+  }
+}
+
+/**
  * A stream of OpenAI chunks.
  *
  * The frames are parsed and written out again rather than copied, because an
@@ -119,16 +138,17 @@ export async function deliverOpenAIStream(
   body: ReadableStream<Uint8Array>,
   dialect: Dialect,
   model: string,
+  onFinish?: (reason: string) => void,
 ): Promise<void> {
   const upstream = await peekStream(body);
   res.setHeader("x-request-id", rid("req_"));
   sseHead(res);
   if (dialect === "openai") {
-    await pipeOpenAIChunks(upstream, res);
+    await pipeOpenAIChunks(upstream, res, onFinish);
     return;
   }
   try {
-    for await (const chunk of openaiStreamToAnthropic(readOpenAIChunks(upstream), model)) {
+    for await (const chunk of openaiStreamToAnthropic(watchFinish(readOpenAIChunks(upstream), onFinish), model)) {
       if (!writeSafe(res, chunk)) break;
     }
   } catch (e) {
@@ -197,9 +217,13 @@ function errorEvent(message: string): string {
 }
 
 /** Forward an OpenAI stream, frame by frame. */
-async function pipeOpenAIChunks(body: ReadableStream<Uint8Array>, res: express.Response): Promise<void> {
+async function pipeOpenAIChunks(
+  body: ReadableStream<Uint8Array>,
+  res: express.Response,
+  onFinish?: (reason: string) => void,
+): Promise<void> {
   try {
-    for await (const chunk of readOpenAIChunks(body)) {
+    for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish)) {
       if (!writeSafe(res, sseData(chunk))) break;
     }
     writeSafe(res, SSE_DONE);
