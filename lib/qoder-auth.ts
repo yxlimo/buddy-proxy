@@ -495,6 +495,59 @@ export interface QoderAccountHealth {
   hint?: string;
 }
 
+/** What the account has left, in credits. */
+export interface QoderCredits {
+  region: QoderRegion;
+  /** The plan's own credits. */
+  plan: { total: number; used: number; remaining: number };
+  /** Credits bought on top of the plan. */
+  addOn: { total: number; used: number; remaining: number };
+  /** Whether the plan's credits are used up. */
+  quotaExceeded: boolean;
+  /** When the plan's credits reset. */
+  resetsAt: string | null;
+}
+
+/**
+ * Ask the account how many credits it has left.
+ *
+ * GET /api/v2/quota/usage on the openapi host, with the same token the status
+ * check uses. The answer holds two pots: the plan's own credits and the ones
+ * bought on top of it.
+ */
+export async function fetchQoderCredits(region: QoderRegion = REGION): Promise<QoderCredits | null> {
+  const session = loadSession(region);
+  if (!session) return null;
+  try {
+    const cred = await ensureCredential(false, region);
+    const r = await fetch(`${ENDPOINTS[region].openapi}/api/v2/quota/usage`, {
+      headers: {
+        Authorization: `Bearer ${cred.accessToken}`,
+        Accept: "application/json",
+        "User-Agent": USER_AGENT,
+        ...(session.machineToken ? { "Cosy-MachineToken": session.machineToken } : {}),
+        ...(session.machineType ? { "Cosy-Machine-Type": session.machineType } : {}),
+      },
+    });
+    if (!r.ok) return null;
+    const body = await r.json().catch(() => undefined);
+    const pot = (p: any) => ({
+      total: Number(p?.total ?? 0),
+      used: Number(p?.used ?? 0),
+      remaining: Number(p?.remaining ?? 0),
+    });
+    return {
+      region,
+      plan: pot(body?.userQuota),
+      addOn: pot(body?.addOnQuota),
+      quotaExceeded: body?.isQuotaExceeded === true,
+      resetsAt: typeof body?.expiresAt === "number" ? new Date(body.expiresAt).toISOString() : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function checkAccountHealth(region: QoderRegion = REGION): Promise<QoderAccountHealth> {
   const session = loadSession(region);
   if (!session) {

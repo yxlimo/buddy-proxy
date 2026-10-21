@@ -642,7 +642,7 @@ it only means a new fingerprint, not a lost login.
 
 ## Daily benefits
 
-Both China accounts hand out credits for showing up, and the router takes them
+Every account hands out credits for showing up, and the router takes them
 without being asked. It runs when it starts and then every six hours; the day
 rolls over at midnight in China, and every call is idempotent — asking twice
 answers "already done" rather than doing it again.
@@ -650,7 +650,10 @@ answers "already done" rather than doing it again.
 | Account | What it takes |
 |---|---|
 | WorkBuddy | the daily check-in (`/v2/billing/meter/daily-checkin`), and then the growth centre: the gift the travelling Buddy brings back, the tasks, the make-up cards for a missed day, the streak tier, and the blind box |
-| Qoder | the campaigns (`/sash/api/v1/me/campaigns`) that are claimable |
+| Qoder (both regions) | the campaigns (`/sash/api/v1/me/campaigns`) that are claimable |
+
+The Qoder activity service is the same service in both regions — only the host
+differs — so the global account is checked in the same way as the China one.
 
 The WorkBuddy growth centre is a chain of calls: take the gift, send the Buddy
 out again so there is one to collect tomorrow, accept the tasks that are not
@@ -678,6 +681,24 @@ The result of the last run is in `/health` under `benefits`:
 
 Each upstream that is switched on takes its own benefits; one that is off is
 not looked at.
+
+### What is left
+
+The balance is in `/health`, per account: the plan's own credits and the ones
+bought on top of it, both for Qoder, and the check-in numbers for WorkBuddy.
+
+```json
+"credits": {
+  "region": "global",
+  "plan": { "total": 300, "used": 22, "remaining": 278 },
+  "addOn": { "total": 100, "used": 0, "remaining": 100 },
+  "quotaExceeded": false,
+  "resetsAt": "2026-11-03T07:28:22.099Z"
+}
+```
+
+The Qoder numbers come from `/api/v2/quota/usage`, the WorkBuddy ones from the
+check-in status.
 
 | Variable | Default | What |
 |----------|---------|------|

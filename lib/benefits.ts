@@ -18,7 +18,13 @@
 
 import crypto from "node:crypto";
 import os from "node:os";
-import { loadSession as loadQoderSession, deviceIdentity, type QoderSession } from "./qoder-auth.ts";
+import {
+  loadSession as loadQoderSession,
+  deviceIdentity,
+  ENDPOINTS,
+  type QoderRegion,
+  type QoderSession,
+} from "./qoder-auth.ts";
 import { loadSession as loadWorkBuddySession, workbuddyDeviceId, type WorkBuddySession } from "./workbuddy-auth.ts";
 import { readEnvString } from "./env.ts";
 
@@ -32,7 +38,7 @@ function workBuddyApiBase(): string {
 }
 
 /** The China accounts that hand out credits. */
-export type BenefitUpstream = "workbuddy-cn" | "qoder-cn";
+export type BenefitUpstream = "workbuddy-cn" | "qoder-cn" | "qoder-global";
 
 export interface BenefitOutcome {
   upstream: BenefitUpstream;
@@ -364,7 +370,14 @@ export async function runWorkBuddyBenefits(): Promise<BenefitOutcome> {
  * Qoder
  * ------------------------------------------------------------------ */
 
-const QODER_CLAIM_BASE = "https://openapi.qoder.com.cn";
+/**
+ * The Qoder activity service is the same service in both regions; only the
+ * host differs.
+ */
+const QODER_CLAIM_BASE: Record<QoderRegion, string> = {
+  cn: ENDPOINTS.cn.openapi,
+  global: ENDPOINTS.global.openapi,
+};
 
 function qoderClaimHeaders(session: QoderSession): Record<string, string> {
   const headers: Record<string, string> = {
@@ -389,9 +402,14 @@ function qoderClaimHeaders(session: QoderSession): Record<string, string> {
   return headers;
 }
 
-async function qoderCall(session: QoderSession, path: string, method: "GET" | "POST"): Promise<ApiResult> {
+async function qoderCall(
+  session: QoderSession,
+  path: string,
+  method: "GET" | "POST",
+  region: QoderRegion = "cn",
+): Promise<ApiResult> {
   try {
-    const res = await fetch(`${QODER_CLAIM_BASE}${path}`, {
+    const res = await fetch(`${QODER_CLAIM_BASE[region]}${path}`, {
       method,
       headers: qoderClaimHeaders(session),
       body: method === "POST" ? "" : undefined,
@@ -409,27 +427,69 @@ async function qoderCall(session: QoderSession, path: string, method: "GET" | "P
   }
 }
 
+/**
+ * What the WorkBuddy account has in credits.
+ *
+ * The check-in status carries the numbers, and asking for it does not check
+ * in: the check-in is the other endpoint.
+ */
+export interface WorkBuddyCredits {
+  /** The credits the daily check-in hands out. */
+  daily: number;
+  /** What today's check-in brought in. */
+  today: number;
+  /** The credits the account has collected in total. */
+  total: number;
+  /** How many days in a row the account has shown up. */
+  streakDays: number;
+  /** Whether today is already checked in. */
+  checkedIn: boolean;
+}
+
+export async function fetchWorkBuddyCredits(): Promise<WorkBuddyCredits | null> {
+  const session = loadWorkBuddySession("cn");
+  if (!session) return null;
+  try {
+    const res = await workbuddyApi(session, "/v2/billing/meter/checkin-activity-status", "POST");
+    const data = dataOf(res.body);
+    if (!data) return null;
+    return {
+      daily: Number(data.daily_credit ?? 0),
+      today: Number(data.today_credit ?? 0),
+      total: Number(data.total_credits ?? 0),
+      streakDays: Number(data.streak_days ?? 0),
+      checkedIn: data.today_checked_in === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Take the Qoder campaign benefits that are waiting. */
-export async function runQoderBenefits(): Promise<BenefitOutcome> {
+export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<BenefitOutcome> {
+  const upstream = region === "cn" ? "qoder-cn" : "qoder-global";
   const report: string[] = [];
-  const session = loadQoderSession("cn");
+  const session = loadQoderSession(region);
   if (!session) {
-    return { upstream: "qoder-cn", ok: false, credits: 0, report: ["没有 Qoder 登录态"], at: new Date().toISOString() };
+    return { upstream, ok: false, credits: 0, report: ["没有 Qoder 登录态"], at: new Date().toISOString() };
   }
   let credits = 0;
   try {
-    const campaigns = await qoderCall(session, "/sash/api/v1/me/campaigns", "GET");
+    const campaigns = await qoderCall(session, "/sash/api/v1/me/campaigns", "GET", region);
     if (campaigns.status !== 200) {
       report.push(`查活动失败（HTTP ${campaigns.status}）`);
-      return { upstream: "qoder-cn", ok: false, credits, report, at: new Date().toISOString() };
+      return { upstream, ok: false, credits, report, at: new Date().toISOString() };
     }
     const rows: any[] = Array.isArray(campaigns.body?.campaigns) ? campaigns.body.campaigns : [];
     if (!rows.length) {
       report.push("没有可领的活动");
     }
     const now = Math.floor(Date.now() / 1000);
+    let claimable = 0;
+    let creditCampaigns = 0;
     for (const row of rows) {
       if (row.actionType !== "CLAIM_BENEFIT") continue;
+      creditCampaigns += 1;
       // The window is in seconds, not milliseconds.
       const start = typeof row.startAt === "number" ? row.startAt : 0;
       const end = typeof row.endAt === "number" ? row.endAt : 0;
@@ -440,7 +500,13 @@ export async function runQoderBenefits(): Promise<BenefitOutcome> {
         continue;
       }
       if (row.claimStatus !== "CLAIMABLE") continue;
-      const claim = await qoderCall(session, `/sash/api/v1/me/campaigns/${row.campaignId}/claim`, "POST");
+      claimable += 1;
+      const claim = await qoderCall(
+        session,
+        `/sash/api/v1/me/campaigns/${row.campaignId}/claim`,
+        "POST",
+        region,
+      );
       if (claim.status >= 200 && claim.status < 300) {
         const amount = Number(row.benefit?.amount ?? 0);
         credits += amount;
@@ -449,17 +515,19 @@ export async function runQoderBenefits(): Promise<BenefitOutcome> {
         report.push(`领活动「${row.campaignKey ?? row.campaignId}」失败：${claim.body?.msg ?? `HTTP ${claim.status}`}`);
       }
     }
+    if (!creditCampaigns) report.push("没有可领积分的活动");
   } catch (e) {
     report.push(`异常：${(e as Error).message}`);
   }
-  return { upstream: "qoder-cn", ok: true, credits, report, at: new Date().toISOString() };
+  return { upstream, ok: true, credits, report, at: new Date().toISOString() };
 }
 
 /** Run the benefits of every enabled upstream. */
 export async function runBenefits(upstreams: BenefitUpstream[]): Promise<BenefitOutcome[]> {
   const out: BenefitOutcome[] = [];
   for (const upstream of upstreams) {
-    out.push(upstream === "workbuddy-cn" ? await runWorkBuddyBenefits() : await runQoderBenefits());
+    if (upstream === "workbuddy-cn") out.push(await runWorkBuddyBenefits());
+    else out.push(await runQoderBenefits(upstream === "qoder-cn" ? "cn" : "global"));
   }
   return out;
 }

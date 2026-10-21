@@ -24,7 +24,7 @@ import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder-transport.ts";
 import { QODER_MODELS, qoderModelsForRegion } from "./lib/qoder-models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
-import { qoderStatus, checkAccountHealth, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
+import { qoderStatus, checkAccountHealth, fetchQoderCredits, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy-auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy-transport.ts";
 import { workBuddyFallbackModels, type WorkBuddyModel } from "./lib/workbuddy-models.ts";
@@ -52,7 +52,7 @@ import {
   minimaxCatalogModels,
   type CatalogGroup,
 } from "./lib/router/catalog.ts";
-import type { BenefitUpstream } from "./lib/benefits.ts";
+import { fetchWorkBuddyCredits, type BenefitUpstream } from "./lib/benefits.ts";
 import { BenefitsRunner } from "./lib/router/benefits.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
@@ -79,6 +79,7 @@ function benefitUpstreams(): BenefitUpstream[] {
   const out: BenefitUpstream[] = [];
   if (ENABLED_WORKBUDDY_CN) out.push("workbuddy-cn");
   if (ENABLED_QODER_CN) out.push("qoder-cn");
+  if (ENABLED_QODER_GLOBAL) out.push("qoder-global");
   return out;
 }
 
@@ -159,6 +160,7 @@ app.get("/health", async (_req, res) => {
       models: region === "cn" ? QODER_CN.length : QODER_GLOBAL.length,
       credential: qoderStatus(region),
       account,
+      credits: await fetchQoderCredits(region),
     };
   }
   res.json({
@@ -178,6 +180,7 @@ app.get("/health", async (_req, res) => {
             region: "cn",
             models: WORKBUDDY_CN.length,
             credential: workbuddyStatus("cn"),
+            credits: await fetchWorkBuddyCredits(),
           }
         : { enabled: false },
     },
@@ -374,7 +377,7 @@ app.listen(PORT, HOST, () => {
             : `  [AUTH] qoder ${region}: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
         );
         // A fresh session is worth a run right away.
-        if (region === "cn") void benefits.runOnce();
+        void benefits.runOnce();
       })
       .catch((e) => console.warn(`  [AUTH] qoder ${region} login failed: ${(e as Error).message}`));
   }
