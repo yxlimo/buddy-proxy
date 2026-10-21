@@ -15,6 +15,7 @@
 //   /openapi-cn/...         openapi.qoder.com.cn
 //   /workbuddy/...          www.workbuddy.cn
 //   /minimax/...            the MiniMax proxy (MINIMAX_UPSTREAM_URL)
+//   /tokenrhythm/...        tokenrhythm.studio
 //
 // The fixtures land in test/fixtures/, one file per method and path.
 
@@ -30,6 +31,7 @@ const UPSTREAMS: Record<string, string> = {
   "openapi-cn": "https://openapi.qoder.com.cn",
   workbuddy: "https://www.workbuddy.cn",
   minimax: process.env.MINIMAX_UPSTREAM_URL ?? "http://127.0.0.1:6448",
+  tokenrhythm: process.env.TOKENRHYTHM_RECORD_BASE ?? "https://tokenrhythm.studio",
 };
 
 import { fixtureName, variantOf, writeFixture, FIXTURE_DIR } from "./fixture-name.ts";
@@ -69,6 +71,10 @@ const server = http.createServer(async (req, res) => {
     const text = await upstream.text();
     const headers: Record<string, string> = {};
     upstream.headers.forEach((value, key) => {
+      // The body was already decoded by fetch, so the encoding must not be
+      // announced again — and the length does not survive the round trip
+      // through a file.
+      if (key === "content-length" || key === "content-encoding") return;
       headers[key] = value;
     });
 

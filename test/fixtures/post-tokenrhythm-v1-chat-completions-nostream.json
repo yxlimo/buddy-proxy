@@ -1,0 +1,28 @@
+{
+  "upstream": "https://tokenrhythm.studio/v1/chat/completions",
+  "status": 200,
+  "headers": {
+    "access-control-allow-credentials": "true",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' https://o.alicdn.com https://g.alicdn.com; style-src 'self' 'unsafe-inline' https://g.alicdn.com; img-src 'self' data: blob: https:; font-src 'self' data: https://static.tokenrhythm.studio; connect-src 'self' https://tokenrhythm-frontend-assets-prod.oss-cn-beijing.aliyuncs.com https://rw34fd.captcha-open.aliyuncs.com https://*.captcha-open.aliyuncs.com https://*.captcha-open-b.aliyuncs.com https://*.captcha-open-dual.aliyuncs.com https://*.captcha-open-dual-b.aliyuncs.com https://cloudauth-device.aliyuncs.com https://cloudauth-device-dualstack.cn-shanghai.aliyuncs.com https://cn-shanghai.device.saf.aliyuncs.com https://upload.captcha-open.aliyuncs.com https://upload.captcha-open-b.aliyuncs.com https://static-captcha.aliyuncs.com; media-src 'self' https: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+    "content-type": "application/json; charset=utf-8",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "date": "Wed, 21 Oct 2026 12:26:29 GMT",
+    "origin-agent-cluster": "?1",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-tr-frontend-cohort": "base",
+    "x-tr-frontend-commit": "202a213f0a5b256cfecd05fb181e4202ea801689",
+    "x-trace-id": "trace_445f304b-f45d-48a3-89c0-910a479d82d2",
+    "x-xss-protection": "0"
+  },
+  "body": "{\"id\":\"021792585588230006c460d0b2d36d003716bcb3522c0d11878cc\",\"created\":1792585589,\"model\":\"deepseek-v4.1-flash-1017\",\"object\":\"chat.completion\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"ok\",\"role\":\"assistant\",\"reasoning_content\":\"We need answer to user: \\\"say ok\\\". Must just say ok likely. Need be careful no extra.\",\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"usage\":{\"completion_tokens\":24,\"prompt_tokens\":32,\"total_tokens\":56,\"completion_tokens_details\":{\"reasoning_tokens\":22},\"prompt_tokens_details\":{\"cached_tokens\":0}},\"cost_cny\":\"0.00012800\",\"billing_pending\":false,\"trace_id\":\"trace_445f304b-f45d-48a3-89c0-910a479d82d2\"}"
+}

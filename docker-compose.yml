@@ -49,6 +49,7 @@ services:
       QODER_GLOBAL: "true"
       QODER_CN: "true"
       WORKBUDDY_CN: "true"
+      TOKENRHYTHM: "true"
       # Anthropic and OpenAI dialects, routed per model name.
       ROUTER_PORT: "6450"
       # The MiniMax upstream, by service name on the compose network.
@@ -56,6 +57,12 @@ services:
       QODER_DATA_DIR: /data
       # The WorkBuddy session lives next to the Qoder one.
       WORKBUDDY_DATA_DIR: /data
+      # The TokenRhythm sessions live in the same place.
+      TOKENRHYTHM_DATA_DIR: /data
+      # The accounts and their keys come from the .env file next to this one.
+      # They are read one by one, so nothing else in the file is loaded.
+      env_file:
+        - .env
       # The image healthcheck reads the port from here.
       HEALTH_PORT: "6450"
       # The daily check-in of the China accounts. It runs on its own, so this is

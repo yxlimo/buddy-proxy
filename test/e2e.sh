@@ -59,7 +59,7 @@ print("ok" if data and not bad else "bad: " + ", ".join(map(str, bad[:3])))
 done
 
 # One request per upstream and dialect.
-for spec in "qoder:glm-5.3" "qoder-cn:glm-5.3" "workbuddy-cn:hy3" "minimax:MiniMax-M3.1-Flash"; do
+for spec in "qoder:glm-5.3" "qoder-cn:glm-5.3" "workbuddy-cn:hy3" "minimax:MiniMax-M3.1-Flash" "tokenrhythm:deepseek-v4.1-flash-1017"; do
   group="${spec%%:*}"
   model="${spec##*:}"
   skip "$group" && continue

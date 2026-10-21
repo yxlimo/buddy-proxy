@@ -1,0 +1,29 @@
+{
+  "upstream": "https://tokenrhythm.studio/v1/chat/completions",
+  "status": 200,
+  "headers": {
+    "cache-control": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' https://o.alicdn.com https://g.alicdn.com; style-src 'self' 'unsafe-inline' https://g.alicdn.com; img-src 'self' data: blob: https:; font-src 'self' data: https://static.tokenrhythm.studio; connect-src 'self' https://tokenrhythm-frontend-assets-prod.oss-cn-beijing.aliyuncs.com https://rw34fd.captcha-open.aliyuncs.com https://*.captcha-open.aliyuncs.com https://*.captcha-open-b.aliyuncs.com https://*.captcha-open-dual.aliyuncs.com https://*.captcha-open-dual-b.aliyuncs.com https://cloudauth-device.aliyuncs.com https://cloudauth-device-dualstack.cn-shanghai.aliyuncs.com https://cn-shanghai.device.saf.aliyuncs.com https://upload.captcha-open.aliyuncs.com https://upload.captcha-open-b.aliyuncs.com https://static-captcha.aliyuncs.com; media-src 'self' https: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+    "content-type": "text/event-stream; charset=utf-8",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "date": "Wed, 21 Oct 2026 12:26:30 GMT",
+    "origin-agent-cluster": "?1",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "transfer-encoding": "chunked",
+    "vary": "Accept-Encoding",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-tr-frontend-cohort": "base",
+    "x-tr-frontend-commit": "202a213f0a5b256cfecd05fb181e4202ea801689",
+    "x-trace-id": "trace_bb41bb1a-cb94-4dd1-bd37-7993bcb08985",
+    "x-xss-protection": "0"
+  },
+  "body": "data: {\"id\":\"02179258559003341b543c0bdbbf2d644f33f27e04d485ee4ed51\",\"created\":1792585589,\"model\":\"deepseek-v4.1-flash-1017\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"\",\"content\":\"\",\"role\":\"assistant\"}}],\"service_tier\":\"default\",\"usage\":null}\n\ndata: {\"id\":\"02179258559003341b543c0bdbbf2d644f33f27e04d485ee4ed51\",\"created\":1792585589,\"model\":\"deepseek-v4.1-flash-1017\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"\",\"content\":\"ok\"}}],\"service_tier\":\"default\",\"usage\":null}\n\ndata: {\"id\":\"02179258559003341b543c0bdbbf2d644f33f27e04d485ee4ed51\",\"object\":\"chat.completion.chunk\",\"created\":1792585589,\"model\":\"deepseek-v4.1-flash-1017\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\ndata: {\"id\":\"02179258559003341b543c0bdbbf2d644f33f27e04d485ee4ed51\",\"created\":1792585589,\"model\":\"deepseek-v4.1-flash-1017\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":null}\n\ndata: {\"id\":\"02179258559003341b543c0bdbbf2d644f33f27e04d485ee4ed51\",\"object\":\"chat.completion.chunk\",\"created\":1792585589,\"model\":\"deepseek-v4.1-flash-1017\",\"choices\":[],\"usage\":{\"completion_tokens\":2,\"prompt_tokens\":32,\"total_tokens\":34,\"completion_tokens_details\":{\"reasoning_tokens\":0},\"prompt_tokens_details\":{\"cached_tokens\":0}},\"cost_cny\":\"0.00004000\",\"billing_pending\":false,\"trace_id\":\"trace_bb41bb1a-cb94-4dd1-bd37-7993bcb08985\",\"reasoning_available\":false}\n\ndata: [DONE]\n\n"
+}

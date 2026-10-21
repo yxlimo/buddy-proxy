@@ -32,6 +32,7 @@ import { readEnvFlag, readEnvNumber, readEnvString } from "./lib/env.ts";
 import { AUTH_MODE, AuthError, credentialStatus, readCredential } from "./lib/minimax-auth.ts";
 import { ensureMinimaxSession } from "./lib/login.ts";
 import { modelsPayload } from "./lib/minimax-models.ts";
+import { fetchMiniMaxBalance, type MiniMaxBalance } from "./lib/minimax-credits.ts";
 
 const PORT = readEnvNumber("MINIMAX_PORT", 6448);
 const REGION = readEnvString("MINIMAX_REGION", "cn");
@@ -271,7 +272,17 @@ app.get("/v1/models", (req: any, res: any) => {
   res.json(modelsPayload());
 });
 
-app.get("/health", (_req: any, res: any) => {
+app.get("/health", async (_req: any, res: any) => {
+  // The account balance, as far as the session can tell.
+  let balance: MiniMaxBalance | null = null;
+  if (ENABLED) {
+    try {
+      const cred = await readCredential(false);
+      balance = await fetchMiniMaxBalance(cred.accessToken, REGION === "en" ? "global" : "cn");
+    } catch {
+      balance = null;
+    }
+  }
   res.json({
     status: "ok",
     enabled: ENABLED,
@@ -282,6 +293,7 @@ app.get("/health", (_req: any, res: any) => {
     auth: REQUIRE_API_KEY ? "required" : "public",
     // A disabled proxy has no credential to report, and does not look for one.
     ...(ENABLED ? { credential: credentialStatus() } : {}),
+    ...(ENABLED ? { balance } : {}),
   });
 });
 

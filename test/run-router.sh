@@ -14,6 +14,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 export WORKBUDDY_CN=true QODER_CN=true QODER_GLOBAL=true MINIMAX_CODE=true
+# The relay station is only served when its accounts are configured.
+export TOKENRHYTHM="${TOKENRHYTHM:-}"
 export WORKBUDDY_DATA_DIR="${WORKBUDDY_DATA_DIR:-$HOME/.workbuddy-proxy}"
 export QODER_DATA_DIR="${QODER_DATA_DIR:-$HOME/.qoder-proxy}"
 export ROUTER_PORT="$PORT"
@@ -26,6 +28,7 @@ if [ -n "$BASE" ]; then
   export QODER_CN_OPENAPI_BASE="$BASE/openapi-cn"
   export WORKBUDDY_CHAT_BASE="$BASE/workbuddy"
   export MINIMAX_UPSTREAM_URL="$BASE/minimax"
+  export TOKENRHYTHM_INFER_BASE="$BASE/tokenrhythm/v1"
 else
   export MINIMAX_UPSTREAM_URL="${MINIMAX_UPSTREAM_URL:-http://192.168.50.4:6448}"
 fi

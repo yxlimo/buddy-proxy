@@ -20,6 +20,11 @@ if [ ! -d "$FIXTURES" ] || [ -z "$(ls -A "$FIXTURES" 2>/dev/null)" ]; then
   exit 1
 fi
 
+# The relay station needs an account and a key; without them it stays off.
+if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
+  export TOKENRHYTHM=true
+fi
+
 node --experimental-strip-types test/mock-server.ts "$MOCK_PORT" > /tmp/opencode/mock-server.log 2>&1 &
 MOCK_PID=$!
 bash test/run-router.sh "$ROUTER_PORT" "http://127.0.0.1:$MOCK_PORT" > /tmp/opencode/smoke-router.log 2>&1 &

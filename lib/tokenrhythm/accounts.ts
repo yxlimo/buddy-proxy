@@ -1,0 +1,359 @@
+// lib/tokenrhythm/accounts.ts — the TokenRhythm accounts.
+//
+// TokenRhythm is a relay station: one account, one wallet, one inference key.
+// The wallet is only readable with the session cookie, and the session comes
+// from a login with the account and password — the proxy does that itself and
+// keeps the cookie on this machine, so the browser and CookieCloud are not in
+// the way.
+//
+// The credentials live in the environment, one set per tenant:
+//
+//   TOKEN_RHYTHM_1_ACCOUNT=...
+//   TOKEN_RHYTHM_1_PASSWORD=...
+//   TOKEN_RHYTHM_1_API_KEY=sk_tr_...      (the key the inference uses)
+//
+// The account and the password are for the wallet; the key is for the
+// inference. They are different things on the platform: the key cannot read
+// the wallet, and the session cannot call the models.
+
+import fs from "node:fs";
+import path from "node:path";
+import { readEnvValue, readEnvString } from "../env.ts";
+
+export const TOKENRHYTHM_API_BASE = readEnvString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
+export const TOKENRHYTHM_INFER_BASE = readEnvString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
+
+/** One account, and the key that belongs to it. */
+export interface TokenRhythmTenant {
+  /** The number in the environment variable names. */
+  index: number;
+  account: string;
+  password: string;
+  /** The key the inference uses, when it is configured. */
+  apiKey: string | null;
+}
+
+/** How many tenants the environment may hold. */
+const MAX_TENANTS = 32;
+
+/** The tenants the environment names, in order. */
+export function tokenRhythmTenants(): TokenRhythmTenant[] {
+  const out: TokenRhythmTenant[] = [];
+  for (let index = 1; index <= MAX_TENANTS; index++) {
+    const account = readEnvValue(`TOKEN_RHYTHM_${index}_ACCOUNT`);
+    const password = readEnvValue(`TOKEN_RHYTHM_${index}_PASSWORD`);
+    if (!account || !password) continue;
+    const key = readEnvValue(`TOKEN_RHYTHM_${index}_API_KEY`);
+    out.push({ index, account, password, apiKey: key || null });
+  }
+  return out;
+}
+
+/** The tenant with this number, if the environment names it. */
+export function tokenRhythmTenant(index: number): TokenRhythmTenant | null {
+  return tokenRhythmTenants().find((t) => t.index === index) ?? null;
+}
+
+/* ------------------------------------------------------------------ *
+ * The session
+ * ------------------------------------------------------------------ */
+
+export interface TokenRhythmSession {
+  index: number;
+  /** The cookies the session needs. */
+  cookie: string;
+  /** The CSRF token, for the writes that need it. */
+  csrf: string;
+  userId: string;
+  name: string;
+  obtainedAtMs: number;
+  /** The cookie lives for thirty days. */
+  expiresAtMs: number;
+}
+
+export function dataDir(): string {
+  const explicit = readEnvString("TOKENRHYTHM_DATA_DIR", "");
+  if (explicit) return explicit;
+  return fs.existsSync("/data") ? "/data" : path.join(process.env.HOME ?? "/tmp", ".tokenrhythm-proxy");
+}
+
+export function sessionPath(index: number): string {
+  return path.join(dataDir(), `tokenrhythm-session.${index}.json`);
+}
+
+export function loadSession(index: number): TokenRhythmSession | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(sessionPath(index), "utf8"));
+    if (!raw || typeof raw !== "object" || !raw.cookie) return null;
+    if (typeof raw.expiresAtMs === "number" && raw.expiresAtMs < Date.now()) return null;
+    return raw as TokenRhythmSession;
+  } catch {
+    return null;
+  }
+}
+
+/** Atomic write, 0600 — this file is a credential. */
+export function saveSession(session: TokenRhythmSession): void {
+  const file = sessionPath(session.index);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(session, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+export class TokenRhythmError extends Error {
+  status: number;
+  constructor(message: string, status = 502) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Log in with the account and password, and keep the session. */
+export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSession> {
+  const r = await fetch(`${TOKENRHYTHM_API_BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ account: tenant.account, password: tenant.password }),
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    throw new TokenRhythmError(`登录失败（HTTP ${r.status}）：${text.slice(0, 200)}`, 502);
+  }
+  const jar = r.headers.getSetCookie?.() ?? [];
+  const cookie = jar.map((c) => c.split(";")[0]).join("; ");
+  if (!cookie.includes("tr_session=")) {
+    throw new TokenRhythmError("登录没有拿到会话 cookie", 502);
+  }
+  let body: any = {};
+  try {
+    body = JSON.parse(text);
+  } catch {
+    /* the cookies are what matter */
+  }
+  const session: TokenRhythmSession = {
+    index: tenant.index,
+    cookie,
+    csrf: (jar.find((c) => c.startsWith("tr_csrf=")) ?? "").split("=")[1] ?? "",
+    userId: String(body?.data?.user?.id ?? ""),
+    name: String(body?.data?.user?.name ?? ""),
+    obtainedAtMs: Date.now(),
+    expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
+  };
+  saveSession(session);
+  return session;
+}
+
+/** The session for a tenant: the stored one, or a fresh login. */
+export async function sessionFor(index: number): Promise<TokenRhythmSession> {
+  const stored = loadSession(index);
+  if (stored) return stored;
+  const tenant = tokenRhythmTenant(index);
+  if (!tenant) throw new TokenRhythmError(`没有配置第 ${index} 个租户`, 500);
+  return login(tenant);
+}
+
+/* ------------------------------------------------------------------ *
+ * The wallet
+ * ------------------------------------------------------------------ */
+
+export interface TokenRhythmWallet {
+  currency: string;
+  /** What is there to spend. */
+  availableCny: number;
+  /** The part of it that was given and expires. */
+  giftAvailableCny: number;
+  /** The part of it that was paid for and does not expire. */
+  rechargeCny: number;
+  giftTotalCny: number;
+  giftStatus: string;
+  asOf: string | null;
+}
+
+export interface TokenRhythmGift {
+  id: string;
+  source: string;
+  sourceLabel: string;
+  remainingCny: number;
+  expiresAt: string | null;
+  status: string;
+}
+
+export interface TokenRhythmCredits {
+  /** The gift money that is running out. */
+  expiringCny: number;
+  /** When the next of it runs out. */
+  nextExpiryAt: string | null;
+  list: TokenRhythmGift[];
+}
+
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** Ask the platform for something, with the session cookie. */
+async function apiGet<T>(path: string, session: TokenRhythmSession): Promise<T> {
+  const r = await fetch(`${TOKENRHYTHM_API_BASE}${path}`, {
+    headers: {
+      Cookie: session.cookie,
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
+    },
+    signal: AbortSignal.timeout(20_000),
+  });
+  const text = await r.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  if (r.status === 401 || r.status === 403) {
+    // The session is gone: drop it, so the next call logs in again.
+    try {
+      fs.rmSync(sessionPath(session.index), { force: true });
+    } catch {
+      /* nothing to clean up */
+    }
+    throw new TokenRhythmError("登录已过期", 503);
+  }
+  if (!r.ok) {
+    throw new TokenRhythmError(`接口失败（HTTP ${r.status}）：${body?.message ?? text.slice(0, 200)}`);
+  }
+  if (body && typeof body.code !== "undefined" && body.code !== 0) {
+    throw new TokenRhythmError(`接口返回 code=${body.code}：${body.message ?? ""}`);
+  }
+  if (!body || typeof body.data === "undefined") {
+    throw new TokenRhythmError("接口响应结构异常，缺少 data 字段");
+  }
+  return body.data as T;
+}
+
+export async function wallet(session: TokenRhythmSession): Promise<TokenRhythmWallet> {
+  const data = await apiGet<any>("/api/wallet/summary", session);
+  return {
+    currency: String(data?.currency ?? "CNY"),
+    availableCny: num(data?.availableBalanceCny),
+    giftAvailableCny: num(data?.giftAvailableCny),
+    rechargeCny: num(data?.rechargeBalanceCny),
+    giftTotalCny: num(data?.giftTotalCny),
+    giftStatus: String(data?.giftStatus ?? ""),
+    asOf: data?.asOf ?? null,
+  };
+}
+
+export async function credits(session: TokenRhythmSession): Promise<TokenRhythmCredits> {
+  const data = await apiGet<any>(
+    "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
+    session,
+  );
+  const list: TokenRhythmGift[] = (Array.isArray(data?.list) ? data.list : []).map((row: any) => ({
+    id: String(row?.id ?? ""),
+    source: String(row?.source ?? ""),
+    sourceLabel: String(row?.sourceLabel ?? ""),
+    remainingCny: num(row?.remainingCny),
+    expiresAt: row?.expiresAt ?? null,
+    status: String(row?.status ?? ""),
+  }));
+  return {
+    expiringCny: num(data?.summary?.expiringBalanceCny),
+    nextExpiryAt: data?.summary?.nextExpiryAt ?? null,
+    list,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * The tenants, as a whole
+ * ------------------------------------------------------------------ */
+
+export interface TokenRhythmTenantStatus {
+  index: number;
+  /** The account, hidden: only the last two digits are shown. */
+  account: string;
+  name: string;
+  /** Whether the tenant has a key for the inference. */
+  hasKey: boolean;
+  wallet: TokenRhythmWallet | null;
+  credits: TokenRhythmCredits | null;
+  error: string | null;
+}
+
+const mask = (account: string): string =>
+  account.length <= 4 ? "***" : `${account.slice(0, 3)}***${account.slice(-2)}`;
+
+/** What every tenant has, as far as the platform says. */
+export async function tenantStatuses(): Promise<TokenRhythmTenantStatus[]> {
+  const tenants = tokenRhythmTenants();
+  const out: TokenRhythmTenantStatus[] = [];
+  for (const tenant of tenants) {
+    const status: TokenRhythmTenantStatus = {
+      index: tenant.index,
+      account: mask(tenant.account),
+      name: "",
+      hasKey: Boolean(tenant.apiKey),
+      wallet: null,
+      credits: null,
+      error: null,
+    };
+    try {
+      const session = await sessionFor(tenant.index);
+      status.name = session.name;
+      status.wallet = await wallet(session);
+      status.credits = await credits(session);
+    } catch (e) {
+      status.error = (e as Error).message;
+    }
+    out.push(status);
+  }
+  return out;
+}
+
+/**
+ * The tenant a request should go to.
+ *
+ * The gift money expires, so the gift that runs out first is the one to spend
+ * first; the money that was paid for does not expire and is the last resort.
+ * A tenant with neither is skipped.
+ */
+export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus | null {
+  const usable = statuses.filter((s) => !s.error && s.hasKey && (s.wallet?.availableCny ?? 0) > 0);
+  if (!usable.length) return null;
+
+  const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
+  const pool = withGift.length ? withGift : usable;
+  // The soonest expiry first. A tenant without one never expires, so it sorts
+  // last among the gift money.
+  const expiry = (s: TokenRhythmTenantStatus): number => {
+    const at = s.credits?.nextExpiryAt;
+    if (!at) return Number.POSITIVE_INFINITY;
+    const t = Date.parse(at);
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  };
+  return pool.sort((a, b) => expiry(a) - expiry(b))[0] ?? null;
+}
+
+/* ------------------------------------------------------------------ *
+ * The cached view
+ * ------------------------------------------------------------------ */
+
+let cache: { at: number; statuses: TokenRhythmTenantStatus[] } | null = null;
+
+/**
+ * The tenants' status, from a recent answer.
+ *
+ * Asking the platform for every wallet on every request would be slow, so the
+ * answer is kept for a few minutes. A request that has to know which tenant to
+ * use asks for the cached view.
+ */
+export async function tokenRhythmStatuses(maxAgeMs = 300_000): Promise<TokenRhythmTenantStatus[]> {
+  if (cache && Date.now() - cache.at < maxAgeMs) return cache.statuses;
+  const statuses = await tenantStatuses();
+  cache = { at: Date.now(), statuses };
+  return statuses;
+}
+
+/** Throw the cached view away, so the next question goes to the platform. */
+export function resetTokenRhythmStatusCache(): void {
+  cache = null;
+}

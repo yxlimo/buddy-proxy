@@ -15,6 +15,11 @@ PROXY_PORT="${PROXY_PORT:-6699}"
 ROUTER_PORT="${ROUTER_PORT:-6698}"
 FIXTURES="$ROOT/test/fixtures"
 
+# The relay station needs an account and a key; without them it stays off.
+if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
+  export TOKENRHYTHM=true
+fi
+
 # The MiniMax upstream of the recording proxy: the real one.
 export MINIMAX_UPSTREAM_URL="${MINIMAX_UPSTREAM_URL:-http://192.168.50.4:6448}"
 

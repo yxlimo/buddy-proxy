@@ -12,10 +12,11 @@
 import { QODER_EFFORTS, qoderLabel, type QoderModel } from "../qoder-models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy-models.ts";
 import type { MiniMaxModel } from "../minimax-models.ts";
+import { TOKENRHYTHM_MODELS } from "../tokenrhythm/transport.ts";
 
-export type UpstreamGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax";
+export type UpstreamGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax" | "tokenrhythm";
 
-export const UPSTREAM_GROUPS: UpstreamGroup[] = ["qoder", "qoder-cn", "workbuddy-cn", "minimax"];
+export const UPSTREAM_GROUPS: UpstreamGroup[] = ["qoder", "qoder-cn", "workbuddy-cn", "minimax", "tokenrhythm"];
 
 /** The prefix the server puts in front of a model id. */
 export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
@@ -23,6 +24,7 @@ export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
   "qoder-cn": "qoder-cn/",
   "workbuddy-cn": "workbuddy-cn/",
   minimax: "minimax/",
+  tokenrhythm: "tokenrhythm/",
 };
 
 /** A model, the same whatever the shape the client wants it in. */
@@ -86,6 +88,17 @@ export function minimaxCatalogModels(models: MiniMaxModel[]): CatalogModel[] {
     contextWindow: m.context,
     maxOutputTokens: m.output,
     effortOptions: m.effortOptions,
+  }));
+}
+
+export function tokenRhythmCatalogModels(): CatalogModel[] {
+  return TOKENRHYTHM_MODELS.map((m) => ({
+    id: m.id,
+    displayName: m.name,
+    reasoning: m.reasoning,
+    toolCall: m.toolCall,
+    contextWindow: m.context,
+    maxOutputTokens: m.maxOutput,
   }));
 }
 

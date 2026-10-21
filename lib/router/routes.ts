@@ -13,7 +13,7 @@ export { GROUP_PREFIX, UPSTREAM_GROUPS };
 export type { UpstreamGroup };
 
 export interface Route {
-  upstream: "qoder" | "minimax" | "workbuddy";
+  upstream: "qoder" | "minimax" | "workbuddy" | "tokenrhythm";
   /** The model as the server names it: prefixed, e.g. `qoder-cn/glm-5.3`. */
   model: string;
   /** Which Qoder region to talk to. Unset for MiniMax. */
@@ -27,6 +27,7 @@ export interface RoutingContext {
     qoderGlobal: boolean;
     qoderCn: boolean;
     workbuddyCn: boolean;
+    tokenrhythm: boolean;
   };
   /** The models each upstream can serve. */
   ids: {
@@ -35,6 +36,7 @@ export interface RoutingContext {
     qoderHidden: Set<string>;
     minimax: Set<string>;
     workbuddy: Set<string>;
+    tokenrhythm: Set<string>;
   };
 }
 
@@ -59,9 +61,17 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
   if (raw.startsWith("workbuddy-cn/")) return workbuddyRoute(raw.slice("workbuddy-cn/".length), ctx);
   if (raw.startsWith("qoder-cn/")) return qoderRoute(raw.slice("qoder-cn/".length), "cn", ctx);
   if (raw.startsWith("qoder/")) return qoderRoute(raw.slice("qoder/".length), "global", ctx);
+  if (raw.startsWith("tokenrhythm/")) {
+    if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
+    return { upstream: "tokenrhythm", model: raw };
+  }
   if (raw.startsWith("minimax/")) {
     if (!ctx.enabled.minimax) throw disabledUpstream("minimax");
     return { upstream: "minimax", model: raw };
+  }
+  if (ctx.ids.tokenrhythm.has(raw)) {
+    if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
+    return { upstream: "tokenrhythm", model: `tokenrhythm/${raw}` };
   }
   if (ctx.ids.minimax.has(raw)) {
     if (!ctx.enabled.minimax) throw disabledUpstream("minimax");
@@ -81,7 +91,7 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
   if (ctx.ids.qoderHidden.has(raw)) throw unavailableQoderModel(raw, ctx);
   throw new AuthError(
     `unknown model "${raw}"`,
-    `这个模型不在目录里。用 qoder/、workbuddy-cn/ 或 minimax/ 前缀显式指定，例如 qoder/auto、workbuddy-cn/glm-5.3、minimax/MiniMax-M3。`,
+    `这个模型不在目录里。用 qoder/、workbuddy-cn/、minimax/ 或 tokenrhythm/ 前缀显式指定，例如 qoder/auto、workbuddy-cn/glm-5.3、minimax/MiniMax-M3、tokenrhythm/deepseek-v4.1-flash-1017。`,
     400,
   );
 }
@@ -100,6 +110,17 @@ export function routeInGroup(group: UpstreamGroup, id: string, ctx: RoutingConte
       return qoderRoute(id, "cn", ctx);
     case "workbuddy-cn":
       return workbuddyRoute(id, ctx);
+    case "tokenrhythm": {
+      if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
+      if (!ctx.ids.tokenrhythm.has(id)) {
+        throw new AuthError(
+          `unknown model "${id}"`,
+          `TokenRhythm 没有这个模型。可用：${[...ctx.ids.tokenrhythm].join("、")}。`,
+          400,
+        );
+      }
+      return { upstream: "tokenrhythm", model: `tokenrhythm/${id}` };
+    }
     case "minimax": {
       if (!ctx.enabled.minimax) throw disabledUpstream("minimax");
       if (!ctx.ids.minimax.has(id)) {
@@ -128,9 +149,19 @@ function workbuddyRoute(id: string, ctx: RoutingContext): Route {
 }
 
 /** An upstream that this router is not serving, because it was not enabled. */
-export function disabledUpstream(which: "minimax" | "qoder-global" | "qoder-cn" | "workbuddy-cn"): AuthError {
+export function disabledUpstream(
+  which: "minimax" | "qoder-global" | "qoder-cn" | "workbuddy-cn" | "tokenrhythm",
+): AuthError {
   const flag =
-    which === "minimax" ? "MINIMAX_CODE" : which === "qoder-cn" ? "QODER_CN" : which === "workbuddy-cn" ? "WORKBUDDY_CN" : "QODER_GLOBAL";
+    which === "minimax"
+      ? "MINIMAX_CODE"
+      : which === "qoder-cn"
+        ? "QODER_CN"
+        : which === "workbuddy-cn"
+          ? "WORKBUDDY_CN"
+          : which === "tokenrhythm"
+            ? "TOKENRHYTHM"
+            : "QODER_GLOBAL";
   const what =
     which === "minimax"
       ? "MiniMax Code"
@@ -138,7 +169,9 @@ export function disabledUpstream(which: "minimax" | "qoder-global" | "qoder-cn" 
         ? "Qoder 中国区"
         : which === "workbuddy-cn"
           ? "WorkBuddy 中国区"
-          : "Qoder 全球区";
+          : which === "tokenrhythm"
+            ? "TokenRhythm"
+            : "Qoder 全球区";
   return new AuthError(
     `${which} is not enabled`,
     `${what}没有启用。设置 ${flag}=true 后重启 router。`,

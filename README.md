@@ -13,7 +13,7 @@ one base URL — see [Router](#router-router-proxyts-port-6450).
 
 ## What is switched on
 
-There are three reverse proxies behind this, and each has a switch. All three
+There are five reverse proxies behind this, and each has a switch. All of them
 are **off by default**; turn on the ones you actually use.
 
 | Switch | Turns on |
@@ -22,6 +22,7 @@ are **off by default**; turn on the ones you actually use.
 | `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
 | `QODER_CN=true` | the Qoder China account (qoder.cn) |
 | `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
+| `TOKENRHYTHM=true` | the TokenRhythm relay station (tokenrhythm.studio) |
 
 A proxy that is switched off is not looked at: no credential is read, no login
 is attempted, no models are advertised, and a request for one is refused with a
@@ -29,7 +30,7 @@ message saying which switch to flip. The two Qoder regions are separate
 accounts, so they are switched on separately, and WorkBuddy's China account is
 a third one.
 
-The router reads all four; the MiniMax proxy reads `MINIMAX_CODE`.
+The router reads all five; the MiniMax proxy reads `MINIMAX_CODE`.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -348,10 +349,12 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
 | `MINIMAX_REFRESH_BUFFER_MS` | `300000` | refresh this far before expiry |
 | `MINIMAX_LOCK_STALE_MS` | `30000` | a lock older than this is taken over |
+| `MINIMAX_API_BASE` | `https://api.minimax.cn` | the platform the balance is read from |
+| `MINIMAX_TOKEN_PLAN_KEY` | — | the token plan's key (`sk-cp-…`); the plan's usage is reported when it is set |
 
 ## Router (`router-proxy.ts`, port 6450)
 
-One entry point, two dialects, three upstreams. The model name decides the
+One entry point, two dialects, five upstreams. The model name decides the
 upstream; the dialect decides how much translation happens.
 
 | Method | Path | Format |
@@ -617,6 +620,74 @@ rejected with code 11133, so it is left out.
 | `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |
 | `WORKBUDDY_LOGIN_TIMEOUT_MS` | `600000` | how long to wait for the browser approval |
 
+## TokenRhythm (the relay station)
+
+TokenRhythm is a relay station: the models are other people's, the account
+holds the money, and the platform speaks the OpenAI dialect — so there is
+nothing private to reverse here. What the gateway adds is the part a relay
+does not do: it keeps several accounts and spends them in the right order.
+
+### The accounts
+
+Each account is a set of environment variables, and there can be many:
+
+```bash
+TOKEN_RHYTHM_1_ACCOUNT=...
+TOKEN_RHYTHM_1_PASSWORD=...
+TOKEN_RHYTHM_1_API_KEY=sk_tr_...
+```
+
+The account and the password are for the **wallet**: the proxy logs in with
+them, keeps the session cookie on this machine, and reads the balance. The key
+is for the **inference**. The two are different things on the platform — the
+key cannot read the wallet (every balance endpoint answers 401 for it), and
+the session cannot call the models.
+
+The key is not created for you: the platform's key management needs a CSRF
+token the browser has, so the key comes from the environment. Without one the
+account still shows its balance, it just cannot serve a request.
+
+### Which account pays
+
+The gift money expires, the money that was paid for does not. So a request
+goes to the account whose gift runs out first, and the account with only paid
+money is the last resort. The balance and the expiry of every account are in
+`/health`:
+
+```json
+{
+  "index": 1,
+  "account": "175***32",
+  "hasKey": true,
+  "wallet": { "availableCny": 100.43, "giftAvailableCny": 50.43, "rechargeCny": 50 },
+  "credits": { "expiringCny": 50.43, "nextExpiryAt": "2026-11-19T04:28:10.883Z" }
+}
+```
+
+### The thinking rule
+
+DeepSeek's thinking mode wants the assistant's `reasoning_content` back when
+the request ends with a tool result — even an empty string. A client that
+switched models mid-conversation leaves the field out, and the upstream
+answers 400. The gateway puts it back (`lib/tokenrhythm/transport.ts`).
+
+### Models
+
+One model for now: `deepseek-v4.1-flash-1017`, a million tokens of context and
+384000 of output.
+
+### Environment
+
+| Variable | Default | What |
+|----------|---------|------|
+| `TOKENRHYTHM` | `false` | switch the relay station on |
+| `TOKEN_RHYTHM_<n>_ACCOUNT` | — | the account of the nth tenant |
+| `TOKEN_RHYTHM_<n>_PASSWORD` | — | its password |
+| `TOKEN_RHYTHM_<n>_API_KEY` | — | the key its inference uses |
+| `TOKENRHYTHM_DATA_DIR` | `~/.tokenrhythm-proxy` | where the sessions live (`/data` in Docker) |
+| `TOKENRHYTHM_API_BASE` | `https://tokenrhythm.studio` | the platform |
+| `TOKENRHYTHM_INFER_BASE` | `{api}/v1` | where the models are called |
+
 ## Device fingerprint
 
 Both upstreams look at the machine code and the session id that come with a
@@ -684,8 +755,25 @@ not looked at.
 
 ### What is left
 
-The balance is in `/health`, per account: the plan's own credits and the ones
-bought on top of it, both for Qoder, and the check-in numbers for WorkBuddy.
+The balance is in `/health`, per account. Every upstream has its own way of
+answering:
+
+| Upstream | Where the numbers come from |
+|----------|-----------------------------|
+| MiniMax | the account balance (`/account/query_balance`) and, with a plan key, the plan's own windows (`/v1/token_plan/remains`) |
+| Qoder | the plan's credits and the ones bought on top (`/api/v2/quota/usage`) |
+| WorkBuddy | the check-in status, which carries the daily and the total |
+| TokenRhythm | the wallet and the gift that expires (`/api/wallet/summary`, `/api/wallet/expiring-credits`) |
+
+The MiniMax plan runs in two windows — five hours and a week — and what is
+left of each is a percentage. The plan's key is the API key (`sk-cp-…`), not
+the OAuth session the Code gateway uses, so it is a separate variable:
+
+| Variable | What |
+|----------|------|
+| `MINIMAX_TOKEN_PLAN_KEY` | the token plan's key; the plan's usage is left out when it is not set |
+
+The Qoder numbers look like this:
 
 ```json
 "credits": {
@@ -696,9 +784,6 @@ bought on top of it, both for Qoder, and the check-in numbers for WorkBuddy.
   "resetsAt": "2026-11-03T07:28:22.099Z"
 }
 ```
-
-The Qoder numbers come from `/api/v2/quota/usage`, the WorkBuddy ones from the
-check-in status.
 
 | Variable | Default | What |
 |----------|---------|------|

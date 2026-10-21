@@ -20,6 +20,8 @@ import { qoderChatCompletion, LimitError } from "../qoder-transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../qoder-legacy.ts";
 import { workbuddyChat, aggregateStream } from "../workbuddy-transport.ts";
 import { MINIMAX_MODELS } from "../minimax-models.ts";
+import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/accounts.ts";
+import { tokenRhythmChat } from "../tokenrhythm/transport.ts";
 import type { QoderRegion } from "../qoder-auth.ts";
 import {
   deliverAnthropicStream,
@@ -382,3 +384,59 @@ export async function toMinimax(
   await deliverAnthropicStream(res, r.body!, dialect, upstreamModel(route));
 }
 
+
+/**
+ * TokenRhythm, the relay station.
+ *
+ * The upstream speaks the OpenAI dialect, so a request in that dialect goes
+ * out nearly unchanged and the answer comes back the same way. An Anthropic
+ * request is converted first.
+ *
+ * Which account pays for it is decided by the gift money: the gift that runs
+ * out first is spent first, and the money that was paid for is the last
+ * resort.
+ */
+export async function toTokenRhythm(
+  ctx: UpstreamContext,
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  res: express.Response,
+): Promise<void> {
+  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
+  const model = upstreamModel(route);
+  openaiBody.model = model;
+  openaiBody.stream = stream;
+
+  const statuses = await tokenRhythmStatuses();
+  const tenant = pickTenant(statuses);
+  if (!tenant) {
+    throw new AuthError(
+      "no tokenrhythm account has credit left",
+      "TokenRhythm 的账号都没有可用的余额了。",
+      503,
+    );
+  }
+  if (ctx.logRoute) {
+    console.log(`[ROUTE] tokenrhythm model=${route.model} tenant=${tenant.index} stream=${stream}`);
+  }
+
+  const { response } = await tokenRhythmChat(tenant.index, openaiBody);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new AuthError(
+      `upstream HTTP ${response.status}`,
+      `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
+      502,
+    );
+  }
+
+  if (!stream) {
+    const json = await response.json();
+    deliverJson(res, dialect, "openai", json, model);
+    return;
+  }
+
+  await deliverOpenAIStream(res, response.body!, dialect, model);
+}

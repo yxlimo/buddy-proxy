@@ -24,6 +24,10 @@ import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder-transport.ts";
 import { QODER_MODELS, qoderModelsForRegion } from "./lib/qoder-models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
+import { miniMaxTokenPlan } from "./lib/minimax-credits.ts";
+import { tokenRhythmCatalogModels } from "./lib/router/catalog.ts";
+import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/transport.ts";
+import { tokenRhythmStatuses } from "./lib/tokenrhythm/accounts.ts";
 import { qoderStatus, checkAccountHealth, fetchQoderCredits, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy-auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy-transport.ts";
@@ -32,6 +36,7 @@ import { ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
 import {
   toMinimax,
   toQoder,
+  toTokenRhythm,
   toWorkBuddy,
   type UpstreamContext,
 } from "./lib/router/upstreams.ts";
@@ -65,6 +70,7 @@ const ENABLED_MINIMAX = readEnvFlag("MINIMAX_CODE", false);
 const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
 const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
 const ENABLED_WORKBUDDY_CN = readEnvFlag("WORKBUDDY_CN", false);
+const ENABLED_TOKENRHYTHM = readEnvFlag("TOKENRHYTHM", false);
 
 /* ------------------------------------------------------------------ *
  * The daily benefits of the China accounts
@@ -171,9 +177,19 @@ app.get("/health", async (_req, res) => {
       qoderGlobal: ENABLED_QODER_GLOBAL,
       qoderCn: ENABLED_QODER_CN,
       workbuddyCn: ENABLED_WORKBUDDY_CN,
+      tokenrhythm: ENABLED_TOKENRHYTHM,
     },
     upstreams: {
-      minimax: ENABLED_MINIMAX ? { base: MINIMAX_BASE, models: MINIMAX_VISIBLE.length } : { enabled: false },
+      minimax: ENABLED_MINIMAX
+        ? {
+            base: MINIMAX_BASE,
+            models: MINIMAX_VISIBLE.length,
+            // What the MiniMax account has left: the money on the platform
+            // account, and the plan's own windows.
+            balance: await miniMaxBalance(),
+            tokenPlan: await miniMaxTokenPlan(),
+          }
+        : { enabled: false },
       qoder: { regions },
       workbuddy: ENABLED_WORKBUDDY_CN
         ? {
@@ -181,6 +197,12 @@ app.get("/health", async (_req, res) => {
             models: WORKBUDDY_CN.length,
             credential: workbuddyStatus("cn"),
             credits: await fetchWorkBuddyCredits(),
+          }
+        : { enabled: false },
+      tokenrhythm: ENABLED_TOKENRHYTHM
+        ? {
+            models: TOKENRHYTHM_MODELS.length,
+            tenants: await tokenRhythmStatuses(),
           }
         : { enabled: false },
     },
@@ -208,6 +230,7 @@ function catalogGroups(): CatalogGroup[] {
   if (QODER_CN.length) groups.push({ group: "qoder-cn", models: qoderCatalogModels(QODER_CN) });
   if (WORKBUDDY_CN.length) groups.push({ group: "workbuddy-cn", models: workbuddyCatalogModels(WORKBUDDY_CN) });
   if (MINIMAX_VISIBLE.length) groups.push({ group: "minimax", models: minimaxCatalogModels(MINIMAX_VISIBLE) });
+  if (ENABLED_TOKENRHYTHM) groups.push({ group: "tokenrhythm", models: tokenRhythmCatalogModels() });
   return groups;
 }
 
@@ -224,6 +247,22 @@ function upstreamContext(): UpstreamContext {
   };
 }
 
+/**
+ * The MiniMax account's balance, as the MiniMax proxy reports it.
+ *
+ * The proxy holds the session, so it is the one that can ask the platform.
+ */
+async function miniMaxBalance(): Promise<unknown> {
+  try {
+    const r = await fetch(`${MINIMAX_BASE}/health`, { signal: AbortSignal.timeout(8_000) });
+    if (!r.ok) return null;
+    const body: any = await r.json().catch(() => null);
+    return body?.balance ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** What the router is serving, and what it knows about. */
 function routingContext(): RoutingContext {
   return {
@@ -232,6 +271,7 @@ function routingContext(): RoutingContext {
       qoderGlobal: ENABLED_QODER_GLOBAL,
       qoderCn: ENABLED_QODER_CN,
       workbuddyCn: ENABLED_WORKBUDDY_CN,
+      tokenrhythm: ENABLED_TOKENRHYTHM,
     },
     ids: {
       qoderGlobal: GLOBAL_QODER_IDS,
@@ -239,6 +279,7 @@ function routingContext(): RoutingContext {
       qoderHidden: QODER_HIDDEN_IDS,
       minimax: MINIMAX_MODEL_IDS,
       workbuddy: WORKBUDDY_CN_IDS,
+      tokenrhythm: TOKENRHYTHM_MODEL_IDS,
     },
   };
 }
@@ -302,6 +343,8 @@ async function handle(
       await toQoder(ctx, body, route, dialect, stream, res);
     } else if (route.upstream === "workbuddy") {
       await toWorkBuddy(ctx, body, route, dialect, stream, res);
+    } else if (route.upstream === "tokenrhythm") {
+      await toTokenRhythm(ctx, body, route, dialect, stream, res);
     } else {
       await toMinimax(ctx, body, route, dialect, stream, res);
     }
@@ -361,6 +404,9 @@ app.listen(PORT, HOST, () => {
   console.log(
     `    workbuddy cn=${ENABLED_WORKBUDDY_CN ? `${WORKBUDDY_CN.length} models` : "off"}`,
   );
+  console.log(
+    `    tokenrhythm ${ENABLED_TOKENRHYTHM ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
+  );
   console.log(`  auth: ${REQUIRE_API_KEY ? "api key required" : "public"}`);
   console.log("");
 
@@ -398,6 +444,21 @@ app.listen(PORT, HOST, () => {
         void benefits.runOnce();
       })
       .catch((e) => console.warn(`  [AUTH] workbuddy cn login failed: ${(e as Error).message}`));
+  }
+
+  if (ENABLED_TOKENRHYTHM) {
+    void tokenRhythmStatuses()
+      .then((tenants) => {
+        for (const tenant of tenants) {
+          const wallet = tenant.wallet;
+          const gift = wallet ? `${wallet.availableCny} 元` : "未知";
+          console.log(
+            `  [TOKENRHYTHM] 租户 ${tenant.index} (${tenant.account}): 可用 ${gift}` +
+              (tenant.error ? ` — ${tenant.error}` : ""),
+          );
+        }
+      })
+      .catch((e) => console.warn(`  [TOKENRHYTHM] 账号状态获取失败: ${(e as Error).message}`));
   }
 
   // The daily benefits of the China accounts: the check-in, the growth centre
