@@ -22,6 +22,10 @@ api-keys.json
 oc-workspace/
 .cortexkit/
 
+# Not needed at runtime: the tests run on a machine, not in the image.
+test/
+tools/
+
 # Not needed at runtime, and the NAS deployment ships a compose file instead
 Dockerfile
 .dockerignore

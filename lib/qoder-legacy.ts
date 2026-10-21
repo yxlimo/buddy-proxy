@@ -29,7 +29,7 @@
 
 import crypto from "node:crypto";
 import { AuthError } from "./credential.ts";
-import { ensureCredential, loadSession, deviceIdentity, type QoderRegion } from "./qoder-auth.ts";
+import { ensureCredential, loadSession, deviceIdentity, ENDPOINTS, type QoderRegion } from "./qoder-auth.ts";
 import { readEnvString } from "./env.ts";
 
 /** Qoder's server public key. Fixed; the protocol has never rotated it. */
@@ -41,11 +41,6 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`;
 
 const COSY_VERSION = "0.1.43";
-
-const LEGACY_ENDPOINTS: Record<QoderRegion, string> = {
-  cn: "https://gateway.qoder.com.cn",
-  global: "https://api3.qoder.sh",
-};
 
 /* ------------------------------------------------------------------ *
  * Qoder's base64
@@ -364,7 +359,7 @@ export async function legacyChatCompletion(
 ): Promise<Response> {
   const region = opts.region ?? "global";
   const url =
-    `${LEGACY_ENDPOINTS[region]}/algo/api/v2/service/pro/sse/agent_chat_generation` +
+    `${ENDPOINTS[region].inferLegacy}` +
     `?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`;
 
   const session = await buildSession(region);

@@ -1,0 +1,14 @@
+{
+  "upstream": "http://192.168.50.4:6448/v1/messages",
+  "status": 200,
+  "headers": {
+    "connection": "keep-alive",
+    "content-length": "561",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Wed, 21 Oct 2026 08:08:01 GMT",
+    "etag": "W/\"231-nLKcCw+eQNLsJt2Tbj7/pmPWtvI\"",
+    "keep-alive": "timeout=5",
+    "x-powered-by": "Express"
+  },
+  "body": "{\"id\":\"0727a5de16e6fedd42c7001a098ec4a0\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"MiniMax-M3.1-Flash\",\"content\":[{\"thinking\":\"We need answer exactly \\\"ok\\\" likely. User says say ok. Need comply concise.\",\"signature\":\"f6e4c627a1893cff70376f725f99353932390b08de5e7e646c4e9ab3908c082e\",\"type\":\"thinking\"},{\"text\":\"ok\",\"type\":\"text\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":22,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":203,\"output_tokens_details\":{\"thinking_tokens\":18}},\"stop_reason\":\"end_turn\",\"base_resp\":{\"status_code\":0,\"status_msg\":\"\"}}"
+}

@@ -1,0 +1,18 @@
+{
+  "upstream": "https://api2-v2.qoder.sh/model/v1/chat/completions",
+  "status": 200,
+  "headers": {
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "cache-control": "no-cache",
+    "content-type": "text/event-stream",
+    "date": "Wed, 21 Oct 2026 08:07:40 GMT",
+    "req-arrive-time": "1792570059833",
+    "req-cost-time": "935",
+    "resp-start-time": "1792570060769",
+    "server": "istio-envoy",
+    "transfer-encoding": "chunked",
+    "x-envoy-upstream-service-time": "935",
+    "x-request-id": "8fb1c1cd-83b6-4646-a86a-1c639515e5a9"
+  },
+  "body": "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"1\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\".  **An\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"alyze the Request:** The user is\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\" asking me to \\\"say ok\\\".\\n2\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\".  **Determine the appropriate response\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\":** The most direct\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\":** The most direct\",\"role\":\"assistant\"},\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\"}\n\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\":** The most direct\",\"role\":\"assistant\"},\"finish_reason\":\"length\",\"index\":0}],\"created\":1792570060,\"id\":\"20261021160740f2f2f38589be4646\",\"model\":\"gmodel\",\"object\":\"chat.completion.chunk\",\"raw_usage\":{\"account_discount\":0,\"d\nata\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":32},\"prompt_tokens\":14,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":46},\"model\":\"oem-glm-5\",\"model_account\":\"\",\"model_context\":{\"client_type\":\"\",\"data_policy_preferred_count\":0,\"from_model\":\"oem-glm-5\",\"has_data\":true,\"image_count\":0,\"intention\":\"\",\"router_strategy_name\":\"\",\"router_strategy_type\":\"\",\"scheduler_times\":1,\"target_id\":\"glm-oem-glm-5\",\"task_mode\":\"\",\"time_of_scheduler\":2,\"use_bailian_safe_mode\":false,\"use_data_mask\":false,\"workspace_code_language\":[],\"workspace_file_count\":0},\"model_level\":\"none\",\"provider_model\":\"glm-5\",\"supply_account\":\"\",\"supply_model\":\"glm-5\",\"supply_region\":\"global\",\"target\":\"glm-oem-glm-5\",\"task_mode\":\"unknown\",\"ttft\":914},\"sub_usages\":[],\"usage\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":32},\"prompt_tokens\":14,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":46}}\n\n\ndata: [DONE]\n\n\n"
+}

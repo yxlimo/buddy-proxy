@@ -410,6 +410,17 @@ export function workbuddyStatus(region: WorkBuddyRegion = "cn"): Record<string, 
  * The identity headers a chat request carries. They describe the official CLI:
  * the account, the conversation, and a trace.
  */
+/**
+ * The device id the official client sends.
+ *
+ * It is the account's own fingerprint, so two accounts never look like they
+ * sit on one machine.
+ */
+export function workbuddyDeviceId(session: WorkBuddySession): string | undefined {
+  if (!session.uid) return undefined;
+  return deriveDeviceIdentity(session.uid, deviceSalt(dataDir())).machineId;
+}
+
 export function chatHeaders(
   session: WorkBuddySession,
   opts: { conversationId?: string; turnRequestId?: string } = {},
@@ -419,9 +430,7 @@ export function chatHeaders(
   const messageId = randomUUID().replace(/-/g, "");
   const conversationId = opts.conversationId ?? randomUUID();
   const turnRequestId = opts.turnRequestId ?? randomUUID().replace(/-/g, "");
-  // The device id the official client sends. It is the account's own
-  // fingerprint, so two accounts never look like they sit on one machine.
-  const identity = session.uid ? deriveDeviceIdentity(session.uid, deviceSalt(dataDir())) : null;
+  const deviceId = workbuddyDeviceId(session);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -436,7 +445,7 @@ export function chatHeaders(
     "X-Domain": session.domain,
     "User-Agent": `CLI/${CLI_VERSION} CodeBuddy/${CLI_VERSION}`,
     "X-User-Id": session.uid || "anonymous",
-    ...(identity ? { "X-Device-Id": identity.machineId } : {}),
+    ...(deviceId ? { "X-Device-Id": deviceId } : {}),
     Authorization: `Bearer ${session.accessToken}`,
     "X-Conversation-ID": conversationId,
     "X-Conversation-Request-ID": turnRequestId,
@@ -467,6 +476,10 @@ export function chatHeaders(
 
 /** The chat endpoint of the account's own domain. */
 export function chatBase(session: WorkBuddySession): string {
+  // The override is what the mock server is reached through; without it the
+  // account's own domain is used.
+  const override = readEnvString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
+  if (override) return override;
   const host = session.domain || ENDPOINTS[session.region].base.replace(/^https?:\/\//, "");
   return `https://${host}`;
 }

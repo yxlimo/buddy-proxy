@@ -44,15 +44,16 @@ export interface QoderEndpoints {
 export const ENDPOINTS: Record<QoderRegion, QoderEndpoints> = {
   cn: {
     site: "https://qoder.cn",
-    openapi: "https://openapi.qoder.com.cn",
-    infer: "https://gateway.qoder.com.cn/model/v1/chat/completions",
-    inferLegacy: "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
+    openapi: readEnvString("QODER_CN_OPENAPI_BASE", "https://openapi.qoder.com.cn").replace(/\/+$/, ""),
+    infer: readEnvString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/model/v1/chat/completions",
+    inferLegacy: readEnvString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
   },
   global: {
     site: "https://qoder.com",
-    openapi: "https://openapi.qoder.sh",
-    infer: "https://api2-v2.qoder.sh/model/v1/chat/completions",
-    inferLegacy: "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
+    openapi: readEnvString("QODER_GLOBAL_OPENAPI_BASE", "https://openapi.qoder.sh").replace(/\/+$/, ""),
+    infer: readEnvString("QODER_GLOBAL_INFER_BASE", "https://api2-v2.qoder.sh").replace(/\/+$/, "") + "/model/v1/chat/completions",
+    // The legacy protocol lives on another host, so it has its own base.
+    inferLegacy: readEnvString("QODER_GLOBAL_LEGACY_BASE", "https://api3.qoder.sh").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
   },
 };
 

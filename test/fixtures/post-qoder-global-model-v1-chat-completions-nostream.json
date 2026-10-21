@@ -1,0 +1,17 @@
+{
+  "upstream": "https://api2-v2.qoder.sh/model/v1/chat/completions",
+  "status": 200,
+  "headers": {
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "content-type": "application/json",
+    "date": "Wed, 21 Oct 2026 08:07:39 GMT",
+    "req-arrive-time": "1792570058216",
+    "req-cost-time": "1502",
+    "resp-start-time": "1792570059719",
+    "server": "istio-envoy",
+    "transfer-encoding": "chunked",
+    "x-envoy-upstream-service-time": "1502",
+    "x-request-id": "13f67680-693e-4ce6-9ebb-890b4185dfe3"
+  },
+  "body": "{\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"message\":{\"content\":\"\",\"reasoning_content\":\"1.  **Analyze the Input:** The user is asking me to \\\"say ok\\\".\\n2.  **Determine the appropriate response:** The user wants\",\"role\":\"assistant\"}}],\"created\":1792570059,\"id\":\"202610211607386627ece4f28b4aa6\",\"model\":\"gmodel\",\"object\":\"chat.completion\",\"request_id\":\"b3f750c4-6780-400d-b29d-81ec795fa317\",\"usage\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":32},\"prompt_tokens\":14,\"prompt_tokens_details\":{\"cached_tokens\":0},\"raw_usage\":{\"account_discount\":0,\"data\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":32},\"prompt_tokens\":14,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":46},\"model\":\"oem-glm-5\",\"model_account\":\"\",\"model_context\":{\"client_type\":\"\",\"data_policy_preferred_count\":0,\"from_model\":\"oem-glm-5\",\"has_data\":false,\"image_count\":0,\"intention\":\"\",\"router_strategy_name\":\"\",\"router_strategy_type\":\"\",\"scheduler_times\":1,\"target_id\":\"glm-oem-glm-5\",\"task_mode\":\"\",\"time_of_scheduler\":2,\"use_bailian_safe_mode\":false,\"use_data_mask\":false,\"workspace_code_language\":[],\"workspace_file_count\":0},\"model_level\":\"none\",\"provider_model\":\"glm-5\",\"supply_account\":\"\",\"supply_model\":\"glm-5\",\"supply_region\":\"global\",\"target\":\"glm-oem-glm-5\",\"task_mode\":\"unknown\"},\"total_tokens\":46}}"
+}

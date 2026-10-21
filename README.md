@@ -46,6 +46,59 @@ MINIMAX_CODE=true node minimax-proxy.ts                     # :6448, the MiniMax
 
 API keys live in `api-keys.json` (auto-generated on first run if missing).
 
+## Layout
+
+```
+router-proxy.ts        the entry point: the switches, the routes, the startup
+minimax-proxy.ts       the MiniMax Code gateway on its own
+lib/router/            the router's inside
+  routes.ts            where a request goes: the model name and the path
+  catalog.ts           the model lists, in both dialects
+  deliver.ts           how an answer reaches the client
+  upstreams.ts         the four upstream adapters
+  benefits.ts          the daily check-in
+lib/dialect/           the conversion between the two dialects
+  request.ts           the request
+  stream.ts            the streaming answer
+  response.ts          the whole answer
+lib/qoder-*.ts         Qoder: the session, the models, the two protocols
+lib/workbuddy-*.ts     WorkBuddy: the session, the models, the transport
+lib/benefits.ts        the daily credits of the China accounts
+lib/device-identity.ts the fingerprint of an account
+```
+
+The code runs through Node's type stripping, so there is no build step — and
+no TypeScript feature that needs more than stripping (no parameter properties,
+no enums).
+
+## Testing
+
+The self-test runs against a mock of the upstreams, so it costs no tokens and
+always sees the same answers:
+
+```bash
+test/smoke.sh       # the whole matrix against the recorded fixtures
+```
+
+The matrix covers every upstream in both dialects, streaming and not, plus the
+tool call and the refused model. It takes about two seconds.
+
+The fixtures are the real answers, recorded from the real upstreams:
+
+```bash
+test/capture.sh     # record the upstreams into test/fixtures/
+```
+
+The China region answers slowly and does not go through the recording proxy, so
+it is recorded on its own (`test/capture-legacy.ts`).
+
+To run the matrix against the real upstreams instead:
+
+```bash
+bash test/run-router.sh 6689 ""   # a router with the real upstreams
+bash test/e2e.sh http://127.0.0.1:6689
+```
+
 ## Endpoints
 
 | Method | Path | Format |

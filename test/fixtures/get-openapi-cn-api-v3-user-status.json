@@ -1,0 +1,22 @@
+{
+  "upstream": "https://openapi.qoder.com.cn/api/v3/user/status",
+  "status": 200,
+  "headers": {
+    "access-control-expose-headers": "TraceId",
+    "connection": "keep-alive",
+    "content-type": "application/json;charset=UTF-8",
+    "date": "Wed, 21 Oct 2026 08:07:34 GMT",
+    "entry-timestamp": "1792570053990",
+    "ga-request-id": "5521dcca594558110dc06a90e493591e",
+    "leave-timestamp": "1792570054027",
+    "req-arrive-time": "1792570053984",
+    "req-cost-time": "44",
+    "resp-start-time": "1792570054029",
+    "set-cookie": "acw_tc=ac10e39e17925700539674310e07a4c08d7e18633ad1448db0c575489e0c79;path=/;HttpOnly;Max-Age=1800",
+    "sw-trace-id": "30b2b0a306e807c1effce98e0c7e9c0b",
+    "transfer-encoding": "chunked",
+    "x-envoy-upstream-service-time": "40",
+    "x-request-id": "516fc4cb-1726-4d03-85a9-6cb4f676601c"
+  },
+  "body": "{\"id\":\"01a158db-0537-7e64-a7ed-1971d88ba719\",\"name\":\"pnvcqe\",\"userType\":\"personal_professional_trial\",\"quota\":0,\"whitelistStatus\":\"PASS\",\"avatarUrl\":\"https://qoder.com.cn/users/01a158db-0537-7e64-a7ed-1971d88ba719/default/avatars\",\"email\":\"\",\"isQuotaExceeded\":false,\"plan\":\"PLAN_TIER_PRO_TRIAL\",\"isSubAccount\":false,\"userTag\":\"Pro Trial\",\"isPrivacyPolicyModifiable\":false,\"nextResetAt\":1793701711498,\"featureSwitches\":{\"allow_byok\":2}}"
+}

@@ -1,0 +1,14 @@
+{
+  "upstream": "http://192.168.50.4:6448/v1/messages",
+  "status": 200,
+  "headers": {
+    "cache-control": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "content-type": "text/event-stream",
+    "date": "Wed, 21 Oct 2026 08:08:02 GMT",
+    "transfer-encoding": "chunked",
+    "x-accel-buffering": "no",
+    "x-powered-by": "Express"
+  },
+  "body": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"0727a5e11e9c5adf952e0a51b46c6261\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"MiniMax-M3.1-Flash\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":76,\"output_tokens\":3,\"cache_read_input_tokens\":128,\"output_tokens_details\":{\"thinking_tokens\":1}}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+}

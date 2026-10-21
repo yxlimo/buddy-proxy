@@ -1,0 +1,25 @@
+{
+  "upstream": "https://openapi.qoder.sh/api/v3/user/status",
+  "status": 200,
+  "headers": {
+    "access-control-expose-headers": "TraceId",
+    "connection": "keep-alive",
+    "content-encoding": "gzip",
+    "content-type": "application/json;charset=UTF-8",
+    "date": "Wed, 21 Oct 2026 08:07:33 GMT",
+    "entry-timestamp": "1792570053810",
+    "ga-ap": "cn-hongkong",
+    "ga-request-id": "4c1d944f237d9400b018eae6785f4747",
+    "leave-timestamp": "1792570053838",
+    "req-arrive-time": "1792570053805",
+    "req-cost-time": "33",
+    "resp-start-time": "1792570053839",
+    "sw-trace-id": "4eef2cbbbf363a8a4817bd0f55e10309",
+    "transfer-encoding": "chunked",
+    "vary": "Accept-Encoding",
+    "x-envoy-upstream-service-time": "29",
+    "x-real-ip": "139.227.108.154",
+    "x-request-id": "5a654696-5164-4aeb-a085-4d055270ed00"
+  },
+  "body": "{\"id\":\"01a15715-1ce5-7930-8665-fdef334fe219\",\"name\":\"mo li\",\"userType\":\"personal_professional_trial\",\"quota\":0,\"whitelistStatus\":\"PASS\",\"avatarUrl\":\"https://qoder.com/users/01a15715-1ce5-7930-8665-fdef334fe219/default/avatars\",\"email\":\"yxlimo@gmail.com\",\"isQuotaExceeded\":false,\"plan\":\"PLAN_TIER_PRO_TRIAL\",\"isSubAccount\":false,\"userTag\":\"Pro Trial\",\"isPrivacyPolicyModifiable\":false,\"nextResetAt\":1793690902099,\"featureSwitches\":{\"allow_byok\":2}}"
+}
