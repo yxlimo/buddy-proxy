@@ -7,10 +7,37 @@
 //   lib/minimax-oauth.ts       owns its own session (logs in, refreshes)
 // lib/minimax-auth.ts picks between them.
 
+import fs from "node:fs";
+import path from "node:path";
+
 export const DEFAULT_CLIENT_ID = "mcode-public";
 export const DEFAULT_AUDIENCE = "agent-backend";
 export const DEFAULT_SCOPES = ["agent.default"];
 export const DEFAULT_REGION = "cn";
+
+/**
+ * Append a line to `auth.log` in the given data directory, and echo it to stdout.
+ *
+ * The file lives in the data volume, so it outlives a container rebuild — `docker
+ * logs` does not. Credential trouble is exactly the thing you want to be able to
+ * read after the fact: a refresh that returns a token the gateway then rejects
+ * leaves no trace in the container log once the container is replaced.
+ */
+export function authLog(dir: string, event: string, detail = ""): void {
+  const line = `${new Date().toISOString()} ${event}${detail ? " " + detail : ""}`;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "auth.log"), line + "\n");
+  } catch {
+    /* logging must never break a request */
+  }
+  console.log(`[AUTH] ${event}${detail ? " " + detail : ""}`);
+}
+
+/** A token is a secret; logs only ever carry its first few characters. */
+export function tokenFingerprint(token: string): string {
+  return token ? `${token.slice(0, 10)}…(${token.length})` : "(empty)";
+}
 
 export interface Credential {
   accessToken: string;

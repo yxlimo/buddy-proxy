@@ -25,7 +25,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES } from "./credential.ts";
+import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "./credential.ts";
 import type { Credential } from "./credential.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
@@ -91,7 +91,7 @@ export function sessionPath(): string {
 
 function loginHint(): string {
   return `还没有登录。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
-    `也可以设置 BUDDY_PROXY_MINIMAX_LOGIN=true 强制重新登录后重启。` +
+    `删掉这个文件再重启，服务会重新登录（会打印一个授权链接）。` +
     `凭据写在 ${sessionPath()}，之后每小时自动刷新。`;
 }
 
@@ -286,10 +286,14 @@ export async function refreshSession(force = false): Promise<Session> {
   if (!r.ok) {
     cache = null;
     const code = r.error ?? `HTTP ${r.status}`;
+    authLog(dataDir(), "minimax refresh rejected", `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
     if (code === "invalid_grant" || code === "invalid_token" || r.status === 401) {
       throw new AuthError(
         `refresh rejected (${code})`,
-        `这个会话被服务端拒绝了（${code}）。设置 BUDDY_PROXY_MINIMAX_LOGIN=true 后重启服务即可重新登录。`,
+        `这个会话的 refresh token 被拒绝了（${code}）。刷新时 token 会轮换，所以一份 session ` +
+          `同一时间只能有一个持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，` +
+          `那边刷新过之后这份就失效了。把当前那份复制过去，或者删掉 ${sessionPath()} ` +
+          `再重启，服务会重新登录。`,
         503,
       );
     }
@@ -299,8 +303,12 @@ export async function refreshSession(force = false): Promise<Session> {
   const next = sessionFromGrant(parseGrant(r.body), session);
   saveSession(next);
   cache = null;
-  console.log(
-    `[AUTH] refreshed (generation ${next.generation}, ${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left)`,
+  authLog(
+    dataDir(),
+    "minimax refresh ok",
+    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
+      `refresh ${tokenFingerprint(next.refreshToken)}, scope ${next.scopes.join(",") || "?"}, ` +
+      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
   );
   return next;
 }
@@ -316,7 +324,7 @@ export async function ensureCredential(force = false): Promise<Credential> {
   if (cred.remainingMs <= 0) {
     throw new AuthError(
       `access token expired (generation ${cred.generation})`,
-      `token 已过期且刷新没成功。设置 BUDDY_PROXY_MINIMAX_LOGIN=true 后重启服务即可重新登录。`,
+      `token 已过期且刷新没成功。删掉 ${sessionPath()} 后重启服务即可重新登录。`,
       503,
     );
   }
@@ -428,6 +436,13 @@ export async function login(): Promise<Session> {
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
   console.log(`  saved to ${sessionPath()} (0600)`);
   console.log("  later refreshes are automatic — nothing else to do.");
+  authLog(
+    dataDir(),
+    "minimax login ok",
+    `generation ${session.generation}, access ${tokenFingerprint(session.accessToken)}, ` +
+      `refresh ${tokenFingerprint(session.refreshToken)}, scope ${session.scopes.join(",") || "?"}, ` +
+      `${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+  );
   return session;
 }
 

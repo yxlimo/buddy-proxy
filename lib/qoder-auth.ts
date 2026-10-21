@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError } from "./credential.ts";
+import { AuthError, authLog, tokenFingerprint } from "./credential.ts";
 import type { Credential } from "./credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "./device-identity.ts";
 
@@ -57,7 +57,7 @@ export const ENDPOINTS: Record<QoderRegion, QoderEndpoints> = {
   },
 };
 
-const REGION = (readEnvString("QODER_REGION", "global").trim().toLowerCase() === "cn" ? "cn" : "global") as QoderRegion;
+const REGION: QoderRegion = "global";
 export const REGION_NAME = REGION;
 export const ENDPOINT = ENDPOINTS[REGION];
 
@@ -110,7 +110,7 @@ export function sessionPath(region: QoderRegion = REGION): string {
 function loginHint(region: QoderRegion = REGION): string {
   return (
     `还没有登录 Qoder（${region} 区域）。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
-    `也可以设置 BUDDY_PROXY_QODER_LOGIN=${region} 强制重新登录后重启。` +
+    `删掉这个文件再重启，服务会重新登录（会打印一个授权链接）。` +
     `凭据写在 ${sessionPath(region)}，之后自动刷新。`
   );
 }
@@ -299,10 +299,13 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
   );
   if (r.status !== 200) {
     const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
+    authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
     if (r.status === 401 || r.status === 403) {
       throw new AuthError(
         `refresh rejected (${code})`,
-        `Qoder 拒绝了刷新（${code}）。设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
+        `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
+          `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
+          `把当前那份复制过去，或者删掉 ${sessionPath(region)} 再重启，服务会重新登录。`,
         503,
       );
     }
@@ -312,7 +315,13 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
   const next = parseGrant(r.body, session);
   saveSession(next);
   cache = null;
-  console.log(`[AUTH] refreshed qoder/${region} (generation ${next.generation}, ${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left)`);
+  authLog(
+    dataDir(),
+    `qoder ${region} refresh ok`,
+    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
+      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
+      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+  );
   return next;
 }
 
@@ -344,7 +353,7 @@ export async function ensureCredential(force = false, region: QoderRegion = REGI
   if (cred.remainingMs <= 0) {
     throw new AuthError(
       `access token expired (generation ${cred.generation})`,
-      `Qoder token 已过期且刷新没成功。设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
+      `Qoder token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
       503,
     );
   }
@@ -447,6 +456,13 @@ export async function login(region: QoderRegion = REGION): Promise<QoderSession>
   saveSession(session);
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
   console.log(`  saved to ${sessionPath(region)} (0600)`);
+  authLog(
+    dataDir(),
+    `qoder ${region} login ok`,
+    `generation ${session.generation}, access ${tokenFingerprint(session.accessToken)}, ` +
+      `refresh ${tokenFingerprint(session.refreshToken)}, ` +
+      `${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+  );
   console.log("  later refreshes are automatic — nothing else to do.");
   return session;
 }
@@ -585,7 +601,7 @@ export async function checkAccountHealth(region: QoderRegion = REGION): Promise<
       authorized: false,
       usable: false,
       reason: "login expired",
-      hint: `登录已失效，设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
+      hint: `登录已失效，删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
     };
   }
   if (whitelistStatus === "NoIpPermission") {
@@ -612,7 +628,7 @@ export async function checkAccountHealth(region: QoderRegion = REGION): Promise<
       userId,
       userType,
       reason: "login expired",
-      hint: `登录已过期，设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
+      hint: `登录已过期，删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
     };
   }
   return { region, authorized: true, usable: true, whitelistStatus, userId, userType };

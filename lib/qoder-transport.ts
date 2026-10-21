@@ -149,7 +149,7 @@ export async function qoderChatCompletion(
   if (r.status === 401) {
     throw new AuthError(
       `upstream rejected the credential (HTTP 401)`,
-      `Qoder 拒绝了当前凭据。设置 BUDDY_PROXY_QODER_LOGIN=${region} 后重启服务即可重新登录。`,
+      `Qoder 拒绝了当前凭据。删掉 session 文件后重启服务即可重新登录。`,
       503,
     );
   }

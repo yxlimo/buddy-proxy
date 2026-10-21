@@ -499,9 +499,18 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
         region,
       );
       if (claim.status >= 200 && claim.status < 300) {
-        const amount = Number(row.benefit?.amount ?? 0);
-        credits += amount;
-        report.push(`领活动「${row.campaignKey ?? row.campaignId}」+${amount} ${row.benefit?.kind ?? ""}`);
+        // The answer says what was granted, which is more than what the
+        // campaign offered. A replay means it was granted before and nothing
+        // arrives now, so it is not counted.
+        const granted = claim.body?.benefit;
+        const amount = Number(granted?.amount ?? row.benefit?.amount ?? 0);
+        const kind = granted?.kind ?? row.benefit?.kind ?? "";
+        if (claim.body?.replayed === true) {
+          report.push(`活动「${row.campaignKey ?? row.campaignId}」已经领过了`);
+        } else {
+          credits += amount;
+          report.push(`领活动「${row.campaignKey ?? row.campaignId}」+${amount} ${kind}`);
+        }
       } else {
         report.push(`领活动「${row.campaignKey ?? row.campaignId}」失败：${claim.body?.msg ?? `HTTP ${claim.status}`}`);
       }

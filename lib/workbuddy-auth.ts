@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError } from "./credential.ts";
+import { AuthError, authLog, tokenFingerprint } from "./credential.ts";
 import type { Credential } from "./credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "./device-identity.ts";
 
@@ -277,6 +277,13 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
     `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - now / 1000)}s`,
   );
   console.log(`  saved to ${sessionPath(region)} (0600)`);
+  authLog(
+    dataDir(),
+    `workbuddy ${region} login ok`,
+    `generation ${session.generation}, access ${tokenFingerprint(session.accessToken)}, ` +
+      `refresh ${tokenFingerprint(session.refreshToken)}, ` +
+      `${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+  );
   console.log("  later refreshes are automatic — nothing else to do.");
   return session;
 }
@@ -306,10 +313,13 @@ export async function refreshSession(
   });
   if (res.status !== 200) {
     const code = res.body?.code ?? res.body?.msg ?? `HTTP ${res.status}`;
+    authLog(dataDir(), `workbuddy ${region} refresh rejected`, `${code} (HTTP ${res.status}), body ${JSON.stringify(res.body).slice(0, 300)}`);
     if (res.status === 401 || res.status === 403) {
       throw new AuthError(
         `refresh rejected (${code})`,
-        `WorkBuddy 拒绝了刷新（${code}）。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+        `WorkBuddy 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
+          `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
+          `把当前那份复制过去，或者删掉 ${sessionPath(region)} 后重启，服务会重新登录。`,
         503,
       );
     }
@@ -337,8 +347,12 @@ export async function refreshSession(
   };
   saveSession(next);
   cache = null;
-  console.log(
-    `[AUTH] refreshed workbuddy/${region} (generation ${next.generation}, ${Math.round(next.expiresAtMs / 1000 - now / 1000)}s left)`,
+  authLog(
+    dataDir(),
+    `workbuddy ${region} refresh ok`,
+    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
+      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
+      `${Math.round(next.expiresAtMs / 1000 - now / 1000)}s left`,
   );
   return next;
 }
