@@ -182,12 +182,19 @@ export interface TokenRhythmGift {
 }
 
 export interface TokenRhythmCredits {
-  /** The gift money that really does run out. */
-  expiringCny: number;
-  /** The gift money that never runs out. */
-  permanentCny: number;
-  /** When the running-out money runs out. */
-  nextExpiryAt: string | null;
+  /**
+   * What the platform itself says.
+   *
+   * `expiringCny` counts the money that never expires as money that runs out,
+   * so it is not to be trusted as an amount. `nextExpiryAt` is the useful one:
+   * it points at the gift that runs out first, and it moves on when that gift
+   * is spent, which is how the gateway knows to change account.
+   */
+  summary: {
+    expiringCny: number;
+    nextExpiryAt: string | null;
+  };
+  /** Every lot, as the platform lists it. */
   list: TokenRhythmGift[];
 }
 
@@ -277,24 +284,13 @@ export async function credits(session: TokenRhythmSession): Promise<TokenRhythmC
     status: String(row?.status ?? ""),
   }));
 
-  // The platform's own summary counts the money that never expires as money
-  // that runs out, so the amounts are counted here instead: the lots are what
-  // the account actually holds.
-  let expiringCny = 0;
-  let permanentCny = 0;
-  let nextExpiryAt: string | null = null;
-  for (const lot of list) {
-    if (lot.remainingCny <= 0) continue;
-    if (isPermanent(lot.expiresAt)) {
-      permanentCny += lot.remainingCny;
-      continue;
-    }
-    expiringCny += lot.remainingCny;
-    if (!nextExpiryAt || Date.parse(lot.expiresAt!) < Date.parse(nextExpiryAt)) {
-      nextExpiryAt = lot.expiresAt;
-    }
-  }
-  return { expiringCny, permanentCny, nextExpiryAt, list };
+  return {
+    summary: {
+      expiringCny: num(data?.summary?.expiringBalanceCny),
+      nextExpiryAt: data?.summary?.nextExpiryAt ?? null,
+    },
+    list,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -356,13 +352,16 @@ export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTena
 
   const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
   const pool = withGift.length ? withGift : usable;
-  // The soonest expiry first. Money that never expires sorts last, so it is
-  // only spent when there is nothing else left.
+  // The soonest expiry first, as the platform reports it: it points at the
+  // gift that runs out first and moves on when that gift is spent, so an
+  // account whose gift is gone sorts last and the next account takes over.
+  // Money that never expires sorts last too.
   const expiry = (s: TokenRhythmTenantStatus): number => {
-    const at = s.credits?.nextExpiryAt;
+    const at = s.credits?.summary?.nextExpiryAt;
     if (!at) return Number.POSITIVE_INFINITY;
     const t = Date.parse(at);
-    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+    if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
+    return t >= PERMANENT_FAR_FUTURE ? Number.POSITIVE_INFINITY : t;
   };
   return pool.sort((a, b) => expiry(a) - expiry(b))[0] ?? null;
 }
