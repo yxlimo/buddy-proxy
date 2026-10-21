@@ -73,9 +73,10 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
     if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
     return { upstream: "tokenrhythm", model: `tokenrhythm/${raw}` };
   }
-  if (ctx.ids.minimax.has(raw)) {
+  const minimaxModel = matchMinimaxModel(raw, ctx.ids.minimax);
+  if (minimaxModel) {
     if (!ctx.enabled.minimax) throw disabledUpstream("minimax");
-    return { upstream: "minimax", model: `minimax/${raw}` };
+    return { upstream: "minimax", model: `minimax/${minimaxModel}` };
   }
   if (ctx.ids.qoderGlobal.has(raw) || ctx.ids.qoderCn.has(raw)) {
     // Known to a region. Prefer one that is enabled; if the only region that has
@@ -123,16 +124,35 @@ export function routeInGroup(group: UpstreamGroup, id: string, ctx: RoutingConte
     }
     case "minimax": {
       if (!ctx.enabled.minimax) throw disabledUpstream("minimax");
-      if (!ctx.ids.minimax.has(id)) {
+      const canonical = matchMinimaxModel(id, ctx.ids.minimax);
+      if (!canonical) {
         throw new AuthError(
           `unknown model "${id}"`,
           `MiniMax 没有这个模型。可用：${[...ctx.ids.minimax].join("、")}。`,
           400,
         );
       }
-      return { upstream: "minimax", model: `minimax/${id}` };
+      // The client catalog's id goes upstream, not the agent's spelling of it.
+      return { upstream: "minimax", model: `minimax/${canonical}` };
     }
   }
+}
+
+/**
+ * Find the MiniMax model an agent asked for, ignoring case.
+ *
+ * Agents spell the id their own way — the desktop client's own catalog says
+ * "Minimax-M3.1-Flash" where ours says "MiniMax-M3.1-Flash". The request
+ * still has to reach the upstream as the client would send it, so the agent's
+ * spelling only identifies the model; the client's id is what goes out.
+ */
+function matchMinimaxModel(id: string, known: Set<string>): string | null {
+  if (known.has(id)) return id;
+  const lower = id.toLowerCase();
+  for (const candidate of known) {
+    if (candidate.toLowerCase() === lower) return candidate;
+  }
+  return null;
 }
 
 /** WorkBuddy's China region. */
