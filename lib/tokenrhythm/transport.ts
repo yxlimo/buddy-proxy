@@ -64,6 +64,41 @@ export function inferenceTenant(index: number): { tenant: TokenRhythmTenant; key
  * The answer comes back as the upstream's own bytes: it is an OpenAI stream or
  * an OpenAI object, and the gateway hands it on.
  */
+/**
+ * The upstream is busy.
+ *
+ * The relay answers 503 with `SERVICE_BUSY` when its backends are all taken.
+ * That is not a failure of the request: the same request may go through on
+ * another account, or a moment later.
+ */
+export class TokenRhythmBusyError extends Error {
+  status: number;
+  retryAfterSec: number;
+  traceId: string;
+  constructor(message: string, retryAfterSec = 2, traceId = "") {
+    super(message);
+    this.status = 503;
+    this.retryAfterSec = retryAfterSec;
+    this.traceId = traceId;
+  }
+}
+
+/** Whether the platform's own answer says it is busy. */
+function isBusy(status: number, code: unknown): boolean {
+  if (status === 429) return true;
+  if (status !== 503) return false;
+  const text = String(code ?? "").toUpperCase();
+  return text.includes("BUSY") || text.includes("SERVICE_UNAVAILABLE") || text === "";
+}
+
+/** The platform's error code and trace id, if the answer carries them. */
+function busyDetail(body: any): { code: string; traceId: string } {
+  return {
+    code: String(body?.code ?? ""),
+    traceId: String(body?.traceId ?? body?.trace_id ?? ""),
+  };
+}
+
 export async function tokenRhythmChat(
   index: number,
   body: Record<string, any>,
@@ -87,8 +122,28 @@ export async function tokenRhythmChat(
       502,
     );
   }
-  if (!response.ok && response.status === 429) {
-    throw new AuthError("tokenrhythm rate limit", "TokenRhythm 限流了，稍后再试。", 503);
+  if (!response.ok && (response.status === 429 || response.status === 503)) {
+    const text = await response.text().catch(() => "");
+    let parsed: any = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      /* not JSON */
+    }
+    const detail = busyDetail(parsed);
+    if (isBusy(response.status, detail.code)) {
+      const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+      throw new TokenRhythmBusyError(
+        parsed?.message ?? "服务繁忙，请稍后重试",
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2,
+        detail.traceId,
+      );
+    }
+    throw new AuthError(
+      `upstream HTTP ${response.status}`,
+      `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
+      502,
+    );
   }
   return { response, key: tenant.apiKey ?? key };
 }

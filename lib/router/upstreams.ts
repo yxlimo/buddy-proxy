@@ -21,7 +21,7 @@ import { legacyChatCompletion, readLegacyFrames } from "../qoder-legacy.ts";
 import { workbuddyChat, aggregateStream } from "../workbuddy-transport.ts";
 import { MINIMAX_MODELS } from "../minimax-models.ts";
 import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/accounts.ts";
-import { tokenRhythmChat } from "../tokenrhythm/transport.ts";
+import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
 import type { QoderRegion } from "../qoder-auth.ts";
 import {
   deliverAnthropicStream,
@@ -48,6 +48,8 @@ export interface UpstreamContext {
   legacyRetryMs: number;
   /** How often a failed new-protocol request is tried again. */
   qoderMaxAttempts: number;
+  /** How often a busy relay is tried again, on the same account. */
+  tokenRhythmMaxAttempts: number;
   /** Whether a request is written to the log. */
   logRoute: boolean;
   /** The output limit of a WorkBuddy model, as its own catalogue says. */
@@ -422,7 +424,11 @@ export async function toTokenRhythm(
     console.log(`[ROUTE] tokenrhythm model=${route.model} tenant=${tenant.index} stream=${stream}`);
   }
 
-  const { response } = await tokenRhythmChat(tenant.index, openaiBody);
+  const { response } = await tokenRhythmChatWithRetry(
+    tenant.index,
+    openaiBody,
+    ctx.tokenRhythmMaxAttempts,
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new AuthError(
@@ -460,4 +466,43 @@ function noteTruncation(body: Record<string, any>, model: string, tenant: number
     `[TRUNCATED] model=${model} tenant=${tenant} asked_for=${asked ?? "unset"} tokens — ` +
       `the upstream stopped at the limit the client set`,
   );
+}
+
+/**
+ * Try the same account again when the relay says it is busy.
+ *
+ * The account is not changed: another account would have to read the prompt
+ * from the start, and the relay charges the uncached prompt — which is a lot
+ * more than the answer itself. So the request waits and is sent again to the
+ * account it was meant for.
+ */
+async function tokenRhythmChatWithRetry(
+  tenant: number,
+  body: Record<string, any>,
+  maxAttempts: number,
+): Promise<{ response: Response; key: string }> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await tokenRhythmChat(tenant, body);
+    } catch (e) {
+      if (e instanceof TokenRhythmBusyError && attempt < maxAttempts) {
+        console.log(
+          `[ROUTE] tokenrhythm busy on tenant ${tenant} (${e.traceId || e.message}), ` +
+            `retry ${attempt}/${maxAttempts - 1} in ${e.retryAfterSec}s`,
+        );
+        await new Promise((r) => setTimeout(r, e.retryAfterSec * 1000));
+        continue;
+      }
+      if (e instanceof TokenRhythmBusyError) {
+        throw new AuthError(
+          "tokenrhythm is busy",
+          `TokenRhythm 现在繁忙（${e.message}）。这是上游的临时状态，稍后重试即可；` +
+            `账号没有换，避免提示词缓存失效。${e.traceId ? `traceId=${e.traceId}` : ""}`.trim(),
+          503,
+          "api_error",
+        );
+      }
+      throw e;
+    }
+  }
 }

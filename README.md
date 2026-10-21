@@ -680,6 +680,21 @@ all of it expires on the same day. Its `nextExpiryAt` is the useful part: it
 points at the gift that runs out first, and it moves on when that gift is
 spent, which is how the gateway knows to change account.
 
+### When the relay is busy
+
+The relay answers `503 SERVICE_BUSY` when its backends are all taken. That is
+a temporary state of the upstream, not a broken request, so the gateway tries
+the same account again — **not another account**: another account would have
+to read the prompt from the start, and the relay charges the uncached prompt,
+which is a lot more than the answer itself.
+
+After the attempts are used up the client gets a `503` with the upstream's own
+trace id, and the answer can simply be tried again.
+
+| Variable | Default | What |
+|----------|---------|------|
+| `TOKENRHYTHM_MAX_ATTEMPTS` | `3` | how often a busy relay is tried again, on the same account |
+
 ### The thinking rule
 
 DeepSeek's thinking mode wants the assistant's `reasoning_content` back when

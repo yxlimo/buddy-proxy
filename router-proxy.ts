@@ -71,6 +71,7 @@ const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
 const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
 const ENABLED_WORKBUDDY_CN = readEnvFlag("WORKBUDDY_CN", false);
 const ENABLED_TOKENRHYTHM = readEnvFlag("TOKENRHYTHM", false);
+const TOKENRHYTHM_MAX_ATTEMPTS = readEnvNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 
 /* ------------------------------------------------------------------ *
  * The daily benefits of the China accounts
@@ -242,6 +243,7 @@ function upstreamContext(): UpstreamContext {
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
+    tokenRhythmMaxAttempts: TOKENRHYTHM_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
     workbuddyMaxOutput: (model: string) => WORKBUDDY_CN.find((m) => m.id === model)?.maxOutput ?? 64000,
   };
@@ -376,8 +378,10 @@ function sendError(res: express.Response, e: unknown): void {
   res.status(status).json({
     error: {
       // 503 means the credential is the problem; everything else is the request
-      // or the upstream failing.
-      type: status === 503 ? "authentication_error" : status === 400 ? "invalid_request_error" : "api_error",
+      // or the upstream failing. A failure that says otherwise says so.
+      type:
+        err?.type ??
+        (status === 503 ? "authentication_error" : status === 400 ? "invalid_request_error" : "api_error"),
       message: err?.message ?? "request failed",
     },
     ...(err?.hint ? { hint: err.hint } : {}),
