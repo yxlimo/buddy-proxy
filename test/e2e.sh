@@ -44,13 +44,15 @@ for group in "" qoder qoder-cn workbuddy-cn minimax; do
 done
 
 # Every model in the list carries the metadata a client needs: how much it
-# reads and how much it may answer.
+# reads and how much it may answer. A model the gateway says nothing about
+# the context window of has no context window here either.
 for group in qoder qoder-cn workbuddy-cn minimax; do
   got=$(curl -s --noproxy '*' -m 20 "$BASE/$group/v1/models" | python3 -c '
 import json,sys
 data = json.load(sys.stdin)["data"]
 bad = [m.get("id") for m in data
-       if not m.get("context_window") or not m.get("max_output_tokens")]
+       if not m.get("max_output_tokens")
+       or (m.get("context_window") is not None and m.get("context_window") <= 0)]
 print("ok" if data and not bad else "bad: " + ", ".join(map(str, bad[:3])))
 ' 2>/dev/null)
   report "models $group metadata" "ok" "$got"

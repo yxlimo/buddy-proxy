@@ -123,6 +123,13 @@ curl http://localhost:6450/v1/messages \
   -d '{"model":"qoder/auto","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
+## Reference material
+
+`reference/qoder/` holds what was needed to read the Qoder client's own model
+catalogue: the script that decrypts it, the decrypted catalogue, and the
+request the client actually sent (decoded). It is what the numbers above are
+based on, and it is what to check again when Qoder changes them.
+
 ## Client model lists
 
 The model list carries what a client needs to plan: how much a model reads

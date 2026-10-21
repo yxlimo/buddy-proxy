@@ -35,7 +35,8 @@ export interface CatalogModel {
   reasoning: boolean;
   /** Whether the model can call tools. */
   toolCall: boolean;
-  contextWindow: number;
+  /** Absent when the gateway advertises no context window for the model. */
+  contextWindow?: number;
   maxOutputTokens: number;
   /** The thinking levels the model accepts, if it has a choice. */
   effortOptions?: string[];
@@ -101,7 +102,7 @@ export function anthropicCatalog(groups: CatalogGroup[]): any {
         created_at: created,
         reasoning: m.reasoning,
         tool_call: m.toolCall,
-        context_window: m.contextWindow,
+        ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
         max_output_tokens: m.maxOutputTokens,
         ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
         ...(m.backend ? { backend: m.backend } : {}),
@@ -159,7 +160,7 @@ export function groupCatalog(group: UpstreamGroup, groups: CatalogGroup[], opena
     created_at: created,
     reasoning: m.reasoning,
     tool_call: m.toolCall,
-    context_window: m.contextWindow,
+    ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
     max_output_tokens: m.maxOutputTokens,
     ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
     ...(m.backend ? { backend: m.backend } : {}),

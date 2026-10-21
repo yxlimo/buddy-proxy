@@ -51,8 +51,13 @@ export interface QoderModel {
   reasoning: boolean;
   /** Backend the gateway reports for this model, when it reports one. */
   backend?: string;
-  /** Context window the catalog advertises for this model. */
-  context: number;
+  /**
+   * The context window the client's catalogue advertises.
+   *
+   * It is absent for a model the catalogue says nothing about: the client
+   * then sends no context window at all and the gateway applies its own.
+   */
+  context?: number;
   /**
    * The largest answer the model gives, in tokens.
    *
@@ -146,17 +151,16 @@ export const QODER_MODELS: QoderModel[] = [
 
   // Named models the new protocol accepts.
   { id: "qwen3.7-plus", name: "Qwen3.7-Plus", multiplier: "0.1×", key: "qmodel", protocol: "new", reasoning: false, backend: "bailian-qwen3.7-plus", context: 1000000, maxOutput: 131072, kind: "model" },
-  // The client's catalogue has no `max_input_tokens` for this one, so it sends
-  // no context window at all and the gateway applies its own. The number below
-  // is the conservative one.
-  { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", protocol: "new", reasoning: false, backend: "oem-kimi-k2.7-code", context: 180000, maxOutput: 32768, kind: "model" },
+  // The client's catalogue says nothing about this model's context window, so
+  // the client sends none and the gateway applies its own.
+  { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", protocol: "new", reasoning: false, backend: "oem-kimi-k2.7-code", maxOutput: 32768, kind: "model" },
   { id: "glm-5.3", name: "GLM-5.3", multiplier: "0.8×", key: "gmodel", protocol: "new", reasoning: true, backend: "oem-glm-5", context: 180000, maxOutput: 131072, kind: "model" },
   { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", multiplier: "0.5×", key: "dmodel", protocol: "new", reasoning: true, backend: "oem-deepseek-v4-pro", context: 1000000, maxOutput: 393216, kind: "model" },
   // Qoder's catalog calls this MiniMax-M3.1-Flash, but the gateway reports the
   // backend it actually used as oem-minimax-m2.5 — a different generation. The
   // id keeps Qoder's wording (that is the name the tier is selected by); the
   // display name says what runs.
-  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 1000000, maxOutput: 131072, kind: "model" },
+  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 180000, maxOutput: 131072, kind: "model" },
 
   // Version-pinned models — the legacy protocol only.
   { id: "deepseek-flash", name: "DeepSeek-Flash", multiplier: "0×", key: "dfmodel", protocol: "legacy", reasoning: true, context: 1000000, maxOutput: 393216, kind: "model" },
