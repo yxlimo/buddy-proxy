@@ -72,6 +72,15 @@ curl http://localhost:6450/v1/messages \
 
 ## Client model lists
 
+Each upstream is a provider of its own, so the model ids are the real ones:
+
+| Provider | Base URL |
+|---|---|
+| `qoder_global` | `{router}/qoder/v1` |
+| `qoder_cn` | `{router}/qoder-cn/v1` |
+| `workbuddy_cn` | `{router}/workbuddy-cn/v1` |
+| `minimax` | `{router}/minimax/v1` |
+
 The opencode **TUI** model picker lists each model exactly once: anything
 already shown under **Favorites** or **Recent** is not repeated in the
 per-provider section further down. A provider whose models are all in
@@ -260,29 +269,36 @@ upstream; the dialect decides how much translation happens.
 | Method | Path | Format |
 |--------|------|--------|
 | `GET`  | `/v1/models` | every enabled upstream, prefixed ids (`?dialect=openai` for the OpenAI shape) |
+| `GET`  | `/{upstream}/v1/models` | one upstream, plain model ids |
 | `POST` | `/v1/messages` | Anthropic messages (stream supported) |
+| `POST` | `/{upstream}/v1/messages` | the same, addressed to one upstream |
 | `POST` | `/v1/chat/completions` | OpenAI chat (stream supported) |
+| `POST` | `/{upstream}/v1/chat/completions` | the same, addressed to one upstream |
 | `GET`  | `/health` | status of every enabled upstream |
+
+`{upstream}` is one of `qoder`, `qoder-cn`, `workbuddy-cn`, `minimax`.
 
 ### Routing
 
-The model name carries the upstream:
+The upstream is chosen by the path, and the model id is the model's own name:
 
-| Model name | Upstream | Model sent upstream |
+| Base URL | Upstream | Example request |
 |---|---|---|
-| `qoder/auto`, `qoder/ultimate` | Qoder | `auto`, `ultimate` |
-| `qoder-cn/glm-5.3` | Qoder, China account | `glm-5.3` |
-| `workbuddy-cn/glm-5.3` | WorkBuddy, China account | `glm-5.3` |
-| `minimax/MiniMax-M3.1-Flash` | MiniMax | `MiniMax-M3.1-Flash` |
-| `auto` (no prefix) | Qoder if it is in the Qoder catalog, else MiniMax | as given |
+| `{router}/qoder/v1` | Qoder, global account | `{"model": "glm-5.3"}` |
+| `{router}/qoder-cn/v1` | Qoder, China account | `{"model": "glm-5.3"}` |
+| `{router}/workbuddy-cn/v1` | WorkBuddy, China account | `{"model": "glm-5.3-flash"}` |
+| `{router}/minimax/v1` | MiniMax | `{"model": "MiniMax-M3.1-Flash"}` |
 
-A client model id cannot hold a slash, so the prefixed forms have client-side
-names: `cn-glm-5.3` for Qoder's China account, `wb-cn-glm-5.3` for WorkBuddy's.
-WorkBuddy's models are only reachable by prefix — several of them carry the
-same name as a Qoder model, so a bare name would be ambiguous.
+A client that can only use one base URL can put the upstream in the model name
+instead — `qoder/glm-5.3`, `qoder-cn/glm-5.3`, `workbuddy-cn/glm-5.3`,
+`minimax/MiniMax-M3` — at `{router}/v1`. The server prefixes the model
+internally either way, so the two spellings mean the same thing.
 
-An unknown model gets a 400 that says to use a prefix, rather than being sent
-somewhere at random.
+The prefixed form is also what `/v1/models` at the root lists, and the
+per-upstream `/qoder/v1/models` lists the same models with their plain names.
+
+An unknown model gets a 400 that says which upstream it was looked for in,
+rather than being sent somewhere at random.
 
 ### Dialect handling
 

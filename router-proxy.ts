@@ -105,37 +105,69 @@ async function refreshWorkBuddyCatalog(force = false): Promise<void> {
 
 interface Route {
   upstream: Upstream;
-  /** Model name as the upstream knows it (prefix stripped). */
+  /** The model as the server names it: prefixed, e.g. `qoder-cn/glm-5.3`. */
   model: string;
   /** Which Qoder region to talk to. Unset for MiniMax. */
   region?: QoderRegion;
+}
+
+/**
+ * The upstream a request is addressed to, taken from the path.
+ *
+ * A client that talks to one upstream says so in the base URL — `/qoder-cn/v1`
+ * — and uses the model's real name. The server prefixes it internally, so the
+ * two spellings never have to be kept in step by hand.
+ */
+type UpstreamGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax";
+
+const UPSTREAM_GROUPS: UpstreamGroup[] = ["qoder", "qoder-cn", "workbuddy-cn", "minimax"];
+
+/** The prefix the server puts in front of a model id. */
+const GROUP_PREFIX: Record<UpstreamGroup, string> = {
+  qoder: "qoder/",
+  "qoder-cn": "qoder-cn/",
+  "workbuddy-cn": "workbuddy-cn/",
+  minimax: "minimax/",
+};
+
+/** The group a request path addresses, if any. */
+function groupFromPath(path: string): UpstreamGroup | undefined {
+  const first = (path.split("/")[1] ?? "").toLowerCase();
+  return (UPSTREAM_GROUPS as string[]).includes(first) ? (first as UpstreamGroup) : undefined;
+}
+
+/** The model as the upstream knows it, prefix stripped. */
+function upstreamModel(route: Route): string {
+  for (const group of UPSTREAM_GROUPS) {
+    const prefix = GROUP_PREFIX[group];
+    if (route.model.startsWith(prefix)) return route.model.slice(prefix.length);
+  }
+  return route.model;
 }
 
 /** Decide where a request goes, and what the upstream should call the model. */
 export function resolveRoute(model: string): Route {
   const raw = String(model ?? "").trim();
   if (raw.startsWith("workbuddy-cn/")) return workbuddyRoute(raw.slice("workbuddy-cn/".length));
-  // Client-side name: a client cannot put a slash in a model id, so
-  // `workbuddy-cn/glm-5.3` is called `wb-cn-glm-5.3` there.
-  if (raw.startsWith("wb-cn-")) return workbuddyRoute(raw.slice("wb-cn-".length));
   if (raw.startsWith("qoder-cn/")) return qoderRoute(raw.slice("qoder-cn/".length), "cn");
   if (raw.startsWith("qoder/")) return qoderRoute(raw.slice("qoder/".length), "global");
   if (raw.startsWith("minimax/")) {
     if (!ENABLED_MINIMAX) throw disabledUpstream("minimax");
-    return { upstream: "minimax", model: raw.slice("minimax/".length) };
+    return { upstream: "minimax", model: raw };
   }
-  // Client-side name for the CN region: the client cannot put a slash in a
-  // model id, so `qoder-cn/glm-5.3` is called `cn-glm-5.3` there.
-  if (raw.startsWith("cn-")) return qoderRoute(raw.slice("cn-".length), "cn");
   if (MINIMAX_MODEL_IDS.has(raw)) {
     if (!ENABLED_MINIMAX) throw disabledUpstream("minimax");
-    return { upstream: "minimax", model: raw };
+    return { upstream: "minimax", model: `minimax/${raw}` };
   }
   if (GLOBAL_QODER_IDS.has(raw) || CN_QODER_IDS.has(raw)) {
     // Known to a region. Prefer one that is enabled; if the only region that has
     // it is off, say so rather than calling it unknown.
-    if (ENABLED_QODER_GLOBAL && GLOBAL_QODER_IDS.has(raw)) return { upstream: "qoder", model: raw, region: "global" };
-    if (ENABLED_QODER_CN && CN_QODER_IDS.has(raw)) return { upstream: "qoder", model: raw, region: "cn" };
+    if (ENABLED_QODER_GLOBAL && GLOBAL_QODER_IDS.has(raw)) {
+      return { upstream: "qoder", model: `qoder/${raw}`, region: "global" };
+    }
+    if (ENABLED_QODER_CN && CN_QODER_IDS.has(raw)) {
+      return { upstream: "qoder", model: `qoder-cn/${raw}`, region: "cn" };
+    }
     throw disabledUpstream(GLOBAL_QODER_IDS.has(raw) ? "qoder-global" : "qoder-cn");
   }
   if (QODER_HIDDEN_IDS.has(raw)) throw unavailableQoderModel(raw);
@@ -144,6 +176,34 @@ export function resolveRoute(model: string): Route {
     `这个模型不在目录里。用 qoder/、workbuddy-cn/ 或 minimax/ 前缀显式指定，例如 qoder/auto、workbuddy-cn/glm-5.3、minimax/MiniMax-M3。`,
     400,
   );
+}
+
+/**
+ * Resolve a model inside one upstream, named by the request path.
+ *
+ * The model id is the real one — `glm-5.3`, not `qoder-cn/glm-5.3` — because
+ * the path already says which upstream it is for.
+ */
+function routeInGroup(group: UpstreamGroup, id: string): Route {
+  switch (group) {
+    case "qoder":
+      return qoderRoute(id, "global");
+    case "qoder-cn":
+      return qoderRoute(id, "cn");
+    case "workbuddy-cn":
+      return workbuddyRoute(id);
+    case "minimax": {
+      if (!ENABLED_MINIMAX) throw disabledUpstream("minimax");
+      if (!MINIMAX_MODEL_IDS.has(id)) {
+        throw new AuthError(
+          `unknown model "${id}"`,
+          `MiniMax 没有这个模型。可用：${[...MINIMAX_MODEL_IDS].join("、")}。`,
+          400,
+        );
+      }
+      return { upstream: "minimax", model: `minimax/${id}` };
+    }
+  }
 }
 
 /** WorkBuddy's China region. */
@@ -156,7 +216,7 @@ function workbuddyRoute(id: string): Route {
       400,
     );
   }
-  return { upstream: "workbuddy", model: id, region: "cn" };
+  return { upstream: "workbuddy", model: `workbuddy-cn/${id}`, region: "cn" };
 }
 
 /** An upstream that this router is not serving, because it was not enabled. */
@@ -198,7 +258,9 @@ function qoderRoute(id: string, region: QoderRegion): Route {
     throw disabledUpstream(region === "cn" ? "qoder-cn" : "qoder-global");
   }
   const known = region === "cn" ? CN_QODER_IDS : GLOBAL_QODER_IDS;
-  if (known.has(id)) return { upstream: "qoder", model: id, region };
+  if (known.has(id)) {
+    return { upstream: "qoder", model: `${GROUP_PREFIX[region === "cn" ? "qoder-cn" : "qoder"]}${id}`, region };
+  }
   if (QODER_HIDDEN_IDS.has(id)) throw unavailableQoderModel(id);
   // Known to the other region but not to this one: point at it.
   const other = region === "cn" ? "global" : "cn";
@@ -206,7 +268,7 @@ function qoderRoute(id: string, region: QoderRegion): Route {
     if (!(other === "cn" ? ENABLED_QODER_CN : ENABLED_QODER_GLOBAL)) throw disabledUpstream(other === "cn" ? "qoder-cn" : "qoder-global");
     throw new AuthError(
       `model "${id}" is not available in the ${region} region`,
-      `这个模型只在 ${other} 区有。用 ${region === "cn" ? "qoder/" : "cn-"} 前缀指定另一个区域。`,
+      `这个模型只在 ${other} 区有。用另一个上游的路径指定它：${other === "cn" ? "/qoder-cn/v1" : "/qoder/v1"}。`,
       400,
     );
   }
@@ -263,14 +325,78 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-app.get("/v1/models", (req, res) => {
-  const dialect = String(req.query.dialect ?? "").toLowerCase();
-  // The upstream's catalogue is the source of truth; fetch it in the background
-  // so this answer is never blocked by it.
-  if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
-  if (dialect === "openai") return res.json(openaiCatalog());
-  return res.json(anthropicCatalog());
-});
+/**
+ * One upstream's catalogue, with the real model ids.
+ *
+ * A client that talks to one upstream does not need the prefix: the path says
+ * which upstream it is, so the ids are the plain ones.
+ */
+function groupCatalog(group: UpstreamGroup, openai: boolean) {
+  const created = Math.floor(Date.now() / 1000);
+  const qoder = (m: (typeof QODER_GLOBAL)[number]) => ({
+    id: m.id,
+    type: "model",
+    display_name: qoderLabel(m),
+    created_at: created,
+    reasoning: m.reasoning,
+    tool_call: true,
+    context_window: m.context,
+    max_output_tokens: QODER_MAX_OUTPUT_TOKENS,
+    ...(m.kind === "tier" ? { effort_options: [...QODER_EFFORTS] } : {}),
+    ...(m.backend ? { backend: m.backend } : {}),
+  });
+  const workbuddy = (m: WorkBuddyModel) => ({
+    id: m.id,
+    type: "model",
+    display_name: workbuddyLabel(m),
+    created_at: created,
+    reasoning: m.reasoning,
+    tool_call: m.tools,
+    context_window: m.context,
+    max_output_tokens: m.maxOutput,
+    ...(m.efforts.length ? { effort_options: [...m.efforts] } : {}),
+  });
+  const minimax = (m: (typeof MINIMAX_MODELS)[number]) => ({
+    id: m.id,
+    type: "model",
+    display_name: m.display_name,
+    created_at: created,
+    reasoning: m.reasoning,
+    tool_call: m.tool_call,
+    context_window: m.context,
+    max_output_tokens: m.output,
+    effort_options: m.effortOptions,
+  });
+
+  const data: any[] = [];
+  switch (group) {
+    case "qoder":
+      data.push(...QODER_GLOBAL.map(qoder));
+      break;
+    case "qoder-cn":
+      data.push(...QODER_CN.map(qoder));
+      break;
+    case "workbuddy-cn":
+      data.push(...WORKBUDDY_CN.map(workbuddy));
+      break;
+    case "minimax":
+      data.push(...MINIMAX_VISIBLE.map(minimax));
+      break;
+  }
+
+  if (openai) {
+    return {
+      object: "list",
+      data: data.map((m) => ({ id: m.id, object: "model", created, owned_by: group, name: m.display_name })),
+    };
+  }
+  return {
+    data,
+    has_more: false,
+    first_id: data.length ? data[0].id : null,
+    last_id: data.length ? data[data.length - 1].id : null,
+  };
+}
 
 /** OpenAI shape, with the prefixes that make routing explicit. */
 function openaiCatalog() {
@@ -342,25 +468,51 @@ function anthropicCatalog() {
   };
 }
 
-app.post("/v1/messages", async (req: express.Request, res: express.Response) => {
-  if (!authenticate(req, keys)) {
-    return res.status(401).json({ error: { type: "authentication_error", message: "invalid api key" } });
-  }
-  await handle(req, res, "anthropic");
-});
+/**
+ * The same endpoints, once per upstream.
+ *
+ * The plain `/v1/...` form takes the upstream in the model name
+ * (`qoder-cn/glm-5.3`); the prefixed form takes it in the path
+ * (`/qoder-cn/v1/messages`) and the model name is the real one.
+ */
+for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
+  const base = group ? `/${group}` : "";
 
-app.post("/v1/chat/completions", async (req: express.Request, res: express.Response) => {
-  if (!authenticate(req, keys)) {
-    return res.status(401).json({ error: { type: "authentication_error", message: "invalid api key" } });
-  }
-  await handle(req, res, "openai");
-});
+  app.post(`${base}/v1/messages`, async (req: express.Request, res: express.Response) => {
+    if (!authenticate(req, keys)) {
+      return res.status(401).json({ error: { type: "authentication_error", message: "invalid api key" } });
+    }
+    await handle(req, res, "anthropic", group || undefined);
+  });
 
-async function handle(req: express.Request, res: express.Response, dialect: Dialect): Promise<void> {
+  app.post(`${base}/v1/chat/completions`, async (req: express.Request, res: express.Response) => {
+    if (!authenticate(req, keys)) {
+      return res.status(401).json({ error: { type: "authentication_error", message: "invalid api key" } });
+    }
+    await handle(req, res, "openai", group || undefined);
+  });
+
+  app.get(`${base}/v1/models`, (req: express.Request, res: express.Response) => {
+    const dialect = String(req.query.dialect ?? "").toLowerCase();
+    // The upstream's catalogue is the source of truth; fetch it in the background
+    // so this answer is never blocked by it.
+    if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
+    if (group) return res.json(groupCatalog(group, dialect === "openai"));
+    if (dialect === "openai") return res.json(openaiCatalog());
+    return res.json(anthropicCatalog());
+  });
+}
+
+async function handle(
+  req: express.Request,
+  res: express.Response,
+  dialect: Dialect,
+  group?: UpstreamGroup,
+): Promise<void> {
   const body = (req.body ?? {}) as Record<string, any>;
   let route: Route;
   try {
-    route = resolveRoute(body.model);
+    route = group ? routeInGroup(group, String(body.model ?? "").trim()) : resolveRoute(body.model);
   } catch (e) {
     sendError(res, e);
     return;
@@ -400,7 +552,8 @@ async function toWorkBuddy(
   res: express.Response,
 ): Promise<void> {
   const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
-  openaiBody.model = route.model;
+  const model = upstreamModel(route);
+  openaiBody.model = model;
   if (LOG_ROUTE) {
     console.log(`[ROUTE] workbuddy model=${route.model} stream=${stream}`);
   }
@@ -410,7 +563,7 @@ async function toWorkBuddy(
   if (!stream) {
     let json: any;
     try {
-      json = await aggregateStream(response, route.model);
+      json = await aggregateStream(response, model);
     } catch (e) {
       throw new AuthError(
         `upstream stream failed (${(e as Error)?.message ?? "unknown"})`,
@@ -426,7 +579,7 @@ async function toWorkBuddy(
         502,
       );
     }
-    const payload = dialect === "openai" ? json : openaiToAnthropicResponse(json, route.model);
+    const payload = dialect === "openai" ? json : openaiToAnthropicResponse(json, model);
     res.json(payload);
     return;
   }
@@ -441,7 +594,7 @@ async function toWorkBuddy(
     return;
   }
   try {
-    for await (const chunk of openaiStreamToAnthropic(readOpenAIChunks(upstreamStream), route.model)) {
+    for await (const chunk of openaiStreamToAnthropic(readOpenAIChunks(upstreamStream), model)) {
       if (!writeSafe(res, chunk)) break;
     }
   } catch (e) {
@@ -499,7 +652,7 @@ async function toQoder(
   // pi put it.
   const effort = extractEffort(body);
   const region = route.region ?? QODER_REGIONS[0] ?? "global";
-  const { model, key } = resolveModelRoute(route.model, effort, region);
+  const { model, key } = resolveModelRoute(upstreamModel(route), effort, region);
   if (LOG_ROUTE) {
     console.log(`[ROUTE] model=${route.model} region=${region} effort=${effort ?? "-"} -> upstream key=${key}`);
     console.log(`[ROUTE] raw body keys: ${Object.keys(body).join(",")}`);
@@ -527,7 +680,7 @@ async function toQoder(
         502,
       );
     }
-    const payload = dialect === "openai" ? json : openaiToAnthropicResponse(json, route.model);
+    const payload = dialect === "openai" ? json : openaiToAnthropicResponse(json, upstreamModel(route));
     res.json(payload);
     return;
   }
@@ -543,7 +696,7 @@ async function toQoder(
     return;
   }
   try {
-    for await (const chunk of openaiStreamToAnthropic(readOpenAIChunks(upstreamStream), route.model)) {
+    for await (const chunk of openaiStreamToAnthropic(readOpenAIChunks(upstreamStream), upstreamModel(route))) {
       if (!writeSafe(res, chunk)) break;
     }
   } catch (e) {
@@ -765,7 +918,7 @@ async function toMinimax(
 ): Promise<void> {
   // MiniMax speaks Anthropic natively.
   const anthropicBody = dialect === "anthropic" ? { ...body } : openaiToAnthropic(body);
-  anthropicBody.model = route.model;
+  anthropicBody.model = upstreamModel(route);
   anthropicBody.stream = stream;
 
   const r = await fetch(`${MINIMAX_BASE}/v1/messages`, {
@@ -785,7 +938,7 @@ async function toMinimax(
 
   if (!stream) {
     const json = await r.json();
-    const payload = dialect === "anthropic" ? json : anthropicToOpenAIResponse(json, route.model);
+    const payload = dialect === "anthropic" ? json : anthropicToOpenAIResponse(json, upstreamModel(route));
     res.json(payload);
     return;
   }
@@ -797,7 +950,7 @@ async function toMinimax(
     return;
   }
   try {
-    for await (const chunk of anthropicStreamToOpenAI(r.body!, route.model)) {
+    for await (const chunk of anthropicStreamToOpenAI(r.body!, upstreamModel(route))) {
       if (!writeSafe(res, chunk)) break;
     }
   } catch (e) {
