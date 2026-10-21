@@ -18,8 +18,14 @@
 
 import crypto from "node:crypto";
 import os from "node:os";
-import { loadSession as loadQoderSession, type QoderSession } from "./qoder-auth.ts";
-import { loadSession as loadWorkBuddySession, type WorkBuddySession } from "./workbuddy-auth.ts";
+import { loadSession as loadQoderSession, deviceIdentity, type QoderSession } from "./qoder-auth.ts";
+import { loadSession as loadWorkBuddySession, dataDir as workBuddyDataDir, type WorkBuddySession } from "./workbuddy-auth.ts";
+import { deriveDeviceIdentity, deviceSalt } from "./device-identity.ts";
+
+/** The WorkBuddy session lives in its own directory; the salt goes with it. */
+function dataDir(): string {
+  return workBuddyDataDir();
+}
 
 /** The China accounts that hand out credits. */
 export type BenefitUpstream = "workbuddy-cn" | "qoder-cn";
@@ -63,6 +69,7 @@ const WORKBUDDY_BASE = "https://www.workbuddy.cn";
 const WORKBUDDY_GROWTH = `${WORKBUDDY_BASE}/v2/activity/growth`;
 
 function workbuddyHeaders(session: WorkBuddySession): Record<string, string> {
+  const identity = session.uid ? deriveDeviceIdentity(session.uid, deviceSalt(dataDir())) : null;
   return {
     Accept: "application/json",
     Authorization: `Bearer ${session.accessToken}`,
@@ -70,6 +77,7 @@ function workbuddyHeaders(session: WorkBuddySession): Record<string, string> {
     "X-User-Id": session.uid,
     "User-Agent": "WorkBuddy",
     "X-Domain": session.domain,
+    ...(identity ? { "X-Device-Id": identity.machineId } : {}),
   };
 }
 
@@ -346,10 +354,15 @@ function qoderClaimHeaders(session: QoderSession): Record<string, string> {
     "Cosy-ClientType": "10",
   };
   // The machine identity the desktop app sends along; the server is happier
-  // with a request that looks like the app's.
-  if (session.machineId) headers["Cosy-MachineId"] = session.machineId;
-  if (session.machineToken) headers["Cosy-MachineToken"] = session.machineToken;
-  if (session.machineType) headers["Cosy-MachineType"] = session.machineType;
+  // with a request that looks like the app's. It is the account's own
+  // fingerprint, so it never links two accounts.
+  const identity = deviceIdentity("cn");
+  if (identity) {
+    headers["Cosy-MachineId"] = identity.machineId;
+    headers["Cosy-MachineToken"] = identity.machineToken;
+    headers["Cosy-MachineType"] = identity.machineType;
+    headers["Cosy-MachineCode"] = identity.machineCode;
+  }
   headers["Cosy-MachineOS"] = `${os.arch()}_linux`;
   headers["Cosy-MachineHostname"] = os.hostname();
   return headers;

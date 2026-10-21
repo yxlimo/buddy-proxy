@@ -4,6 +4,9 @@ oc-workspace/
 *.log
 .env
 free_models.json
+# The salt the device fingerprint is derived with — per installation, and the
+# fingerprint has to stay the same across rebuilds.
+identity.salt
 
 # Local notes and tooling state, not part of the project
 docs/

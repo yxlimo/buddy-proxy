@@ -532,6 +532,29 @@ rejected with code 11133, so it is left out.
 | `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |
 | `WORKBUDDY_LOGIN_TIMEOUT_MS` | `600000` | how long to wait for the browser approval |
 
+## Device fingerprint
+
+Both upstreams look at the machine code and the session id that come with a
+request. The official client keeps one machine id for the whole installation —
+so two accounts on it look like two accounts on one device, which is what a
+risk check looks for.
+
+The router derives the pair from the account instead:
+
+| | Qoder | WorkBuddy |
+|---|---|---|
+| machine code | `Cosy-MachineId`, `Cosy-MachineToken`, `Cosy-Machine-Type`, `Cosy-MachineCode` | `X-Device-Id` |
+| session id | `X-Session-ID` | — |
+
+So the same account always looks like the same machine and nothing drifts,
+and no two accounts ever look like the same machine. The derivation is salted
+with a secret of the installation (`identity.salt`, next to the sessions), so
+the machine token cannot be worked out from the account id alone, and two
+installations of the same account do not correlate either.
+
+The salt lives in the data volume, so a rebuild keeps the fingerprint. Losing
+it only means a new fingerprint, not a lost login.
+
 ## Daily benefits
 
 Both China accounts hand out credits for showing up, and the router takes them

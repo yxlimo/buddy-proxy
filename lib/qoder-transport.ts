@@ -11,7 +11,7 @@
 // headers.
 
 import { randomUUID } from "node:crypto";
-import { ensureCredential, ENDPOINTS, loadSession, type QoderRegion } from "./qoder-auth.ts";
+import { ensureCredential, ENDPOINTS, deviceIdentity, type QoderRegion } from "./qoder-auth.ts";
 import { AuthError } from "./credential.ts";
 
 const USER_AGENT = "qoder/1.1.74";
@@ -101,18 +101,22 @@ export function buildBody(body: Record<string, unknown>, stream: boolean): Recor
 
 async function upstreamHeaders(region: QoderRegion, force: boolean): Promise<Record<string, string>> {
   const cred = await ensureCredential(force, region);
-  const session = loadSession(region);
+  const identity = deviceIdentity(region);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${cred.accessToken}`,
     "Content-Type": "application/json",
     Accept: "text/event-stream",
     "User-Agent": USER_AGENT,
     "X-Request-ID": randomUUID(),
-    "X-Session-ID": randomUUID(),
+    // The session id belongs to the account: a new one on every request would
+    // look like a new session on every request.
+    "X-Session-ID": identity?.sessionId ?? randomUUID(),
   };
-  if (session) {
-    headers["Cosy-MachineToken"] = session.machineToken;
-    headers["Cosy-Machine-Type"] = session.machineType;
+  if (identity) {
+    headers["Cosy-MachineId"] = identity.machineId;
+    headers["Cosy-MachineToken"] = identity.machineToken;
+    headers["Cosy-Machine-Type"] = identity.machineType;
+    headers["Cosy-MachineCode"] = identity.machineCode;
   }
   return headers;
 }

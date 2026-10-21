@@ -23,6 +23,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readEnvNumber, readEnvString } from "./env.ts";
 import { AuthError } from "./credential.ts";
 import type { Credential } from "./credential.ts";
+import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "./device-identity.ts";
 
 export type QoderRegion = "cn" | "global";
 
@@ -138,6 +139,19 @@ export function hasSession(region: QoderRegion = REGION): boolean {
   return loadSession(region) !== null;
 }
 
+/**
+ * The fingerprint of the account: derived from its id, so the account always
+ * looks like the same machine and no two accounts look like the same one.
+ *
+ * The identity that was stored at login time is not used — that one was random,
+ * and it would drift with every login.
+ */
+export function deviceIdentity(region: QoderRegion = REGION): DeviceIdentity | null {
+  const session = loadSession(region);
+  if (!session?.userId) return null;
+  return deriveDeviceIdentity(session.userId, deviceSalt(dataDir()));
+}
+
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 export function saveSession(session: QoderSession): void {
   const file = sessionPath(session.region);
@@ -196,6 +210,16 @@ async function withSessionLock<T>(region: QoderRegion, fn: () => Promise<T>): Pr
 }
 
 function machineFields(session: QoderSession): Record<string, string> {
+  // The derived fingerprint, not the one that was stored at login time: the
+  // account has to keep looking like the same machine.
+  const identity = deviceIdentity(session.region);
+  if (identity) {
+    return {
+      machine_id: identity.machineId,
+      machine_token: identity.machineToken,
+      machine_type: identity.machineType,
+    };
+  }
   return {
     machine_id: session.machineId,
     machine_token: session.machineToken,
@@ -217,7 +241,9 @@ async function postJson(endpoint: string, body: unknown, token?: string): Promis
 
 /** The grant response uses `token` / `refresh_token`, not the OAuth `access_token`. */
 function parseGrant(body: any, previous?: QoderSession | null): QoderSession {
-  const accessToken = typeof body?.token === "string" ? body.token : "";
+  // The login answers `token`, the refresh answers `device_token` — same thing.
+  const accessToken =
+    typeof body?.token === "string" ? body.token : typeof body?.device_token === "string" ? body.device_token : "";
   const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token : previous?.refreshToken ?? "";
   const userId = typeof body?.user_id === "string" ? body.user_id : previous?.userId ?? "";
 
@@ -344,7 +370,10 @@ export function buildDeviceAuthorization(region: QoderRegion = REGION): DeviceAu
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
   const nonce = randomUUID();
-  const machine = newMachineIdentity();
+  // A login for an account that is already known reuses that account's
+  // fingerprint, so the upstream does not see a new device. A first login has
+  // no account id to derive from yet, so it gets a fresh one.
+  const machine = deviceIdentity(region) ?? newMachineIdentity();
   const params = new URLSearchParams({
     challenge,
     challenge_method: "S256",

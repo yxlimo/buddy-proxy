@@ -29,7 +29,7 @@
 
 import crypto from "node:crypto";
 import { AuthError } from "./credential.ts";
-import { ensureCredential, loadSession, type QoderRegion } from "./qoder-auth.ts";
+import { ensureCredential, loadSession, deviceIdentity, type QoderRegion } from "./qoder-auth.ts";
 import { readEnvString } from "./env.ts";
 
 /** Qoder's server public key. Fixed; the protocol has never rotated it. */
@@ -117,9 +117,14 @@ export async function buildSession(region: QoderRegion = "global"): Promise<Lega
     .toString("base64");
   const info = aesEncrypt(Buffer.from(JSON.stringify(identity), "utf8"), tempKey).toString("base64");
 
-  const machine = stored
-    ? { id: stored.machineId, token: stored.machineToken, type: stored.machineType }
-    : { id: crypto.randomUUID(), token: crypto.randomUUID().replace(/-/g, ""), type: crypto.randomUUID().replace(/-/g, "").slice(0, 18) };
+  // The fingerprint of the account, so the legacy path presents the same
+  // machine as the new one.
+  const fingerprint = deviceIdentity(region);
+  const machine = fingerprint
+    ? { id: fingerprint.machineId, token: fingerprint.machineToken, type: fingerprint.machineType }
+    : stored
+      ? { id: stored.machineId, token: stored.machineToken, type: stored.machineType }
+      : { id: crypto.randomUUID(), token: crypto.randomUUID().replace(/-/g, ""), type: crypto.randomUUID().replace(/-/g, "").slice(0, 18) };
 
   return { tempKey, cosyKey, info, identity, machineId: machine.id, machineToken: machine.token, machineType: machine.type };
 }

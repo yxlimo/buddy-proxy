@@ -20,6 +20,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readEnvNumber, readEnvString } from "./env.ts";
 import { AuthError } from "./credential.ts";
 import type { Credential } from "./credential.ts";
+import { deriveDeviceIdentity, deviceSalt } from "./device-identity.ts";
 
 export type WorkBuddyRegion = "cn";
 
@@ -418,6 +419,9 @@ export function chatHeaders(
   const messageId = randomUUID().replace(/-/g, "");
   const conversationId = opts.conversationId ?? randomUUID();
   const turnRequestId = opts.turnRequestId ?? randomUUID().replace(/-/g, "");
+  // The device id the official client sends. It is the account's own
+  // fingerprint, so two accounts never look like they sit on one machine.
+  const identity = session.uid ? deriveDeviceIdentity(session.uid, deviceSalt(dataDir())) : null;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -432,6 +436,7 @@ export function chatHeaders(
     "X-Domain": session.domain,
     "User-Agent": `CLI/${CLI_VERSION} CodeBuddy/${CLI_VERSION}`,
     "X-User-Id": session.uid || "anonymous",
+    ...(identity ? { "X-Device-Id": identity.machineId } : {}),
     Authorization: `Bearer ${session.accessToken}`,
     "X-Conversation-ID": conversationId,
     "X-Conversation-Request-ID": turnRequestId,
