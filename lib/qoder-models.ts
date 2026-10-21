@@ -54,6 +54,14 @@ export interface QoderModel {
   /** Context window the catalog advertises for this model. */
   context: number;
   /**
+   * The largest answer the model gives, in tokens.
+   *
+   * The gateway does not enforce it — a request that asks for more gets more —
+   * but a client that reads the model list should be told the real number
+   * rather than a guess.
+   */
+  maxOutput: number;
+  /**
    * `model` pins one model. `tier` lets Qoder pick the model and only sets how
    * hard it thinks — the tiers are the same capability at different effort
    * levels, so they are exposed as effort variants of one entry rather than as
@@ -107,6 +115,18 @@ export function tierForEffort(effort: string | undefined): string {
   return effortTiers()[effort.toLowerCase()] ?? "auto";
 }
 
+// The output limits come from the vendors' own documentation, not from the
+// gateway: the gateway ignores the value a request asks for and cuts the
+// answer at the model's own limit. The sources are the vendors' model pages —
+// Alibaba Model Studio for the Qwen family, Moonshot's platform docs for Kimi,
+// Zhipu's model pages for GLM, DeepSeek's pricing table, MiniMax's
+// documentation — and the numbers follow the model that actually runs behind
+// the label (see the `backend` field).
+//
+// Where the gateway's own label and its backend disagree, the smaller number
+// wins: MiniMax-M3.1-Flash is served by M2.5, so M2.5's limit is the one
+// that holds.
+
 export const QODER_MODELS: QoderModel[] = [
   // The tier entry: one model, four thinking levels. The tier decides how hard
   // Qoder thinks and which model it lands on.
@@ -119,31 +139,32 @@ export const QODER_MODELS: QoderModel[] = [
     reasoning: true,
     backend: "qwen3-coder-plus",
     context: 200000,
+    maxOutput: 65536,
     kind: "tier",
     tierFor: (effort) => tierForEffort(effort),
   },
 
   // Named models the new protocol accepts.
-  { id: "qwen3.7-plus", name: "Qwen3.7-Plus", multiplier: "0.1×", key: "qmodel", protocol: "new", reasoning: false, backend: "bailian-qwen3.7-plus", context: 1000000, kind: "model" },
-  { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", protocol: "new", reasoning: false, backend: "oem-kimi-k2.7-code", context: 180000, kind: "model" },
-  { id: "glm-5.3", name: "GLM-5.3", multiplier: "0.8×", key: "gmodel", protocol: "new", reasoning: true, backend: "oem-glm-5", context: 180000, kind: "model" },
-  { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", multiplier: "0.5×", key: "dmodel", protocol: "new", reasoning: true, backend: "oem-deepseek-v4-pro", context: 1000000, kind: "model" },
+  { id: "qwen3.7-plus", name: "Qwen3.7-Plus", multiplier: "0.1×", key: "qmodel", protocol: "new", reasoning: false, backend: "bailian-qwen3.7-plus", context: 1000000, maxOutput: 131072, kind: "model" },
+  { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", protocol: "new", reasoning: false, backend: "oem-kimi-k2.7-code", context: 180000, maxOutput: 32768, kind: "model" },
+  { id: "glm-5.3", name: "GLM-5.3", multiplier: "0.8×", key: "gmodel", protocol: "new", reasoning: true, backend: "oem-glm-5", context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", multiplier: "0.5×", key: "dmodel", protocol: "new", reasoning: true, backend: "oem-deepseek-v4-pro", context: 1000000, maxOutput: 393216, kind: "model" },
   // Qoder's catalog calls this MiniMax-M3.1-Flash, but the gateway reports the
   // backend it actually used as oem-minimax-m2.5 — a different generation. The
   // id keeps Qoder's wording (that is the name the tier is selected by); the
   // display name says what runs.
-  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 1000000, kind: "model" },
+  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 1000000, maxOutput: 131072, kind: "model" },
 
   // Version-pinned models — the legacy protocol only.
-  { id: "deepseek-flash", name: "DeepSeek-Flash", multiplier: "0×", key: "dfmodel", protocol: "legacy", reasoning: true, context: 1000000, kind: "model" },
-  { id: "qwen3.8-flash", name: "Qwen3.8-Flash", multiplier: "0×", key: "qfmodel", protocol: "legacy", reasoning: true, context: 180000, kind: "model" },
-  { id: "qwen3.8-max", name: "Qwen3.8-Max", multiplier: "0.5×", key: "qmodel_38max", protocol: "legacy", reasoning: true, context: 180000, kind: "model" },
-  { id: "qwen3.7-max", name: "Qwen3.7-Max", multiplier: "0.5×", key: "qmodel_latest", protocol: "legacy", reasoning: false, context: 1000000, kind: "model" },
-  { id: "kimi-k3", name: "Kimi-K3", multiplier: "1.4×", key: "kmodel_latest", protocol: "legacy", reasoning: false, context: 180000, kind: "model" },
-  { id: "glm-5.3-flash", name: "GLM-5.3-Flash", multiplier: "0.1×", key: "gfmodel", protocol: "legacy", reasoning: true, context: 1000000, kind: "model" },
+  { id: "deepseek-flash", name: "DeepSeek-Flash", multiplier: "0×", key: "dfmodel", protocol: "legacy", reasoning: true, context: 1000000, maxOutput: 393216, kind: "model" },
+  { id: "qwen3.8-flash", name: "Qwen3.8-Flash", multiplier: "0×", key: "qfmodel", protocol: "legacy", reasoning: true, context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "qwen3.8-max", name: "Qwen3.8-Max", multiplier: "0.5×", key: "qmodel_38max", protocol: "legacy", reasoning: true, context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "qwen3.7-max", name: "Qwen3.7-Max", multiplier: "0.5×", key: "qmodel_latest", protocol: "legacy", reasoning: false, context: 1000000, maxOutput: 131072, kind: "model" },
+  { id: "kimi-k3", name: "Kimi-K3", multiplier: "1.4×", key: "kmodel_latest", protocol: "legacy", reasoning: false, context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "glm-5.3-flash", name: "GLM-5.3-Flash", multiplier: "0.1×", key: "gfmodel", protocol: "legacy", reasoning: true, context: 1000000, maxOutput: 131072, kind: "model" },
   // Cantus is not in the list: the gateway answers "All backends failed" for it,
   // while the other legacy models on the same account still work.
-  { id: "sonus", name: "Sonus", multiplier: "0×", key: "smodel", protocol: "legacy", reasoning: true, context: 180000, kind: "model" },
+  { id: "sonus", name: "Sonus", multiplier: "0×", key: "smodel", protocol: "legacy", reasoning: true, context: 180000, maxOutput: 65536, kind: "model" },
 ];
 
 export const DEFAULT_MODEL_ID = "auto";
@@ -187,7 +208,6 @@ export function qoderProtocolForRegion(model: QoderModel, region: QoderRegion): 
 
 /** Context window and output cap, as the CLI advertises them. */
 export const QODER_CONTEXT_WINDOW = 200000;
-export const QODER_MAX_OUTPUT_TOKENS = 4096;
 
 /** Largest context window any model in the catalog advertises. */
 export const QODER_MAX_CONTEXT = 1000000;
@@ -227,43 +247,4 @@ export function resolveModelRoute(
     return { model: known, key: known.tierFor?.(effort ?? "") ?? known.key };
   }
   return { model: known, key: known.key };
-}
-
-/** OpenAI GET /v1/models shape. */
-export function openaiModelsPayload() {
-  const created = Math.floor(Date.now() / 1000);
-  return {
-    object: "list",
-    data: QODER_MODELS.map((m) => ({
-      id: m.id,
-      object: "model",
-      created,
-      owned_by: "qoder",
-    })),
-  };
-}
-
-/** Anthropic GET /v1/models shape, with the extra metadata pi reads. */
-export function anthropicModelsPayload() {
-  const data = QODER_MODELS.map((m) => ({
-    id: m.id,
-    type: "model",
-    display_name: m.name,
-    created_at: Math.floor(Date.now() / 1000),
-    reasoning: m.reasoning,
-    tool_call: true,
-    context_window: m.context,
-    max_output_tokens: QODER_MAX_OUTPUT_TOKENS,
-    // Tiers accept a thinking level; a pinned model either thinks or does not,
-    // and the list says which.
-    ...(m.kind === "tier" ? { effort_options: [...QODER_EFFORTS] } : {}),
-    ...(m.backend ? { backend: m.backend } : {}),
-  }));
-  return {
-    data,
-    has_more: false,
-    first_id: data.length ? data[0].id : null,
-    last_id: data.length ? data[data.length - 1].id : null,
-    default_model: DEFAULT_MODEL_ID,
-  };
 }

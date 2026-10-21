@@ -9,7 +9,7 @@
 // the prefixed form (`/qoder-cn/v1/models`) with one upstream, and the model
 // ids are the real ones there — the path already says where the model lives.
 
-import { QODER_EFFORTS, QODER_MAX_OUTPUT_TOKENS, qoderLabel, type QoderModel } from "../qoder-models.ts";
+import { QODER_EFFORTS, qoderLabel, type QoderModel } from "../qoder-models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy-models.ts";
 import type { MiniMaxModel } from "../minimax-models.ts";
 
@@ -56,7 +56,7 @@ export function qoderCatalogModels(models: QoderModel[]): CatalogModel[] {
     reasoning: m.reasoning,
     toolCall: true,
     contextWindow: m.context,
-    maxOutputTokens: QODER_MAX_OUTPUT_TOKENS,
+    maxOutputTokens: m.maxOutput,
     // A tier accepts a thinking level; a pinned model either thinks or does not,
     // and the list says which.
     ...(m.kind === "tier" ? { effortOptions: [...QODER_EFFORTS] } : {}),

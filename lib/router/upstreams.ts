@@ -18,6 +18,7 @@ import {
 import { qoderChatCompletion, LimitError } from "../qoder-transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../qoder-legacy.ts";
 import { workbuddyChat, aggregateStream } from "../workbuddy-transport.ts";
+import { MINIMAX_MODELS } from "../minimax-models.ts";
 import type { QoderRegion } from "../qoder-auth.ts";
 import {
   deliverAnthropicStream,
@@ -27,6 +28,11 @@ import {
   type Dialect,
 } from "./deliver.ts";
 import { upstreamModel, type Route } from "./routes.ts";
+
+/** The output limit of a MiniMax model, as its own catalog says. */
+function minimaxMaxOutput(model: string): number {
+  return MINIMAX_MODELS.find((m) => m.id === model)?.output ?? 4096;
+}
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
@@ -181,7 +187,8 @@ export async function toQoderLegacy(
           tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
           modelKey: model.key,
           displayName: model.name,
-          maxTokens: typeof openaiBody.max_tokens === "number" ? openaiBody.max_tokens : 4096,
+          // The gateway does not enforce the cap, but the answer is cut at it.
+          maxTokens: typeof openaiBody.max_tokens === "number" ? openaiBody.max_tokens : model.maxOutput,
           reasoning: model.reasoning,
           contextWindow: model.context,
         },
@@ -335,6 +342,11 @@ export async function toMinimax(
   const anthropicBody = dialect === "anthropic" ? { ...body } : openaiToAnthropic(body);
   anthropicBody.model = upstreamModel(route);
   anthropicBody.stream = stream;
+  // The Anthropic dialect requires a limit; when the client did not name one,
+  // the model's own is used rather than a guess.
+  if (typeof anthropicBody.max_tokens !== "number") {
+    anthropicBody.max_tokens = minimaxMaxOutput(upstreamModel(route));
+  }
 
   const r = await fetch(`${ctx.minimaxBase}/v1/messages`, {
     method: "POST",

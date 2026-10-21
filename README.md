@@ -125,6 +125,18 @@ curl http://localhost:6450/v1/messages \
 
 ## Client model lists
 
+The model list carries what a client needs to plan: how much a model reads
+(`context_window`) and how much it may answer (`max_output_tokens`).
+
+The output limits are the vendors' own numbers, not the gateway's — the gateway
+ignores the `max_tokens` a request asks for and cuts the answer at the model's
+own limit. They come from the vendors' model pages: Alibaba Model Studio for
+the Qwen family, Moonshot's platform docs for Kimi, Zhipu's model pages for
+GLM, DeepSeek's pricing table, MiniMax's documentation.
+
+The context windows are the gateway's own, because those are what the gateway
+enforces.
+
 Each upstream is a provider of its own, so the model ids are the real ones:
 
 | Provider | Base URL | Upstream |
