@@ -1,6 +1,6 @@
-# The image only needs package.json, pnpm-lock.yaml, minimax-proxy.ts,
-# router-proxy.ts and lib/, all copied explicitly by the Dockerfile. Everything else
-# stays out of the build context.
+# The image only needs package.json, pnpm-lock.yaml, router-proxy.ts and lib/,
+# all copied explicitly by the Dockerfile. Everything else stays out of the build
+# context.
 
 # Other proxy entry points and their shared local state
 v1-proxy.mjs

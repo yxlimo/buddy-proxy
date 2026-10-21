@@ -14,7 +14,7 @@
 //   /openapi-global/...     openapi.qoder.sh
 //   /openapi-cn/...         openapi.qoder.com.cn
 //   /workbuddy/...          www.workbuddy.cn
-//   /minimax/...            the MiniMax proxy (MINIMAX_UPSTREAM_URL)
+//   /minimax/...            the MiniMax Code gateway (MINIMAX_RECORD_BASE)
 //   /tokenrhythm/...        tokenrhythm.studio
 //
 // The fixtures land in test/fixtures/, one file per method and path.
@@ -30,7 +30,8 @@ const UPSTREAMS: Record<string, string> = {
   "openapi-global": "https://openapi.qoder.sh",
   "openapi-cn": "https://openapi.qoder.com.cn",
   workbuddy: "https://www.workbuddy.cn",
-  minimax: process.env.MINIMAX_UPSTREAM_URL ?? "http://127.0.0.1:6448",
+  // The gateway's own path is <base>/v1/messages.
+  minimax: process.env.MINIMAX_RECORD_BASE ?? "https://agent.minimax.cn/mavis/api/v1/llm",
   tokenrhythm: process.env.TOKENRHYTHM_RECORD_BASE ?? "https://tokenrhythm.studio",
 };
 

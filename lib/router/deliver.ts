@@ -164,11 +164,12 @@ export async function deliverAnthropicStream(
   body: ReadableStream<Uint8Array>,
   dialect: Dialect,
   model: string,
+  pingMs = 0,
 ): Promise<void> {
   res.setHeader("x-request-id", rid("req_"));
   sseHead(res);
   if (dialect === "anthropic") {
-    await pipeStream(body, res);
+    await pipeStream(body, res, pingMs);
     return;
   }
   try {
@@ -237,9 +238,39 @@ async function pipeOpenAIChunks(
   }
 }
 
-/** Forward an Anthropic stream, byte for byte. */
-async function pipeStream(body: ReadableStream<Uint8Array>, res: express.Response): Promise<void> {
+/**
+ * Forward an Anthropic stream, byte for byte.
+ *
+ * With `pingMs` set, a `ping` event goes out whenever the upstream has been
+ * quiet for that long. Some hops in front of the gateway (a local HTTP proxy,
+ * a NAT gateway) drop idle connections, and a long thinking pause can keep the
+ * stream quiet for minutes. The upstream sends `event: ping` right after
+ * message_start but then goes silent while the model thinks, so we emit our
+ * own.
+ *
+ * Two rules keep this safe:
+ *   - only ping when the stream is actually idle, so a busy stream is not
+ *     padded with useless events;
+ *   - only ping on an SSE frame boundary, because writing one in the middle
+ *     of an upstream frame would corrupt the client's parse.
+ */
+async function pipeStream(
+  body: ReadableStream<Uint8Array>,
+  res: express.Response,
+  pingMs = 0,
+): Promise<void> {
   const reader = body.getReader();
+  let tail = Buffer.alloc(0); // last bytes written, used to detect a frame boundary
+  let lastActivity = Date.now();
+  const writePing = () => {
+    if (res.writableEnded || res.destroyed) return;
+    if (Date.now() - lastActivity < pingMs) return; // upstream is still talking
+    if (!/\r?\n\r?\n$/.test(tail.toString("latin1"))) return; // mid-frame: wait
+    // Same payload the gateway itself sends, so clients see nothing unusual.
+    if (writeSafe(res, 'event: ping\ndata: {"type":"ping"}\n\n')) lastActivity = Date.now();
+  };
+  const pingTimer = pingMs > 0 ? setInterval(writePing, Math.min(pingMs, 5000)) : null;
+  pingTimer?.unref?.();
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -247,8 +278,11 @@ async function pipeStream(body: ReadableStream<Uint8Array>, res: express.Respons
       // The bytes go out as they came in: this path forwards the upstream's own
       // SSE, and decoding it would only risk breaking a character across chunks.
       if (!writeSafe(res, value)) break;
+      lastActivity = Date.now();
+      tail = Buffer.concat([tail, Buffer.from(value)]).slice(-4);
     }
   } finally {
+    if (pingTimer) clearInterval(pingTimer);
     reader.releaseLock();
     res.end();
   }

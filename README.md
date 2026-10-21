@@ -1,15 +1,14 @@
 # buddy-proxy
 
-Two independent proxies in front of free model providers, each its own process
-on its own port:
+One reverse proxy in front of free model providers. It answers in both
+dialects, and the model name decides which upstream the request goes to:
 
-| Process | Port | Upstream | Dialect |
-|---------|------|----------|---------|
-| `minimax-proxy.ts` | 6448 | MiniMax Code gateway | Anthropic |
-| `router-proxy.ts` | 6450 | Qoder **and** MiniMax, chosen per model name | OpenAI + Anthropic |
+| Process | Port | Upstreams | Dialect |
+|---------|------|-----------|---------|
+| `router-proxy.ts` | 6450 | MiniMax Code, Qoder, WorkBuddy, TokenRhythm | OpenAI + Anthropic |
 
-The router is the one to point a client at when you want both providers behind
-one base URL — see [Router](#router-router-proxyts-port-6450).
+Point a client at it and it works with either dialect — see
+[Router](#router-router-proxyts-port-6450).
 
 ## What is switched on
 
@@ -18,7 +17,7 @@ are **off by default**; turn on the ones you actually use.
 
 | Switch | Turns on |
 |--------|----------|
-| `MINIMAX_CODE=true` | the MiniMax Code gateway (port 6448) |
+| `MINIMAX_CODE=true` | the MiniMax Code gateway |
 | `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
 | `QODER_CN=true` | the Qoder China account (qoder.cn) |
 | `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
@@ -30,7 +29,7 @@ message saying which switch to flip. The two Qoder regions are separate
 accounts, so they are switched on separately, and WorkBuddy's China account is
 a third one.
 
-The router reads all five; the MiniMax proxy reads `MINIMAX_CODE`.
+One process reads all five.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -41,8 +40,7 @@ has been removed rather than left to rot.
 
 ```bash
 npm install
-MINIMAX_CODE=true QODER_GLOBAL=true QODER_CN=true WORKBUDDY_CN=true node router-proxy.ts   # :6450, the one to point a client at
-MINIMAX_CODE=true node minimax-proxy.ts                     # :6448, the MiniMax gateway on its own
+MINIMAX_CODE=true QODER_GLOBAL=true QODER_CN=true WORKBUDDY_CN=true node router-proxy.ts   # :6450
 ```
 
 API keys live in `api-keys.json` (auto-generated on first run if missing).
@@ -51,12 +49,11 @@ API keys live in `api-keys.json` (auto-generated on first run if missing).
 
 ```
 router-proxy.ts        the entry point: the switches, the routes, the startup
-minimax-proxy.ts       the MiniMax Code gateway on its own
 lib/router/            the router's inside
   routes.ts            where a request goes: the model name and the path
   catalog.ts           the model lists, in both dialects
   deliver.ts           how an answer reaches the client
-  upstreams.ts         the four upstream adapters
+  upstreams.ts         the upstream adapters
   benefits.ts          the daily check-in
 lib/dialect/           the conversion between the two dialects
   request.ts           the request
@@ -64,6 +61,8 @@ lib/dialect/           the conversion between the two dialects
   response.ts          the whole answer
 lib/qoder-*.ts         Qoder: the session, the models, the two protocols
 lib/workbuddy-*.ts     WorkBuddy: the session, the models, the transport
+lib/minimax-*.ts       MiniMax: the session, the models, the gateway call
+lib/tokenrhythm/       TokenRhythm: the accounts, the models, the relay call
 lib/benefits.ts        the daily credits of the China accounts
 lib/device-identity.ts the fingerprint of an account
 ```
@@ -111,6 +110,11 @@ bash test/e2e.sh http://127.0.0.1:6689
 
 Auth: `Authorization: Bearer <key>` (OpenAI) or `x-api-key: <key>` (Anthropic).
 Base URL: `http://localhost:6450` (use `.../v1` for OpenAI clients).
+
+Each upstream also has a path of its own — `/qoder/v1`, `/qoder-cn/v1`,
+`/workbuddy-cn/v1`, `/minimax/v1`, `/tokenrhythm/v1` — so a client can be
+pointed at one provider, and the model name there is the real one. The root
+paths above take the model name with a prefix instead (`qoder-cn/glm-5.3`).
 
 ```bash
 # OpenAI format
@@ -167,9 +171,6 @@ Each upstream is a provider of its own, so the model ids are the real ones:
 | `workbuddy_cn` | `{router}/workbuddy-cn/v1` | WorkBuddy, China account |
 | `minimax_code` | `{router}/minimax/v1` | the MiniMax Code gateway |
 
-The router's MiniMax upstream is the same gateway the standalone proxy on 6448
-serves, so the client has one MiniMax Code provider, not two.
-
 The opencode **TUI** model picker lists each model exactly once: anything
 already shown under **Favorites** or **Recent** is not repeated in the
 per-provider section further down. A provider whose models are all in
@@ -185,31 +186,26 @@ provider's models are not in there by default. Open the picker → **Manage
 models** → flip the provider's switch (one switch covers all its models). That
 is per-browser.
 
-## MiniMax Code proxy (`minimax-proxy.ts`, port 6448)
+## MiniMax Code gateway
 
-A second, independent process in front of the MiniMax Code LLM gateway. It shares
-`lib/` with the proxy above (env loading, API-key auth) but has its own entry
-point, port, and credential source.
-
-```bash
-mise run serve-minimax     # or: node minimax-proxy.ts
-```
-
-Only the Anthropic dialect is exposed — the upstream is already an Anthropic
-`/v1/messages` endpoint, so requests pass through verbatim (system, thinking,
-tools, streaming).
+One of the router's upstreams: the MiniMax Code LLM gateway, reached through
+the router's own `/minimax` path.
 
 | Method | Path | Format |
 |--------|------|--------|
-| `POST` | `/v1/messages` | Anthropic messages (stream supported) |
-| `GET`  | `/v1/models` | model catalog |
-| `GET`  | `/health` | status, including credential state |
+| `POST` | `/minimax/v1/messages` | Anthropic messages (stream supported) |
+| `GET`  | `/minimax/v1/models` | model catalog |
+| `GET`  | `/health` | status, including the account's balance |
 
-`/v1/messages` is the only chat path, matching Anthropic's own versioning
-(`https://api.anthropic.com/v1/messages`). Clients append `/messages` to their
-base URL, so the base URL is expected to carry the `/v1` segment — opencode and
-the Anthropic SDK use `<base>/v1/messages`, and pi (whose `baseUrl` is a plain
-root) uses `<base>/v1/messages` as well.
+The upstream is already an Anthropic `/v1/messages` endpoint, so a request in
+the Anthropic dialect passes through verbatim (system, thinking, tools,
+streaming) — the router only adds the credential and the attribution headers
+the gateway expects. A request in the OpenAI dialect is converted on the way
+in and the answer is converted back.
+
+Clients append `/messages` to their base URL, so the base URL is expected to
+carry the `/v1` segment — opencode and the Anthropic SDK use `<base>/v1/messages`,
+and pi (whose `baseUrl` is a plain root) uses `<base>/v1/messages` as well.
 
 What makes the gateway treat this as a MiniMax Code client is the OAuth grant
 itself — `client_id=mcode-public`, `audience=agent-backend`, `scope=agent.default`
@@ -276,19 +272,20 @@ The gateway does **not** validate model ids either: an unrecognized name (say
 
 ### Clients
 
-- **pi** — `~/.pi/agent/models.json` has a `minimax-code` provider
-  (`baseUrl: http://<proxy-host>:6448`, `api: anthropic-messages`) listing both
+- **pi** — `~/.pi/agent/models.json` has a `minimax_code` provider
+  (`baseUrl: http://<proxy-host>:6450/minimax`, `api: anthropic-messages`)
+  listing both
   models with `contextWindow: 1000000` / `maxTokens: 128000`, a
   `thinkingLevelMap` (pi's `off|minimal|low|…|max` → the gateway's effort
   values) and `compat.forceAdaptiveThinking: true`, so pi sends the same
   `thinking: {type: "adaptive"}` + `output_config: {effort: …}` the desktop
   client sends. Pick a level with `pi --model MiniMax-M3.1-Flash:high`.
-- **opencode** — `~/.config/opencode/opencode.jsonc` has a `minimax-code`
-  provider (`npm: @ai-sdk/anthropic`, `baseURL: http://<proxy-host>:6448/v1`)
+- **opencode** — `~/.config/opencode/opencode.jsonc` has a `minimax_code`
+  provider (`npm: @ai-sdk/anthropic`, `baseURL: http://<proxy-host>:6450/minimax/v1`)
   with the same two models and limits. The thinking levels are declared as
   `capabilities.reasoning.effort` — opencode turns that into model variants
   (`low`/`medium`/`high`/`xhigh`/`max`), selectable as
-  `opencode run -m minimax-code/MiniMax-M3.1-Flash#high`. Hand-written
+  `opencode run -m minimax_code/MiniMax-M3.1-Flash#high`. Hand-written
   `variants` entries in the config are rejected as a legacy setting, and
   `settings` inside a variant is not accepted either — `capabilities.reasoning`
   is the supported way.
@@ -329,7 +326,6 @@ is actually idle, so a busy stream is not padded with useless events.
 
 | Variable | Default | What |
 |----------|---------|------|
-| `MINIMAX_PORT` | `6448` | proxy port |
 | `MINIMAX_AUTH_DIR` | auto-detected | credential store directory |
 | `MINIMAX_REGION` | `cn` | store subdirectory (`cn` / `global`) |
 | `MINIMAX_CLIENT_ID` | `mcode-public` | OAuth client id |
@@ -546,7 +542,7 @@ used from, a disabled app, a lapsed login).
 | Variable | Default | What |
 |----------|---------|------|
 | `ROUTER_PORT` | `6450` | router port |
-| `MINIMAX_UPSTREAM_URL` | `http://127.0.0.1:6448` | where the MiniMax proxy is |
+| `MINIMAX_BASE_URL` | the gateway's own address | where the MiniMax gateway is |
 | `MINIMAX_CODE` | `false` | switch the MiniMax Code upstream on |
 | `QODER_GLOBAL` | `false` | switch the Qoder global region on |
 | `QODER_CN` | `false` | switch the Qoder China region on |
@@ -826,9 +822,7 @@ The image carries the code. The NAS never receives a checkout — it holds a
 `docker-compose.yml` and a `./data` directory, and nothing else. The image is
 built locally and shipped there as a tar.
 
-The compose file runs two services from that one image: `minimax-proxy` on
-6448 and `router` on 6450. The router reaches the MiniMax proxy by service name
-over the compose network, so there is no host port to configure.
+The compose file runs one service from that one image: the router on 6450.
 
 ```bash
 podman build --format docker -t localhost/buddy-proxy:latest .
@@ -851,8 +845,8 @@ Two details that are easy to get wrong:
 The service directory holds the compose file and a `./data` directory mounted at
 `/data`, and nothing else.
 
-The login is the only step that needs a human, and the services do it
-themselves: a switched-on proxy with no session in `./data` runs the device
+The login is the only step that needs a human, and the service does it
+itself: a switched-on proxy with no session in `./data` runs the device
 flow at startup and prints the authorization URL and user code to its log.
 Approve it in a browser and the credential lands in `./data`. Every later
 refresh is done by the proxy itself. To log in again, remove the session file

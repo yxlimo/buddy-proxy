@@ -421,6 +421,24 @@ export function workbuddyDeviceId(session: WorkBuddySession): string | undefined
   return deriveDeviceIdentity(session.uid, deviceSalt(dataDir())).machineId;
 }
 
+/**
+ * The headers every call to the account's API carries.
+ *
+ * The chat call adds the agent, IDE and trace headers on top of these; the
+ * growth centre does not need them, but it needs the same identity.
+ */
+export function accountHeaders(session: WorkBuddySession): Record<string, string> {
+  const deviceId = workbuddyDeviceId(session);
+  return {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${session.accessToken}`,
+    "X-User-Id": session.uid || "anonymous",
+    "X-Domain": session.domain,
+    ...(deviceId ? { "X-Device-Id": deviceId } : {}),
+  };
+}
+
 export function chatHeaders(
   session: WorkBuddySession,
   opts: { conversationId?: string; turnRequestId?: string } = {},
@@ -430,10 +448,8 @@ export function chatHeaders(
   const messageId = randomUUID().replace(/-/g, "");
   const conversationId = opts.conversationId ?? randomUUID();
   const turnRequestId = opts.turnRequestId ?? randomUUID().replace(/-/g, "");
-  const deviceId = workbuddyDeviceId(session);
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
+    ...accountHeaders(session),
     "X-Agent-Intent": "craft",
     "X-Agent-Purpose": "conversation",
     "X-Agent-Runtime": "other",
@@ -442,11 +458,7 @@ export function chatHeaders(
     "X-IDE-Name": "CLI",
     "X-IDE-Version": CLI_VERSION,
     "X-Product": "SaaS",
-    "X-Domain": session.domain,
     "User-Agent": `CLI/${CLI_VERSION} CodeBuddy/${CLI_VERSION}`,
-    "X-User-Id": session.uid || "anonymous",
-    ...(deviceId ? { "X-Device-Id": deviceId } : {}),
-    Authorization: `Bearer ${session.accessToken}`,
     "X-Conversation-ID": conversationId,
     "X-Conversation-Request-ID": turnRequestId,
     "X-Root-Request-ID": turnRequestId,

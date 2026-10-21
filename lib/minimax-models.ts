@@ -24,18 +24,11 @@ export interface MiniMaxModel {
   reasoning: boolean;
   tool_call: boolean;
   temperature: boolean;
-  modalities: { input: string[]; output: string[] };
   context: number;
   output: number;
-  contextWindowOptions: number[];
   /** Effort levels the gateway accepts for this model ("default" = no thinking). */
   effortOptions: string[];
-  defaultEffort: string;
-  /** Model the proxy reports as default (gateway default too). */
-  isDefault?: boolean;
 }
-
-const FILE_API_CAPABLE = { input: ["text", "image", "video"], output: ["text"] };
 
 export const MINIMAX_MODELS: MiniMaxModel[] = [
   {
@@ -44,13 +37,9 @@ export const MINIMAX_MODELS: MiniMaxModel[] = [
     reasoning: true,
     tool_call: true,
     temperature: true,
-    modalities: FILE_API_CAPABLE,
     context: 1000000,
     output: 128000,
-    contextWindowOptions: [512000, 1000000],
     effortOptions: ["default", "low", "medium", "high", "xhigh", "max"],
-    defaultEffort: "default",
-    isDefault: true,
   },
   {
     id: "MiniMax-M3",
@@ -58,34 +47,9 @@ export const MINIMAX_MODELS: MiniMaxModel[] = [
     reasoning: true,
     tool_call: true,
     temperature: true,
-    modalities: FILE_API_CAPABLE,
     context: 1000000,
     output: 128000,
-    contextWindowOptions: [512000, 1000000],
     effortOptions: ["default", "low", "medium", "high", "xhigh", "max"],
-    defaultEffort: "default",
   },
 ];
 
-/** Anthropic GET /v1/models shape, with the extra metadata pi needs. */
-export function modelsPayload() {
-  const data = MINIMAX_MODELS.map((m) => ({
-    id: m.id,
-    type: "model",
-    display_name: m.display_name,
-    created_at: Math.floor(Date.now() / 1000),
-    reasoning: m.reasoning,
-    tool_call: m.tool_call,
-    context_window: m.context,
-    max_output_tokens: m.output,
-    effort_options: m.effortOptions,
-    ...(m.isDefault ? { default: true } : {}),
-  }));
-  return {
-    data,
-    has_more: false,
-    first_id: data.length ? data[0].id : null,
-    last_id: data.length ? data[data.length - 1].id : null,
-    default_model: MINIMAX_MODELS.find((m) => m.isDefault)?.id ?? null,
-  };
-}

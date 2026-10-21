@@ -20,6 +20,26 @@ export WORKBUDDY_DATA_DIR="${WORKBUDDY_DATA_DIR:-$HOME/.workbuddy-proxy}"
 export QODER_DATA_DIR="${QODER_DATA_DIR:-$HOME/.qoder-proxy}"
 export ROUTER_PORT="$PORT"
 
+# The router holds the MiniMax credential itself, so it needs one — but the
+# mock never looks at it. A dummy session keeps the test away from the real
+# one and stops the device flow from starting.
+export MINIMAX_DATA_DIR="${MINIMAX_DATA_DIR:-/tmp/opencode/test-minimax}"
+mkdir -p "$MINIMAX_DATA_DIR"
+if [ ! -f "$MINIMAX_DATA_DIR/minimax-session.json" ]; then
+  node -e '
+const fs = require("fs");
+const path = process.argv[1] + "/minimax-session.json";
+const now = Date.now();
+fs.writeFileSync(path, JSON.stringify({
+  schemaVersion: 1, clientId: "mcode-public", audience: "agent-backend",
+  scopes: ["agent.default"], region: "cn",
+  accessToken: "test-token", refreshToken: "test-refresh", tokenType: "Bearer",
+  expiresAtMs: now + 365 * 24 * 3600 * 1000,
+  generation: 1, loginAtMs: now, refreshedAtMs: now,
+}, null, 2));
+' "$MINIMAX_DATA_DIR"
+fi
+
 if [ -n "$BASE" ]; then
   export QODER_GLOBAL_INFER_BASE="$BASE/qoder-global"
   export QODER_GLOBAL_LEGACY_BASE="$BASE/qoder-global-legacy"
@@ -27,10 +47,10 @@ if [ -n "$BASE" ]; then
   export QODER_GLOBAL_OPENAPI_BASE="$BASE/openapi-global"
   export QODER_CN_OPENAPI_BASE="$BASE/openapi-cn"
   export WORKBUDDY_CHAT_BASE="$BASE/workbuddy"
-  export MINIMAX_UPSTREAM_URL="$BASE/minimax"
+  # The MiniMax upstream is called at <base>/messages; the mock and the
+  # recorder both answer on /minimax/v1/messages.
+  export MINIMAX_BASE_URL="$BASE/minimax/v1"
   export TOKENRHYTHM_INFER_BASE="$BASE/tokenrhythm/v1"
-else
-  export MINIMAX_UPSTREAM_URL="${MINIMAX_UPSTREAM_URL:-http://192.168.50.4:6448}"
 fi
 
 # The benefits would talk to the upstream for nothing during a test.

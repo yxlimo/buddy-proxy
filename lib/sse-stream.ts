@@ -1,7 +1,7 @@
 // lib/sse-stream.ts — reading and writing SSE, for the paths that have to convert
 // between dialects instead of passing bytes through.
 //
-// The passthrough proxies (minimax-proxy) do not need any of this: they copy the
+// The MiniMax upstream does not need any of this: its stream is copied the
 // upstream stream. The router does, because an OpenAI request aimed at the
 // MiniMax gateway has to become an Anthropic request and back.
 

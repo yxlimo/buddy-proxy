@@ -22,6 +22,7 @@ import { workbuddyChat, aggregateStream } from "../workbuddy-transport.ts";
 import { MINIMAX_MODELS } from "../minimax-models.ts";
 import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/accounts.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
+import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax-gateway.ts";
 import type { QoderRegion } from "../qoder-auth.ts";
 import {
   deliverAnthropicStream,
@@ -34,13 +35,15 @@ import { upstreamModel, type Route } from "./routes.ts";
 
 /** The output limit of a MiniMax model, as its own catalog says. */
 function minimaxMaxOutput(model: string): number {
-  return MINIMAX_MODELS.find((m) => m.id === model)?.output ?? 4096;
+  // The catalog is the only place a limit comes from. A made-up number here
+  // would be a limit the gateway never agreed to.
+  const found = MINIMAX_MODELS.find((m) => m.id === model);
+  if (!found) throw new AuthError("unknown minimax model", `没有这个 MiniMax 模型：${model}`, 400);
+  return found.output;
 }
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
-  /** The MiniMax gateway, by address. */
-  minimaxBase: string;
   /** The Qoder regions that are on. */
   qoderRegions: QoderRegion[];
   /** How often a queued legacy request is tried again. */
@@ -362,19 +365,24 @@ export async function toMinimax(
   anthropicBody.model = upstreamModel(route);
   anthropicBody.stream = stream;
 
-  const r = await fetch(`${ctx.minimaxBase}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: stream ? "text/event-stream" : "application/json",
-      "anthropic-version": body.anthropic_version ?? "2023-06-01",
-    },
-    body: JSON.stringify(anthropicBody),
-  });
+  let r: Response;
+  try {
+    r = await minimaxChat(anthropicBody, stream);
+  } catch (e) {
+    const err = e as AuthError;
+    throw new AuthError(err.message, err.hint, err.status, err.type);
+  }
 
   if (!r.ok) {
     const text = await r.text().catch(() => "");
-    throw new AuthError(`upstream HTTP ${r.status}`, `MiniMax 上游返回 ${r.status}：${text.slice(0, 300)}`, 502);
+    let parsed: any = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      /* not JSON */
+    }
+    const { type, message } = gatewayErrorMessage(r.status, parsed, text);
+    throw new AuthError(message, "", r.status, type);
   }
 
   if (!stream) {
@@ -383,7 +391,7 @@ export async function toMinimax(
     return;
   }
 
-  await deliverAnthropicStream(res, r.body!, dialect, upstreamModel(route));
+  await deliverAnthropicStream(res, r.body!, dialect, upstreamModel(route), PING_MS);
 }
 
 

@@ -7,7 +7,6 @@
   "scripts": {
     "start": "node router-proxy.ts",
     "serve": "node router-proxy.ts",
-    "serve:minimax": "node minimax-proxy.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

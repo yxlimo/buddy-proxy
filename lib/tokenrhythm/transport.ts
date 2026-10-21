@@ -9,22 +9,7 @@
 
 import { AuthError } from "../credential.ts";
 import { TOKENRHYTHM_INFER_BASE, tokenRhythmTenant, type TokenRhythmTenant } from "./accounts.ts";
-
-/** The one model the gateway serves for now. */
-export const TOKENRHYTHM_MODELS = [
-  {
-    id: "deepseek-v4.1-flash-1017",
-    name: "DeepSeek V4.1 Flash 1017",
-    reasoning: true,
-    toolCall: true,
-    /** The levels the upstream's thinking mode takes. */
-    efforts: ["low", "high", "max"],
-    context: 1000000,
-    maxOutput: 384000,
-  },
-] as const;
-
-export const TOKENRHYTHM_MODEL_IDS = new Set(TOKENRHYTHM_MODELS.map((m) => m.id));
+import { TOKENRHYTHM_MODELS } from "./models.ts";
 
 /**
  * Put the thinking back into the assistant messages.

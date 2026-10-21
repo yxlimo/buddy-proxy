@@ -24,15 +24,17 @@ import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder-transport.ts";
 import { QODER_MODELS, qoderModelsForRegion } from "./lib/qoder-models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
-import { miniMaxTokenPlan } from "./lib/minimax-credits.ts";
+import { fetchMiniMaxBalance, miniMaxTokenPlan } from "./lib/minimax-credits.ts";
+import { credentialStatus, readCredential } from "./lib/minimax-auth.ts";
+import { MINIMAX_UPSTREAM } from "./lib/minimax-gateway.ts";
 import { tokenRhythmCatalogModels } from "./lib/router/catalog.ts";
-import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/transport.ts";
+import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
 import { tokenRhythmStatuses } from "./lib/tokenrhythm/accounts.ts";
 import { qoderStatus, checkAccountHealth, fetchQoderCredits, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy-auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy-transport.ts";
 import { workBuddyFallbackModels, type WorkBuddyModel } from "./lib/workbuddy-models.ts";
-import { ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
+import { ensureMinimaxSession, ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
 import {
   toMinimax,
   toQoder,
@@ -62,11 +64,14 @@ import { BenefitsRunner } from "./lib/router/benefits.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
 const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
-const MINIMAX_BASE = readEnvString("MINIMAX_UPSTREAM_URL", "http://127.0.0.1:6448").replace(/\/+$/, "");
 // Which upstreams this router serves. Each flag turns on one reverse proxy; an
 // upstream that is off is not looked at at all — no credential read, no login,
 // no models advertised, and a request for one is refused with a clear message.
 const ENABLED_MINIMAX = readEnvFlag("MINIMAX_CODE", false);
+const MINIMAX_REGION = readEnvString("MINIMAX_REGION", "cn");
+// How often the MiniMax credential is looked at, so a warning reaches the log
+// even when nothing is being asked for.
+const MINIMAX_WATCH_MS = readEnvNumber("MINIMAX_WATCH_MS", 5 * 60 * 1000);
 const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
 const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
 const ENABLED_WORKBUDDY_CN = readEnvFlag("WORKBUDDY_CN", false);
@@ -183,12 +188,14 @@ app.get("/health", async (_req, res) => {
     upstreams: {
       minimax: ENABLED_MINIMAX
         ? {
-            base: MINIMAX_BASE,
+            base: MINIMAX_UPSTREAM,
             models: MINIMAX_VISIBLE.length,
             // What the MiniMax account has left: the money on the platform
             // account, and the plan's own windows.
             balance: await miniMaxBalance(),
             tokenPlan: await miniMaxTokenPlan(),
+            // Which credential is in use and how much of it is left.
+            credential: credentialStatus(),
           }
         : { enabled: false },
       qoder: { regions },
@@ -238,7 +245,6 @@ function catalogGroups(): CatalogGroup[] {
 /** What the adapters need to know about the router they run in. */
 function upstreamContext(): UpstreamContext {
   return {
-    minimaxBase: MINIMAX_BASE,
     qoderRegions: QODER_REGIONS,
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
@@ -250,16 +256,14 @@ function upstreamContext(): UpstreamContext {
 }
 
 /**
- * The MiniMax account's balance, as the MiniMax proxy reports it.
+ * The MiniMax account's balance.
  *
- * The proxy holds the session, so it is the one that can ask the platform.
+ * The router holds the session, so it is the one that can ask the platform.
  */
 async function miniMaxBalance(): Promise<unknown> {
   try {
-    const r = await fetch(`${MINIMAX_BASE}/health`, { signal: AbortSignal.timeout(8_000) });
-    if (!r.ok) return null;
-    const body: any = await r.json().catch(() => null);
-    return body?.balance ?? null;
+    const cred = await readCredential();
+    return await fetchMiniMaxBalance(cred.accessToken, MINIMAX_REGION === "en" ? "global" : "cn");
   } catch {
     return null;
   }
@@ -403,7 +407,7 @@ app.listen(PORT, HOST, () => {
       `  cn=${ENABLED_QODER_CN ? `${QODER_CN.length} models` : "off"}`,
   );
   console.log(
-    `    minimax  ${ENABLED_MINIMAX ? `${MINIMAX_BASE}  models=${MINIMAX_VISIBLE.length}` : "off"}`,
+    `    minimax  ${ENABLED_MINIMAX ? `${MINIMAX_UPSTREAM}  models=${MINIMAX_VISIBLE.length}` : "off"}`,
   );
   console.log(
     `    workbuddy cn=${ENABLED_WORKBUDDY_CN ? `${WORKBUDDY_CN.length} models` : "off"}`,
@@ -417,6 +421,47 @@ app.listen(PORT, HOST, () => {
   // The server owns the credentials. An enabled region with no session runs the
   // device flow here, in the background: the URL goes to the log and the operator
   // approves it. A region that is off is never looked at.
+  if (ENABLED_MINIMAX) {
+    void ensureMinimaxSession()
+      .then(async (outcome) => {
+        const c = await readCredential();
+        const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
+        console.log(outcome === "logged-in" ? `  [AUTH] minimax: logged in: ${state}` : `  [AUTH] minimax: token ok: ${state}`);
+      })
+      .catch((e) => {
+        const err = e as AuthError;
+        console.warn(`  [AUTH] minimax: ${err.message}`);
+        console.warn(`         ${err.hint}`);
+      });
+
+    // A periodic watch, so a credential that is about to expire reaches the log
+    // even when nothing is being asked for.
+    let lastState = "";
+    setInterval(
+      () => {
+        void readCredential()
+          .then((c) => {
+            const state = c.warning ? "warning" : "ok";
+            if (state !== lastState) {
+              lastState = state;
+              console.log(
+                `[AUTH] ${state}: generation ${c.generation}, ${Math.round(c.remainingMs / 60000)} min left`,
+              );
+            }
+          })
+          .catch((e) => {
+            const err = e as AuthError;
+            if (err.message !== lastState) {
+              lastState = err.message;
+              console.warn(`[AUTH] ${err.message}`);
+              console.warn(`       ${err.hint}`);
+            }
+          });
+      },
+      MINIMAX_WATCH_MS,
+    ).unref();
+  }
+
   for (const region of QODER_REGIONS) {
     void ensureQoderSession(region)
       .then((outcome) => {

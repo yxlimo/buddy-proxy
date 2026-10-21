@@ -20,9 +20,6 @@ if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
   export TOKENRHYTHM=true
 fi
 
-# The MiniMax upstream of the recording proxy: the real one.
-export MINIMAX_UPSTREAM_URL="${MINIMAX_UPSTREAM_URL:-http://192.168.50.4:6448}"
-
 rm -rf "$FIXTURES"
 mkdir -p "$FIXTURES"
 

@@ -25,7 +25,7 @@ import {
   type QoderRegion,
   type QoderSession,
 } from "./qoder-auth.ts";
-import { loadSession as loadWorkBuddySession, workbuddyDeviceId, type WorkBuddySession } from "./workbuddy-auth.ts";
+import { accountHeaders, loadSession as loadWorkBuddySession, type WorkBuddySession } from "./workbuddy-auth.ts";
 import { readEnvString } from "./env.ts";
 
 /** The host the account's own API is on. */
@@ -77,16 +77,7 @@ function clientToken(): string {
 
 
 function workbuddyHeaders(session: WorkBuddySession): Record<string, string> {
-  const deviceId = workbuddyDeviceId(session);
-  return {
-    Accept: "application/json",
-    Authorization: `Bearer ${session.accessToken}`,
-    "Content-Type": "application/json",
-    "X-User-Id": session.uid,
-    "User-Agent": "WorkBuddy",
-    "X-Domain": session.domain,
-    ...(deviceId ? { "X-Device-Id": deviceId } : {}),
-  };
+  return { ...accountHeaders(session), "User-Agent": "WorkBuddy" };
 }
 
 /** The growth centre of the account's own API. */

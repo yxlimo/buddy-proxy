@@ -12,7 +12,7 @@
 import { QODER_EFFORTS, qoderLabel, type QoderModel } from "../qoder-models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy-models.ts";
 import type { MiniMaxModel } from "../minimax-models.ts";
-import { TOKENRHYTHM_MODELS } from "../tokenrhythm/transport.ts";
+import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
 
 export type UpstreamGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax" | "tokenrhythm";
 

@@ -9,11 +9,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod
 
-# Only what the proxies actually load. minimax-proxy.ts and router-proxy.ts both
-# import from lib/; the rest of lib/ comes along because minimax-auth statically
-# imports the file store too. There is no login program: the proxies run the
-# device flow themselves when their credential is missing.
-COPY minimax-proxy.ts ./
+# Only what the router actually loads: the entry point and lib/. There is no login
+# program: the router runs the device flow itself when a credential is missing.
 COPY router-proxy.ts ./
 COPY lib/ ./lib/
 
@@ -23,12 +20,12 @@ COPY lib/ ./lib/
 RUN mkdir -p /data && chown node:node /data
 ENV MINIMAX_DATA_DIR=/data
 
-EXPOSE 6448
+EXPOSE 6450
 
-# The port differs per service (the minimax proxy is 6448, the router 6450), so the
-# check reads it from the environment instead of being hardcoded.
+# The check reads the port from the environment, so the same image can serve on
+# whichever port it is given.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD node -e "const p=process.env.HEALTH_PORT||6448;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.HEALTH_PORT||6450;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 USER node
-CMD ["node", "minimax-proxy.ts"]
+CMD ["node", "router-proxy.ts"]
