@@ -21,13 +21,15 @@ are **off by default**; turn on the ones you actually use.
 | `MINIMAX_CODE=true` | the MiniMax Code gateway (port 6448) |
 | `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
 | `QODER_CN=true` | the Qoder China account (qoder.cn) |
+| `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
 
 A proxy that is switched off is not looked at: no credential is read, no login
 is attempted, no models are advertised, and a request for one is refused with a
 message saying which switch to flip. The two Qoder regions are separate
-accounts, so they are switched on separately.
+accounts, so they are switched on separately, and WorkBuddy's China account is
+a third one.
 
-The router reads all three; the MiniMax proxy reads `MINIMAX_CODE`.
+The router reads all four; the MiniMax proxy reads `MINIMAX_CODE`.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -38,7 +40,7 @@ has been removed rather than left to rot.
 
 ```bash
 npm install
-MINIMAX_CODE=true QODER_GLOBAL=true node router-proxy.ts   # :6450, the one to point a client at
+MINIMAX_CODE=true QODER_GLOBAL=true QODER_CN=true WORKBUDDY_CN=true node router-proxy.ts   # :6450, the one to point a client at
 MINIMAX_CODE=true node minimax-proxy.ts                     # :6448, the MiniMax gateway on its own
 ```
 
@@ -252,15 +254,15 @@ is actually idle, so a busy stream is not padded with useless events.
 
 ## Router (`router-proxy.ts`, port 6450)
 
-One entry point, two dialects, two upstreams. The model name decides the
+One entry point, two dialects, three upstreams. The model name decides the
 upstream; the dialect decides how much translation happens.
 
 | Method | Path | Format |
 |--------|------|--------|
-| `GET`  | `/v1/models` | both upstreams, prefixed ids (`?dialect=openai` for the OpenAI shape) |
+| `GET`  | `/v1/models` | every enabled upstream, prefixed ids (`?dialect=openai` for the OpenAI shape) |
 | `POST` | `/v1/messages` | Anthropic messages (stream supported) |
 | `POST` | `/v1/chat/completions` | OpenAI chat (stream supported) |
-| `GET`  | `/health` | status of both upstreams |
+| `GET`  | `/health` | status of every enabled upstream |
 
 ### Routing
 
@@ -269,8 +271,15 @@ The model name carries the upstream:
 | Model name | Upstream | Model sent upstream |
 |---|---|---|
 | `qoder/auto`, `qoder/ultimate` | Qoder | `auto`, `ultimate` |
+| `qoder-cn/glm-5.3` | Qoder, China account | `glm-5.3` |
+| `workbuddy-cn/glm-5.3` | WorkBuddy, China account | `glm-5.3` |
 | `minimax/MiniMax-M3.1-Flash` | MiniMax | `MiniMax-M3.1-Flash` |
 | `auto` (no prefix) | Qoder if it is in the Qoder catalog, else MiniMax | as given |
+
+A client model id cannot hold a slash, so the prefixed forms have client-side
+names: `cn-glm-5.3` for Qoder's China account, `wb-cn-glm-5.3` for WorkBuddy's.
+WorkBuddy's models are only reachable by prefix — several of them carry the
+same name as a Qoder model, so a bare name would be ambiguous.
 
 An unknown model gets a 400 that says to use a prefix, rather than being sent
 somewhere at random.
@@ -444,6 +453,65 @@ used from, a disabled app, a lapsed login).
 | `QODER_EFFORT_TIERS` | — | override the thinking level → tier mapping |
 | `QODER_LOG_ROUTE` | `false` | log the model and tier each request resolved to |
 | `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
+
+## WorkBuddy (China account)
+
+WorkBuddy is Tencent's coding assistant. This speaks to the China account
+(`workbuddy.cn`), which is a different account from the international one
+(`workbuddy.ai`) and needs its own login.
+
+### Protocol
+
+The upstream speaks the OpenAI chat-completions dialect, so a request body goes
+out almost unchanged. What it checks is the identity around it: the account,
+the conversation, and a trace, in the shape the official CLI sends. The proxy
+reproduces that shape (`lib/workbuddy-auth.ts`).
+
+Two things are not what they look like:
+
+- **The upstream always answers with a stream**, even for a client that asked
+  for none. A non-streaming request is folded back into one completion object
+  here.
+- **The catalogue comes from the upstream** at `GET /v3/config`, and the
+  upstream adds models without a client release. The proxy fetches it at
+  startup and every half hour, and trims it the way the official picker does:
+  no completion-only models, no tier aliases, no paid build of a name the list
+  already carries (`hy3-x` next to the free `hy3`), and no paid sibling of a
+  free one. The bundled snapshot is only the fallback.
+
+### Login
+
+The login is the browser one: the proxy asks for a state, sends you to
+`https://www.workbuddy.cn/login`, and polls until you approve. The token is a
+JWT whose `sub` claim is the account id. The refresh token rotates on every
+refresh, so the session file must survive restarts.
+
+```bash
+WORKBUDDY_CN=true node router-proxy.ts   # prints the login URL
+```
+
+### Models
+
+18 models as of 2026-10-21, from `hy3` and `step-5-preview` (free) through
+`kimi-k3-1` (the most expensive). The label carries the credit multiplier, so
+the list reads as a price list: `Hy3 免费`, `GLM-5.3-Flash 0.08×`,
+`Kimi-K3 1.62×`.
+
+`glm-5.1` is in the upstream's own catalogue but every request for it is
+rejected with code 11133, so it is left out.
+
+### Environment
+
+| Variable | Default | What |
+|----------|---------|------|
+| `WORKBUDDY_CN` | `false` | switch the WorkBuddy China upstream on |
+| `WORKBUDDY_CN_BASE` | `https://www.workbuddy.cn` | the host that serves the account |
+| `WORKBUDDY_CN_ORIGIN` | `https://www.codebuddy.cn` | Origin / Referer on the auth calls |
+| `WORKBUDDY_DATA_DIR` | `~/.workbuddy-proxy` | where the session file lives (`/data` in Docker) |
+| `WORKBUDDY_CATALOG_TTL_MS` | `1800000` | how long the upstream's catalogue is trusted |
+| `WORKBUDDY_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
+| `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |
+| `WORKBUDDY_LOGIN_TIMEOUT_MS` | `600000` | how long to wait for the browser approval |
 
 ## Deployment (Docker)
 

@@ -31,7 +31,10 @@ import { MINIMAX_MODELS } from "./lib/minimax-models.ts";
 import { qoderChatCompletion, LimitError } from "./lib/qoder-transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "./lib/qoder-legacy.ts";
 import { qoderStatus, checkAccountHealth, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
-import { ensureQoderSession } from "./lib/login.ts";
+import { workbuddyStatus } from "./lib/workbuddy-auth.ts";
+import { workbuddyChat, aggregateStream, fetchWorkBuddyCatalog } from "./lib/workbuddy-transport.ts";
+import { WORKBUDDY_CN_MODELS, workbuddyLabel, type WorkBuddyModel } from "./lib/workbuddy-models.ts";
+import { ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
 const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
@@ -42,6 +45,7 @@ const MINIMAX_BASE = readEnvString("MINIMAX_UPSTREAM_URL", "http://127.0.0.1:644
 const ENABLED_MINIMAX = readEnvFlag("MINIMAX_CODE", false);
 const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
 const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
+const ENABLED_WORKBUDDY_CN = readEnvFlag("WORKBUDDY_CN", false);
 const QODER_REGIONS: QoderRegion[] = [
   ...(ENABLED_QODER_GLOBAL ? (["global"] as QoderRegion[]) : []),
   ...(ENABLED_QODER_CN ? (["cn"] as QoderRegion[]) : []),
@@ -53,11 +57,13 @@ const LEGACY_MAX_ATTEMPTS = readEnvNumber("QODER_LEGACY_ATTEMPTS", 3);
 const LEGACY_RETRY_MS = readEnvNumber("QODER_LEGACY_RETRY_MS", 10000);
 const QODER_MAX_ATTEMPTS = readEnvNumber("QODER_MAX_ATTEMPTS", 3);
 const LOG_ROUTE = readEnvFlag("QODER_LOG_ROUTE", false);
+// How long the upstream's own catalogue is trusted before it is fetched again.
+const WORKBUDDY_CATALOG_TTL_MS = readEnvNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 60 * 1000);
 
 const rid = (prefix: string) => prefix + crypto.randomBytes(12).toString("hex");
 
 type Dialect = "anthropic" | "openai";
-type Upstream = "qoder" | "minimax";
+type Upstream = "qoder" | "minimax" | "workbuddy";
 
 const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
 const MINIMAX_VISIBLE = ENABLED_MINIMAX ? MINIMAX_MODELS : [];
@@ -72,6 +78,30 @@ const QODER_MODEL_IDS = new Set(QODER_VISIBLE.map((m) => m.id));
 const QODER_HIDDEN_IDS = new Set(QODER_MODELS.filter((m) => !QODER_MODEL_IDS.has(m.id)).map((m) => m.id));
 const GLOBAL_QODER_IDS = new Set(qoderModelsForRegion("global").map((m) => m.id));
 const CN_QODER_IDS = new Set(qoderModelsForRegion("cn").map((m) => m.id));
+// WorkBuddy's models are addressed by prefix only: several of them (glm-5.3,
+// kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
+// would be ambiguous. The list starts as the bundled snapshot and is replaced
+// by the upstream's own catalogue as soon as it can be fetched.
+let WORKBUDDY_CN: WorkBuddyModel[] = ENABLED_WORKBUDDY_CN ? WORKBUDDY_CN_MODELS : [];
+let WORKBUDDY_CN_IDS = new Set(WORKBUDDY_CN.map((m) => m.id));
+let workbuddyCatalogAt = 0;
+
+/** The upstream catalogue, refreshed at most every half hour. */
+async function refreshWorkBuddyCatalog(force = false): Promise<void> {
+  if (!ENABLED_WORKBUDDY_CN) return;
+  const age = Date.now() - workbuddyCatalogAt;
+  if (!force && workbuddyCatalogAt && age < WORKBUDDY_CATALOG_TTL_MS) return;
+  try {
+    const models = await fetchWorkBuddyCatalog("cn");
+    if (models?.length) {
+      WORKBUDDY_CN = models;
+      WORKBUDDY_CN_IDS = new Set(models.map((m) => m.id));
+      workbuddyCatalogAt = Date.now();
+    }
+  } catch (e) {
+    console.warn(`[WORKBUDDY] catalogue refresh failed: ${(e as Error).message}`);
+  }
+}
 
 interface Route {
   upstream: Upstream;
@@ -84,6 +114,10 @@ interface Route {
 /** Decide where a request goes, and what the upstream should call the model. */
 export function resolveRoute(model: string): Route {
   const raw = String(model ?? "").trim();
+  if (raw.startsWith("workbuddy-cn/")) return workbuddyRoute(raw.slice("workbuddy-cn/".length));
+  // Client-side name: a client cannot put a slash in a model id, so
+  // `workbuddy-cn/glm-5.3` is called `wb-cn-glm-5.3` there.
+  if (raw.startsWith("wb-cn-")) return workbuddyRoute(raw.slice("wb-cn-".length));
   if (raw.startsWith("qoder-cn/")) return qoderRoute(raw.slice("qoder-cn/".length), "cn");
   if (raw.startsWith("qoder/")) return qoderRoute(raw.slice("qoder/".length), "global");
   if (raw.startsWith("minimax/")) {
@@ -107,16 +141,36 @@ export function resolveRoute(model: string): Route {
   if (QODER_HIDDEN_IDS.has(raw)) throw unavailableQoderModel(raw);
   throw new AuthError(
     `unknown model "${raw}"`,
-    `这个模型不在目录里。用 qoder/ 或 minimax/ 前缀显式指定，例如 qoder/auto、minimax/MiniMax-M3。`,
+    `这个模型不在目录里。用 qoder/、workbuddy-cn/ 或 minimax/ 前缀显式指定，例如 qoder/auto、workbuddy-cn/glm-5.3、minimax/MiniMax-M3。`,
     400,
   );
 }
 
+/** WorkBuddy's China region. */
+function workbuddyRoute(id: string): Route {
+  if (!ENABLED_WORKBUDDY_CN) throw disabledUpstream("workbuddy-cn");
+  if (!WORKBUDDY_CN_IDS.has(id)) {
+    throw new AuthError(
+      `unknown model "${id}"`,
+      `WorkBuddy 中国区没有这个模型。可用：${[...WORKBUDDY_CN_IDS].join("、")}。`,
+      400,
+    );
+  }
+  return { upstream: "workbuddy", model: id, region: "cn" };
+}
+
 /** An upstream that this router is not serving, because it was not enabled. */
-function disabledUpstream(which: "minimax" | "qoder-global" | "qoder-cn"): AuthError {
-  const flag = which === "minimax" ? "MINIMAX_CODE" : which === "qoder-cn" ? "QODER_CN" : "QODER_GLOBAL";
+function disabledUpstream(which: "minimax" | "qoder-global" | "qoder-cn" | "workbuddy-cn"): AuthError {
+  const flag =
+    which === "minimax" ? "MINIMAX_CODE" : which === "qoder-cn" ? "QODER_CN" : which === "workbuddy-cn" ? "WORKBUDDY_CN" : "QODER_GLOBAL";
   const what =
-    which === "minimax" ? "MiniMax Code" : which === "qoder-cn" ? "Qoder 中国区" : "Qoder 全球区";
+    which === "minimax"
+      ? "MiniMax Code"
+      : which === "qoder-cn"
+        ? "Qoder 中国区"
+        : which === "workbuddy-cn"
+          ? "WorkBuddy 中国区"
+          : "Qoder 全球区";
   return new AuthError(
     `${which} is not enabled`,
     `${what}没有启用。设置 ${flag}=true 后重启 router。`,
@@ -192,10 +246,18 @@ app.get("/health", async (_req, res) => {
       minimax: ENABLED_MINIMAX,
       qoderGlobal: ENABLED_QODER_GLOBAL,
       qoderCn: ENABLED_QODER_CN,
+      workbuddyCn: ENABLED_WORKBUDDY_CN,
     },
     upstreams: {
       minimax: ENABLED_MINIMAX ? { base: MINIMAX_BASE, models: MINIMAX_VISIBLE.length } : { enabled: false },
       qoder: { regions },
+      workbuddy: ENABLED_WORKBUDDY_CN
+        ? {
+            region: "cn",
+            models: WORKBUDDY_CN.length,
+            credential: workbuddyStatus("cn"),
+          }
+        : { enabled: false },
     },
     auth: REQUIRE_API_KEY ? "api-key" : "public",
   });
@@ -203,6 +265,9 @@ app.get("/health", async (_req, res) => {
 
 app.get("/v1/models", (req, res) => {
   const dialect = String(req.query.dialect ?? "").toLowerCase();
+  // The upstream's catalogue is the source of truth; fetch it in the background
+  // so this answer is never blocked by it.
+  if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
   if (dialect === "openai") return res.json(openaiCatalog());
   return res.json(anthropicCatalog());
 });
@@ -213,6 +278,13 @@ function openaiCatalog() {
   const data = [
     ...QODER_GLOBAL.map((m) => ({ id: `qoder/${m.id}`, object: "model", created, owned_by: "qoder", name: qoderLabel(m) })),
     ...QODER_CN.map((m) => ({ id: `qoder-cn/${m.id}`, object: "model", created, owned_by: "qoder-cn", name: qoderLabel(m) })),
+    ...WORKBUDDY_CN.map((m) => ({
+      id: `workbuddy-cn/${m.id}`,
+      object: "model",
+      created,
+      owned_by: "workbuddy-cn",
+      name: workbuddyLabel(m),
+    })),
     ...MINIMAX_VISIBLE.map((m) => ({ id: `minimax/${m.id}`, object: "model", created, owned_by: "minimax" })),
   ];
   return { object: "list", data };
@@ -238,6 +310,17 @@ function anthropicCatalog() {
   const data = [
     ...QODER_GLOBAL.map((m) => qoderEntry(m, "qoder/")),
     ...QODER_CN.map((m) => qoderEntry(m, "qoder-cn/")),
+    ...WORKBUDDY_CN.map((m) => ({
+      id: `workbuddy-cn/${m.id}`,
+      type: "model",
+      display_name: workbuddyLabel(m),
+      created_at: created,
+      reasoning: m.reasoning,
+      tool_call: m.tools,
+      context_window: m.context,
+      max_output_tokens: m.maxOutput,
+      ...(m.efforts.length ? { effort_options: [...m.efforts] } : {}),
+    })),
     ...MINIMAX_VISIBLE.map((m) => ({
       id: `minimax/${m.id}`,
       type: "model",
@@ -287,12 +370,90 @@ async function handle(req: express.Request, res: express.Response, dialect: Dial
   try {
     if (route.upstream === "qoder") {
       await toQoder(body, route, dialect, stream, res);
+    } else if (route.upstream === "workbuddy") {
+      await toWorkBuddy(body, route, dialect, stream, res);
     } else {
       await toMinimax(body, route, dialect, stream, res);
     }
   } catch (e) {
     sendError(res, e);
   }
+}
+
+/* ---------------- WorkBuddy ---------------- */
+
+/**
+ * WorkBuddy's China region.
+ *
+ * The upstream speaks the OpenAI dialect natively, so the request goes out
+ * almost unchanged; what the upstream checks is the identity around it, which
+ * lib/workbuddy-auth.ts builds.
+ *
+ * The upstream always answers with a stream, even for a client that asked for
+ * none, so a non-streaming request is folded back into one object here.
+ */
+async function toWorkBuddy(
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  res: express.Response,
+): Promise<void> {
+  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
+  openaiBody.model = route.model;
+  if (LOG_ROUTE) {
+    console.log(`[ROUTE] workbuddy model=${route.model} stream=${stream}`);
+  }
+
+  const { response } = await workbuddyChat(openaiBody, { region: "cn", stream });
+
+  if (!stream) {
+    let json: any;
+    try {
+      json = await aggregateStream(response, route.model);
+    } catch (e) {
+      throw new AuthError(
+        `upstream stream failed (${(e as Error)?.message ?? "unknown"})`,
+        "WorkBuddy 的响应流中断了。",
+        502,
+      );
+    }
+    if (json?.error) {
+      const detail = json.error;
+      throw new AuthError(
+        `upstream error (${detail?.type ?? detail?.code ?? "unknown"})`,
+        typeof detail?.message === "string" ? detail.message : JSON.stringify(detail).slice(0, 300),
+        502,
+      );
+    }
+    const payload = dialect === "openai" ? json : openaiToAnthropicResponse(json, route.model);
+    res.json(payload);
+    return;
+  }
+
+  // Peek before the headers go out, so an upstream failure inside a 200 response
+  // can still become a proper status code.
+  const upstreamStream = await peekStream(response.body!);
+  res.setHeader("x-request-id", rid("req_"));
+  sseHead(res);
+  if (dialect === "openai") {
+    await pipeStream(upstreamStream, res);
+    return;
+  }
+  try {
+    for await (const chunk of openaiStreamToAnthropic(readOpenAIChunks(upstreamStream), route.model)) {
+      if (!writeSafe(res, chunk)) break;
+    }
+  } catch (e) {
+    writeSafe(
+      res,
+      sseEvent("error", {
+        type: "error",
+        error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" },
+      }),
+    );
+  }
+  res.end();
 }
 
 /* ---------------- Qoder ---------------- */
@@ -757,6 +918,9 @@ app.listen(PORT, HOST, () => {
   console.log(
     `    minimax  ${ENABLED_MINIMAX ? `${MINIMAX_BASE}  models=${MINIMAX_VISIBLE.length}` : "off"}`,
   );
+  console.log(
+    `    workbuddy cn=${ENABLED_WORKBUDDY_CN ? `${WORKBUDDY_CN.length} models` : "off"}`,
+  );
   console.log(`  auth: ${REQUIRE_API_KEY ? "api key required" : "public"}`);
   console.log("");
 
@@ -774,6 +938,22 @@ app.listen(PORT, HOST, () => {
         );
       })
       .catch((e) => console.warn(`  [AUTH] qoder ${region} login failed: ${(e as Error).message}`));
+  }
+
+  if (ENABLED_WORKBUDDY_CN) {
+    void ensureWorkBuddySession()
+      .then(async (outcome) => {
+        const s = workbuddyStatus("cn");
+        console.log(
+          outcome === "logged-in"
+            ? `  [AUTH] workbuddy cn: logged in`
+            : `  [AUTH] workbuddy cn: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
+        );
+        // The catalogue needs a token, so it comes after the login.
+        await refreshWorkBuddyCatalog(true);
+        console.log(`  [WORKBUDDY] catalogue: ${WORKBUDDY_CN.length} models`);
+      })
+      .catch((e) => console.warn(`  [AUTH] workbuddy cn login failed: ${(e as Error).message}`));
   }
 
   void PING_MS;
