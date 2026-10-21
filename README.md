@@ -74,12 +74,15 @@ curl http://localhost:6450/v1/messages \
 
 Each upstream is a provider of its own, so the model ids are the real ones:
 
-| Provider | Base URL |
-|---|---|
-| `qoder_global` | `{router}/qoder/v1` |
-| `qoder_cn` | `{router}/qoder-cn/v1` |
-| `workbuddy_cn` | `{router}/workbuddy-cn/v1` |
-| `minimax` | `{router}/minimax/v1` |
+| Provider | Base URL | Upstream |
+|---|---|---|
+| `qoder_global` | `{router}/qoder/v1` | Qoder, global account |
+| `qoder_cn` | `{router}/qoder-cn/v1` | Qoder, China account |
+| `workbuddy_cn` | `{router}/workbuddy-cn/v1` | WorkBuddy, China account |
+| `minimax_code` | `{router}/minimax/v1` | the MiniMax Code gateway |
+
+The router's MiniMax upstream is the same gateway the standalone proxy on 6448
+serves, so the client has one MiniMax Code provider, not two.
 
 The opencode **TUI** model picker lists each model exactly once: anything
 already shown under **Favorites** or **Recent** is not repeated in the
