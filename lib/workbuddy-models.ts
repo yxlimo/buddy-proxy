@@ -273,18 +273,6 @@ export const WORKBUDDY_CN_MODELS: WorkBuddyModel[] = [
     onlyReasoning: true,
     efforts: [],
   },
-  {
-    id: "hy4-preview-f",
-    display_name: "Hy4 preview (free)",
-    credits: 0,
-    context: 1000000,
-    maxOutput: 64000,
-    vision: true,
-    tools: true,
-    reasoning: true,
-    onlyReasoning: true,
-    efforts: ["high"],
-  },
 ];
 
 const BY_ID = new Map(WORKBUDDY_CN_MODELS.map((m) => [m.id, m]));
@@ -330,6 +318,20 @@ function isChatModel(id: string): boolean {
   if (NON_CHAT_PREFIXES.some((p) => id.startsWith(p))) return false;
   if (NON_CHAT_SUFFIXES.some((s) => id.endsWith(s))) return false;
   return true;
+}
+
+/**
+ * The snapshot, trimmed like the live catalogue.
+ *
+ * The snapshot is what the router publishes when the upstream cannot be
+ * reached, so it has to go through the same rules: a model the upstream
+ * rejects, or a paid build of a name that is already in the list, must not
+ * show up there either.
+ */
+export function workBuddyFallbackModels(): WorkBuddyModel[] {
+  return WORKBUDDY_CN_MODELS.filter(
+    (m) => isChatModel(m.id) && !BROKEN_MODELS.has(m.id) && !VARIANT_SUFFIXES.some((s) => m.id.endsWith(s)),
+  );
 }
 
 /** "x0.51 credits" → 0.51 */

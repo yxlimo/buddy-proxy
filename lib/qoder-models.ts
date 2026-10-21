@@ -141,7 +141,8 @@ export const QODER_MODELS: QoderModel[] = [
   { id: "qwen3.7-max", name: "Qwen3.7-Max", multiplier: "0.5×", key: "qmodel_latest", protocol: "legacy", reasoning: false, context: 1000000, kind: "model" },
   { id: "kimi-k3", name: "Kimi-K3", multiplier: "1.4×", key: "kmodel_latest", protocol: "legacy", reasoning: false, context: 180000, kind: "model" },
   { id: "glm-5.3-flash", name: "GLM-5.3-Flash", multiplier: "0.1×", key: "gfmodel", protocol: "legacy", reasoning: true, context: 1000000, kind: "model" },
-  { id: "cantus", name: "Cantus", multiplier: "0×", key: "cmodel", protocol: "legacy", reasoning: true, context: 180000, kind: "model" },
+  // Cantus is not in the list: the gateway answers "All backends failed" for it,
+  // while the other legacy models on the same account still work.
   { id: "sonus", name: "Sonus", multiplier: "0×", key: "smodel", protocol: "legacy", reasoning: true, context: 180000, kind: "model" },
 ];
 

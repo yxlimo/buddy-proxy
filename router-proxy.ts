@@ -33,8 +33,9 @@ import { legacyChatCompletion, readLegacyFrames } from "./lib/qoder-legacy.ts";
 import { qoderStatus, checkAccountHealth, type QoderAccountHealth, type QoderRegion } from "./lib/qoder-auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy-auth.ts";
 import { workbuddyChat, aggregateStream, fetchWorkBuddyCatalog } from "./lib/workbuddy-transport.ts";
-import { WORKBUDDY_CN_MODELS, workbuddyLabel, type WorkBuddyModel } from "./lib/workbuddy-models.ts";
+import { workBuddyFallbackModels, workbuddyLabel, type WorkBuddyModel } from "./lib/workbuddy-models.ts";
 import { ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
+import { runBenefits, type BenefitOutcome, type BenefitUpstream } from "./lib/benefits.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);
 const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
@@ -46,6 +47,67 @@ const ENABLED_MINIMAX = readEnvFlag("MINIMAX_CODE", false);
 const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
 const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
 const ENABLED_WORKBUDDY_CN = readEnvFlag("WORKBUDDY_CN", false);
+
+/* ------------------------------------------------------------------ *
+ * The daily benefits of the China accounts
+ * ------------------------------------------------------------------ */
+
+/** How often the check-in runs. The day rolls over at midnight in China. */
+const BENEFITS_INTERVAL_MS = Number(readEnvString("BENEFITS_INTERVAL_MS", "") || 6 * 3600 * 1000);
+
+interface BenefitsState {
+  /** When the last run finished. */
+  lastRunAt: string | null;
+  /** What that run did. */
+  lastOutcome: BenefitOutcome[] | null;
+  /** A run is in progress. */
+  running: boolean;
+}
+
+let benefitsState: BenefitsState = { lastRunAt: null, lastOutcome: null, running: false };
+
+/** The upstreams that hand out credits and are switched on. */
+function benefitUpstreams(): BenefitUpstream[] {
+  const out: BenefitUpstream[] = [];
+  if (ENABLED_WORKBUDDY_CN) out.push("workbuddy-cn");
+  if (ENABLED_QODER_CN) out.push("qoder-cn");
+  return out;
+}
+
+/**
+ * Take the daily benefits, if there is a session to take them with.
+ *
+ * The run is idempotent — asking twice answers "already done" — so it can run
+ * on a timer without keeping a state file of its own.
+ */
+async function runBenefitsOnce(): Promise<void> {
+  if (benefitsState.running) return;
+  const upstreams = benefitUpstreams();
+  if (!upstreams.length) return;
+  benefitsState.running = true;
+  try {
+    const outcomes = await runBenefits(upstreams);
+    benefitsState.lastRunAt = new Date().toISOString();
+    benefitsState.lastOutcome = outcomes;
+    for (const outcome of outcomes) {
+      const what = outcome.credits ? `+${outcome.credits} credits` : "nothing new";
+      console.log(`  [BENEFITS] ${outcome.upstream}: ${what} — ${outcome.report.join("; ")}`);
+    }
+  } catch (e) {
+    console.warn(`  [BENEFITS] failed: ${(e as Error).message}`);
+  } finally {
+    benefitsState.running = false;
+  }
+}
+
+/** Run the benefits now, and then on the timer. */
+function scheduleBenefits(): void {
+  if (!benefitUpstreams().length) return;
+  setInterval(() => void runBenefitsOnce(), BENEFITS_INTERVAL_MS);
+  // The login may still be waiting for an approval, so the first run waits for
+  // the session to be there.
+  setTimeout(() => void runBenefitsOnce(), 60_000);
+}
 const QODER_REGIONS: QoderRegion[] = [
   ...(ENABLED_QODER_GLOBAL ? (["global"] as QoderRegion[]) : []),
   ...(ENABLED_QODER_CN ? (["cn"] as QoderRegion[]) : []),
@@ -82,7 +144,7 @@ const CN_QODER_IDS = new Set(qoderModelsForRegion("cn").map((m) => m.id));
 // kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
 // would be ambiguous. The list starts as the bundled snapshot and is replaced
 // by the upstream's own catalogue as soon as it can be fetched.
-let WORKBUDDY_CN: WorkBuddyModel[] = ENABLED_WORKBUDDY_CN ? WORKBUDDY_CN_MODELS : [];
+let WORKBUDDY_CN: WorkBuddyModel[] = ENABLED_WORKBUDDY_CN ? workBuddyFallbackModels() : [];
 let WORKBUDDY_CN_IDS = new Set(WORKBUDDY_CN.map((m) => m.id));
 let workbuddyCatalogAt = 0;
 
@@ -322,6 +384,13 @@ app.get("/health", async (_req, res) => {
         : { enabled: false },
     },
     auth: REQUIRE_API_KEY ? "api-key" : "public",
+    benefits: {
+      enabled: benefitUpstreams().length > 0,
+      intervalMs: BENEFITS_INTERVAL_MS,
+      lastRunAt: benefitsState.lastRunAt,
+      running: benefitsState.running,
+      lastOutcome: benefitsState.lastOutcome,
+    },
   });
 });
 
@@ -1109,6 +1178,8 @@ app.listen(PORT, HOST, () => {
             ? `  [AUTH] qoder ${region}: logged in`
             : `  [AUTH] qoder ${region}: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
         );
+        // A fresh session is worth a run right away.
+        if (region === "cn") void runBenefitsOnce();
       })
       .catch((e) => console.warn(`  [AUTH] qoder ${region} login failed: ${(e as Error).message}`));
   }
@@ -1125,9 +1196,15 @@ app.listen(PORT, HOST, () => {
         // The catalogue needs a token, so it comes after the login.
         await refreshWorkBuddyCatalog(true);
         console.log(`  [WORKBUDDY] catalogue: ${WORKBUDDY_CN.length} models`);
+        // A fresh session is worth a run right away.
+        void runBenefitsOnce();
       })
       .catch((e) => console.warn(`  [AUTH] workbuddy cn login failed: ${(e as Error).message}`));
   }
+
+  // The daily benefits of the China accounts: the check-in, the growth centre
+  // and the campaigns. The first run waits for the login above.
+  scheduleBenefits();
 
   void PING_MS;
 });

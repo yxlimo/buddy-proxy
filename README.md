@@ -532,6 +532,49 @@ rejected with code 11133, so it is left out.
 | `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |
 | `WORKBUDDY_LOGIN_TIMEOUT_MS` | `600000` | how long to wait for the browser approval |
 
+## Daily benefits
+
+Both China accounts hand out credits for showing up, and the router takes them
+without being asked. It runs when it starts and then every six hours; the day
+rolls over at midnight in China, and every call is idempotent — asking twice
+answers "already done" rather than doing it again.
+
+| Account | What it takes |
+|---|---|
+| WorkBuddy | the daily check-in (`/v2/billing/meter/daily-checkin`), and then the growth centre: the gift the travelling Buddy brings back, the tasks, the make-up cards for a missed day, the streak tier, and the blind box |
+| Qoder | the campaigns (`/sash/api/v1/me/campaigns`) that are claimable |
+
+The WorkBuddy growth centre is a chain of calls: take the gift, send the Buddy
+out again so there is one to collect tomorrow, accept the tasks that are not
+accepted, claim the ones that are finished, use a make-up card for a day that
+was missed, redeem the tier the streak unlocked, and open one blind box. A
+draw cannot be undone, so only one is opened per run.
+
+The Qoder campaigns come back **empty** without the `Cosy-ClientType` header,
+so that one is not optional.
+
+The result of the last run is in `/health` under `benefits`:
+
+```json
+"benefits": {
+  "enabled": true,
+  "intervalMs": 21600000,
+  "lastRunAt": "2026-10-21T03:07:50.801Z",
+  "running": false,
+  "lastOutcome": [
+    { "upstream": "workbuddy-cn", "credits": 0, "report": ["今日已签到（连签 1 天）"] },
+    { "upstream": "qoder-cn", "credits": 0, "report": ["活动「act-20261020-791」已领过"] }
+  ]
+}
+```
+
+Each upstream that is switched on takes its own benefits; one that is off is
+not looked at.
+
+| Variable | Default | What |
+|----------|---------|------|
+| `BENEFITS_INTERVAL_MS` | `21600000` | how often the check-in runs |
+
 ## Deployment (Docker)
 
 The image carries the code. The NAS never receives a checkout — it holds a

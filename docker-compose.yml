@@ -58,6 +58,9 @@ services:
       WORKBUDDY_DATA_DIR: /data
       # The image healthcheck reads the port from here.
       HEALTH_PORT: "6450"
+      # The daily check-in of the China accounts. It runs on its own, so this is
+      # only how often it looks; the day rolls over at midnight in China.
+      BENEFITS_INTERVAL_MS: "21600000"
       TZ: Asia/Shanghai
       KEYS_FILE: /data/api-keys.json
     volumes:
