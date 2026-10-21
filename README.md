@@ -663,15 +663,15 @@ money is the last resort. The balance and the expiry of every account are in
   "credits": {
     "summary": { "expiringCny": 50.43, "nextExpiryAt": "2026-11-19T04:28:10.883Z" },
     "list": [
-      { "sourceLabel": "充值活动赠额", "remainingCny": 50, "permanent": true },
+      { "sourceLabel": "充值活动赠额", "remainingCny": 50, "expiresAt": "2099-12-31T15:59:59.000Z" },
       { "sourceLabel": "实名认证奖励", "remainingCny": 0.43, "expiresAt": "2026-11-19T04:28:10.883Z" }
     ]
   }
 }
 ```
 
-The list is the truth and is there to be read: the platform marks the money
-that never expires with a date in 2099, which is shown as `permanent`.
+The list is the truth and is there to be read: every lot, with the date the
+platform gives it.
 
 The summary is the platform's own view, and its amount is not to be trusted —
 it counts the money that never expires as money that runs out, so an account

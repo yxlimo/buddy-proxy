@@ -59,10 +59,6 @@ services:
       WORKBUDDY_DATA_DIR: /data
       # The TokenRhythm sessions live in the same place.
       TOKENRHYTHM_DATA_DIR: /data
-      # The accounts and their keys come from the .env file next to this one.
-      # They are read one by one, so nothing else in the file is loaded.
-      env_file:
-        - .env
       # The image healthcheck reads the port from here.
       HEALTH_PORT: "6450"
       # The daily check-in of the China accounts. It runs on its own, so this is
@@ -70,6 +66,11 @@ services:
       BENEFITS_INTERVAL_MS: "21600000"
       TZ: Asia/Shanghai
       KEYS_FILE: /data/api-keys.json
+    # The TokenRhythm accounts and their keys, and the MiniMax plan key, come
+    # from the .env file next to this one. The proxy reads the ones it knows
+    # by name; nothing else in the file is loaded.
+    env_file:
+      - .env
     volumes:
       # Same volume as the minimax proxy: the Qoder session file lives next to the
       # MiniMax one, and both are credentials that must survive a rebuild.

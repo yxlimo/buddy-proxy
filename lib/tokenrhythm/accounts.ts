@@ -176,8 +176,6 @@ export interface TokenRhythmGift {
   sourceLabel: string;
   remainingCny: number;
   expiresAt: string | null;
-  /** Whether this lot of money never runs out. */
-  permanent: boolean;
   status: string;
 }
 
@@ -254,21 +252,6 @@ export async function wallet(session: TokenRhythmSession): Promise<TokenRhythmWa
   };
 }
 
-/**
- * A date far enough away that it means "never".
- *
- * The platform marks the money that does not expire with a date in 2099 rather
- * than with nothing, so the date has to be read for what it is.
- */
-const PERMANENT_FAR_FUTURE = Date.parse("2099-01-01T00:00:00Z");
-
-/** Whether a lot of money ever runs out. */
-function isPermanent(expiresAt: string | null): boolean {
-  if (!expiresAt) return true;
-  const t = Date.parse(expiresAt);
-  return !Number.isFinite(t) || t >= PERMANENT_FAR_FUTURE;
-}
-
 export async function credits(session: TokenRhythmSession): Promise<TokenRhythmCredits> {
   const data = await apiGet<any>(
     "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
@@ -280,7 +263,6 @@ export async function credits(session: TokenRhythmSession): Promise<TokenRhythmC
     sourceLabel: String(row?.sourceLabel ?? ""),
     remainingCny: num(row?.remainingCny),
     expiresAt: row?.expiresAt ?? null,
-    permanent: isPermanent(row?.expiresAt ?? null),
     status: String(row?.status ?? ""),
   }));
 
@@ -355,13 +337,11 @@ export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTena
   // The soonest expiry first, as the platform reports it: it points at the
   // gift that runs out first and moves on when that gift is spent, so an
   // account whose gift is gone sorts last and the next account takes over.
-  // Money that never expires sorts last too.
   const expiry = (s: TokenRhythmTenantStatus): number => {
     const at = s.credits?.summary?.nextExpiryAt;
     if (!at) return Number.POSITIVE_INFINITY;
     const t = Date.parse(at);
-    if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
-    return t >= PERMANENT_FAR_FUTURE ? Number.POSITIVE_INFINITY : t;
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
   };
   return pool.sort((a, b) => expiry(a) - expiry(b))[0] ?? null;
 }
