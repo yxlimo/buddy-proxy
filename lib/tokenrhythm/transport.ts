@@ -17,6 +17,8 @@ export const TOKENRHYTHM_MODELS = [
     name: "DeepSeek V4.1 Flash 1017",
     reasoning: true,
     toolCall: true,
+    /** The levels the upstream's thinking mode takes. */
+    efforts: ["low", "high", "max"],
     context: 1000000,
     maxOutput: 384000,
   },

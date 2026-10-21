@@ -97,6 +97,7 @@ export function tokenRhythmCatalogModels(): CatalogModel[] {
     displayName: m.name,
     reasoning: m.reasoning,
     toolCall: m.toolCall,
+    effortOptions: [...m.efforts],
     contextWindow: m.context,
     maxOutputTokens: m.maxOutput,
   }));
