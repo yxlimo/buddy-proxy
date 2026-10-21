@@ -590,7 +590,7 @@ async function toWorkBuddy(
   res.setHeader("x-request-id", rid("req_"));
   sseHead(res);
   if (dialect === "openai") {
-    await pipeStream(upstreamStream, res);
+    await pipeOpenAIChunks(upstreamStream, res);
     return;
   }
   try {
@@ -691,8 +691,8 @@ async function toQoder(
   res.setHeader("x-request-id", rid("req_"));
   sseHead(res);
   if (dialect === "openai") {
-    // Same dialect on both sides: copy the bytes.
-    await pipeStream(upstreamStream, res);
+    // Same dialect on both sides: forward the frames, repaired if need be.
+    await pipeOpenAIChunks(upstreamStream, res);
     return;
   }
   try {
@@ -1007,6 +1007,26 @@ async function peekStream(body: ReadableStream<Uint8Array>): Promise<ReadableStr
       reader.cancel(reason);
     },
   });
+}
+
+/**
+ * Forward an OpenAI stream, frame by frame.
+ *
+ * The frames are parsed and written out again rather than copied, because an
+ * upstream frame can be malformed — Qoder's last frame carries a raw newline
+ * inside a string — and a client that cannot parse it loses the finish reason
+ * and the usage with it.
+ */
+async function pipeOpenAIChunks(body: ReadableStream<Uint8Array>, res: express.Response): Promise<void> {
+  try {
+    for await (const chunk of readOpenAIChunks(body)) {
+      if (!writeSafe(res, sseData(chunk))) break;
+    }
+    writeSafe(res, SSE_DONE);
+  } catch (e) {
+    writeSafe(res, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
+    writeSafe(res, SSE_DONE);
+  }
 }
 
 async function pipeStream(body: ReadableStream<Uint8Array>, res: express.Response): Promise<void> {

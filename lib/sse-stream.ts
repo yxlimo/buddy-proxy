@@ -16,6 +16,21 @@ export async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGen
   const decoder = new TextDecoder();
   let buffer = "";
   let event: string | undefined;
+  // The data lines of the event being read.
+  let dataLines: string[] = [];
+
+  /** Take the event that was read, if there is one. */
+  const take = (): SseEvent | undefined => {
+    if (!dataLines.length) {
+      event = undefined;
+      return undefined;
+    }
+    const payload = dataLines.join("\n");
+    const name = event;
+    dataLines = [];
+    event = undefined;
+    return name ? { event: name, data: payload } : { data: payload };
+  };
 
   try {
     while (true) {
@@ -28,31 +43,87 @@ export async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGen
         buffer = buffer.slice(idx + 1);
         if (line === "") {
           // Blank line ends an event.
-          if (event !== undefined) {
-            yield { event, data: "" };
-            event = undefined;
-          }
+          const ev = take();
+          if (ev) yield ev;
           continue;
         }
         if (line.startsWith(":")) continue; // comment / heartbeat
         if (line.startsWith("event:")) {
           event = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          const data = line.slice(5).replace(/^ /, "");
-          if (event === undefined) {
-            yield { data };
-          } else {
-            yield { event, data };
-            event = undefined;
-          }
+          continue;
         }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).replace(/^ /, ""));
+          continue;
+        }
+        // A line with no field name belongs to the data line above it: some
+        // upstreams (Qoder) pretty-print the JSON across several lines, and
+        // dropping the continuations would lose the whole frame — including the
+        // usage that rides in the last one.
+        if (dataLines.length) dataLines.push(line);
       }
     }
+    // Whatever is left when the stream ends.
     const rest = buffer.trim();
-    if (rest.startsWith("data:")) yield { data: rest.slice(5).replace(/^ /, "") };
+    if (rest) {
+      if (rest.startsWith("data:")) dataLines.push(rest.slice(5).replace(/^ /, ""));
+      else if (dataLines.length) dataLines.push(rest);
+    }
+    const ev = take();
+    if (ev) yield ev;
   } finally {
     reader.releaseLock();
   }
+}
+
+/**
+ * Parse JSON that has a raw control character inside a string.
+ *
+ * Qoder's last frame of a stream carries a field whose value contains a
+ * newline that was never escaped, which strict JSON rejects — and that frame is
+ * the one the usage arrives in. Escaping the control characters instead of
+ * failing keeps the numbers, which is the whole point of the frame.
+ */
+export function parseLooseJson(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {
+    /* fall through to the lenient pass */
+  }
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") {
+        out += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+        out += ch;
+        continue;
+      }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        out +=
+          code === 10 ? "\\n" : code === 13 ? "\\r" : code === 9 ? "\\t" : `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    out += ch;
+  }
+  return JSON.parse(out);
 }
 
 /**
@@ -68,7 +139,7 @@ export async function* readOpenAIChunks(body: ReadableStream<Uint8Array>): Async
     if (!ev.data || ev.data === "[DONE]") continue;
     let chunk: Record<string, any>;
     try {
-      chunk = JSON.parse(ev.data);
+      chunk = parseLooseJson(ev.data);
     } catch {
       continue;
     }

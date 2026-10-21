@@ -308,6 +308,13 @@ export async function* openaiStreamToAnthropic(
   let thinkingOpen = false;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cachedTokens = 0;
+  let reasoningTokens = 0;
+  // The OpenAI dialect reports the usage in the last chunk, which can arrive
+  // after the chunk that carries the finish reason. The stream therefore is not
+  // over until the upstream says so.
+  let finalStopReason = "";
+  let finished = false;
   const toolCalls = new Map<number, { id: string; name: string; args: string }>();
 
   async function* start(usage?: Json): AsyncGenerator<string> {
@@ -332,7 +339,12 @@ export async function* openaiStreamToAnthropic(
     if (chunk.usage) {
       inputTokens = chunk.usage.prompt_tokens ?? inputTokens;
       outputTokens = chunk.usage.completion_tokens ?? outputTokens;
+      cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? cachedTokens;
+      reasoningTokens = chunk.usage.completion_tokens_details?.reasoning_tokens ?? reasoningTokens;
     }
+    // After the finish reason the upstream may still send the usage; anything
+    // else would arrive out of order and is dropped.
+    if (finished) continue;
     const choice = chunk.choices?.[0];
     if (!choice) continue;
     const delta = choice.delta ?? {};
@@ -412,13 +424,9 @@ export async function* openaiStreamToAnthropic(
         index++;
       }
       const stopReason = choice.finish_reason === "length" ? "max_tokens" : choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
-      yield sseEvent("message_delta", {
-        type: "message_delta",
-        delta: { stop_reason: stopReason, stop_sequence: null },
-        usage: { output_tokens: outputTokens },
-      });
-      yield sseEvent("message_stop", { type: "message_stop" });
-      return;
+      finalStopReason = stopReason;
+      // The stream is not over yet: the usage may still be coming.
+      finished = true;
     }
   }
 
@@ -427,8 +435,16 @@ export async function* openaiStreamToAnthropic(
   if (thinkingOpen) yield sseEvent("content_block_stop", { type: "content_block_stop", index: thinkingIndex });
   yield sseEvent("message_delta", {
     type: "message_delta",
-    delta: { stop_reason: "end_turn", stop_sequence: null },
-    usage: { output_tokens: outputTokens },
+    delta: { stop_reason: finalStopReason || "end_turn", stop_sequence: null },
+    // The Anthropic dialect reports the input tokens in the first frame, but the
+    // OpenAI dialect only knows them at the end — so they ride along here, and a
+    // client that reads them from the last frame finds them.
+    usage: {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      ...(cachedTokens ? { cache_read_input_tokens: cachedTokens } : {}),
+      ...(reasoningTokens ? { output_tokens_details: { thinking_tokens: reasoningTokens } } : {}),
+    },
   });
   yield sseEvent("message_stop", { type: "message_stop" });
 }
@@ -583,6 +599,12 @@ export function openaiToAnthropicResponse(body: Json, model: string): Json {
     usage: {
       input_tokens: body?.usage?.prompt_tokens ?? 0,
       output_tokens: body?.usage?.completion_tokens ?? 0,
+      ...(body?.usage?.prompt_tokens_details?.cached_tokens
+        ? { cache_read_input_tokens: body.usage.prompt_tokens_details.cached_tokens }
+        : {}),
+      ...(body?.usage?.completion_tokens_details?.reasoning_tokens
+        ? { output_tokens_details: { thinking_tokens: body.usage.completion_tokens_details.reasoning_tokens } }
+        : {}),
     },
   };
 }
