@@ -327,7 +327,12 @@ async function handleAggregate(
   const rctx = routingContext();
   let lastError: unknown = null;
 
-  for (const target of entry.targets) {
+  // single 只走权重最大的那一个，失败了就是失败了 —— 面板上写着 single，
+  // 流量却悄悄跑到别的账号上，那就跟面板说的不是一回事。
+  // fallback 才试下一个。
+  const targets = entry.strategy === "fallback" ? entry.targets : entry.targets.slice(0, 1);
+
+  for (const target of targets) {
     let route: Route;
     try {
       route = routeInGroup(target.group, target.upstreamModel, rctx);

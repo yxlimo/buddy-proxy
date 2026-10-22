@@ -126,11 +126,17 @@ export function humanMessage(
 ): string {
   const text = (message ?? '').trim()
   if (!text) return ''
-  return text
-    .replace(
-      /(（|\()([^（()）]*)(）|\))\s*$/,
-      (whole, _open: string, inner: string) =>
-        /[\u4e00-\u9fff]/.test(inner) ? whole : ''
-    )
-    .trim()
+  // 机器码：括号里没有中文的那些。后端给的是「中文（机器码）。（English (code)）」
+  // 这种形状，括号里还套着括号 —— 从最里层开始剥，剥到没有为止。
+  let stripped = text
+  for (let i = 0; i < 5; i++) {
+    const next = stripped
+      .replace(/[（(][^（()）]*[)）]/g, (whole) =>
+        /[\u4e00-\u9fff]/.test(whole) ? whole : ''
+      )
+      .trim()
+    if (next === stripped) break
+    stripped = next
+  }
+  return stripped || text
 }
