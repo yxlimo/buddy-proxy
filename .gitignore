@@ -21,3 +21,7 @@ reference/qoder/
 # Helpers for the machine this runs on, not for the service: they rewrite
 # personal client configs and poke at the opencode client's own storage.
 tools/
+
+# The panel's dependencies and build output
+web/node_modules/
+web/dist/

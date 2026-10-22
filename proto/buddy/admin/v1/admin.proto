@@ -1,0 +1,420 @@
+// 管理接口的契约。protobuf 定义，Connect 传输。
+//
+// 这是前端与后端之间唯一的接缝：两侧都从这份文件生成代码，谁也不手写
+// 对方的形状。改这个文件就是改接口，走 buf breaking 守演进。
+//
+// 鉴权不在 schema 里：它是 Authorization 头里的一个 Bearer 令牌，来源是
+// /data/admin-token。/health 仍然是公开的，给外部调用。
+
+syntax = "proto3";
+
+package buddy.admin.v1;
+
+// ── 公共形状 ──────────────────────────────────────────────────────────────
+
+// 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
+message Upstream {
+  string id = 1;
+  // 给人看的名字。
+  string label = 2;
+  bool enabled = 3;
+  // 这个上游现在公布了几个模型。
+  int32 model_count = 4;
+  // 凭据的状态摘要。
+  CredentialStatus credential = 5;
+  // 余额的摘要，没有余额的上游不带这个。
+  BalanceSummary balance = 6;
+}
+
+// 凭据的状态。
+message CredentialStatus {
+  string kind = 1;
+  // authenticated / missing / expired / error
+  string status = 2;
+  // 只留前几位，不给全文。
+  string fingerprint = 3;
+  int64 expires_at = 4;
+  int64 remaining_sec = 5;
+  bool warning = 6;
+  string detail = 7;
+  int32 generation = 8;
+}
+
+// 余额。
+message BalanceSummary {
+  double available_cny = 1;
+  string currency = 2;
+  // 每一笔赠金。
+  repeated CreditLot lots = 3;
+  // 平台给的到期指针：最早到期的赠金是哪一批。
+  int64 next_expiry_at = 4;
+  double expiring_cny = 5;
+}
+
+// 一笔赠金。
+message CreditLot {
+  string id = 1;
+  string source_label = 2;
+  double remaining_cny = 3;
+  int64 expires_at = 4;
+  // 平台用 2099-12-31 标记「永不过期」，这里原样透出。
+  string status = 5;
+}
+
+// ── 系统 ──────────────────────────────────────────────────────────────────
+
+message GetSystemStatusRequest {}
+
+message GetSystemStatusResponse {
+  string version = 1;
+  repeated Upstream upstreams = 2;
+  // 配置改了但还没重启生效时为真。
+  bool pending_restart = 3;
+  int64 uptime_sec = 4;
+  // 聚合路由现在公布了几个模型。
+  int32 published_model_count = 5;
+  // 面板自己的鉴权令牌是否已配置。
+  bool admin_token_set = 6;
+}
+
+message RestartSystemRequest {}
+
+message RestartSystemResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+// ── 上游 ──────────────────────────────────────────────────────────────────
+
+message ListUpstreamsRequest {}
+
+message ListUpstreamsResponse {
+  repeated Upstream upstreams = 1;
+}
+
+message SetUpstreamEnabledRequest {
+  string upstream_id = 1;
+  bool enabled = 2;
+}
+
+message SetUpstreamEnabledResponse {
+  bool ok = 1;
+  // 改了要重启才生效。
+  bool pending_restart = 2;
+  string message = 3;
+}
+
+// ── 配置 ──────────────────────────────────────────────────────────────────
+
+message ListConfigRequest {}
+
+message ConfigItem {
+  string key = 1;
+  string value = 2;
+  // database / environment / default —— 这个值现在从哪来。
+  string source = 3;
+  string fallback = 4;
+  // 归到面板的哪一组。
+  string group = 5;
+  string description = 6;
+  bool secret = 7;
+}
+
+message ListConfigResponse {
+  repeated ConfigItem items = 1;
+  bool pending_restart = 2;
+}
+
+message SetConfigRequest {
+  string key = 1;
+  string value = 2;
+  // 空字符串表示清掉这个覆盖，回到环境变量或默认值。
+  bool clear = 3;
+}
+
+message SetConfigResponse {
+  bool ok = 1;
+  bool pending_restart = 2;
+  string message = 3;
+}
+
+// ── 账号与凭据 ────────────────────────────────────────────────────────────
+
+// 一个账号：上游的一个登录身份。
+message Account {
+  string id = 1;
+  string upstream_id = 2;
+  string label = 3;
+  // usable / expired / missing
+  string status = 4;
+  int32 credential_count = 5;
+  string detail = 6;
+}
+
+message ListAccountsRequest {}
+
+message ListAccountsResponse {
+  repeated Account accounts = 1;
+}
+
+// 一条凭据：refresh token、API key、cookie 之类。
+message Credential {
+  string id = 1;
+  string account_id = 2;
+  string upstream_id = 3;
+  // session / api_key / login / plan_key
+  string kind = 4;
+  string label = 5;
+  // 掩码后的值：只留前几位。
+  string masked = 6;
+  string fingerprint = 7;
+  string status = 8;
+  int32 generation = 9;
+  int64 expires_at = 10;
+  int64 last_ok_at = 11;
+  string last_error = 12;
+  int64 updated_at = 13;
+}
+
+message ListCredentialsRequest {
+  string account_id = 1;
+}
+
+message ListCredentialsResponse {
+  repeated Credential credentials = 1;
+}
+
+message TestCredentialRequest {
+  string credential_id = 1;
+}
+
+message TestCredentialResponse {
+  bool ok = 1;
+  string message = 2;
+  int64 checked_at = 3;
+}
+
+message RefreshCredentialRequest {
+  string credential_id = 1;
+}
+
+message RefreshCredentialResponse {
+  bool ok = 1;
+  string message = 2;
+  int32 generation = 3;
+}
+
+// ── 余额 ──────────────────────────────────────────────────────────────────
+
+message GetBalanceRequest {
+  string upstream_id = 1;
+}
+
+message GetBalanceResponse {
+  repeated BalanceSummary balances = 1;
+}
+
+// ── 用量 ──────────────────────────────────────────────────────────────────
+
+message UsageSummary {
+  int64 requests = 1;
+  int64 succeeded = 2;
+  int64 failed = 3;
+  int64 prompt_tokens = 4;
+  int64 completion_tokens = 5;
+  int64 reasoning_tokens = 6;
+  int64 latency_ms_sum = 7;
+}
+
+message GetUsageSummaryRequest {
+  // 空表示全部。
+  string upstream_id = 1;
+  // 按天 / 按小时。
+  string window = 2;
+}
+
+message GetUsageSummaryResponse {
+  UsageSummary total = 1;
+  // 按上游分组。
+  repeated UsageBucket by_upstream = 2;
+  // 按模型分组。
+  repeated UsageBucket by_model = 3;
+  // 按天分组的时间序列。
+  repeated UsageBucket by_day = 4;
+}
+
+message UsageBucket {
+  string key = 1;
+  UsageSummary summary = 2;
+}
+
+message ListUsageEventsRequest {
+  int32 limit = 1;
+  string upstream_id = 2;
+  string model = 3;
+}
+
+message UsageEvent {
+  int64 id = 1;
+  int64 ts = 2;
+  string upstream_id = 3;
+  string model = 4;
+  // agent 写的模型 id。
+  string agent_model = 5;
+  string dialect = 6;
+  int64 prompt_tokens = 7;
+  int64 completion_tokens = 8;
+  int64 reasoning_tokens = 9;
+  int64 latency_ms = 10;
+  string status = 11;
+  string error = 12;
+}
+
+message ListUsageEventsResponse {
+  repeated UsageEvent events = 1;
+}
+
+// ── 公布的模型（聚合路由） ────────────────────────────────────────────────
+
+// 一个公布出来的模型：对外的 id 背后有哪几个上游模型。
+message PublishedModel {
+  string id = 1;
+  string display_name = 2;
+  bool enabled = 3;
+  // single / fallback
+  string strategy = 4;
+  int32 context_window = 5;
+  int32 max_output_tokens = 6;
+  bool reasoning = 7;
+  bool tool_call = 8;
+  repeated string effort_options = 9;
+  repeated PublishedTarget targets = 10;
+  int64 updated_at = 11;
+}
+
+message PublishedTarget {
+  // qoder / qoder-cn / workbuddy-cn / minimax / tokenrhythm
+  string group_name = 1;
+  string upstream_model = 2;
+  int32 weight = 3;
+  int32 position = 4;
+  bool enabled = 5;
+  // 这个目标分到了多少请求。
+  int64 requests = 6;
+  int64 failed = 7;
+}
+
+message ListPublishedModelsRequest {}
+
+message ListPublishedModelsResponse {
+  repeated PublishedModel models = 1;
+}
+
+message SavePublishedModelRequest {
+  PublishedModel model = 1;
+}
+
+message SavePublishedModelResponse {
+  bool ok = 1;
+  string id = 2;
+  string message = 3;
+}
+
+message DeletePublishedModelRequest {
+  string id = 1;
+}
+
+message DeletePublishedModelResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+// ── 每日权益 ──────────────────────────────────────────────────────────────
+
+message GetBenefitStatusRequest {}
+
+message BenefitStatus {
+  string upstream_id = 1;
+  // 今日已签到 / 活动已领 / 暂无新活动
+  string summary = 2;
+  repeated string lines = 3;
+  int64 checked_at = 4;
+  int32 credits = 5;
+  bool ok = 6;
+}
+
+message GetBenefitStatusResponse {
+  repeated BenefitStatus benefits = 1;
+}
+
+message RunBenefitNowRequest {}
+
+message RunBenefitNowResponse {
+  bool ok = 1;
+  repeated string lines = 2;
+}
+
+// ── 目录与日志 ────────────────────────────────────────────────────────────
+
+message ListModelsRequest {
+  string upstream_id = 1;
+}
+
+message CatalogModel {
+  string id = 1;
+  string display_name = 2;
+  int32 context_window = 3;
+  int32 max_output_tokens = 4;
+  bool reasoning = 5;
+  bool tool_call = 6;
+  repeated string effort_options = 7;
+  // 计费倍率，0 是免费。
+  double credits = 8;
+}
+
+message ListModelsResponse {
+  repeated CatalogModel models = 1;
+}
+
+message TailLogRequest {
+  int32 lines = 1;
+  // 检索词。
+  string filter = 2;
+}
+
+message TailLogResponse {
+  repeated string lines = 1;
+}
+
+// ── 服务 ──────────────────────────────────────────────────────────────────
+
+service AdminService {
+  rpc GetSystemStatus(GetSystemStatusRequest) returns (GetSystemStatusResponse);
+  rpc RestartSystem(RestartSystemRequest) returns (RestartSystemResponse);
+
+  rpc ListUpstreams(ListUpstreamsRequest) returns (ListUpstreamsResponse);
+  rpc SetUpstreamEnabled(SetUpstreamEnabledRequest) returns (SetUpstreamEnabledResponse);
+
+  rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
+
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+  rpc ListCredentials(ListCredentialsRequest) returns (ListCredentialsResponse);
+  rpc TestCredential(TestCredentialRequest) returns (TestCredentialResponse);
+  rpc RefreshCredential(RefreshCredentialRequest) returns (RefreshCredentialResponse);
+
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+
+  rpc GetUsageSummary(GetUsageSummaryRequest) returns (GetUsageSummaryResponse);
+  rpc ListUsageEvents(ListUsageEventsRequest) returns (ListUsageEventsResponse);
+
+  rpc ListPublishedModels(ListPublishedModelsRequest) returns (ListPublishedModelsResponse);
+  rpc SavePublishedModel(SavePublishedModelRequest) returns (SavePublishedModelResponse);
+  rpc DeletePublishedModel(DeletePublishedModelRequest) returns (DeletePublishedModelResponse);
+
+  rpc GetBenefitStatus(GetBenefitStatusRequest) returns (GetBenefitStatusResponse);
+  rpc RunBenefitNow(RunBenefitNowRequest) returns (RunBenefitNowResponse);
+
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  rpc TailLog(TailLogRequest) returns (TailLogResponse);
+}

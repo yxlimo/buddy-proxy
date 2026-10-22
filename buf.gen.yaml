@@ -1,0 +1,9 @@
+# 生成 TypeScript 客户端。生成物进版本库：容器里没有构建步骤，前端构建
+# 用的是仓库里已有的那一份。
+version: v2
+plugins:
+  - remote: buf.build/bufbuild/es:v2.2.3
+    out: web/src/gen
+    opt:
+      - target=ts
+      - import_extension=none

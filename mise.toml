@@ -1,6 +1,9 @@
 [tools]
 node = "lts"
 pnpm = "latest"
+# The contract compiler. The generated TypeScript client is committed, so a
+# normal build never needs it — only a change to the contract does.
+buf = "1.74.0"
 
 [tasks.serve]
 description = "Run the router (every upstream, OpenAI/Anthropic compatible)"
