@@ -9,7 +9,7 @@
 // the prefixed form (`/qoder-cn/v1/models`) with one upstream, and the model
 // ids are the real ones there — the path already says where the model lives.
 
-import { QODER_EFFORTS, qoderLabel, type QoderModel } from "../qoder/models.ts";
+import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "../qoder/models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy/models.ts";
 import type { MiniMaxModel } from "../minimax/models.ts";
 import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
@@ -45,6 +45,8 @@ export interface CatalogModel {
   effortOptions?: string[];
   /** The model the gateway actually ran, when it is not the one that was asked for. */
   backend?: string;
+  /** What the account is charged at: 0 is free. Absent when nobody says. */
+  credits?: number;
 }
 
 /** One upstream's models. */
@@ -65,6 +67,7 @@ export function qoderCatalogModels(models: QoderModel[]): CatalogModel[] {
     // and the list says which.
     ...(m.kind === "tier" ? { effortOptions: [...QODER_EFFORTS] } : {}),
     ...(m.backend ? { backend: m.backend } : {}),
+    credits: qoderCredits(m.multiplier),
   }));
 }
 
@@ -77,6 +80,7 @@ export function workbuddyCatalogModels(models: WorkBuddyModel[]): CatalogModel[]
     contextWindow: m.context,
     maxOutputTokens: m.maxOutput,
     ...(m.efforts.length ? { effortOptions: [...m.efforts] } : {}),
+    credits: m.credits,
   }));
 }
 

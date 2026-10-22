@@ -254,6 +254,16 @@ export function qoderLabel(model: QoderModel): string {
 }
 
 /**
+ * The multiplier as a number: the client shows "0.8×", the panel wants 0.8.
+ * No multiplier means free (0).
+ */
+export function qoderCredits(multiplier: string | undefined): number {
+  if (!multiplier) return 0;
+  const n = Number(String(multiplier).replace(/[×x]/g, "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
  * Resolve a client-visible id to what the gateway wants.
  *
  * A tier entry takes the thinking level from the request and turns it into the

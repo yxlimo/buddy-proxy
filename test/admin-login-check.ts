@@ -346,7 +346,8 @@ check("轮询同意会变成 approved", becameApproved, "没有变成 approved")
 const approvedStatus = await call("GetLoginStatus", { loginId: approved.body?.session?.loginId });
 check(
   "成功时带着凭据的摘要",
-  approvedStatus.body?.session?.credential?.status === "usable",
+  // 凭据状态是契约里的枚举，JSON 里是枚举的名字。
+  approvedStatus.body?.session?.credential?.status === "CREDENTIAL_STATE_USABLE",
   JSON.stringify(approvedStatus.body?.session),
 );
 const secretAppeared = await waitFor(() =>

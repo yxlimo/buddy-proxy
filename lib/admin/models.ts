@@ -5,26 +5,26 @@
 // 同一个模型时，面板给的是两者里较小的那个上下文。
 
 import {
-  aggregateModels,
   deleteAggregateModel,
   getAggregateModel,
   listAggregateModels,
   listAggregateUsage,
   reloadAggregate,
   saveAggregateModel,
+  type AggregateModel,
   type AggregateStrategy,
   type AggregateTarget,
 } from "../aggregate.ts";
 import {
   catalogGroups,
-  minimaxVisible,
-  qoderVisible,
-  workbuddyCatalog,
+  upstreamCredential,
+  upstreamEnabled,
+  UPSTREAM_FLAG_KEYS,
   type UpstreamId,
 } from "./upstreams.ts";
-import { qoderLabel, QODER_EFFORTS } from "../qoder/models.ts";
-import { workbuddyLabel } from "../workbuddy/models.ts";
-import { aggregateCatalog, tokenRhythmCatalogModels } from "../router/catalog.ts";
+import { hasUsableCredential } from "./credentials.ts";
+import type { CatalogGroup } from "../router/catalog.ts";
+import { UnpublishedReason } from "../gen/buddy/admin/v1/admin_pb.ts";
 
 /** 一个公布出来的模型。 */
 export interface PublishedModelView {
@@ -38,6 +38,8 @@ export interface PublishedModelView {
    * 上游全关着的时候，模型在库里但没人能接 —— 面板上要看得见这件事。
    */
   published: boolean;
+  /** 没公布的原因。公布了就是 UNSPECIFIED。 */
+  unpublishedReason: UnpublishedReason;
   strategy: string;
   /**
    * 元数据可以不给：不给就是「继承目标的值」。
@@ -67,45 +69,97 @@ export interface PublishedTargetView {
 }
 
 /**
+ * 一个公布出来的模型没被公布的理由。
+ *
+ * 判据跟根路由那边一致（根路由拿 aggregateCatalog() 算的那份就是公布的
+ * 清单），但这里多问一句：这个目标的上游登录了没有 —— 根路由的清单里不看
+ * 凭据，模型在清单里但没人能接，面板要说得出来。
+ *
+ * 顺序：
+ *
+ *   1. 模型自己被停用了        → DISABLED
+ *   2. 一个目标都没有          → NO_TARGET
+ *   3. 目标全被停用了          → TARGET_DISABLED
+ *   4. 目标的上游关着          → UPSTREAM_DISABLED
+ *   5. 目标的上游没登录        → NO_CREDENTIAL
+ *   6. 上游不列这个模型了      → MODEL_GONE
+ *
+ * 有一个目标能用，就是公布了（UNSPECIFIED）。多个目标有的能用有的不能时，
+ * 能用的那些说了算 —— 理由留空。
+ */
+function unpublishedReason(model: AggregateModel, groups: CatalogGroup[]): UnpublishedReason {
+  if (!model.enabled) return UnpublishedReason.DISABLED;
+  if (!model.targets.length) return UnpublishedReason.NO_TARGET;
+  const enabled = model.targets.filter((target) => target.enabled);
+  if (!enabled.length) return UnpublishedReason.TARGET_DISABLED;
+  let firstBlocker: UnpublishedReason = UnpublishedReason.UNSPECIFIED;
+  for (const target of enabled) {
+    const blocker = targetBlocker(target, groups);
+    if (!blocker) return UnpublishedReason.UNSPECIFIED; // 有能用的目标 → 公布了
+    if (firstBlocker === UnpublishedReason.UNSPECIFIED) firstBlocker = blocker;
+  }
+  return firstBlocker;
+}
+
+/** 一个目标为什么不能用。空 = 能用。 */
+function targetBlocker(target: AggregateTarget, groups: CatalogGroup[]): UnpublishedReason {
+  const group = target.group as UpstreamId;
+  // 不认识的上游：没有开关，也没有目录 —— 当作关着。
+  if (!UPSTREAM_FLAG_KEYS[group]) return UnpublishedReason.UPSTREAM_DISABLED;
+  if (!upstreamEnabled(group)) return UnpublishedReason.UPSTREAM_DISABLED;
+  const credential = upstreamCredential(group);
+  if (!hasUsableCredential(credential.status)) return UnpublishedReason.NO_CREDENTIAL;
+  const upstream = groups.find((g) => g.group === target.group);
+  if (!upstream || !upstream.models.some((m) => m.id === target.upstreamModel)) {
+    return UnpublishedReason.MODEL_GONE;
+  }
+  return UnpublishedReason.UNSPECIFIED;
+}
+
+/**
  * 公布的模型，面板看的形状。
  *
  * 元数据是**库里存的那个**，不是合出来的：存的是空（继承）就是没有，客户端
  * 原样存回去还是继承。合出来的值由目录那边算（lib/router/catalog.ts），
  * 面板要显示的话可以用 ListModels 与目标自己算。
  *
- * `published` 用的是目录那边的判据：根路由拿 aggregateCatalog() 算出来的那
- * 份就是根路由公布的清单，面板说「公布了」就是说它在那份清单里。两边不能
- * 各算一套 —— 上游一关，模型立刻就不公布了。
+ * `published` 与 `unpublishedReason` 是同一个判断的两面：公布了就没有理由，
+ * 没公布就有理由。两边不能各算一套 —— 上游一关，模型立刻就不公布了。
  */
 export function publishedModels(): PublishedModelView[] {
   const usage = listAggregateUsage();
-  const live = new Set(aggregateCatalog(catalogGroups(), aggregateModels()).map((entry) => entry.id));
-  return listAggregateModels().map((model) => ({
-    id: model.id,
-    displayName: model.displayName,
-    enabled: model.enabled,
-    published: live.has(model.id),
-    strategy: model.strategy,
-    contextWindow: model.contextWindow ?? undefined,
-    maxOutputTokens: model.maxOutputTokens ?? undefined,
-    reasoning: model.reasoning ?? undefined,
-    toolCall: model.toolCall ?? undefined,
-    effortOptions: model.effortOptions ?? [],
-    updatedAt: model.updatedAt,
-    targets: model.targets.map((target) => {
-      const row = usage.find(
-        (u) => u.modelId === model.id && u.group === target.group && u.upstreamModel === target.upstreamModel,
-      );
-      return {
-        groupName: target.group,
-        upstreamModel: target.upstreamModel,
-        weight: target.weight,
-        enabled: target.enabled,
-        requests: row?.requests ?? 0,
-        failed: row?.failed ?? 0,
-      };
-    }),
-  }));
+  const groups = catalogGroups();
+  return listAggregateModels().map((model) => {
+    // 一个判断，两处用：公布了就是没有理由，没公布就有理由。
+    const reason = unpublishedReason(model, groups);
+    return {
+      id: model.id,
+      displayName: model.displayName,
+      enabled: model.enabled,
+      published: reason === UnpublishedReason.UNSPECIFIED,
+      unpublishedReason: reason,
+      strategy: model.strategy,
+      contextWindow: model.contextWindow ?? undefined,
+      maxOutputTokens: model.maxOutputTokens ?? undefined,
+      reasoning: model.reasoning ?? undefined,
+      toolCall: model.toolCall ?? undefined,
+      effortOptions: model.effortOptions ?? [],
+      updatedAt: model.updatedAt,
+      targets: model.targets.map((target) => {
+        const row = usage.find(
+          (u) => u.modelId === model.id && u.group === target.group && u.upstreamModel === target.upstreamModel,
+        );
+        return {
+          groupName: target.group,
+          upstreamModel: target.upstreamModel,
+          weight: target.weight,
+          enabled: target.enabled,
+          requests: row?.requests ?? 0,
+          failed: row?.failed ?? 0,
+        };
+      }),
+    };
+  });
 }
 
 /** 面板发过来的模型。 */
@@ -231,81 +285,21 @@ export interface CatalogModelView {
   credits: number;
 }
 
-/** Qoder 的倍率是给客户端看的字符串（"0.5×"），这里换成数。 */
-function qoderCredits(multiplier: string | undefined): number {
-  if (!multiplier) return 0;
-  const n = Number(String(multiplier).replace(/[×x]/g, "").trim());
-  return Number.isFinite(n) ? n : 0;
-}
-
 /**
  * 各上游的模型目录。
  *
  * 不给上游就是全部。倍率只有 WorkBuddy 与 Qoder 有 —— MiniMax 与
  * TokenRhythm 的模型都是免费的（倍率记 0）。
+ *
+ * 目录取自 `catalogGroups()`：那是唯一看开关的地方（关着的上游不公布模型）。
+ * 以前这里各读各的目录，WorkBuddy 与 TokenRhythm 忘了看开关 —— 上游关了
+ * 面板上还列着它的模型。
  */
 export function catalogModels(upstreamId = ""): CatalogModelView[] {
   const out: CatalogModelView[] = [];
-  const want = (id: UpstreamId) => !upstreamId || upstreamId === id;
-
-  if (want("qoder")) {
-    for (const m of qoderVisible("global")) {
-      out.push({
-        id: m.id,
-        displayName: qoderLabel(m),
-        contextWindow: m.context ?? 0,
-        maxOutputTokens: m.maxOutput,
-        reasoning: m.reasoning,
-        toolCall: true,
-        effortOptions: m.kind === "tier" ? [...QODER_EFFORTS] : [],
-        credits: qoderCredits(m.multiplier),
-      });
-    }
-  }
-  if (want("qoder-cn")) {
-    for (const m of qoderVisible("cn")) {
-      out.push({
-        id: m.id,
-        displayName: qoderLabel(m),
-        contextWindow: m.context ?? 0,
-        maxOutputTokens: m.maxOutput,
-        reasoning: m.reasoning,
-        toolCall: true,
-        effortOptions: m.kind === "tier" ? [...QODER_EFFORTS] : [],
-        credits: qoderCredits(m.multiplier),
-      });
-    }
-  }
-  if (want("workbuddy-cn")) {
-    for (const m of workbuddyCatalog()) {
-      out.push({
-        id: m.id,
-        displayName: workbuddyLabel(m),
-        contextWindow: m.context,
-        maxOutputTokens: m.maxOutput,
-        reasoning: m.reasoning,
-        toolCall: m.tools,
-        effortOptions: [...m.efforts],
-        credits: m.credits,
-      });
-    }
-  }
-  if (want("minimax")) {
-    for (const m of minimaxVisible()) {
-      out.push({
-        id: m.id,
-        displayName: m.display_name,
-        contextWindow: m.context,
-        maxOutputTokens: m.output,
-        reasoning: m.reasoning,
-        toolCall: m.tool_call,
-        effortOptions: [...m.effortOptions],
-        credits: 0,
-      });
-    }
-  }
-  if (want("tokenrhythm")) {
-    for (const m of tokenRhythmCatalogModels()) {
+  for (const group of catalogGroups()) {
+    if (upstreamId && group.group !== upstreamId) continue;
+    for (const m of group.models) {
       out.push({
         id: m.id,
         displayName: m.displayName,
@@ -314,7 +308,7 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
         reasoning: m.reasoning,
         toolCall: m.toolCall,
         effortOptions: m.effortOptions ?? [],
-        credits: 0,
+        credits: m.credits ?? 0,
       });
     }
   }

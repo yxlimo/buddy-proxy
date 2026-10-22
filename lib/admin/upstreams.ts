@@ -29,6 +29,9 @@ import { tokenRhythmStatuses, type TokenRhythmTenantStatus } from "../tokenrhyth
 import { TOKENRHYTHM_API_BASE, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { getSecret, peekCached, setCached } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
+import { CredentialState, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
+import { credentialState, hasUsableCredential } from "./credentials.ts";
+import { loginActivity } from "./login.ts";
 import {
   minimaxCatalogModels,
   qoderCatalogModels,
@@ -60,7 +63,10 @@ for (const key of Object.values(UPSTREAM_FLAG_KEYS)) markHotSetting(key);
  * 不需要「待重启」那一套。
  */
 export function upstreamEnabled(id: UpstreamId): boolean {
-  return configFlag(UPSTREAM_FLAG_KEYS[id], false);
+  const key = UPSTREAM_FLAG_KEYS[id];
+  // 不认识的上游：没有开关，就是没开。
+  if (!key) return false;
+  return configFlag(key, false);
 }
 
 /** 上游的名字，给人看的。 */
@@ -76,7 +82,7 @@ export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
 export const UPSTREAM_IDS: UpstreamId[] = ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm"];
 
 /** 一个上游的开关状态。 */
-export interface UpstreamState {
+export interface UpstreamSwitch {
   /** 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。 */
   enabled: boolean;
 }
@@ -100,17 +106,12 @@ export function setUpstreamEnabled(id: UpstreamId, enabled: boolean): { ok: bool
  * 开关是热的：面板改了，配置重读一遍，下一个请求就是新的。所以这里只有
  * 「现在在生效的值」—— 没有「改了还没生效」这回事。
  */
-export function upstreamStates(): Record<UpstreamId, UpstreamState> {
-  const out = {} as Record<UpstreamId, UpstreamState>;
+export function upstreamStates(): Record<UpstreamId, UpstreamSwitch> {
+  const out = {} as Record<UpstreamId, UpstreamSwitch>;
   for (const id of UPSTREAM_IDS) {
     out[id] = { enabled: upstreamEnabled(id) };
   }
   return out;
-}
-
-/** 一个上游的开关状态。 */
-export function upstreamState(id: UpstreamId): UpstreamState {
-  return upstreamStates()[id];
 }
 
 /**
@@ -364,8 +365,8 @@ export async function freshHealthSnapshot(): Promise<HealthSnapshot> {
 export interface CredentialView {
   /** session / api_key / login / plan_key */
   kind: string;
-  /** authenticated / missing / expired / error */
-  status: string;
+  /** authenticated / missing / expired / error / usable / anonymous。 */
+  status: CredentialState;
   /** 只留前几位。 */
   fingerprint: string;
   /** 到期时间（毫秒）。 */
@@ -409,7 +410,9 @@ function fromUpstreamStatus(raw: Record<string, unknown>, kind: string, secretId
   const token = String(session?.accessToken ?? "");
   return {
     kind,
-    status: status === "anonymous" ? "missing" : status,
+    // 上游的 "anonymous" 是「没登录」的意思（qoder、workbuddy、minimax 都
+    // 这么报）—— 没有凭据，所以是 MISSING。
+    status: status === "anonymous" ? CredentialState.MISSING : credentialState(status),
     fingerprint: fingerprintOf(token),
     expiresAt: raw.expiresAt ? Date.parse(String(raw.expiresAt)) : 0,
     remainingSec: Number(raw.remainingSec ?? 0),
@@ -448,7 +451,7 @@ function tokenrhythmCredential(): CredentialView {
   if (!tenants.length) {
     return {
       kind: "session",
-      status: "missing",
+      status: CredentialState.MISSING,
       fingerprint: "",
       expiresAt: 0,
       remainingSec: 0,
@@ -467,7 +470,7 @@ function tokenrhythmCredential(): CredentialView {
   }
   return {
     kind: "session",
-    status: expiresAt > Date.now() ? "authenticated" : "missing",
+    status: expiresAt > Date.now() ? CredentialState.ANONYMOUS : CredentialState.MISSING,
     fingerprint: fingerprintOf(key),
     expiresAt,
     remainingSec: expiresAt ? Math.round((expiresAt - Date.now()) / 1000) : 0,
@@ -710,3 +713,87 @@ function tokenrhythmBalances(snapshot: HealthSnapshot): BalanceView[] {
 
 /** 平台标记「永不过期」的那一天。 */
 const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
+
+/* ------------------------------------------------------------------ *
+ * 上游现在能不能接
+ * ------------------------------------------------------------------ */
+
+/**
+ * 这个上游的额度用尽了吗？
+ *
+ * 判据（都用 /health 的缓存，不去打上游）：
+ *
+ *   minimax      账户余额 ≤ 0。钱、券、赠金都算在 available 里。
+ *   qoder        套餐额度用尽。**加购的那一池不算数** —— 上游在套餐用尽时
+ *                会把活动藏起来（之前踩过这个坑），所以套餐这一池才是要紧
+ *                的；两池都空当然也是用尽。
+ *   workbuddy    今天的签到积分没了。
+ *   tokenrhythm  钱包里没钱了。
+ *
+ * 读不到数据就说「不知道」：null 不算用尽。
+ */
+export function outOfCredits(id: UpstreamId): boolean {
+  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
+  if (!snapshot) return false;
+  switch (id) {
+    case "minimax": {
+      const balance = snapshot.minimax?.balance as any;
+      if (!balance) return false;
+      return Number(balance.available ?? 0) <= 0;
+    }
+    case "qoder":
+    case "qoder-cn": {
+      const region = id === "qoder-cn" ? "cn" : "global";
+      const credits = snapshot.qoder?.[region]?.credits as any;
+      if (!credits) return false;
+      const plan = Number(credits.plan?.remaining ?? 0);
+      const addOn = Number(credits.addOn?.remaining ?? 0);
+      if (credits.quotaExceeded === true) return true;
+      // 有套餐、套餐用光了：上游这时藏活动。
+      if (Number(credits.plan?.total ?? 0) > 0 && plan <= 0) return true;
+      // 两池都空。
+      return plan <= 0 && addOn <= 0;
+    }
+    case "workbuddy-cn": {
+      const credits = snapshot.workbuddy?.credits as any;
+      if (!credits) return false;
+      return Number(credits.daily ?? 0) <= 0;
+    }
+    case "tokenrhythm": {
+      const tenants = (snapshot.tokenrhythm?.tenants ?? []) as TokenRhythmTenantStatus[];
+      const wallets = tenants.map((t) => t.wallet).filter(Boolean) as any[];
+      if (!wallets.length) return false;
+      return wallets.every((w) => Number(w.availableCny ?? 0) <= 0);
+    }
+  }
+}
+
+/**
+ * 这个上游现在能不能接请求。
+ *
+ * 判据的顺序（先说最要紧的）：
+ *
+ *   1. 开关关着            → DISABLED（别的都不用看）
+ *   2. 正在登录            → LOGGING_IN（用户正在点授权，面板该等）
+ *   3. 凭据被拒过          → CREDENTIAL_REJECTED（面板该让人重登，而不是
+ *                           让人以为「没登录」）
+ *   4. 没有凭据            → NO_CREDENTIAL
+ *   5. 凭据过期            → CREDENTIAL_EXPIRED
+ *   6. 额度用尽            → OUT_OF_CREDITS
+ *   7. 其余                → READY
+ */
+export function upstreamState(id: UpstreamId): UpstreamState {
+  if (!upstreamEnabled(id)) return UpstreamState.DISABLED;
+  const activity = loginActivity(id);
+  if (activity.loggingIn) return UpstreamState.LOGGING_IN;
+  const credential = upstreamCredential(id);
+  if (credential.status === CredentialState.ERROR) return UpstreamState.CREDENTIAL_REJECTED;
+  if (!hasUsableCredential(credential.status)) {
+    // 登录被拒过：面板上要说的是「被拒了」—— 用户能照着改密码。
+    if (activity.rejected) return UpstreamState.CREDENTIAL_REJECTED;
+    if (credential.status === CredentialState.EXPIRED) return UpstreamState.CREDENTIAL_EXPIRED;
+    return UpstreamState.NO_CREDENTIAL;
+  }
+  if (outOfCredits(id)) return UpstreamState.OUT_OF_CREDITS;
+  return UpstreamState.READY;
+}

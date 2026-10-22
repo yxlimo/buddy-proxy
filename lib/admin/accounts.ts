@@ -18,14 +18,16 @@ import { refreshSession as refreshWorkBuddySession } from "../workbuddy/auth.ts"
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { login as loginTokenRhythm, sessionFor, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { wallet as tokenRhythmWallet } from "../tokenrhythm/wallet.ts";
+import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
+import { credentialStateText } from "./credentials.ts";
 
 /** 一个账号：上游的一个登录身份。 */
 export interface AccountView {
   id: string;
   upstreamId: string;
   label: string;
-  /** usable / expired / missing */
-  status: string;
+  /** 凭据的状态。 */
+  status: CredentialState;
   credentialCount: number;
   detail: string;
 }
@@ -42,8 +44,8 @@ export interface CredentialRow {
   masked: string;
   /** 值的指纹，用来认出「还是那一条」。 */
   fingerprint: string;
-  /** usable / expired / missing */
-  status: string;
+  /** 这条凭据的状态。 */
+  status: CredentialState;
   generation: number;
   expiresAt: number;
   lastOkAt: number;
@@ -90,7 +92,7 @@ function sessionCredential(id: string, accountId: string, upstreamId: string, la
       label,
       masked: "",
       fingerprint: "",
-      status: "missing",
+      status: CredentialState.MISSING,
       generation: 0,
       expiresAt: 0,
       lastOkAt: 0,
@@ -109,7 +111,7 @@ function sessionCredential(id: string, accountId: string, upstreamId: string, la
     label,
     masked: maskOf(token),
     fingerprint: fingerprintOf(token),
-    status: expired ? "expired" : "usable",
+    status: expired ? CredentialState.EXPIRED : CredentialState.USABLE,
     generation: Number(raw.generation ?? 0),
     expiresAt,
     lastOkAt: Number(raw.refreshedAtMs ?? raw.obtainedAtMs ?? raw.loginAtMs ?? 0),
@@ -140,7 +142,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
           label: "Plan key",
           masked: maskOf(key),
           fingerprint: fingerprintOf(key),
-          status: "usable",
+          status: CredentialState.USABLE,
           generation: 0,
           expiresAt: 0,
           lastOkAt: 0,
@@ -173,7 +175,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
           label: "登录账号",
           masked: maskOf(String(login.user)),
           fingerprint: fingerprintOf(String(login.user)),
-          status: "usable",
+          status: CredentialState.USABLE,
           generation: 0,
           expiresAt: 0,
           lastOkAt: 0,
@@ -198,7 +200,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
         label: sites.length ? `子站 token（${sites.map((s: any) => s.name).join(" / ")}）` : "登录会话",
         masked: maskOf(token),
         fingerprint: fingerprintOf(token),
-        status: token ? "usable" : "missing",
+        status: token ? CredentialState.USABLE : CredentialState.MISSING,
         generation: 0,
         expiresAt: 0,
         lastOkAt: Number(session?.obtainedAtMs ?? 0),
@@ -224,7 +226,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       label: "登录账号",
       masked: maskOf(String(login.account ?? "")),
       fingerprint: fingerprintOf(String(login.account ?? "")),
-      status: login.account && login.password ? "usable" : "missing",
+      status: login.account && login.password ? CredentialState.USABLE : CredentialState.MISSING,
       generation: 0,
       expiresAt: 0,
       lastOkAt: 0,
@@ -241,7 +243,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
         label: "推理 key",
         masked: maskOf(key),
         fingerprint: fingerprintOf(key),
-        status: "usable",
+        status: CredentialState.USABLE,
         generation: 0,
         expiresAt: 0,
         lastOkAt: 0,
@@ -265,9 +267,9 @@ export function listAccounts(): AccountView[] {
       id: account.id,
       upstreamId: account.upstream,
       label: account.label,
-      status: session ? session.status : "missing",
+      status: session ? session.status : CredentialState.MISSING,
       credentialCount: credentials.length,
-      detail: session ? `会话 ${session.status}` : "还没有凭据",
+      detail: session ? `会话 ${credentialStateText(session.status)}` : "还没有凭据",
     });
   }
   for (const tenant of tokenRhythmTenants()) {
@@ -278,9 +280,9 @@ export function listAccounts(): AccountView[] {
       id: accountId,
       upstreamId: "tokenrhythm",
       label: `TokenRhythm 租户 ${tenant.index}`,
-      status: session ? session.status : "missing",
+      status: session ? session.status : CredentialState.MISSING,
       credentialCount: credentials.length,
-      detail: session ? `会话 ${session.status}` : "还没有登录态",
+      detail: session ? `会话 ${credentialStateText(session.status)}` : "还没有登录态",
     });
   }
   return out;

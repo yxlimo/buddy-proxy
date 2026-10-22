@@ -508,6 +508,56 @@ check(
 // 时间：毫秒还是秒。
 const upstreams = await call("ListUpstreams");
 const list: any[] = Array.isArray(upstreams.body?.upstreams) ? upstreams.body.upstreams : [];
+
+// 三个枚举：值只能是契约里那几个。
+const UPSTREAM_STATES = [
+  "UPSTREAM_STATE_READY",
+  "UPSTREAM_STATE_DISABLED",
+  "UPSTREAM_STATE_NO_CREDENTIAL",
+  "UPSTREAM_STATE_CREDENTIAL_EXPIRED",
+  "UPSTREAM_STATE_CREDENTIAL_REJECTED",
+  "UPSTREAM_STATE_OUT_OF_CREDITS",
+  "UPSTREAM_STATE_LOGGING_IN",
+];
+const CREDENTIAL_STATES = [
+  "CREDENTIAL_STATE_AUTHENTICATED",
+  "CREDENTIAL_STATE_MISSING",
+  "CREDENTIAL_STATE_EXPIRED",
+  "CREDENTIAL_STATE_ERROR",
+  "CREDENTIAL_STATE_USABLE",
+  "CREDENTIAL_STATE_ANONYMOUS",
+];
+const UNPUBLISHED_REASONS = [
+  "UNPUBLISHED_REASON_DISABLED",
+  "UNPUBLISHED_REASON_UPSTREAM_DISABLED",
+  "UNPUBLISHED_REASON_NO_CREDENTIAL",
+  "UNPUBLISHED_REASON_MODEL_GONE",
+  "UNPUBLISHED_REASON_TARGET_DISABLED",
+  "UNPUBLISHED_REASON_NO_TARGET",
+];
+check(
+  "上游的 state 是契约里的枚举",
+  list.every((u: any) => UPSTREAM_STATES.includes(u.state)),
+  JSON.stringify(list.map((u: any) => u.state)),
+);
+check(
+  "凭据的 status 是契约里的枚举",
+  list.every((u: any) => CREDENTIAL_STATES.includes(u.credential?.status)),
+  JSON.stringify(list.map((u: any) => u.credential?.status)),
+);
+const publishedModels = await call("ListPublishedModels");
+const publishedList: any[] = Array.isArray(publishedModels.body?.models) ? publishedModels.body.models : [];
+check(
+  "没公布的原因是契约里的枚举（公布了就没有这个字段）",
+  publishedList.every((m: any) => m.unpublishedReason === undefined || UNPUBLISHED_REASONS.includes(m.unpublishedReason)),
+  JSON.stringify(publishedList.map((m: any) => [m.id, m.unpublishedReason])),
+);
+check(
+  "公布了就没有理由，没公布一定有理由",
+  publishedList.every((m: any) => (m.published === true) === (m.unpublishedReason === undefined)),
+  JSON.stringify(publishedList.map((m: any) => [m.id, m.published, m.unpublishedReason])),
+);
+
 const cred = list.map((u) => u.credential).find((c) => c && c.expiresAt !== "0");
 check("有一个带到期时间的凭据", Boolean(cred), JSON.stringify(list.map((u) => u.credential?.status)));
 if (cred) {

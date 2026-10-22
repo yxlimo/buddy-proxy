@@ -44,13 +44,22 @@ run = "node --experimental-strip-types test/admin-login-check.ts"
 description = "Check that the settings the panel can change take effect at once (no restart)"
 run = "node --experimental-strip-types test/config-restart-check.ts"
 
+[tasks."test:admin:state"]
+description = "Check the upstream states, the credential enum and the unpublished reasons"
+run = "node --experimental-strip-types test/admin-state-check.ts"
+
 [tasks."test:intern-ai"]
 description = "Run the tests for the intern-ai module (no network)"
 run = "node --experimental-strip-types test/intern-ai-check.ts"
 
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract"
-run = "buf generate"
+run = """
+buf generate
+# Node 的「只剥类型」模式不认 enum 语法 —— 后端直接跑 .ts 文件，所以生成物
+# 里的 enum 要换成 const 对象（值与类型都不变）。
+node scripts/patch-enums.mjs
+"""
 
 [tasks."proto:lint"]
 description = "Check the contract"

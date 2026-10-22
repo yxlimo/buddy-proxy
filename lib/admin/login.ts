@@ -310,7 +310,26 @@ async function runPoll(session: StoredLogin): Promise<string> {
  * ------------------------------------------------------------------ */
 
 /**
- * 这次登录到哪一步了。
+ * 这个上游现在有没有在登录，最近一次是不是被拒了。
+ *
+ * 面板要知道「正在登录」（用户在点授权，别催他）和「被拒了」（让人重登，
+ * 而不是让人以为「没登录」）。登录会话都在 cache 表里 —— 多进程共享 ✓。
+ */
+export function loginActivity(upstreamId: string): { loggingIn: boolean; rejected: boolean } {
+  let loggingIn = false;
+  let latest: LoginStatus | null = null;
+  // listCached 按时间排，所以最后一个就是最近的那次。
+  for (const row of listCached("login:")) {
+    const session = peekCached<StoredLogin>(row.id)?.data;
+    if (!session || session.upstreamId !== upstreamId) continue;
+    if (session.status === "pending") loggingIn = true;
+    latest = session.status;
+  }
+  return { loggingIn, rejected: latest === "failed" };
+}
+
+/**
+ * 一次登录到哪一步了。
  *
  * 还是 pending、但已经过了过期时间，就是过期了。
  */

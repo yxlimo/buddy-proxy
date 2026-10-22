@@ -72,12 +72,14 @@ import {
   upstreamCredential,
   upstreamModelCount,
   upstreamRegion,
+  upstreamState,
   upstreamStates,
   type BalanceView,
   type UpstreamId,
-  type UpstreamState,
+  type UpstreamSwitch,
 } from "./upstreams.ts";
 import { listAccounts, listCredentials, refreshCredential, testCredential } from "./accounts.ts";
+import { credentialStateText } from "./credentials.ts";
 import {
   beginLogin,
   cancelLogin,
@@ -155,7 +157,7 @@ function mergeBalances(balances: BalanceView[]): BalanceView | null {
 }
 
 /** 一个上游在面板上的样子。 */
-async function upstreamMessage(id: UpstreamId, state: UpstreamState) {
+async function upstreamMessage(id: UpstreamId, state: UpstreamSwitch) {
   const credential = upstreamCredential(id);
   const balances = await upstreamBalances(id);
   const balance = mergeBalances(balances);
@@ -164,6 +166,8 @@ async function upstreamMessage(id: UpstreamId, state: UpstreamState) {
     label: UPSTREAM_LABELS[id],
     // 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。
     enabled: state.enabled,
+    // 现在能不能接：额度用尽、正在登录这些面板自己拼不出来的事，后端知道。
+    state: upstreamState(id),
     modelCount: upstreamModelCount(id),
     credential: create(CredentialStatusSchema, {
       kind: credential.kind,
@@ -231,7 +235,7 @@ function accountMessage(accountId: string) {
     id: row.id,
     upstreamId: row.upstreamId,
     label: row.label,
-    status: row.status,
+    status: credentialStateText(row.status),
     credentialCount: row.credentialCount,
     detail: row.detail,
   });
@@ -250,7 +254,7 @@ function credentialMessage(credentialId: string) {
     label: row.label,
     masked: row.masked,
     fingerprint: row.fingerprint,
-    status: row.status,
+    status: credentialStateText(row.status),
     generation: row.generation,
     expiresAt: BigInt(row.expiresAt),
     lastOkAt: BigInt(row.lastOkAt),
@@ -382,7 +386,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           id: account.id,
           upstreamId: account.upstreamId,
           label: account.label,
-          status: account.status,
+          status: credentialStateText(account.status),
           credentialCount: account.credentialCount,
           detail: account.detail,
           balance: balance ? balanceMessage(balance) : undefined,
@@ -403,7 +407,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           label: row.label,
           masked: row.masked,
           fingerprint: row.fingerprint,
-          status: row.status,
+          status: credentialStateText(row.status),
           generation: row.generation,
           expiresAt: BigInt(row.expiresAt),
           lastOkAt: BigInt(row.lastOkAt),
@@ -544,6 +548,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           enabled: model.enabled,
           // 根路由现在真的公布它吗？判据跟根路由一样。
           published: model.published,
+          // 没公布的原因。公布了就是 UNSPECIFIED。
+          unpublishedReason: model.unpublishedReason,
           strategy: model.strategy,
           // 继承的字段就是没有（契约里 optional）：客户端原样存回去还是继承。
           contextWindow: model.contextWindow,
