@@ -95,11 +95,15 @@ describe('面板', () => {
     )
 
     // 侧边栏的导航在，标题也在
-    await waitFor(() => {
-      expect(
-        screen.getByRole('heading', { name: '总览' })
-      ).toBeInTheDocument()
-    })
+    await waitFor(
+      () => {
+        expect(
+          screen.getByRole('heading', { name: '总览' })
+        ).toBeInTheDocument()
+      },
+      // 整套测试一起跑的时候慢一点，别在这儿翻车。
+      { timeout: 5000 }
+    )
     expect(screen.getByText('网关管理面板')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '上游' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '配置' })).toBeInTheDocument()
@@ -113,9 +117,12 @@ describe('面板', () => {
     ).toBeInTheDocument()
 
     // 版本和模型数都从假网关上来了
-    await waitFor(() => {
-      expect(screen.getByText('版本 1.0.0')).toBeInTheDocument()
-    })
+    await waitFor(
+      () => {
+        expect(screen.getByText('版本 1.0.0')).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
     expect(screen.getByText('12')).toBeInTheDocument()
 
     expect(errors).toEqual([])

@@ -37,6 +37,7 @@ import {
   useLoginWithPassword,
 } from '@/features/login/api'
 import { accountKeys } from '@/features/accounts/api'
+import { upstreamKeys } from '@/features/upstreams/api'
 import { humanMessage } from '@/lib/errors'
 import { formatCountdown } from '@/lib/format'
 
@@ -78,6 +79,8 @@ export function LoginDialog({
       toast.success(humanMessage(session.message) || '登录好了。')
     }
     void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+    // 登录好了，上游的状态就变了（从「没登录」变成「就绪」），重取一下。
+    void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
     onOpenChange(false)
   }, [session?.status, session?.loginId, session?.message, onOpenChange, queryClient])
 

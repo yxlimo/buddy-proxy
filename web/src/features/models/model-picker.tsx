@@ -17,6 +17,8 @@ import {
 } from '@/components/ui/popover'
 import { Input } from '@/components/ui/input'
 import { useCatalogModels } from '@/features/models/catalog-api'
+import { useUpstreams } from '@/features/upstreams/api'
+import { UpstreamState } from '@/gen/buddy/admin/v1/admin_pb'
 
 type ModelPickerProps = {
   /** 上游组名。选了它才去拉那个组的模型目录。 */
@@ -39,7 +41,12 @@ export function ModelPicker({
   id,
   placeholder = '选一个上游模型',
 }: ModelPickerProps) {
-  const catalog = useCatalogModels(groupName)
+  const upstreams = useUpstreams()
+  // 目录跟上游的开关有关（关着就不给模型），所以缓存键里带上状态。
+  const state =
+    upstreams.data?.upstreams.find((upstream) => upstream.id === groupName)
+      ?.state ?? UpstreamState.UNSPECIFIED
+  const catalog = useCatalogModels(groupName, state)
   const [open, setOpen] = useState(false)
   const [manual, setManual] = useState(false)
 

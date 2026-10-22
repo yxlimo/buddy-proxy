@@ -41,6 +41,7 @@ import {
   usePublishedModels,
   useSavePublishedModel,
 } from '@/features/models/api'
+import { UNPUBLISHED_REASON_LABELS } from '@/features/upstreams/state'
 import { ModelDialog } from '@/features/models/model-dialog'
 import { formatCount, formatDate } from '@/lib/format'
 
@@ -182,14 +183,14 @@ export function PublishedModelsPage() {
                             <Badge variant='secondary'>已停用</Badge>
                           ) : null}
                           {/* 库里有不等于根路由公布了：上游关着、或者目标
-                              模型的上游没了，都没人能接。点「发布」也不会
-                              改变这个 —— 那是上游的事。 */}
+                              模型的上游没了，都没人能接。published 说
+                              有没有，unpublishedReason 说为什么。 */}
                           {model.published ? null : (
                             <Badge
                               variant='outline'
-                              title='根路由现在没有它：上游关着、或者还没登录。发布这个模型也改不了这个，得先把上游打开。'
+                              title='根路由现在没有它。发布这个模型也改不了这个，得先把上游打开、登录好。'
                             >
-                              未公布
+                              {`未公布：${UNPUBLISHED_REASON_LABELS[model.unpublishedReason] ?? '原因未知'}`}
                             </Badge>
                           )}
                         </div>

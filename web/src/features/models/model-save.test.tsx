@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
+  CredentialState,
   CredentialStatusSchema,
   ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
@@ -10,6 +11,7 @@ import {
   PublishedModelSchema,
   SavePublishedModelResponseSchema,
   UpstreamSchema,
+  UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { PublishedModelsPage } from '@/features/models/index'
 import { ModelDialog, fromDraft, toDraft } from '@/features/models/model-dialog'
@@ -41,8 +43,9 @@ function upstreamHandlers() {
             id: 'qoder',
             label: 'Qoder 全球区',
             enabled: true,
+            state: UpstreamState.READY,
             credential: create(CredentialStatusSchema, {
-              status: 'authenticated',
+              status: CredentialState.AUTHENTICATED,
             }),
           }),
         ],

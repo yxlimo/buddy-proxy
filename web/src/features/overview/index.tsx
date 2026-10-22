@@ -12,7 +12,10 @@ import {
   ErrorState,
   LoadingState,
 } from '@/components/async-state'
-import { StatusBadge } from '@/components/status-badge'
+import {
+  CredentialStateBadge,
+  UpstreamStateBadge,
+} from '@/features/upstreams/state-badge'
 import {
   Card,
   CardContent,
@@ -153,11 +156,9 @@ export function OverviewPage() {
                     ) : null}
                   </div>
                   <div className='flex shrink-0 flex-col items-end gap-1'>
-                    <StatusBadge
-                      status={upstream.enabled ? 'enabled' : 'disabled'}
-                    />
+                    <UpstreamStateBadge state={upstream.state} />
                     {upstream.credential ? (
-                      <StatusBadge status={upstream.credential.status} />
+                      <CredentialStateBadge status={upstream.credential.status} />
                     ) : null}
                     {upstream.balance ? (
                       <span className='text-xs font-mono'>

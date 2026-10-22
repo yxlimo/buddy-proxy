@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
+  CredentialState,
   CredentialStatusSchema,
   ListUpstreamsResponseSchema,
   UpstreamSchema,
+  UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { GroupPicker } from '@/features/models/group-picker'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -14,15 +16,21 @@ import { renderWithClient } from '@/test/render'
 function upstream(
   id: string,
   label: string,
-  options: { enabled?: boolean; status?: string; modelCount?: number } = {}
+  options: {
+    enabled?: boolean
+    state?: UpstreamState
+    credential?: CredentialState
+    modelCount?: number
+  } = {}
 ) {
   return create(UpstreamSchema, {
     id,
     label,
     enabled: options.enabled ?? true,
+    state: options.state ?? UpstreamState.READY,
     modelCount: options.modelCount ?? 0,
     credential: create(CredentialStatusSchema, {
-      status: options.status ?? 'authenticated',
+      status: options.credential ?? CredentialState.AUTHENTICATED,
       kind: 'session',
     }),
   })
@@ -31,10 +39,11 @@ function upstream(
 /**
  * 上游组下拉只列能用的上游。
  *
- * 能用 = 开着 + 凭据是已登录的。没登录的、关掉的都不列：填了也接不了。
+ * 能不能接由后端说（Upstream.state）。前端不再自己拼
+ * 「开着 && 登录了」——后端知道的事情比面板多（额度用尽、正在登录）。
  */
 describe('上游组下拉', () => {
-  it('只列开着而且已登录的上游', async () => {
+  it('只列 state 是 READY 的上游', async () => {
     const user = userEvent.setup()
     const client = mockAdminClient({
       ListUpstreams: () =>
@@ -42,14 +51,21 @@ describe('上游组下拉', () => {
           upstreams: [
             upstream('qoder', 'Qoder 全球区', { modelCount: 6 }),
             upstream('minimax', 'MiniMax Code', { modelCount: 2 }),
-            // 关掉的
-            upstream('qoder-cn', 'Qoder 中国区', { enabled: false }),
-            // 没登录的
-            upstream('workbuddy-cn', 'WorkBuddy 中国区', {
-              status: 'missing',
+            // 开关关着
+            upstream('qoder-cn', 'Qoder 中国区', {
+              enabled: false,
+              state: UpstreamState.DISABLED,
             }),
-            // 凭据过期的
-            upstream('tokenrhythm', 'TokenRhythm', { status: 'expired' }),
+            // 没登录
+            upstream('workbuddy-cn', 'WorkBuddy 中国区', {
+              state: UpstreamState.NO_CREDENTIAL,
+              credential: CredentialState.MISSING,
+            }),
+            // 登录过期了
+            upstream('tokenrhythm', 'TokenRhythm', {
+              state: UpstreamState.CREDENTIAL_EXPIRED,
+              credential: CredentialState.EXPIRED,
+            }),
           ],
         }),
     })
@@ -59,7 +75,6 @@ describe('上游组下拉', () => {
       children: <GroupPicker value='' onChange={() => {}} />,
     })
 
-    // 等上游列表到了（下拉在取数据的时候是灰的）。
     await waitFor(() => {
       expect(screen.getByRole('combobox')).toBeEnabled()
     })
@@ -75,19 +90,40 @@ describe('上游组下拉', () => {
     // 模型数也带上了
     expect(screen.getByText('Qoder 全球区（6 个模型）')).toBeInTheDocument()
 
-    // 不能用的不在
-    expect(screen.queryByText(/Qoder 中国区/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/WorkBuddy/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/TokenRhythm/)).not.toBeInTheDocument()
+    // 不能用的不在选项里（下面那几行只是说明为什么不能用）
+    expect(
+      screen.queryByRole('option', { name: /Qoder 中国区/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('option', { name: /WorkBuddy/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('option', { name: /TokenRhythm/ })
+    ).not.toBeInTheDocument()
+    // 但说得出为什么不能用。
+    expect(screen.getByText('Qoder 中国区：开关关着')).toBeInTheDocument()
+    expect(screen.getByText('WorkBuddy 中国区：没登录')).toBeInTheDocument()
+    expect(screen.getByText('TokenRhythm：登录过期了')).toBeInTheDocument()
   })
 
-  it('一个可用上游都没有的时候显示空状态', async () => {
+  it('说得出每个上游为什么不能选', async () => {
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
-            upstream('qoder-cn', 'Qoder 中国区', { enabled: false }),
-            upstream('minimax', 'MiniMax Code', { status: 'missing' }),
+            upstream('qoder-cn', 'Qoder 中国区', {
+              state: UpstreamState.DISABLED,
+            }),
+            upstream('minimax', 'MiniMax Code', {
+              state: UpstreamState.NO_CREDENTIAL,
+              credential: CredentialState.MISSING,
+            }),
+            upstream('tokenrhythm', 'TokenRhythm', {
+              state: UpstreamState.OUT_OF_CREDITS,
+            }),
+            upstream('workbuddy-cn', 'WorkBuddy 中国区', {
+              state: UpstreamState.LOGGING_IN,
+            }),
           ],
         }),
     })
@@ -100,7 +136,11 @@ describe('上游组下拉', () => {
     expect(
       await screen.findByText(/先在上游页登录并打开一个上游/)
     ).toBeInTheDocument()
-    // 下拉是灰的，点不开。
+    expect(screen.getByText('Qoder 中国区：开关关着')).toBeInTheDocument()
+    expect(screen.getByText('MiniMax Code：没登录')).toBeInTheDocument()
+    expect(screen.getByText('TokenRhythm：额度用完了')).toBeInTheDocument()
+    expect(screen.getByText('WorkBuddy 中国区：正在登录')).toBeInTheDocument()
+    // 一个可用上游都没有：下拉是灰的。
     expect(screen.getByRole('combobox')).toBeDisabled()
   })
 
@@ -139,7 +179,6 @@ describe('上游组下拉', () => {
       ),
     })
 
-    // 等上游列表到了（下拉在取数据的时候是灰的）。
     await waitFor(() => {
       expect(screen.getByRole('combobox')).toBeEnabled()
     })

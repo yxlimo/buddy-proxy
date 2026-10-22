@@ -4,6 +4,7 @@ import { screen } from '@testing-library/react'
 import {
   ListPublishedModelsResponseSchema,
   PublishedModelSchema,
+  UnpublishedReason,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { PublishedModelsPage } from '@/features/models/index'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -50,9 +51,75 @@ describe('主路由模型的公布数', () => {
       await screen.findByText('根路由现在公布 1 个（共 3 个）。')
     ).toBeInTheDocument()
 
-    // 没公布的要标出来。
-    expect(screen.getAllByText('未公布')).toHaveLength(2)
+    // 没公布的要标出来，还带原因。
+    expect(screen.getAllByText(/未公布/)).toHaveLength(2)
     expect(screen.queryByText('已公布')).not.toBeInTheDocument()
+  })
+
+  it('没公布的时候说清楚为什么', async () => {
+    const client = mockAdminClient({
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [
+            create(PublishedModelSchema, {
+              id: 'a',
+              displayName: 'A',
+              enabled: true,
+              published: false,
+              unpublishedReason: UnpublishedReason.UPSTREAM_DISABLED,
+            }),
+            create(PublishedModelSchema, {
+              id: 'b',
+              displayName: 'B',
+              enabled: true,
+              published: false,
+              unpublishedReason: UnpublishedReason.MODEL_GONE,
+            }),
+            create(PublishedModelSchema, {
+              id: 'c',
+              displayName: 'C',
+              enabled: true,
+              published: false,
+              unpublishedReason: UnpublishedReason.NO_TARGET,
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <PublishedModelsPage /> })
+
+    expect(
+      await screen.findByText('未公布：目标的上游关着')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('未公布：目标的上游不列这个模型了')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('未公布：没有能用的目标')
+    ).toBeInTheDocument()
+  })
+
+  it('公布了就没有那个徽章', async () => {
+    const client = mockAdminClient({
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [
+            create(PublishedModelSchema, {
+              id: 'a',
+              displayName: 'A',
+              enabled: true,
+              published: true,
+              // 公布了的时候 reason 是 0（JSON 里会被省掉）。
+              unpublishedReason: UnpublishedReason.UNSPECIFIED,
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <PublishedModelsPage /> })
+
+    await screen.findByText('根路由现在公布 1 个（共 1 个）。')
+    expect(screen.queryByText(/未公布/)).not.toBeInTheDocument()
   })
 
   it('全都公布的时候说公布了几个', async () => {

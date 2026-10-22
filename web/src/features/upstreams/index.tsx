@@ -5,7 +5,10 @@ import {
   ErrorState,
   LoadingState,
 } from '@/components/async-state'
-import { StatusBadge } from '@/components/status-badge'
+import {
+  CredentialStateBadge,
+  UpstreamStateBadge,
+} from '@/features/upstreams/state-badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -103,14 +106,12 @@ export function UpstreamsPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge
-                        status={upstream.enabled ? 'enabled' : 'disabled'}
-                      />
+                      <UpstreamStateBadge state={upstream.state} />
                     </TableCell>
                     <TableCell>
                       {upstream.credential ? (
                         <div className='grid gap-0.5'>
-                          <StatusBadge status={upstream.credential.status} />
+                          <CredentialStateBadge status={upstream.credential.status} />
                           <span className='text-xs text-muted-foreground'>
                             {upstream.credential.kind || '—'}
                             {upstream.credential.fingerprint

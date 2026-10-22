@@ -4,10 +4,12 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   CatalogModelSchema,
+  CredentialState,
   CredentialStatusSchema,
   ListModelsResponseSchema,
   ListUpstreamsResponseSchema,
   UpstreamSchema,
+  UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { ModelDialog } from '@/features/models/model-dialog'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -19,9 +21,10 @@ function usableUpstream(id: string, label: string) {
     id,
     label,
     enabled: true,
+    state: UpstreamState.READY,
     modelCount: 2,
     credential: create(CredentialStatusSchema, {
-      status: 'authenticated',
+      status: CredentialState.AUTHENTICATED,
       kind: 'session',
     }),
   })

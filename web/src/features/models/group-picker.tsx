@@ -1,6 +1,10 @@
 import { useMemo } from 'react'
 import { useUpstreams } from '@/features/upstreams/api'
 import {
+  UPSTREAM_STATE_HINTS,
+  isUpstreamReady,
+} from '@/features/upstreams/state'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -19,26 +23,24 @@ type GroupPickerProps = {
 /**
  * 上游组下拉。
  *
- * 只列「能用」的上游：开着、而且凭据是已登录的。没登录的、关掉的都不列 ——
- * 填了也接不了，不如先让用户去登录、去打开。
+ * 只列「能用」的上游：能不能接由后端说（Upstream.state 是 READY 才算）。
+ * 其余的上游不列，但要说清楚为什么不能选。
  *
  * 显示的是给人看的名字（上游的 label）加一句模型数；存的是组名。
  */
 export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
   const upstreams = useUpstreams()
 
-  const usable = useMemo(
-    () =>
-      (upstreams.data?.upstreams ?? []).filter(
-        (upstream) =>
-          upstream.enabled && upstream.credential?.status === 'authenticated'
-      ),
-    [upstreams.data]
+  const all = upstreams.data?.upstreams ?? []
+  const ready = useMemo(() => all.filter((u) => isUpstreamReady(u.state)), [all])
+  const unusable = useMemo(
+    () => all.filter((u) => !isUpstreamReady(u.state)),
+    [all]
   )
 
   // 草稿里的组现在不能用（比如上游被关了）：留着它，用户看得见自己填的是啥，
   // 也方便换回去。
-  const stale = value.trim() !== '' && !usable.some((u) => u.id === value)
+  const stale = value.trim() !== '' && !ready.some((u) => u.id === value)
 
   if (upstreams.isPending) {
     return (
@@ -52,34 +54,21 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
     )
   }
 
-  if (usable.length === 0 && !stale) {
-    return (
-      <div className='grid gap-1'>
-        <Select disabled value=''>
-          <SelectTrigger id={id} className='w-full'>
-            <SelectValue placeholder='没有可用的上游' />
-          </SelectTrigger>
-        </Select>
-        <p className='text-xs text-muted-foreground'>
-          先在上游页登录并打开一个上游，才有组可以选。
-        </p>
-      </div>
-    )
-  }
-
   return (
     <div className='grid gap-1'>
-      <Select value={value} onValueChange={onChange}>
+      <Select
+        value={value}
+        onValueChange={onChange}
+        disabled={ready.length === 0}
+      >
         <SelectTrigger id={id} className='w-full'>
           <SelectValue placeholder='选一个上游组' />
         </SelectTrigger>
         <SelectContent>
           {stale ? (
-            <SelectItem value={value}>
-              {value}（现在不能用）
-            </SelectItem>
+            <SelectItem value={value}>{value}（现在不能用）</SelectItem>
           ) : null}
-          {usable.map((upstream) => (
+          {ready.map((upstream) => (
             <SelectItem key={upstream.id} value={upstream.id}>
               {upstream.label || upstream.id}
               {upstream.modelCount > 0
@@ -89,10 +78,26 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
           ))}
         </SelectContent>
       </Select>
+
+      {ready.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>
+          先在上游页登录并打开一个上游，才有组可以选。
+        </p>
+      ) : null}
       {stale ? (
         <p className='text-xs text-muted-foreground'>
           现在选的这个组不能用（上游关着或者没登录），换一个吧。
         </p>
+      ) : null}
+      {/* 不能用的上游不列，但说清楚为什么。 */}
+      {unusable.length > 0 ? (
+        <ul className='space-y-0.5 text-xs text-muted-foreground'>
+          {unusable.map((upstream) => (
+            <li key={upstream.id}>
+              {`${upstream.label || upstream.id}：${UPSTREAM_STATE_HINTS[upstream.state] ?? '现在不能用'}`}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   )
