@@ -17,17 +17,20 @@ message Upstream {
   string id = 1;
   // 给人看的名字。
   string label = 2;
+  // 将要生效的值：面板改了但还没重启时，这里已经是改后的值。
   bool enabled = 3;
+  // 改过、还没重启。
+  bool pending = 4;
   // 这个上游现在公布了几个模型。
-  int32 model_count = 4;
+  int32 model_count = 5;
   // 凭据的状态摘要。
-  CredentialStatus credential = 5;
+  CredentialStatus credential = 6;
   // 余额的摘要，没有余额的上游不带这个。
-  BalanceSummary balance = 6;
+  BalanceSummary balance = 7;
   // 上游的地址。
-  string base_url = 7;
+  string base_url = 8;
   // 区域：cn / global。
-  string region = 8;
+  string region = 9;
 }
 
 // 凭据的状态。
@@ -61,6 +64,25 @@ message BalanceSummary {
   // Unix 毫秒。
   int64 next_expiry_at = 6;
   double expiring_cny = 7;
+  // 套餐额度：几个窗口，每个窗口剩多少。没有套餐的账号不带这个。
+  TokenPlan token_plan = 8;
+}
+
+// 套餐额度的一个窗口。
+message TokenPlanWindow {
+  // general / video。
+  string label = 1;
+  // 这个窗口里还剩多少个百分点。
+  int32 interval_percent = 2;
+  int32 weekly_percent = 3;
+  // Unix 毫秒。
+  int64 interval_ends_at = 4;
+  int64 weekly_ends_at = 5;
+}
+
+// 套餐额度。
+message TokenPlan {
+  repeated TokenPlanWindow windows = 1;
 }
 
 // 一笔赠金。
@@ -122,19 +144,21 @@ message ListConfigRequest {}
 
 message ConfigItem {
   string key = 1;
-  string value = 2;
+  // 给人看的名字：「MiniMax Code 上游」这种，不要把 env 的键名甩给人。
+  string label = 2;
+  string value = 3;
   // database / environment / default —— 这个值现在从哪来。
-  string source = 3;
+  string source = 4;
   // 这个键在代码里的默认值。不是上一个来源的值。
-  string fallback = 4;
+  string fallback = 5;
   // 归到面板的哪一组。
-  string group = 5;
-  string description = 6;
+  string group = 6;
+  string description = 7;
   // 这一项是不是敏感项。敏感项只写不读：value 不给真值。
-  bool secret = 7;
+  bool secret = 8;
   // 敏感项现在有没有值。留着空表示不改，别把掩码当值回传。
   // 敏感项的 value 是空串：只写不读，掩码长得像值。
-  bool has_value = 8;
+  bool has_value = 9;
 }
 
 message ListConfigResponse {
@@ -327,12 +351,12 @@ message PublishedTarget {
   // qoder / qoder-cn / workbuddy-cn / minimax / tokenrhythm
   string group_name = 1;
   string upstream_model = 2;
+  // 权重。越大越优先：先试权重大的，失败才试小的。
   int32 weight = 3;
-  int32 position = 4;
-  bool enabled = 5;
+  bool enabled = 4;
   // 这个目标分到了多少请求。只读：保存时会被网关自己的计数覆盖。
-  int64 requests = 6;
-  int64 failed = 7;
+  int64 requests = 5;
+  int64 failed = 6;
 }
 
 message ListPublishedModelsRequest {}

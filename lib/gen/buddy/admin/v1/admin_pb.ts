@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file buddy/admin/v1/admin.proto.
  */
 export const file_buddy_admin_v1_admin: GenFile = /*@__PURE__*/
-  fileDesc("ChpidWRkeS9hZG1pbi92MS9hZG1pbi5wcm90bxIOYnVkZHkuYWRtaW4udjEi1AEKCFVwc3RyZWFtEgoKAmlkGAEgASgJEg0KBWxhYmVsGAIgASgJEg8KB2VuYWJsZWQYAyABKAgSEwoLbW9kZWxfY291bnQYBCABKAUSNAoKY3JlZGVudGlhbBgFIAEoCzIgLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWxTdGF0dXMSLwoHYmFsYW5jZRgGIAEoCzIeLmJ1ZGR5LmFkbWluLnYxLkJhbGFuY2VTdW1tYXJ5EhAKCGJhc2VfdXJsGAcgASgJEg4KBnJlZ2lvbhgIIAEoCSKlAQoQQ3JlZGVudGlhbFN0YXR1cxIMCgRraW5kGAEgASgJEg4KBnN0YXR1cxgCIAEoCRITCgtmaW5nZXJwcmludBgDIAEoCRISCgpleHBpcmVzX2F0GAQgASgDEhUKDXJlbWFpbmluZ19zZWMYBSABKAMSDwoHd2FybmluZxgGIAEoCBIOCgZkZXRhaWwYByABKAkSEgoKZ2VuZXJhdGlvbhgIIAEoBSK5AQoOQmFsYW5jZVN1bW1hcnkSEwoLdXBzdHJlYW1faWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIVCg1hdmFpbGFibGVfY255GAMgASgBEhAKCGN1cnJlbmN5GAQgASgJEicKBGxvdHMYBSADKAsyGS5idWRkeS5hZG1pbi52MS5DcmVkaXRMb3QSFgoObmV4dF9leHBpcnlfYXQYBiABKAMSFAoMZXhwaXJpbmdfY255GAcgASgBImgKCUNyZWRpdExvdBIKCgJpZBgBIAEoCRIUCgxzb3VyY2VfbGFiZWwYAiABKAkSFQoNcmVtYWluaW5nX2NueRgDIAEoARISCgpleHBpcmVzX2F0GAQgASgDEg4KBnN0YXR1cxgFIAEoCSIYChZHZXRTeXN0ZW1TdGF0dXNSZXF1ZXN0IrwBChdHZXRTeXN0ZW1TdGF0dXNSZXNwb25zZRIPCgd2ZXJzaW9uGAEgASgJEisKCXVwc3RyZWFtcxgCIAMoCzIYLmJ1ZGR5LmFkbWluLnYxLlVwc3RyZWFtEhcKD3BlbmRpbmdfcmVzdGFydBgDIAEoCBISCgp1cHRpbWVfc2VjGAQgASgDEh0KFXB1Ymxpc2hlZF9tb2RlbF9jb3VudBgFIAEoBRIXCg9hZG1pbl90b2tlbl9zZXQYBiABKAgiFgoUUmVzdGFydFN5c3RlbVJlcXVlc3QiOgoVUmVzdGFydFN5c3RlbVJlc3BvbnNlEhAKCGFjY2VwdGVkGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiFgoUTGlzdFVwc3RyZWFtc1JlcXVlc3QiRAoVTGlzdFVwc3RyZWFtc1Jlc3BvbnNlEisKCXVwc3RyZWFtcxgBIAMoCzIYLmJ1ZGR5LmFkbWluLnYxLlVwc3RyZWFtIkEKGVNldFVwc3RyZWFtRW5hYmxlZFJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSDwoHZW5hYmxlZBgCIAEoCCJSChpTZXRVcHN0cmVhbUVuYWJsZWRSZXNwb25zZRIKCgJvaxgBIAEoCBIXCg9wZW5kaW5nX3Jlc3RhcnQYAiABKAgSDwoHbWVzc2FnZRgDIAEoCSITChFMaXN0Q29uZmlnUmVxdWVzdCKRAQoKQ29uZmlnSXRlbRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSDgoGc291cmNlGAMgASgJEhAKCGZhbGxiYWNrGAQgASgJEg0KBWdyb3VwGAUgASgJEhMKC2Rlc2NyaXB0aW9uGAYgASgJEg4KBnNlY3JldBgHIAEoCBIRCgloYXNfdmFsdWUYCCABKAgiWAoSTGlzdENvbmZpZ1Jlc3BvbnNlEikKBWl0ZW1zGAEgAygLMhouYnVkZHkuYWRtaW4udjEuQ29uZmlnSXRlbRIXCg9wZW5kaW5nX3Jlc3RhcnQYAiABKAgiPQoQU2V0Q29uZmlnUmVxdWVzdBILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSDQoFY2xlYXIYAyABKAgiSQoRU2V0Q29uZmlnUmVzcG9uc2USCgoCb2sYASABKAgSFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIEg8KB21lc3NhZ2UYAyABKAkipAEKB0FjY291bnQSCgoCaWQYASABKAkSEwoLdXBzdHJlYW1faWQYAiABKAkSDQoFbGFiZWwYAyABKAkSDgoGc3RhdHVzGAQgASgJEhgKEGNyZWRlbnRpYWxfY291bnQYBSABKAUSDgoGZGV0YWlsGAYgASgJEi8KB2JhbGFuY2UYByABKAsyHi5idWRkeS5hZG1pbi52MS5CYWxhbmNlU3VtbWFyeSIVChNMaXN0QWNjb3VudHNSZXF1ZXN0IkEKFExpc3RBY2NvdW50c1Jlc3BvbnNlEikKCGFjY291bnRzGAEgAygLMhcuYnVkZHkuYWRtaW4udjEuQWNjb3VudCL3AQoKQ3JlZGVudGlhbBIKCgJpZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhMKC3Vwc3RyZWFtX2lkGAMgASgJEgwKBGtpbmQYBCABKAkSDQoFbGFiZWwYBSABKAkSDgoGbWFza2VkGAYgASgJEhMKC2ZpbmdlcnByaW50GAcgASgJEg4KBnN0YXR1cxgIIAEoCRISCgpnZW5lcmF0aW9uGAkgASgFEhIKCmV4cGlyZXNfYXQYCiABKAMSEgoKbGFzdF9va19hdBgLIAEoAxISCgpsYXN0X2Vycm9yGAwgASgJEhIKCnVwZGF0ZWRfYXQYDSABKAMiLAoWTGlzdENyZWRlbnRpYWxzUmVxdWVzdBISCgphY2NvdW50X2lkGAEgASgJIkoKF0xpc3RDcmVkZW50aWFsc1Jlc3BvbnNlEi8KC2NyZWRlbnRpYWxzGAEgAygLMhouYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbCIuChVUZXN0Q3JlZGVudGlhbFJlcXVlc3QSFQoNY3JlZGVudGlhbF9pZBgBIAEoCSJJChZUZXN0Q3JlZGVudGlhbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkSEgoKY2hlY2tlZF9hdBgDIAEoAyIxChhSZWZyZXNoQ3JlZGVudGlhbFJlcXVlc3QSFQoNY3JlZGVudGlhbF9pZBgBIAEoCSJMChlSZWZyZXNoQ3JlZGVudGlhbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkSEgoKZ2VuZXJhdGlvbhgDIAEoBSIoChFHZXRCYWxhbmNlUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCSJGChJHZXRCYWxhbmNlUmVzcG9uc2USMAoIYmFsYW5jZXMYASADKAsyHi5idWRkeS5hZG1pbi52MS5CYWxhbmNlU3VtbWFyeSKnAQoMVXNhZ2VTdW1tYXJ5EhAKCHJlcXVlc3RzGAEgASgDEhEKCXN1Y2NlZWRlZBgCIAEoAxIOCgZmYWlsZWQYAyABKAMSFQoNcHJvbXB0X3Rva2VucxgEIAEoAxIZChFjb21wbGV0aW9uX3Rva2VucxgFIAEoAxIYChByZWFzb25pbmdfdG9rZW5zGAYgASgDEhYKDmxhdGVuY3lfbXNfc3VtGAcgASgDIj0KFkdldFVzYWdlU3VtbWFyeVJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSDgoGd2luZG93GAIgASgJItQBChdHZXRVc2FnZVN1bW1hcnlSZXNwb25zZRIrCgV0b3RhbBgBIAEoCzIcLmJ1ZGR5LmFkbWluLnYxLlVzYWdlU3VtbWFyeRIwCgtieV91cHN0cmVhbRgCIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0Ei0KCGJ5X21vZGVsGAMgAygLMhsuYnVkZHkuYWRtaW4udjEuVXNhZ2VCdWNrZXQSKwoGYnlfZGF5GAQgAygLMhsuYnVkZHkuYWRtaW4udjEuVXNhZ2VCdWNrZXQiSQoLVXNhZ2VCdWNrZXQSCwoDa2V5GAEgASgJEi0KB3N1bW1hcnkYAiABKAsyHC5idWRkeS5hZG1pbi52MS5Vc2FnZVN1bW1hcnkiXgoWTGlzdFVzYWdlRXZlbnRzUmVxdWVzdBINCgVsaW1pdBgBIAEoBRITCgt1cHN0cmVhbV9pZBgCIAEoCRINCgVtb2RlbBgDIAEoCRIRCgliZWZvcmVfaWQYBCABKAMi/QEKClVzYWdlRXZlbnQSCgoCaWQYASABKAMSCgoCdHMYAiABKAMSEwoLdXBzdHJlYW1faWQYAyABKAkSDQoFbW9kZWwYBCABKAkSEwoLYWdlbnRfbW9kZWwYBSABKAkSDwoHZGlhbGVjdBgGIAEoCRIOCgZjbGllbnQYByABKAkSFQoNcHJvbXB0X3Rva2VucxgIIAEoAxIZChFjb21wbGV0aW9uX3Rva2VucxgJIAEoAxIYChByZWFzb25pbmdfdG9rZW5zGAogASgDEhIKCmxhdGVuY3lfbXMYCyABKAMSDgoGc3RhdHVzGAwgASgJEg0KBWVycm9yGA0gASgJIkUKF0xpc3RVc2FnZUV2ZW50c1Jlc3BvbnNlEioKBmV2ZW50cxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLlVzYWdlRXZlbnQi5QIKDlB1Ymxpc2hlZE1vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIPCgdlbmFibGVkGAMgASgIEhAKCHN0cmF0ZWd5GAQgASgJEhsKDmNvbnRleHRfd2luZG93GAUgASgFSACIAQESHgoRbWF4X291dHB1dF90b2tlbnMYBiABKAVIAYgBARIWCglyZWFzb25pbmcYByABKAhIAogBARIWCgl0b29sX2NhbGwYCCABKAhIA4gBARIWCg5lZmZvcnRfb3B0aW9ucxgJIAMoCRIwCgd0YXJnZXRzGAogAygLMh8uYnVkZHkuYWRtaW4udjEuUHVibGlzaGVkVGFyZ2V0EhIKCnVwZGF0ZWRfYXQYCyABKANCEQoPX2NvbnRleHRfd2luZG93QhQKEl9tYXhfb3V0cHV0X3Rva2Vuc0IMCgpfcmVhc29uaW5nQgwKCl90b29sX2NhbGwikgEKD1B1Ymxpc2hlZFRhcmdldBISCgpncm91cF9uYW1lGAEgASgJEhYKDnVwc3RyZWFtX21vZGVsGAIgASgJEg4KBndlaWdodBgDIAEoBRIQCghwb3NpdGlvbhgEIAEoBRIPCgdlbmFibGVkGAUgASgIEhAKCHJlcXVlc3RzGAYgASgDEg4KBmZhaWxlZBgHIAEoAyIcChpMaXN0UHVibGlzaGVkTW9kZWxzUmVxdWVzdCJNChtMaXN0UHVibGlzaGVkTW9kZWxzUmVzcG9uc2USLgoGbW9kZWxzGAEgAygLMh4uYnVkZHkuYWRtaW4udjEuUHVibGlzaGVkTW9kZWwiSgoZU2F2ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBItCgVtb2RlbBgBIAEoCzIeLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZE1vZGVsIkUKGlNhdmVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEgoKAm9rGAEgASgIEgoKAmlkGAIgASgJEg8KB21lc3NhZ2UYAyABKAkiKQobRGVsZXRlUHVibGlzaGVkTW9kZWxSZXF1ZXN0EgoKAmlkGAEgASgJIjsKHERlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2USCgoCb2sYASABKAgSDwoHbWVzc2FnZRgCIAEoCSIZChdHZXRCZW5lZml0U3RhdHVzUmVxdWVzdCJ1Cg1CZW5lZml0U3RhdHVzEhMKC3Vwc3RyZWFtX2lkGAEgASgJEg8KB3N1bW1hcnkYAiABKAkSDQoFbGluZXMYAyADKAkSEgoKY2hlY2tlZF9hdBgEIAEoAxIPCgdjcmVkaXRzGAUgASgFEgoKAm9rGAYgASgIIksKGEdldEJlbmVmaXRTdGF0dXNSZXNwb25zZRIvCghiZW5lZml0cxgBIAMoCzIdLmJ1ZGR5LmFkbWluLnYxLkJlbmVmaXRTdGF0dXMiFgoUUnVuQmVuZWZpdE5vd1JlcXVlc3QiMgoVUnVuQmVuZWZpdE5vd1Jlc3BvbnNlEgoKAm9rGAEgASgIEg0KBWxpbmVzGAIgAygJIigKEUxpc3RNb2RlbHNSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJIrIBCgxDYXRhbG9nTW9kZWwSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhYKDmNvbnRleHRfd2luZG93GAMgASgFEhkKEW1heF9vdXRwdXRfdG9rZW5zGAQgASgFEhEKCXJlYXNvbmluZxgFIAEoCBIRCgl0b29sX2NhbGwYBiABKAgSFgoOZWZmb3J0X29wdGlvbnMYByADKAkSDwoHY3JlZGl0cxgIIAEoASJCChJMaXN0TW9kZWxzUmVzcG9uc2USLAoGbW9kZWxzGAEgAygLMhwuYnVkZHkuYWRtaW4udjEuQ2F0YWxvZ01vZGVsIi8KDlRhaWxMb2dSZXF1ZXN0Eg0KBWxpbmVzGAEgASgFEg4KBmZpbHRlchgCIAEoCSIgCg9UYWlsTG9nUmVzcG9uc2USDQoFbGluZXMYASADKAkynw8KDEFkbWluU2VydmljZRJiCg9HZXRTeXN0ZW1TdGF0dXMSJi5idWRkeS5hZG1pbi52MS5HZXRTeXN0ZW1TdGF0dXNSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuR2V0U3lzdGVtU3RhdHVzUmVzcG9uc2USXAoNUmVzdGFydFN5c3RlbRIkLmJ1ZGR5LmFkbWluLnYxLlJlc3RhcnRTeXN0ZW1SZXF1ZXN0GiUuYnVkZHkuYWRtaW4udjEuUmVzdGFydFN5c3RlbVJlc3BvbnNlElwKDUxpc3RVcHN0cmVhbXMSJC5idWRkeS5hZG1pbi52MS5MaXN0VXBzdHJlYW1zUmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLkxpc3RVcHN0cmVhbXNSZXNwb25zZRJrChJTZXRVcHN0cmVhbUVuYWJsZWQSKS5idWRkeS5hZG1pbi52MS5TZXRVcHN0cmVhbUVuYWJsZWRSZXF1ZXN0GiouYnVkZHkuYWRtaW4udjEuU2V0VXBzdHJlYW1FbmFibGVkUmVzcG9uc2USUwoKTGlzdENvbmZpZxIhLmJ1ZGR5LmFkbWluLnYxLkxpc3RDb25maWdSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuTGlzdENvbmZpZ1Jlc3BvbnNlElAKCVNldENvbmZpZxIgLmJ1ZGR5LmFkbWluLnYxLlNldENvbmZpZ1JlcXVlc3QaIS5idWRkeS5hZG1pbi52MS5TZXRDb25maWdSZXNwb25zZRJZCgxMaXN0QWNjb3VudHMSIy5idWRkeS5hZG1pbi52MS5MaXN0QWNjb3VudHNSZXF1ZXN0GiQuYnVkZHkuYWRtaW4udjEuTGlzdEFjY291bnRzUmVzcG9uc2USYgoPTGlzdENyZWRlbnRpYWxzEiYuYnVkZHkuYWRtaW4udjEuTGlzdENyZWRlbnRpYWxzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkxpc3RDcmVkZW50aWFsc1Jlc3BvbnNlEl8KDlRlc3RDcmVkZW50aWFsEiUuYnVkZHkuYWRtaW4udjEuVGVzdENyZWRlbnRpYWxSZXF1ZXN0GiYuYnVkZHkuYWRtaW4udjEuVGVzdENyZWRlbnRpYWxSZXNwb25zZRJoChFSZWZyZXNoQ3JlZGVudGlhbBIoLmJ1ZGR5LmFkbWluLnYxLlJlZnJlc2hDcmVkZW50aWFsUmVxdWVzdBopLmJ1ZGR5LmFkbWluLnYxLlJlZnJlc2hDcmVkZW50aWFsUmVzcG9uc2USUwoKR2V0QmFsYW5jZRIhLmJ1ZGR5LmFkbWluLnYxLkdldEJhbGFuY2VSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuR2V0QmFsYW5jZVJlc3BvbnNlEmIKD0dldFVzYWdlU3VtbWFyeRImLmJ1ZGR5LmFkbWluLnYxLkdldFVzYWdlU3VtbWFyeVJlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5HZXRVc2FnZVN1bW1hcnlSZXNwb25zZRJiCg9MaXN0VXNhZ2VFdmVudHMSJi5idWRkeS5hZG1pbi52MS5MaXN0VXNhZ2VFdmVudHNSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuTGlzdFVzYWdlRXZlbnRzUmVzcG9uc2USbgoTTGlzdFB1Ymxpc2hlZE1vZGVscxIqLmJ1ZGR5LmFkbWluLnYxLkxpc3RQdWJsaXNoZWRNb2RlbHNSZXF1ZXN0GisuYnVkZHkuYWRtaW4udjEuTGlzdFB1Ymxpc2hlZE1vZGVsc1Jlc3BvbnNlEmsKElNhdmVQdWJsaXNoZWRNb2RlbBIpLmJ1ZGR5LmFkbWluLnYxLlNhdmVQdWJsaXNoZWRNb2RlbFJlcXVlc3QaKi5idWRkeS5hZG1pbi52MS5TYXZlUHVibGlzaGVkTW9kZWxSZXNwb25zZRJxChREZWxldGVQdWJsaXNoZWRNb2RlbBIrLmJ1ZGR5LmFkbWluLnYxLkRlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBosLmJ1ZGR5LmFkbWluLnYxLkRlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2USZQoQR2V0QmVuZWZpdFN0YXR1cxInLmJ1ZGR5LmFkbWluLnYxLkdldEJlbmVmaXRTdGF0dXNSZXF1ZXN0GiguYnVkZHkuYWRtaW4udjEuR2V0QmVuZWZpdFN0YXR1c1Jlc3BvbnNlElwKDVJ1bkJlbmVmaXROb3cSJC5idWRkeS5hZG1pbi52MS5SdW5CZW5lZml0Tm93UmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLlJ1bkJlbmVmaXROb3dSZXNwb25zZRJTCgpMaXN0TW9kZWxzEiEuYnVkZHkuYWRtaW4udjEuTGlzdE1vZGVsc1JlcXVlc3QaIi5idWRkeS5hZG1pbi52MS5MaXN0TW9kZWxzUmVzcG9uc2USSgoHVGFpbExvZxIeLmJ1ZGR5LmFkbWluLnYxLlRhaWxMb2dSZXF1ZXN0Gh8uYnVkZHkuYWRtaW4udjEuVGFpbExvZ1Jlc3BvbnNlYgZwcm90bzM");
+  fileDesc("ChpidWRkeS9hZG1pbi92MS9hZG1pbi5wcm90bxIOYnVkZHkuYWRtaW4udjEi5QEKCFVwc3RyZWFtEgoKAmlkGAEgASgJEg0KBWxhYmVsGAIgASgJEg8KB2VuYWJsZWQYAyABKAgSDwoHcGVuZGluZxgEIAEoCBITCgttb2RlbF9jb3VudBgFIAEoBRI0CgpjcmVkZW50aWFsGAYgASgLMiAuYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbFN0YXR1cxIvCgdiYWxhbmNlGAcgASgLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkSEAoIYmFzZV91cmwYCCABKAkSDgoGcmVnaW9uGAkgASgJIqUBChBDcmVkZW50aWFsU3RhdHVzEgwKBGtpbmQYASABKAkSDgoGc3RhdHVzGAIgASgJEhMKC2ZpbmdlcnByaW50GAMgASgJEhIKCmV4cGlyZXNfYXQYBCABKAMSFQoNcmVtYWluaW5nX3NlYxgFIAEoAxIPCgd3YXJuaW5nGAYgASgIEg4KBmRldGFpbBgHIAEoCRISCgpnZW5lcmF0aW9uGAggASgFIugBCg5CYWxhbmNlU3VtbWFyeRITCgt1cHN0cmVhbV9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhUKDWF2YWlsYWJsZV9jbnkYAyABKAESEAoIY3VycmVuY3kYBCABKAkSJwoEbG90cxgFIAMoCzIZLmJ1ZGR5LmFkbWluLnYxLkNyZWRpdExvdBIWCg5uZXh0X2V4cGlyeV9hdBgGIAEoAxIUCgxleHBpcmluZ19jbnkYByABKAESLQoKdG9rZW5fcGxhbhgIIAEoCzIZLmJ1ZGR5LmFkbWluLnYxLlRva2VuUGxhbiKEAQoPVG9rZW5QbGFuV2luZG93Eg0KBWxhYmVsGAEgASgJEhgKEGludGVydmFsX3BlcmNlbnQYAiABKAUSFgoOd2Vla2x5X3BlcmNlbnQYAyABKAUSGAoQaW50ZXJ2YWxfZW5kc19hdBgEIAEoAxIWCg53ZWVrbHlfZW5kc19hdBgFIAEoAyI9CglUb2tlblBsYW4SMAoHd2luZG93cxgBIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlRva2VuUGxhbldpbmRvdyJoCglDcmVkaXRMb3QSCgoCaWQYASABKAkSFAoMc291cmNlX2xhYmVsGAIgASgJEhUKDXJlbWFpbmluZ19jbnkYAyABKAESEgoKZXhwaXJlc19hdBgEIAEoAxIOCgZzdGF0dXMYBSABKAkiGAoWR2V0U3lzdGVtU3RhdHVzUmVxdWVzdCK8AQoXR2V0U3lzdGVtU3RhdHVzUmVzcG9uc2USDwoHdmVyc2lvbhgBIAEoCRIrCgl1cHN0cmVhbXMYAiADKAsyGC5idWRkeS5hZG1pbi52MS5VcHN0cmVhbRIXCg9wZW5kaW5nX3Jlc3RhcnQYAyABKAgSEgoKdXB0aW1lX3NlYxgEIAEoAxIdChVwdWJsaXNoZWRfbW9kZWxfY291bnQYBSABKAUSFwoPYWRtaW5fdG9rZW5fc2V0GAYgASgIIhYKFFJlc3RhcnRTeXN0ZW1SZXF1ZXN0IjoKFVJlc3RhcnRTeXN0ZW1SZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoCBIPCgdtZXNzYWdlGAIgASgJIhYKFExpc3RVcHN0cmVhbXNSZXF1ZXN0IkQKFUxpc3RVcHN0cmVhbXNSZXNwb25zZRIrCgl1cHN0cmVhbXMYASADKAsyGC5idWRkeS5hZG1pbi52MS5VcHN0cmVhbSJBChlTZXRVcHN0cmVhbUVuYWJsZWRSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEg8KB2VuYWJsZWQYAiABKAgiUgoaU2V0VXBzdHJlYW1FbmFibGVkUmVzcG9uc2USCgoCb2sYASABKAgSFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIEg8KB21lc3NhZ2UYAyABKAkiEwoRTGlzdENvbmZpZ1JlcXVlc3QioAEKCkNvbmZpZ0l0ZW0SCwoDa2V5GAEgASgJEg0KBWxhYmVsGAIgASgJEg0KBXZhbHVlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIQCghmYWxsYmFjaxgFIAEoCRINCgVncm91cBgGIAEoCRITCgtkZXNjcmlwdGlvbhgHIAEoCRIOCgZzZWNyZXQYCCABKAgSEQoJaGFzX3ZhbHVlGAkgASgIIlgKEkxpc3RDb25maWdSZXNwb25zZRIpCgVpdGVtcxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNvbmZpZ0l0ZW0SFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIIj0KEFNldENvbmZpZ1JlcXVlc3QSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEg0KBWNsZWFyGAMgASgIIkkKEVNldENvbmZpZ1Jlc3BvbnNlEgoKAm9rGAEgASgIEhcKD3BlbmRpbmdfcmVzdGFydBgCIAEoCBIPCgdtZXNzYWdlGAMgASgJIqQBCgdBY2NvdW50EgoKAmlkGAEgASgJEhMKC3Vwc3RyZWFtX2lkGAIgASgJEg0KBWxhYmVsGAMgASgJEg4KBnN0YXR1cxgEIAEoCRIYChBjcmVkZW50aWFsX2NvdW50GAUgASgFEg4KBmRldGFpbBgGIAEoCRIvCgdiYWxhbmNlGAcgASgLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkiFQoTTGlzdEFjY291bnRzUmVxdWVzdCJBChRMaXN0QWNjb3VudHNSZXNwb25zZRIpCghhY2NvdW50cxgBIAMoCzIXLmJ1ZGR5LmFkbWluLnYxLkFjY291bnQi9wEKCkNyZWRlbnRpYWwSCgoCaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRITCgt1cHN0cmVhbV9pZBgDIAEoCRIMCgRraW5kGAQgASgJEg0KBWxhYmVsGAUgASgJEg4KBm1hc2tlZBgGIAEoCRITCgtmaW5nZXJwcmludBgHIAEoCRIOCgZzdGF0dXMYCCABKAkSEgoKZ2VuZXJhdGlvbhgJIAEoBRISCgpleHBpcmVzX2F0GAogASgDEhIKCmxhc3Rfb2tfYXQYCyABKAMSEgoKbGFzdF9lcnJvchgMIAEoCRISCgp1cGRhdGVkX2F0GA0gASgDIiwKFkxpc3RDcmVkZW50aWFsc1JlcXVlc3QSEgoKYWNjb3VudF9pZBgBIAEoCSJKChdMaXN0Q3JlZGVudGlhbHNSZXNwb25zZRIvCgtjcmVkZW50aWFscxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWwiLgoVVGVzdENyZWRlbnRpYWxSZXF1ZXN0EhUKDWNyZWRlbnRpYWxfaWQYASABKAkiSQoWVGVzdENyZWRlbnRpYWxSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEhIKCmNoZWNrZWRfYXQYAyABKAMiMQoYUmVmcmVzaENyZWRlbnRpYWxSZXF1ZXN0EhUKDWNyZWRlbnRpYWxfaWQYASABKAkiTAoZUmVmcmVzaENyZWRlbnRpYWxSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEhIKCmdlbmVyYXRpb24YAyABKAUiKAoRR2V0QmFsYW5jZVJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkiRgoSR2V0QmFsYW5jZVJlc3BvbnNlEjAKCGJhbGFuY2VzGAEgAygLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkipwEKDFVzYWdlU3VtbWFyeRIQCghyZXF1ZXN0cxgBIAEoAxIRCglzdWNjZWVkZWQYAiABKAMSDgoGZmFpbGVkGAMgASgDEhUKDXByb21wdF90b2tlbnMYBCABKAMSGQoRY29tcGxldGlvbl90b2tlbnMYBSABKAMSGAoQcmVhc29uaW5nX3Rva2VucxgGIAEoAxIWCg5sYXRlbmN5X21zX3N1bRgHIAEoAyI9ChZHZXRVc2FnZVN1bW1hcnlSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEg4KBndpbmRvdxgCIAEoCSLUAQoXR2V0VXNhZ2VTdW1tYXJ5UmVzcG9uc2USKwoFdG90YWwYASABKAsyHC5idWRkeS5hZG1pbi52MS5Vc2FnZVN1bW1hcnkSMAoLYnlfdXBzdHJlYW0YAiADKAsyGy5idWRkeS5hZG1pbi52MS5Vc2FnZUJ1Y2tldBItCghieV9tb2RlbBgDIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0EisKBmJ5X2RheRgEIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0IkkKC1VzYWdlQnVja2V0EgsKA2tleRgBIAEoCRItCgdzdW1tYXJ5GAIgASgLMhwuYnVkZHkuYWRtaW4udjEuVXNhZ2VTdW1tYXJ5Il4KFkxpc3RVc2FnZUV2ZW50c1JlcXVlc3QSDQoFbGltaXQYASABKAUSEwoLdXBzdHJlYW1faWQYAiABKAkSDQoFbW9kZWwYAyABKAkSEQoJYmVmb3JlX2lkGAQgASgDIv0BCgpVc2FnZUV2ZW50EgoKAmlkGAEgASgDEgoKAnRzGAIgASgDEhMKC3Vwc3RyZWFtX2lkGAMgASgJEg0KBW1vZGVsGAQgASgJEhMKC2FnZW50X21vZGVsGAUgASgJEg8KB2RpYWxlY3QYBiABKAkSDgoGY2xpZW50GAcgASgJEhUKDXByb21wdF90b2tlbnMYCCABKAMSGQoRY29tcGxldGlvbl90b2tlbnMYCSABKAMSGAoQcmVhc29uaW5nX3Rva2VucxgKIAEoAxISCgpsYXRlbmN5X21zGAsgASgDEg4KBnN0YXR1cxgMIAEoCRINCgVlcnJvchgNIAEoCSJFChdMaXN0VXNhZ2VFdmVudHNSZXNwb25zZRIqCgZldmVudHMYASADKAsyGi5idWRkeS5hZG1pbi52MS5Vc2FnZUV2ZW50IuUCCg5QdWJsaXNoZWRNb2RlbBIKCgJpZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSDwoHZW5hYmxlZBgDIAEoCBIQCghzdHJhdGVneRgEIAEoCRIbCg5jb250ZXh0X3dpbmRvdxgFIAEoBUgAiAEBEh4KEW1heF9vdXRwdXRfdG9rZW5zGAYgASgFSAGIAQESFgoJcmVhc29uaW5nGAcgASgISAKIAQESFgoJdG9vbF9jYWxsGAggASgISAOIAQESFgoOZWZmb3J0X29wdGlvbnMYCSADKAkSMAoHdGFyZ2V0cxgKIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZFRhcmdldBISCgp1cGRhdGVkX2F0GAsgASgDQhEKD19jb250ZXh0X3dpbmRvd0IUChJfbWF4X291dHB1dF90b2tlbnNCDAoKX3JlYXNvbmluZ0IMCgpfdG9vbF9jYWxsIoABCg9QdWJsaXNoZWRUYXJnZXQSEgoKZ3JvdXBfbmFtZRgBIAEoCRIWCg51cHN0cmVhbV9tb2RlbBgCIAEoCRIOCgZ3ZWlnaHQYAyABKAUSDwoHZW5hYmxlZBgEIAEoCBIQCghyZXF1ZXN0cxgFIAEoAxIOCgZmYWlsZWQYBiABKAMiHAoaTGlzdFB1Ymxpc2hlZE1vZGVsc1JlcXVlc3QiTQobTGlzdFB1Ymxpc2hlZE1vZGVsc1Jlc3BvbnNlEi4KBm1vZGVscxgBIAMoCzIeLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZE1vZGVsIkoKGVNhdmVQdWJsaXNoZWRNb2RlbFJlcXVlc3QSLQoFbW9kZWwYASABKAsyHi5idWRkeS5hZG1pbi52MS5QdWJsaXNoZWRNb2RlbCJFChpTYXZlUHVibGlzaGVkTW9kZWxSZXNwb25zZRIKCgJvaxgBIAEoCBIKCgJpZBgCIAEoCRIPCgdtZXNzYWdlGAMgASgJIikKG0RlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBIKCgJpZBgBIAEoCSI7ChxEZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiGQoXR2V0QmVuZWZpdFN0YXR1c1JlcXVlc3QidQoNQmVuZWZpdFN0YXR1cxITCgt1cHN0cmVhbV9pZBgBIAEoCRIPCgdzdW1tYXJ5GAIgASgJEg0KBWxpbmVzGAMgAygJEhIKCmNoZWNrZWRfYXQYBCABKAMSDwoHY3JlZGl0cxgFIAEoBRIKCgJvaxgGIAEoCCJLChhHZXRCZW5lZml0U3RhdHVzUmVzcG9uc2USLwoIYmVuZWZpdHMYASADKAsyHS5idWRkeS5hZG1pbi52MS5CZW5lZml0U3RhdHVzIhYKFFJ1bkJlbmVmaXROb3dSZXF1ZXN0IjIKFVJ1bkJlbmVmaXROb3dSZXNwb25zZRIKCgJvaxgBIAEoCBINCgVsaW5lcxgCIAMoCSIoChFMaXN0TW9kZWxzUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCSKyAQoMQ2F0YWxvZ01vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIWCg5jb250ZXh0X3dpbmRvdxgDIAEoBRIZChFtYXhfb3V0cHV0X3Rva2VucxgEIAEoBRIRCglyZWFzb25pbmcYBSABKAgSEQoJdG9vbF9jYWxsGAYgASgIEhYKDmVmZm9ydF9vcHRpb25zGAcgAygJEg8KB2NyZWRpdHMYCCABKAEiQgoSTGlzdE1vZGVsc1Jlc3BvbnNlEiwKBm1vZGVscxgBIAMoCzIcLmJ1ZGR5LmFkbWluLnYxLkNhdGFsb2dNb2RlbCIvCg5UYWlsTG9nUmVxdWVzdBINCgVsaW5lcxgBIAEoBRIOCgZmaWx0ZXIYAiABKAkiIAoPVGFpbExvZ1Jlc3BvbnNlEg0KBWxpbmVzGAEgAygJMp8PCgxBZG1pblNlcnZpY2USYgoPR2V0U3lzdGVtU3RhdHVzEiYuYnVkZHkuYWRtaW4udjEuR2V0U3lzdGVtU3RhdHVzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkdldFN5c3RlbVN0YXR1c1Jlc3BvbnNlElwKDVJlc3RhcnRTeXN0ZW0SJC5idWRkeS5hZG1pbi52MS5SZXN0YXJ0U3lzdGVtUmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLlJlc3RhcnRTeXN0ZW1SZXNwb25zZRJcCg1MaXN0VXBzdHJlYW1zEiQuYnVkZHkuYWRtaW4udjEuTGlzdFVwc3RyZWFtc1JlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5MaXN0VXBzdHJlYW1zUmVzcG9uc2USawoSU2V0VXBzdHJlYW1FbmFibGVkEikuYnVkZHkuYWRtaW4udjEuU2V0VXBzdHJlYW1FbmFibGVkUmVxdWVzdBoqLmJ1ZGR5LmFkbWluLnYxLlNldFVwc3RyZWFtRW5hYmxlZFJlc3BvbnNlElMKCkxpc3RDb25maWcSIS5idWRkeS5hZG1pbi52MS5MaXN0Q29uZmlnUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkxpc3RDb25maWdSZXNwb25zZRJQCglTZXRDb25maWcSIC5idWRkeS5hZG1pbi52MS5TZXRDb25maWdSZXF1ZXN0GiEuYnVkZHkuYWRtaW4udjEuU2V0Q29uZmlnUmVzcG9uc2USWQoMTGlzdEFjY291bnRzEiMuYnVkZHkuYWRtaW4udjEuTGlzdEFjY291bnRzUmVxdWVzdBokLmJ1ZGR5LmFkbWluLnYxLkxpc3RBY2NvdW50c1Jlc3BvbnNlEmIKD0xpc3RDcmVkZW50aWFscxImLmJ1ZGR5LmFkbWluLnYxLkxpc3RDcmVkZW50aWFsc1JlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5MaXN0Q3JlZGVudGlhbHNSZXNwb25zZRJfCg5UZXN0Q3JlZGVudGlhbBIlLmJ1ZGR5LmFkbWluLnYxLlRlc3RDcmVkZW50aWFsUmVxdWVzdBomLmJ1ZGR5LmFkbWluLnYxLlRlc3RDcmVkZW50aWFsUmVzcG9uc2USaAoRUmVmcmVzaENyZWRlbnRpYWwSKC5idWRkeS5hZG1pbi52MS5SZWZyZXNoQ3JlZGVudGlhbFJlcXVlc3QaKS5idWRkeS5hZG1pbi52MS5SZWZyZXNoQ3JlZGVudGlhbFJlc3BvbnNlElMKCkdldEJhbGFuY2USIS5idWRkeS5hZG1pbi52MS5HZXRCYWxhbmNlUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkdldEJhbGFuY2VSZXNwb25zZRJiCg9HZXRVc2FnZVN1bW1hcnkSJi5idWRkeS5hZG1pbi52MS5HZXRVc2FnZVN1bW1hcnlSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuR2V0VXNhZ2VTdW1tYXJ5UmVzcG9uc2USYgoPTGlzdFVzYWdlRXZlbnRzEiYuYnVkZHkuYWRtaW4udjEuTGlzdFVzYWdlRXZlbnRzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkxpc3RVc2FnZUV2ZW50c1Jlc3BvbnNlEm4KE0xpc3RQdWJsaXNoZWRNb2RlbHMSKi5idWRkeS5hZG1pbi52MS5MaXN0UHVibGlzaGVkTW9kZWxzUmVxdWVzdBorLmJ1ZGR5LmFkbWluLnYxLkxpc3RQdWJsaXNoZWRNb2RlbHNSZXNwb25zZRJrChJTYXZlUHVibGlzaGVkTW9kZWwSKS5idWRkeS5hZG1pbi52MS5TYXZlUHVibGlzaGVkTW9kZWxSZXF1ZXN0GiouYnVkZHkuYWRtaW4udjEuU2F2ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2UScQoURGVsZXRlUHVibGlzaGVkTW9kZWwSKy5idWRkeS5hZG1pbi52MS5EZWxldGVQdWJsaXNoZWRNb2RlbFJlcXVlc3QaLC5idWRkeS5hZG1pbi52MS5EZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEmUKEEdldEJlbmVmaXRTdGF0dXMSJy5idWRkeS5hZG1pbi52MS5HZXRCZW5lZml0U3RhdHVzUmVxdWVzdBooLmJ1ZGR5LmFkbWluLnYxLkdldEJlbmVmaXRTdGF0dXNSZXNwb25zZRJcCg1SdW5CZW5lZml0Tm93EiQuYnVkZHkuYWRtaW4udjEuUnVuQmVuZWZpdE5vd1JlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5SdW5CZW5lZml0Tm93UmVzcG9uc2USUwoKTGlzdE1vZGVscxIhLmJ1ZGR5LmFkbWluLnYxLkxpc3RNb2RlbHNSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuTGlzdE1vZGVsc1Jlc3BvbnNlEkoKB1RhaWxMb2cSHi5idWRkeS5hZG1pbi52MS5UYWlsTG9nUmVxdWVzdBofLmJ1ZGR5LmFkbWluLnYxLlRhaWxMb2dSZXNwb25zZWIGcHJvdG8z");
 
 /**
  * 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
@@ -39,42 +39,51 @@ export type Upstream = Message<"buddy.admin.v1.Upstream"> & {
   label: string;
 
   /**
+   * 将要生效的值：面板改了但还没重启时，这里已经是改后的值。
+   *
    * @generated from field: bool enabled = 3;
    */
   enabled: boolean;
 
   /**
+   * 改过、还没重启。
+   *
+   * @generated from field: bool pending = 4;
+   */
+  pending: boolean;
+
+  /**
    * 这个上游现在公布了几个模型。
    *
-   * @generated from field: int32 model_count = 4;
+   * @generated from field: int32 model_count = 5;
    */
   modelCount: number;
 
   /**
    * 凭据的状态摘要。
    *
-   * @generated from field: buddy.admin.v1.CredentialStatus credential = 5;
+   * @generated from field: buddy.admin.v1.CredentialStatus credential = 6;
    */
   credential?: CredentialStatus;
 
   /**
    * 余额的摘要，没有余额的上游不带这个。
    *
-   * @generated from field: buddy.admin.v1.BalanceSummary balance = 6;
+   * @generated from field: buddy.admin.v1.BalanceSummary balance = 7;
    */
   balance?: BalanceSummary;
 
   /**
    * 上游的地址。
    *
-   * @generated from field: string base_url = 7;
+   * @generated from field: string base_url = 8;
    */
   baseUrl: string;
 
   /**
    * 区域：cn / global。
    *
-   * @generated from field: string region = 8;
+   * @generated from field: string region = 9;
    */
   region: string;
 };
@@ -198,6 +207,13 @@ export type BalanceSummary = Message<"buddy.admin.v1.BalanceSummary"> & {
    * @generated from field: double expiring_cny = 7;
    */
   expiringCny: number;
+
+  /**
+   * 套餐额度：几个窗口，每个窗口剩多少。没有套餐的账号不带这个。
+   *
+   * @generated from field: buddy.admin.v1.TokenPlan token_plan = 8;
+   */
+  tokenPlan?: TokenPlan;
 };
 
 /**
@@ -206,6 +222,70 @@ export type BalanceSummary = Message<"buddy.admin.v1.BalanceSummary"> & {
  */
 export const BalanceSummarySchema: GenMessage<BalanceSummary> = /*@__PURE__*/
   messageDesc(file_buddy_admin_v1_admin, 2);
+
+/**
+ * 套餐额度的一个窗口。
+ *
+ * @generated from message buddy.admin.v1.TokenPlanWindow
+ */
+export type TokenPlanWindow = Message<"buddy.admin.v1.TokenPlanWindow"> & {
+  /**
+   * general / video。
+   *
+   * @generated from field: string label = 1;
+   */
+  label: string;
+
+  /**
+   * 这个窗口里还剩多少个百分点。
+   *
+   * @generated from field: int32 interval_percent = 2;
+   */
+  intervalPercent: number;
+
+  /**
+   * @generated from field: int32 weekly_percent = 3;
+   */
+  weeklyPercent: number;
+
+  /**
+   * Unix 毫秒。
+   *
+   * @generated from field: int64 interval_ends_at = 4;
+   */
+  intervalEndsAt: bigint;
+
+  /**
+   * @generated from field: int64 weekly_ends_at = 5;
+   */
+  weeklyEndsAt: bigint;
+};
+
+/**
+ * Describes the message buddy.admin.v1.TokenPlanWindow.
+ * Use `create(TokenPlanWindowSchema)` to create a new message.
+ */
+export const TokenPlanWindowSchema: GenMessage<TokenPlanWindow> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 3);
+
+/**
+ * 套餐额度。
+ *
+ * @generated from message buddy.admin.v1.TokenPlan
+ */
+export type TokenPlan = Message<"buddy.admin.v1.TokenPlan"> & {
+  /**
+   * @generated from field: repeated buddy.admin.v1.TokenPlanWindow windows = 1;
+   */
+  windows: TokenPlanWindow[];
+};
+
+/**
+ * Describes the message buddy.admin.v1.TokenPlan.
+ * Use `create(TokenPlanSchema)` to create a new message.
+ */
+export const TokenPlanSchema: GenMessage<TokenPlan> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 4);
 
 /**
  * 一笔赠金。
@@ -246,7 +326,7 @@ export type CreditLot = Message<"buddy.admin.v1.CreditLot"> & {
  * Use `create(CreditLotSchema)` to create a new message.
  */
 export const CreditLotSchema: GenMessage<CreditLot> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 3);
+  messageDesc(file_buddy_admin_v1_admin, 5);
 
 /**
  * @generated from message buddy.admin.v1.GetSystemStatusRequest
@@ -259,7 +339,7 @@ export type GetSystemStatusRequest = Message<"buddy.admin.v1.GetSystemStatusRequ
  * Use `create(GetSystemStatusRequestSchema)` to create a new message.
  */
 export const GetSystemStatusRequestSchema: GenMessage<GetSystemStatusRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 4);
+  messageDesc(file_buddy_admin_v1_admin, 6);
 
 /**
  * @generated from message buddy.admin.v1.GetSystemStatusResponse
@@ -307,7 +387,7 @@ export type GetSystemStatusResponse = Message<"buddy.admin.v1.GetSystemStatusRes
  * Use `create(GetSystemStatusResponseSchema)` to create a new message.
  */
 export const GetSystemStatusResponseSchema: GenMessage<GetSystemStatusResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 5);
+  messageDesc(file_buddy_admin_v1_admin, 7);
 
 /**
  * @generated from message buddy.admin.v1.RestartSystemRequest
@@ -320,7 +400,7 @@ export type RestartSystemRequest = Message<"buddy.admin.v1.RestartSystemRequest"
  * Use `create(RestartSystemRequestSchema)` to create a new message.
  */
 export const RestartSystemRequestSchema: GenMessage<RestartSystemRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 6);
+  messageDesc(file_buddy_admin_v1_admin, 8);
 
 /**
  * @generated from message buddy.admin.v1.RestartSystemResponse
@@ -342,7 +422,7 @@ export type RestartSystemResponse = Message<"buddy.admin.v1.RestartSystemRespons
  * Use `create(RestartSystemResponseSchema)` to create a new message.
  */
 export const RestartSystemResponseSchema: GenMessage<RestartSystemResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 7);
+  messageDesc(file_buddy_admin_v1_admin, 9);
 
 /**
  * @generated from message buddy.admin.v1.ListUpstreamsRequest
@@ -355,7 +435,7 @@ export type ListUpstreamsRequest = Message<"buddy.admin.v1.ListUpstreamsRequest"
  * Use `create(ListUpstreamsRequestSchema)` to create a new message.
  */
 export const ListUpstreamsRequestSchema: GenMessage<ListUpstreamsRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 8);
+  messageDesc(file_buddy_admin_v1_admin, 10);
 
 /**
  * @generated from message buddy.admin.v1.ListUpstreamsResponse
@@ -372,7 +452,7 @@ export type ListUpstreamsResponse = Message<"buddy.admin.v1.ListUpstreamsRespons
  * Use `create(ListUpstreamsResponseSchema)` to create a new message.
  */
 export const ListUpstreamsResponseSchema: GenMessage<ListUpstreamsResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 9);
+  messageDesc(file_buddy_admin_v1_admin, 11);
 
 /**
  * @generated from message buddy.admin.v1.SetUpstreamEnabledRequest
@@ -394,7 +474,7 @@ export type SetUpstreamEnabledRequest = Message<"buddy.admin.v1.SetUpstreamEnabl
  * Use `create(SetUpstreamEnabledRequestSchema)` to create a new message.
  */
 export const SetUpstreamEnabledRequestSchema: GenMessage<SetUpstreamEnabledRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 10);
+  messageDesc(file_buddy_admin_v1_admin, 12);
 
 /**
  * @generated from message buddy.admin.v1.SetUpstreamEnabledResponse
@@ -423,7 +503,7 @@ export type SetUpstreamEnabledResponse = Message<"buddy.admin.v1.SetUpstreamEnab
  * Use `create(SetUpstreamEnabledResponseSchema)` to create a new message.
  */
 export const SetUpstreamEnabledResponseSchema: GenMessage<SetUpstreamEnabledResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 11);
+  messageDesc(file_buddy_admin_v1_admin, 13);
 
 /**
  * @generated from message buddy.admin.v1.ListConfigRequest
@@ -436,7 +516,7 @@ export type ListConfigRequest = Message<"buddy.admin.v1.ListConfigRequest"> & {
  * Use `create(ListConfigRequestSchema)` to create a new message.
  */
 export const ListConfigRequestSchema: GenMessage<ListConfigRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 12);
+  messageDesc(file_buddy_admin_v1_admin, 14);
 
 /**
  * @generated from message buddy.admin.v1.ConfigItem
@@ -448,40 +528,47 @@ export type ConfigItem = Message<"buddy.admin.v1.ConfigItem"> & {
   key: string;
 
   /**
-   * @generated from field: string value = 2;
+   * 给人看的名字：「MiniMax Code 上游」这种，不要把 env 的键名甩给人。
+   *
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: string value = 3;
    */
   value: string;
 
   /**
    * database / environment / default —— 这个值现在从哪来。
    *
-   * @generated from field: string source = 3;
+   * @generated from field: string source = 4;
    */
   source: string;
 
   /**
    * 这个键在代码里的默认值。不是上一个来源的值。
    *
-   * @generated from field: string fallback = 4;
+   * @generated from field: string fallback = 5;
    */
   fallback: string;
 
   /**
    * 归到面板的哪一组。
    *
-   * @generated from field: string group = 5;
+   * @generated from field: string group = 6;
    */
   group: string;
 
   /**
-   * @generated from field: string description = 6;
+   * @generated from field: string description = 7;
    */
   description: string;
 
   /**
    * 这一项是不是敏感项。敏感项只写不读：value 不给真值。
    *
-   * @generated from field: bool secret = 7;
+   * @generated from field: bool secret = 8;
    */
   secret: boolean;
 
@@ -489,7 +576,7 @@ export type ConfigItem = Message<"buddy.admin.v1.ConfigItem"> & {
    * 敏感项现在有没有值。留着空表示不改，别把掩码当值回传。
    * 敏感项的 value 是空串：只写不读，掩码长得像值。
    *
-   * @generated from field: bool has_value = 8;
+   * @generated from field: bool has_value = 9;
    */
   hasValue: boolean;
 };
@@ -499,7 +586,7 @@ export type ConfigItem = Message<"buddy.admin.v1.ConfigItem"> & {
  * Use `create(ConfigItemSchema)` to create a new message.
  */
 export const ConfigItemSchema: GenMessage<ConfigItem> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 13);
+  messageDesc(file_buddy_admin_v1_admin, 15);
 
 /**
  * @generated from message buddy.admin.v1.ListConfigResponse
@@ -521,7 +608,7 @@ export type ListConfigResponse = Message<"buddy.admin.v1.ListConfigResponse"> & 
  * Use `create(ListConfigResponseSchema)` to create a new message.
  */
 export const ListConfigResponseSchema: GenMessage<ListConfigResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 14);
+  messageDesc(file_buddy_admin_v1_admin, 16);
 
 /**
  * @generated from message buddy.admin.v1.SetConfigRequest
@@ -550,7 +637,7 @@ export type SetConfigRequest = Message<"buddy.admin.v1.SetConfigRequest"> & {
  * Use `create(SetConfigRequestSchema)` to create a new message.
  */
 export const SetConfigRequestSchema: GenMessage<SetConfigRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 15);
+  messageDesc(file_buddy_admin_v1_admin, 17);
 
 /**
  * @generated from message buddy.admin.v1.SetConfigResponse
@@ -577,7 +664,7 @@ export type SetConfigResponse = Message<"buddy.admin.v1.SetConfigResponse"> & {
  * Use `create(SetConfigResponseSchema)` to create a new message.
  */
 export const SetConfigResponseSchema: GenMessage<SetConfigResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 16);
+  messageDesc(file_buddy_admin_v1_admin, 18);
 
 /**
  * 一个账号：上游的一个登录身份。
@@ -630,7 +717,7 @@ export type Account = Message<"buddy.admin.v1.Account"> & {
  * Use `create(AccountSchema)` to create a new message.
  */
 export const AccountSchema: GenMessage<Account> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 17);
+  messageDesc(file_buddy_admin_v1_admin, 19);
 
 /**
  * @generated from message buddy.admin.v1.ListAccountsRequest
@@ -643,7 +730,7 @@ export type ListAccountsRequest = Message<"buddy.admin.v1.ListAccountsRequest"> 
  * Use `create(ListAccountsRequestSchema)` to create a new message.
  */
 export const ListAccountsRequestSchema: GenMessage<ListAccountsRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 18);
+  messageDesc(file_buddy_admin_v1_admin, 20);
 
 /**
  * @generated from message buddy.admin.v1.ListAccountsResponse
@@ -660,7 +747,7 @@ export type ListAccountsResponse = Message<"buddy.admin.v1.ListAccountsResponse"
  * Use `create(ListAccountsResponseSchema)` to create a new message.
  */
 export const ListAccountsResponseSchema: GenMessage<ListAccountsResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 19);
+  messageDesc(file_buddy_admin_v1_admin, 21);
 
 /**
  * 一条凭据：refresh token、API key、cookie 之类。
@@ -747,7 +834,7 @@ export type Credential = Message<"buddy.admin.v1.Credential"> & {
  * Use `create(CredentialSchema)` to create a new message.
  */
 export const CredentialSchema: GenMessage<Credential> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 20);
+  messageDesc(file_buddy_admin_v1_admin, 22);
 
 /**
  * @generated from message buddy.admin.v1.ListCredentialsRequest
@@ -766,7 +853,7 @@ export type ListCredentialsRequest = Message<"buddy.admin.v1.ListCredentialsRequ
  * Use `create(ListCredentialsRequestSchema)` to create a new message.
  */
 export const ListCredentialsRequestSchema: GenMessage<ListCredentialsRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 21);
+  messageDesc(file_buddy_admin_v1_admin, 23);
 
 /**
  * @generated from message buddy.admin.v1.ListCredentialsResponse
@@ -783,7 +870,7 @@ export type ListCredentialsResponse = Message<"buddy.admin.v1.ListCredentialsRes
  * Use `create(ListCredentialsResponseSchema)` to create a new message.
  */
 export const ListCredentialsResponseSchema: GenMessage<ListCredentialsResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 22);
+  messageDesc(file_buddy_admin_v1_admin, 24);
 
 /**
  * @generated from message buddy.admin.v1.TestCredentialRequest
@@ -800,7 +887,7 @@ export type TestCredentialRequest = Message<"buddy.admin.v1.TestCredentialReques
  * Use `create(TestCredentialRequestSchema)` to create a new message.
  */
 export const TestCredentialRequestSchema: GenMessage<TestCredentialRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 23);
+  messageDesc(file_buddy_admin_v1_admin, 25);
 
 /**
  * @generated from message buddy.admin.v1.TestCredentialResponse
@@ -829,7 +916,7 @@ export type TestCredentialResponse = Message<"buddy.admin.v1.TestCredentialRespo
  * Use `create(TestCredentialResponseSchema)` to create a new message.
  */
 export const TestCredentialResponseSchema: GenMessage<TestCredentialResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 24);
+  messageDesc(file_buddy_admin_v1_admin, 26);
 
 /**
  * @generated from message buddy.admin.v1.RefreshCredentialRequest
@@ -846,7 +933,7 @@ export type RefreshCredentialRequest = Message<"buddy.admin.v1.RefreshCredential
  * Use `create(RefreshCredentialRequestSchema)` to create a new message.
  */
 export const RefreshCredentialRequestSchema: GenMessage<RefreshCredentialRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 25);
+  messageDesc(file_buddy_admin_v1_admin, 27);
 
 /**
  * @generated from message buddy.admin.v1.RefreshCredentialResponse
@@ -873,7 +960,7 @@ export type RefreshCredentialResponse = Message<"buddy.admin.v1.RefreshCredentia
  * Use `create(RefreshCredentialResponseSchema)` to create a new message.
  */
 export const RefreshCredentialResponseSchema: GenMessage<RefreshCredentialResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 26);
+  messageDesc(file_buddy_admin_v1_admin, 28);
 
 /**
  * @generated from message buddy.admin.v1.GetBalanceRequest
@@ -890,7 +977,7 @@ export type GetBalanceRequest = Message<"buddy.admin.v1.GetBalanceRequest"> & {
  * Use `create(GetBalanceRequestSchema)` to create a new message.
  */
 export const GetBalanceRequestSchema: GenMessage<GetBalanceRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 27);
+  messageDesc(file_buddy_admin_v1_admin, 29);
 
 /**
  * @generated from message buddy.admin.v1.GetBalanceResponse
@@ -907,7 +994,7 @@ export type GetBalanceResponse = Message<"buddy.admin.v1.GetBalanceResponse"> & 
  * Use `create(GetBalanceResponseSchema)` to create a new message.
  */
 export const GetBalanceResponseSchema: GenMessage<GetBalanceResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 28);
+  messageDesc(file_buddy_admin_v1_admin, 30);
 
 /**
  * @generated from message buddy.admin.v1.UsageSummary
@@ -954,7 +1041,7 @@ export type UsageSummary = Message<"buddy.admin.v1.UsageSummary"> & {
  * Use `create(UsageSummarySchema)` to create a new message.
  */
 export const UsageSummarySchema: GenMessage<UsageSummary> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 29);
+  messageDesc(file_buddy_admin_v1_admin, 31);
 
 /**
  * @generated from message buddy.admin.v1.GetUsageSummaryRequest
@@ -980,7 +1067,7 @@ export type GetUsageSummaryRequest = Message<"buddy.admin.v1.GetUsageSummaryRequ
  * Use `create(GetUsageSummaryRequestSchema)` to create a new message.
  */
 export const GetUsageSummaryRequestSchema: GenMessage<GetUsageSummaryRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 30);
+  messageDesc(file_buddy_admin_v1_admin, 32);
 
 /**
  * @generated from message buddy.admin.v1.GetUsageSummaryResponse
@@ -1018,7 +1105,7 @@ export type GetUsageSummaryResponse = Message<"buddy.admin.v1.GetUsageSummaryRes
  * Use `create(GetUsageSummaryResponseSchema)` to create a new message.
  */
 export const GetUsageSummaryResponseSchema: GenMessage<GetUsageSummaryResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 31);
+  messageDesc(file_buddy_admin_v1_admin, 33);
 
 /**
  * @generated from message buddy.admin.v1.UsageBucket
@@ -1040,7 +1127,7 @@ export type UsageBucket = Message<"buddy.admin.v1.UsageBucket"> & {
  * Use `create(UsageBucketSchema)` to create a new message.
  */
 export const UsageBucketSchema: GenMessage<UsageBucket> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 32);
+  messageDesc(file_buddy_admin_v1_admin, 34);
 
 /**
  * @generated from message buddy.admin.v1.ListUsageEventsRequest
@@ -1074,7 +1161,7 @@ export type ListUsageEventsRequest = Message<"buddy.admin.v1.ListUsageEventsRequ
  * Use `create(ListUsageEventsRequestSchema)` to create a new message.
  */
 export const ListUsageEventsRequestSchema: GenMessage<ListUsageEventsRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 33);
+  messageDesc(file_buddy_admin_v1_admin, 35);
 
 /**
  * @generated from message buddy.admin.v1.UsageEvent
@@ -1159,7 +1246,7 @@ export type UsageEvent = Message<"buddy.admin.v1.UsageEvent"> & {
  * Use `create(UsageEventSchema)` to create a new message.
  */
 export const UsageEventSchema: GenMessage<UsageEvent> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 34);
+  messageDesc(file_buddy_admin_v1_admin, 36);
 
 /**
  * @generated from message buddy.admin.v1.ListUsageEventsResponse
@@ -1176,7 +1263,7 @@ export type ListUsageEventsResponse = Message<"buddy.admin.v1.ListUsageEventsRes
  * Use `create(ListUsageEventsResponseSchema)` to create a new message.
  */
 export const ListUsageEventsResponseSchema: GenMessage<ListUsageEventsResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 35);
+  messageDesc(file_buddy_admin_v1_admin, 37);
 
 /**
  * 一个公布出来的模型：对外的 id 背后有哪几个上游模型。
@@ -1251,7 +1338,7 @@ export type PublishedModel = Message<"buddy.admin.v1.PublishedModel"> & {
  * Use `create(PublishedModelSchema)` to create a new message.
  */
 export const PublishedModelSchema: GenMessage<PublishedModel> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 36);
+  messageDesc(file_buddy_admin_v1_admin, 38);
 
 /**
  * @generated from message buddy.admin.v1.PublishedTarget
@@ -1270,29 +1357,26 @@ export type PublishedTarget = Message<"buddy.admin.v1.PublishedTarget"> & {
   upstreamModel: string;
 
   /**
+   * 权重。越大越优先：先试权重大的，失败才试小的。
+   *
    * @generated from field: int32 weight = 3;
    */
   weight: number;
 
   /**
-   * @generated from field: int32 position = 4;
-   */
-  position: number;
-
-  /**
-   * @generated from field: bool enabled = 5;
+   * @generated from field: bool enabled = 4;
    */
   enabled: boolean;
 
   /**
    * 这个目标分到了多少请求。只读：保存时会被网关自己的计数覆盖。
    *
-   * @generated from field: int64 requests = 6;
+   * @generated from field: int64 requests = 5;
    */
   requests: bigint;
 
   /**
-   * @generated from field: int64 failed = 7;
+   * @generated from field: int64 failed = 6;
    */
   failed: bigint;
 };
@@ -1302,7 +1386,7 @@ export type PublishedTarget = Message<"buddy.admin.v1.PublishedTarget"> & {
  * Use `create(PublishedTargetSchema)` to create a new message.
  */
 export const PublishedTargetSchema: GenMessage<PublishedTarget> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 37);
+  messageDesc(file_buddy_admin_v1_admin, 39);
 
 /**
  * @generated from message buddy.admin.v1.ListPublishedModelsRequest
@@ -1315,7 +1399,7 @@ export type ListPublishedModelsRequest = Message<"buddy.admin.v1.ListPublishedMo
  * Use `create(ListPublishedModelsRequestSchema)` to create a new message.
  */
 export const ListPublishedModelsRequestSchema: GenMessage<ListPublishedModelsRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 38);
+  messageDesc(file_buddy_admin_v1_admin, 40);
 
 /**
  * @generated from message buddy.admin.v1.ListPublishedModelsResponse
@@ -1332,7 +1416,7 @@ export type ListPublishedModelsResponse = Message<"buddy.admin.v1.ListPublishedM
  * Use `create(ListPublishedModelsResponseSchema)` to create a new message.
  */
 export const ListPublishedModelsResponseSchema: GenMessage<ListPublishedModelsResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 39);
+  messageDesc(file_buddy_admin_v1_admin, 41);
 
 /**
  * @generated from message buddy.admin.v1.SavePublishedModelRequest
@@ -1351,7 +1435,7 @@ export type SavePublishedModelRequest = Message<"buddy.admin.v1.SavePublishedMod
  * Use `create(SavePublishedModelRequestSchema)` to create a new message.
  */
 export const SavePublishedModelRequestSchema: GenMessage<SavePublishedModelRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 40);
+  messageDesc(file_buddy_admin_v1_admin, 42);
 
 /**
  * @generated from message buddy.admin.v1.SavePublishedModelResponse
@@ -1378,7 +1462,7 @@ export type SavePublishedModelResponse = Message<"buddy.admin.v1.SavePublishedMo
  * Use `create(SavePublishedModelResponseSchema)` to create a new message.
  */
 export const SavePublishedModelResponseSchema: GenMessage<SavePublishedModelResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 41);
+  messageDesc(file_buddy_admin_v1_admin, 43);
 
 /**
  * @generated from message buddy.admin.v1.DeletePublishedModelRequest
@@ -1395,7 +1479,7 @@ export type DeletePublishedModelRequest = Message<"buddy.admin.v1.DeletePublishe
  * Use `create(DeletePublishedModelRequestSchema)` to create a new message.
  */
 export const DeletePublishedModelRequestSchema: GenMessage<DeletePublishedModelRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 42);
+  messageDesc(file_buddy_admin_v1_admin, 44);
 
 /**
  * @generated from message buddy.admin.v1.DeletePublishedModelResponse
@@ -1417,7 +1501,7 @@ export type DeletePublishedModelResponse = Message<"buddy.admin.v1.DeletePublish
  * Use `create(DeletePublishedModelResponseSchema)` to create a new message.
  */
 export const DeletePublishedModelResponseSchema: GenMessage<DeletePublishedModelResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 43);
+  messageDesc(file_buddy_admin_v1_admin, 45);
 
 /**
  * @generated from message buddy.admin.v1.GetBenefitStatusRequest
@@ -1430,7 +1514,7 @@ export type GetBenefitStatusRequest = Message<"buddy.admin.v1.GetBenefitStatusRe
  * Use `create(GetBenefitStatusRequestSchema)` to create a new message.
  */
 export const GetBenefitStatusRequestSchema: GenMessage<GetBenefitStatusRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 44);
+  messageDesc(file_buddy_admin_v1_admin, 46);
 
 /**
  * @generated from message buddy.admin.v1.BenefitStatus
@@ -1474,7 +1558,7 @@ export type BenefitStatus = Message<"buddy.admin.v1.BenefitStatus"> & {
  * Use `create(BenefitStatusSchema)` to create a new message.
  */
 export const BenefitStatusSchema: GenMessage<BenefitStatus> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 45);
+  messageDesc(file_buddy_admin_v1_admin, 47);
 
 /**
  * @generated from message buddy.admin.v1.GetBenefitStatusResponse
@@ -1491,7 +1575,7 @@ export type GetBenefitStatusResponse = Message<"buddy.admin.v1.GetBenefitStatusR
  * Use `create(GetBenefitStatusResponseSchema)` to create a new message.
  */
 export const GetBenefitStatusResponseSchema: GenMessage<GetBenefitStatusResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 46);
+  messageDesc(file_buddy_admin_v1_admin, 48);
 
 /**
  * @generated from message buddy.admin.v1.RunBenefitNowRequest
@@ -1504,7 +1588,7 @@ export type RunBenefitNowRequest = Message<"buddy.admin.v1.RunBenefitNowRequest"
  * Use `create(RunBenefitNowRequestSchema)` to create a new message.
  */
 export const RunBenefitNowRequestSchema: GenMessage<RunBenefitNowRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 47);
+  messageDesc(file_buddy_admin_v1_admin, 49);
 
 /**
  * @generated from message buddy.admin.v1.RunBenefitNowResponse
@@ -1526,7 +1610,7 @@ export type RunBenefitNowResponse = Message<"buddy.admin.v1.RunBenefitNowRespons
  * Use `create(RunBenefitNowResponseSchema)` to create a new message.
  */
 export const RunBenefitNowResponseSchema: GenMessage<RunBenefitNowResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 48);
+  messageDesc(file_buddy_admin_v1_admin, 50);
 
 /**
  * @generated from message buddy.admin.v1.ListModelsRequest
@@ -1543,7 +1627,7 @@ export type ListModelsRequest = Message<"buddy.admin.v1.ListModelsRequest"> & {
  * Use `create(ListModelsRequestSchema)` to create a new message.
  */
 export const ListModelsRequestSchema: GenMessage<ListModelsRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 49);
+  messageDesc(file_buddy_admin_v1_admin, 51);
 
 /**
  * @generated from message buddy.admin.v1.CatalogModel
@@ -1597,7 +1681,7 @@ export type CatalogModel = Message<"buddy.admin.v1.CatalogModel"> & {
  * Use `create(CatalogModelSchema)` to create a new message.
  */
 export const CatalogModelSchema: GenMessage<CatalogModel> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 50);
+  messageDesc(file_buddy_admin_v1_admin, 52);
 
 /**
  * @generated from message buddy.admin.v1.ListModelsResponse
@@ -1614,7 +1698,7 @@ export type ListModelsResponse = Message<"buddy.admin.v1.ListModelsResponse"> & 
  * Use `create(ListModelsResponseSchema)` to create a new message.
  */
 export const ListModelsResponseSchema: GenMessage<ListModelsResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 51);
+  messageDesc(file_buddy_admin_v1_admin, 53);
 
 /**
  * @generated from message buddy.admin.v1.TailLogRequest
@@ -1638,7 +1722,7 @@ export type TailLogRequest = Message<"buddy.admin.v1.TailLogRequest"> & {
  * Use `create(TailLogRequestSchema)` to create a new message.
  */
 export const TailLogRequestSchema: GenMessage<TailLogRequest> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 52);
+  messageDesc(file_buddy_admin_v1_admin, 54);
 
 /**
  * @generated from message buddy.admin.v1.TailLogResponse
@@ -1655,7 +1739,7 @@ export type TailLogResponse = Message<"buddy.admin.v1.TailLogResponse"> & {
  * Use `create(TailLogResponseSchema)` to create a new message.
  */
 export const TailLogResponseSchema: GenMessage<TailLogResponse> = /*@__PURE__*/
-  messageDesc(file_buddy_admin_v1_admin, 53);
+  messageDesc(file_buddy_admin_v1_admin, 55);
 
 /**
  * @generated from service buddy.admin.v1.AdminService
