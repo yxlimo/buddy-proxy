@@ -24,6 +24,10 @@ run = "bash test/smoke.sh"
 description = "Run the tests for the published models"
 run = "bash test/aggregate.sh"
 
+[tasks."test:admin"]
+description = "Run the tests for the panel's API (Connect)"
+run = "node --experimental-strip-types test/admin-check.ts"
+
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract"
 run = "buf generate"

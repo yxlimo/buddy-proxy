@@ -226,20 +226,37 @@ The root route's inference is OpenAI only.
 |--------|------|--------------|
 | `GET`  | `/v1/models` | the published models |
 | `POST` | `/v1/chat/completions` | a published model, with the fallback |
-| `POST` | `/admin/reload` | read the settings and the published models again |
-| `GET`  | `/admin/models` | the published models, for the panel |
-| `POST` | `/admin/models` | save a published model |
-| `DELETE` | `/admin/models/:id` | forget a published model |
-| `GET`  | `/admin/usage` | where the traffic went |
 
-A save does not change anything for the clients: the panel saves what it
-changed and then asks for the configuration to be read again, so several
-changes can be made and applied together.
+The panel's own API is Connect over HTTP: `POST /buddy.admin.v1.AdminService/<方法>`,
+with the contract in `proto/buddy/admin/v1/admin.proto`. It needs the panel's
+own token (`Authorization: Bearer <token>`), which the gateway generates once
+into `/data/admin-token` (0600). `/health` stays public.
 
-The settings and the published models are read once and then kept, so the
-panel can change them without a restart — but nothing is picked up until
-someone asks for it, so the panel calls `/admin/reload` when it wants the
-change to take effect now.
+| Method | What it does |
+|--------|--------------|
+| `GetSystemStatus` | the upstreams, their credentials, the balances |
+| `ListUpstreams` / `SetUpstreamEnabled` | the upstream switches |
+| `ListConfig` / `SetConfig` | the settings and where each value comes from |
+| `ListAccounts` / `ListCredentials` | the accounts and their credentials |
+| `TestCredential` / `RefreshCredential` | try one credential, refresh it |
+| `GetBalance` | the balances and the credit lots |
+| `GetUsageSummary` / `ListUsageEvents` | the traffic |
+| `ListPublishedModels` / `SavePublishedModel` / `DeletePublishedModel` | the published models |
+| `GetBenefitStatus` / `RunBenefitNow` | the daily check-in |
+| `ListModels` | the catalogues of the upstreams |
+| `TailLog` | the credential log |
+
+A saved published model takes effect right away: the panel saves what it
+changed and the root route serves it from then on.
+
+A published model's metadata may be left out: left out means "whatever the
+targets say" (the smallest context window among them, and so on). The gateway
+stores that as an empty value, so a panel that reads a model and saves it back
+unchanged keeps following the upstreams instead of freezing their numbers.
+
+The settings are read once at startup, so a changed setting waits for a
+restart — the panel says so with `pending_restart`, and `RestartSystem` asks
+the gateway to exit (the container brings it back with the new settings).
 
 The traffic table counts every request against the target that served it, and
 against the ones that failed, with the tokens each one cost.

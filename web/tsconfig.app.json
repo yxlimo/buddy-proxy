@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Alias */
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/gen/*": ["../lib/gen/*"],
+      /* lib/gen/ 在 web/ 外面，依赖要从 web/node_modules 里取。 */
+      "@bufbuild/protobuf": ["./node_modules/@bufbuild/protobuf"],
+      "@bufbuild/protobuf/*": ["./node_modules/@bufbuild/protobuf/*"]
+    },
+
+    /* Linting */
+    "types": ["vite/client", "node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,278 @@
+import { useState } from 'react'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
+import type { PublishedModel } from '@/gen/buddy/admin/v1/admin_pb'
+import { PageShell } from '@/components/layout/page-shell'
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+} from '@/components/async-state'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  useDeletePublishedModel,
+  usePublishedModels,
+  useSavePublishedModel,
+} from '@/features/models/api'
+import { ModelDialog } from '@/features/models/model-dialog'
+import { formatCount, formatDateTime } from '@/lib/format'
+
+export function PublishedModelsPage() {
+  const models = usePublishedModels()
+  const save = useSavePublishedModel()
+  const remove = useDeletePublishedModel()
+
+  const [editing, setEditing] = useState<PublishedModel | undefined>(undefined)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleting, setDeleting] = useState<PublishedModel | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+
+  const openCreate = () => {
+    setEditing(undefined)
+    setDialogOpen(true)
+  }
+
+  const openEdit = (model: PublishedModel) => {
+    setEditing(model)
+    setDialogOpen(true)
+  }
+
+  const submit = async (model: PublishedModel) => {
+    setBusy(true)
+    try {
+      await save.mutateAsync(model)
+      // 只有真的存成了才关弹窗。失败时 api 层已经报过错，弹窗留着，
+      // 用户填的 id 和目标都还在。
+      setDialogOpen(false)
+    } catch {
+      // 失败：不动弹窗。
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleting) return
+    setBusy(true)
+    try {
+      await remove.mutateAsync({ id: deleting.id })
+      setDeleting(undefined)
+    } catch {
+      // 失败：对话框留着。
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (models.isPending) {
+    return <LoadingState />
+  }
+  if (models.isError) {
+    return <ErrorState error={models.error} onRetry={() => models.refetch()} />
+  }
+
+  const list = models.data.models
+
+  return (
+    <PageShell
+      title='公布的模型'
+      description='聚合路由：对外面公布一个 id，背后挂几个上游模型，客户端只看见公布的这一层。'
+      actions={
+        <Button onClick={openCreate}>
+          <Plus />
+          新建
+        </Button>
+      }
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle className='text-base'>公布的模型</CardTitle>
+          <CardDescription>
+            目标分到了多少请求，是网关跑出来的统计。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='px-0'>
+          {list.length === 0 ? (
+            <EmptyState
+              title='还没有公布任何模型'
+              description='根路由只服务这里公布出来的模型。'
+              action={
+                <Button onClick={openCreate}>
+                  <Plus />
+                  新建一个
+                </Button>
+              }
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>对外 id</TableHead>
+                  <TableHead>显示名</TableHead>
+                  <TableHead>策略</TableHead>
+                  <TableHead>上下文 / 输出</TableHead>
+                  <TableHead>上游目标</TableHead>
+                  <TableHead className='text-right'>请求</TableHead>
+                  <TableHead className='text-right'>更新时间</TableHead>
+                  <TableHead className='text-right'>操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {list.map((model) => (
+                  <TableRow key={model.id}>
+                    <TableCell>
+                      <div className='grid gap-0.5'>
+                        <span className='font-mono text-xs font-medium'>
+                          {model.id}
+                        </span>
+                        {!model.enabled ? (
+                          <Badge variant='secondary'>已停用</Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell>{model.displayName || '—'}</TableCell>
+                    <TableCell>
+                      <Badge variant='outline'>
+                        {model.strategy === 'fallback' ? 'fallback' : 'single'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {/* 不给就是继承目标的值 */}
+                      <span className='font-mono text-xs'>
+                        {model.contextWindow ?? '继承'}
+                        {' / '}
+                        {model.maxOutputTokens ?? '继承'}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className='grid gap-1'>
+                        {model.targets.length === 0 ? (
+                          <span className='text-xs text-muted-foreground'>
+                            没有目标
+                          </span>
+                        ) : (
+                          model.targets.map((target) => (
+                            <div
+                              key={`${target.groupName}-${target.upstreamModel}`}
+                              className='grid gap-0.5'
+                            >
+                              <span className='font-mono text-xs'>
+                                {target.groupName} → {target.upstreamModel}
+                              </span>
+                              <span className='text-xs text-muted-foreground'>
+                                {formatCount(target.requests)} 次
+                                {target.failed > 0n
+                                  ? ` · 失败 ${formatCount(target.failed)}`
+                                  : ''}
+                                {!target.enabled ? ' · 已停用' : ''}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className='text-right font-mono'>
+                      {formatCount(
+                        model.targets.reduce(
+                          (sum, target) => sum + target.requests,
+                          0n
+                        )
+                      )}
+                    </TableCell>
+                    <TableCell className='text-right text-xs text-muted-foreground'>
+                      {formatDateTime(model.updatedAt)}
+                    </TableCell>
+                    <TableCell className='text-right'>
+                      <div className='flex justify-end gap-2'>
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          onClick={() => openEdit(model)}
+                        >
+                          <Pencil />
+                          改
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          onClick={() => setDeleting(model)}
+                        >
+                          <Trash2 />
+                          删
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <ModelDialog
+        open={dialogOpen}
+        model={editing}
+        busy={busy}
+        onOpenChange={setDialogOpen}
+        onSubmit={(model) => void submit(model)}
+      />
+
+      <Dialog
+        open={deleting !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(undefined)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删掉这个模型？</DialogTitle>
+            <DialogDescription>
+              <span className='font-mono'>{deleting?.id}</span>{' '}
+              删了之后客户端就看不见它了。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant='outline'
+              onClick={() => setDeleting(undefined)}
+              disabled={busy}
+            >
+              取消
+            </Button>
+            <Button
+              variant='destructive'
+              disabled={busy}
+              onClick={() => void confirmDelete()}
+            >
+              删掉
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </PageShell>
+  )
+}

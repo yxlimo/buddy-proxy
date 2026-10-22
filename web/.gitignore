@@ -1,0 +1,9 @@
+# 依赖和构建产物
+node_modules/
+dist/
+
+# TanStack Router 的缓存
+.tanstack/
+
+# 路由表是自动生成的：pnpm run routes:gen（typecheck 和 build 都会先跑一遍）
+src/routeTree.gen.ts

@@ -1,0 +1,281 @@
+import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { KeyRound, RotateCcw, Save } from 'lucide-react'
+import { PageShell } from '@/components/layout/page-shell'
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+} from '@/components/async-state'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { useConfig, useSetConfig } from '@/features/config/api'
+import type { ConfigItem } from '@/gen/buddy/admin/v1/admin_pb'
+
+const SOURCE_LABELS: Record<string, string> = {
+  database: '数据库覆盖',
+  environment: '环境变量',
+  default: '默认值',
+}
+
+/**
+ * 服务端对敏感项回的是掩码，不是真值。
+ *
+ * 掩码长得太像值了：一旦把它当输入回传，库里就会写进一个叫 "***" 的
+ * 密钥，重启后 parseBool 认不出来，门就开了。所以掩码只是「有没有值」的
+ * 提示，绝不当值用。
+ */
+const SECRET_MASK = '***'
+
+/**
+ * 这一项现在有没有值。
+ *
+ * has_value 是契约里的字段，服务端还没填的时候看别的：来源是数据库覆盖
+ * 或环境变量就说明有人给过值了；值不是掩码也是。
+ */
+function hasValue(item: ConfigItem): boolean {
+  if (item.hasValue) return true
+  if (item.source === 'database' || item.source === 'environment') {
+    return true
+  }
+  return Boolean(item.value) && item.value !== SECRET_MASK
+}
+
+export function ConfigPage() {
+  const config = useConfig()
+  const setConfig = useSetConfig()
+  const [editing, setEditing] = useState<{
+    key: string
+    description: string
+    secret: boolean
+  } | null>(null)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const groups = useMemo(() => {
+    const map = new Map<string, NonNullable<typeof config.data>['items']>()
+    for (const item of config.data?.items ?? []) {
+      const group = item.group || '其他'
+      const list = map.get(group) ?? []
+      list.push(item)
+      map.set(group, list)
+    }
+    return [...map.entries()]
+  }, [config.data])
+
+  if (config.isPending) {
+    return <LoadingState />
+  }
+  if (config.isError) {
+    return <ErrorState error={config.error} onRetry={() => config.refetch()} />
+  }
+
+  const save = async (key: string, value: string, clear: boolean) => {
+    setBusy(true)
+    try {
+      await setConfig.mutateAsync({ key, value, clear })
+      setEditing(null)
+    } catch {
+      // 失败时 api 层已经报过了。弹窗留着，用户还要改。
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <PageShell
+      title='配置'
+      description='每一项现在生效的值，以及这个值是从哪来的：数据库覆盖、环境变量，还是默认值。'
+      actions={
+        config.data?.pendingRestart ? (
+          <Badge variant='destructive'>配置改了，重启后生效</Badge>
+        ) : null
+      }
+    >
+
+      {groups.length === 0 ? (
+        <Card>
+          <CardContent>
+            <EmptyState title='网关没有报任何配置项' />
+          </CardContent>
+        </Card>
+      ) : (
+        groups.map(([group, items]) => (
+          <Card key={group} className='mb-4'>
+            <CardHeader>
+              <CardTitle className='text-base'>{group}</CardTitle>
+              <CardDescription>
+                改动会写进数据库，标上「待重启」，重启网关之后才生效。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className='px-0'>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>键</TableHead>
+                    <TableHead>当前值</TableHead>
+                    <TableHead>来源</TableHead>
+                    <TableHead className='text-right'>操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => (
+                    <TableRow key={item.key}>
+                      <TableCell>
+                        <div className='grid gap-0.5'>
+                          <span className='font-mono text-xs'>{item.key}</span>
+                          {item.description ? (
+                            <span className='text-xs text-muted-foreground'>
+                              {item.description}
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {item.secret ? (
+                          // 敏感项的值读不出来，只说有没有。
+                          <span className='text-xs'>
+                            {hasValue(item) ? '已设置' : '未设置'}
+                          </span>
+                        ) : (
+                          <span className='font-mono text-xs'>
+                            {item.value || '—'}
+                          </span>
+                        )}
+                        {item.fallback && item.fallback !== item.value ? (
+                          <div className='text-xs text-muted-foreground'>
+                            默认值 {item.fallback}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant='outline'>
+                          {SOURCE_LABELS[item.source] ?? item.source ?? '未知'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className='text-right'>
+                        <div className='flex justify-end gap-2'>
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            onClick={() => {
+                              setEditing({
+                                key: item.key,
+                                description: item.description,
+                                secret: item.secret,
+                              })
+                              // 敏感项的值读不出来，输入框一律从空开始。
+                              setDraft(item.secret ? '' : item.value)
+                            }}
+                          >
+                            <Save />
+                            改
+                          </Button>
+                          {item.source === 'database' ? (
+                            <Button
+                              variant='ghost'
+                              size='sm'
+                              disabled={busy}
+                              onClick={() => void save(item.key, '', true)}
+                            >
+                              <RotateCcw />
+                              清回默认
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        ))
+      )}
+
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className='flex items-center gap-2'>
+              {editing?.secret ? <KeyRound className='size-4' /> : null}
+              改配置
+            </DialogTitle>
+            <DialogDescription>
+              <span className='font-mono'>{editing?.key}</span>
+              {editing?.description ? ` —— ${editing.description}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className='grid gap-2'>
+            <Label htmlFor='config-value'>新值</Label>
+            <Input
+              id='config-value'
+              value={draft}
+              autoFocus
+              type={editing?.secret ? 'password' : 'text'}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <p className='text-xs text-muted-foreground'>
+              {editing?.secret
+                ? '这一项的值读不出来（只写不读）。留空表示不改；要改就填新值。'
+                : '存进数据库，重启网关之后生效。'}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant='outline'
+              onClick={() => setEditing(null)}
+              disabled={busy}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => {
+                if (!editing) return
+                if (editing.secret && draft.trim() === '') {
+                  // 没填新值就别发请求：空串会被服务端当成「把密钥清空」。
+                  toast('敏感项原样保留', { description: '没填新值，什么都没改。' })
+                  setEditing(null)
+                  return
+                }
+                void save(editing.key, draft, false)
+              }}
+            >
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </PageShell>
+  )
+}

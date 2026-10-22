@@ -11,6 +11,9 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@bufbuild/protobuf": "^2.16.0",
+    "@connectrpc/connect": "^2.2.0",
+    "@connectrpc/connect-node": "^2.2.0",
     "@koa/router": "^15.7.0",
     "koa": "^3.2.1",
     "koa-bodyparser": "^4.4.1"

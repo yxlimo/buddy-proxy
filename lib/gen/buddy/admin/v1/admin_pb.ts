@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file buddy/admin/v1/admin.proto.
  */
 export const file_buddy_admin_v1_admin: GenFile = /*@__PURE__*/
-  fileDesc("ChpidWRkeS9hZG1pbi92MS9hZG1pbi5wcm90bxIOYnVkZHkuYWRtaW4udjEisgEKCFVwc3RyZWFtEgoKAmlkGAEgASgJEg0KBWxhYmVsGAIgASgJEg8KB2VuYWJsZWQYAyABKAgSEwoLbW9kZWxfY291bnQYBCABKAUSNAoKY3JlZGVudGlhbBgFIAEoCzIgLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWxTdGF0dXMSLwoHYmFsYW5jZRgGIAEoCzIeLmJ1ZGR5LmFkbWluLnYxLkJhbGFuY2VTdW1tYXJ5IqUBChBDcmVkZW50aWFsU3RhdHVzEgwKBGtpbmQYASABKAkSDgoGc3RhdHVzGAIgASgJEhMKC2ZpbmdlcnByaW50GAMgASgJEhIKCmV4cGlyZXNfYXQYBCABKAMSFQoNcmVtYWluaW5nX3NlYxgFIAEoAxIPCgd3YXJuaW5nGAYgASgIEg4KBmRldGFpbBgHIAEoCRISCgpnZW5lcmF0aW9uGAggASgFIpABCg5CYWxhbmNlU3VtbWFyeRIVCg1hdmFpbGFibGVfY255GAEgASgBEhAKCGN1cnJlbmN5GAIgASgJEicKBGxvdHMYAyADKAsyGS5idWRkeS5hZG1pbi52MS5DcmVkaXRMb3QSFgoObmV4dF9leHBpcnlfYXQYBCABKAMSFAoMZXhwaXJpbmdfY255GAUgASgBImgKCUNyZWRpdExvdBIKCgJpZBgBIAEoCRIUCgxzb3VyY2VfbGFiZWwYAiABKAkSFQoNcmVtYWluaW5nX2NueRgDIAEoARISCgpleHBpcmVzX2F0GAQgASgDEg4KBnN0YXR1cxgFIAEoCSIYChZHZXRTeXN0ZW1TdGF0dXNSZXF1ZXN0IrwBChdHZXRTeXN0ZW1TdGF0dXNSZXNwb25zZRIPCgd2ZXJzaW9uGAEgASgJEisKCXVwc3RyZWFtcxgCIAMoCzIYLmJ1ZGR5LmFkbWluLnYxLlVwc3RyZWFtEhcKD3BlbmRpbmdfcmVzdGFydBgDIAEoCBISCgp1cHRpbWVfc2VjGAQgASgDEh0KFXB1Ymxpc2hlZF9tb2RlbF9jb3VudBgFIAEoBRIXCg9hZG1pbl90b2tlbl9zZXQYBiABKAgiFgoUUmVzdGFydFN5c3RlbVJlcXVlc3QiOgoVUmVzdGFydFN5c3RlbVJlc3BvbnNlEhAKCGFjY2VwdGVkGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiFgoUTGlzdFVwc3RyZWFtc1JlcXVlc3QiRAoVTGlzdFVwc3RyZWFtc1Jlc3BvbnNlEisKCXVwc3RyZWFtcxgBIAMoCzIYLmJ1ZGR5LmFkbWluLnYxLlVwc3RyZWFtIkEKGVNldFVwc3RyZWFtRW5hYmxlZFJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSDwoHZW5hYmxlZBgCIAEoCCJSChpTZXRVcHN0cmVhbUVuYWJsZWRSZXNwb25zZRIKCgJvaxgBIAEoCBIXCg9wZW5kaW5nX3Jlc3RhcnQYAiABKAgSDwoHbWVzc2FnZRgDIAEoCSITChFMaXN0Q29uZmlnUmVxdWVzdCJ+CgpDb25maWdJdGVtEgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCRIOCgZzb3VyY2UYAyABKAkSEAoIZmFsbGJhY2sYBCABKAkSDQoFZ3JvdXAYBSABKAkSEwoLZGVzY3JpcHRpb24YBiABKAkSDgoGc2VjcmV0GAcgASgIIlgKEkxpc3RDb25maWdSZXNwb25zZRIpCgVpdGVtcxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNvbmZpZ0l0ZW0SFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIIj0KEFNldENvbmZpZ1JlcXVlc3QSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEg0KBWNsZWFyGAMgASgIIkkKEVNldENvbmZpZ1Jlc3BvbnNlEgoKAm9rGAEgASgIEhcKD3BlbmRpbmdfcmVzdGFydBgCIAEoCBIPCgdtZXNzYWdlGAMgASgJInMKB0FjY291bnQSCgoCaWQYASABKAkSEwoLdXBzdHJlYW1faWQYAiABKAkSDQoFbGFiZWwYAyABKAkSDgoGc3RhdHVzGAQgASgJEhgKEGNyZWRlbnRpYWxfY291bnQYBSABKAUSDgoGZGV0YWlsGAYgASgJIhUKE0xpc3RBY2NvdW50c1JlcXVlc3QiQQoUTGlzdEFjY291bnRzUmVzcG9uc2USKQoIYWNjb3VudHMYASADKAsyFy5idWRkeS5hZG1pbi52MS5BY2NvdW50IvcBCgpDcmVkZW50aWFsEgoKAmlkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSEwoLdXBzdHJlYW1faWQYAyABKAkSDAoEa2luZBgEIAEoCRINCgVsYWJlbBgFIAEoCRIOCgZtYXNrZWQYBiABKAkSEwoLZmluZ2VycHJpbnQYByABKAkSDgoGc3RhdHVzGAggASgJEhIKCmdlbmVyYXRpb24YCSABKAUSEgoKZXhwaXJlc19hdBgKIAEoAxISCgpsYXN0X29rX2F0GAsgASgDEhIKCmxhc3RfZXJyb3IYDCABKAkSEgoKdXBkYXRlZF9hdBgNIAEoAyIsChZMaXN0Q3JlZGVudGlhbHNSZXF1ZXN0EhIKCmFjY291bnRfaWQYASABKAkiSgoXTGlzdENyZWRlbnRpYWxzUmVzcG9uc2USLwoLY3JlZGVudGlhbHMYASADKAsyGi5idWRkeS5hZG1pbi52MS5DcmVkZW50aWFsIi4KFVRlc3RDcmVkZW50aWFsUmVxdWVzdBIVCg1jcmVkZW50aWFsX2lkGAEgASgJIkkKFlRlc3RDcmVkZW50aWFsUmVzcG9uc2USCgoCb2sYASABKAgSDwoHbWVzc2FnZRgCIAEoCRISCgpjaGVja2VkX2F0GAMgASgDIjEKGFJlZnJlc2hDcmVkZW50aWFsUmVxdWVzdBIVCg1jcmVkZW50aWFsX2lkGAEgASgJIkwKGVJlZnJlc2hDcmVkZW50aWFsUmVzcG9uc2USCgoCb2sYASABKAgSDwoHbWVzc2FnZRgCIAEoCRISCgpnZW5lcmF0aW9uGAMgASgFIigKEUdldEJhbGFuY2VSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJIkYKEkdldEJhbGFuY2VSZXNwb25zZRIwCghiYWxhbmNlcxgBIAMoCzIeLmJ1ZGR5LmFkbWluLnYxLkJhbGFuY2VTdW1tYXJ5IqcBCgxVc2FnZVN1bW1hcnkSEAoIcmVxdWVzdHMYASABKAMSEQoJc3VjY2VlZGVkGAIgASgDEg4KBmZhaWxlZBgDIAEoAxIVCg1wcm9tcHRfdG9rZW5zGAQgASgDEhkKEWNvbXBsZXRpb25fdG9rZW5zGAUgASgDEhgKEHJlYXNvbmluZ190b2tlbnMYBiABKAMSFgoObGF0ZW5jeV9tc19zdW0YByABKAMiPQoWR2V0VXNhZ2VTdW1tYXJ5UmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCRIOCgZ3aW5kb3cYAiABKAki1AEKF0dldFVzYWdlU3VtbWFyeVJlc3BvbnNlEisKBXRvdGFsGAEgASgLMhwuYnVkZHkuYWRtaW4udjEuVXNhZ2VTdW1tYXJ5EjAKC2J5X3Vwc3RyZWFtGAIgAygLMhsuYnVkZHkuYWRtaW4udjEuVXNhZ2VCdWNrZXQSLQoIYnlfbW9kZWwYAyADKAsyGy5idWRkeS5hZG1pbi52MS5Vc2FnZUJ1Y2tldBIrCgZieV9kYXkYBCADKAsyGy5idWRkeS5hZG1pbi52MS5Vc2FnZUJ1Y2tldCJJCgtVc2FnZUJ1Y2tldBILCgNrZXkYASABKAkSLQoHc3VtbWFyeRgCIAEoCzIcLmJ1ZGR5LmFkbWluLnYxLlVzYWdlU3VtbWFyeSJLChZMaXN0VXNhZ2VFdmVudHNSZXF1ZXN0Eg0KBWxpbWl0GAEgASgFEhMKC3Vwc3RyZWFtX2lkGAIgASgJEg0KBW1vZGVsGAMgASgJIu0BCgpVc2FnZUV2ZW50EgoKAmlkGAEgASgDEgoKAnRzGAIgASgDEhMKC3Vwc3RyZWFtX2lkGAMgASgJEg0KBW1vZGVsGAQgASgJEhMKC2FnZW50X21vZGVsGAUgASgJEg8KB2RpYWxlY3QYBiABKAkSFQoNcHJvbXB0X3Rva2VucxgHIAEoAxIZChFjb21wbGV0aW9uX3Rva2VucxgIIAEoAxIYChByZWFzb25pbmdfdG9rZW5zGAkgASgDEhIKCmxhdGVuY3lfbXMYCiABKAMSDgoGc3RhdHVzGAsgASgJEg0KBWVycm9yGAwgASgJIkUKF0xpc3RVc2FnZUV2ZW50c1Jlc3BvbnNlEioKBmV2ZW50cxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLlVzYWdlRXZlbnQijAIKDlB1Ymxpc2hlZE1vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIPCgdlbmFibGVkGAMgASgIEhAKCHN0cmF0ZWd5GAQgASgJEhYKDmNvbnRleHRfd2luZG93GAUgASgFEhkKEW1heF9vdXRwdXRfdG9rZW5zGAYgASgFEhEKCXJlYXNvbmluZxgHIAEoCBIRCgl0b29sX2NhbGwYCCABKAgSFgoOZWZmb3J0X29wdGlvbnMYCSADKAkSMAoHdGFyZ2V0cxgKIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZFRhcmdldBISCgp1cGRhdGVkX2F0GAsgASgDIpIBCg9QdWJsaXNoZWRUYXJnZXQSEgoKZ3JvdXBfbmFtZRgBIAEoCRIWCg51cHN0cmVhbV9tb2RlbBgCIAEoCRIOCgZ3ZWlnaHQYAyABKAUSEAoIcG9zaXRpb24YBCABKAUSDwoHZW5hYmxlZBgFIAEoCBIQCghyZXF1ZXN0cxgGIAEoAxIOCgZmYWlsZWQYByABKAMiHAoaTGlzdFB1Ymxpc2hlZE1vZGVsc1JlcXVlc3QiTQobTGlzdFB1Ymxpc2hlZE1vZGVsc1Jlc3BvbnNlEi4KBm1vZGVscxgBIAMoCzIeLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZE1vZGVsIkoKGVNhdmVQdWJsaXNoZWRNb2RlbFJlcXVlc3QSLQoFbW9kZWwYASABKAsyHi5idWRkeS5hZG1pbi52MS5QdWJsaXNoZWRNb2RlbCJFChpTYXZlUHVibGlzaGVkTW9kZWxSZXNwb25zZRIKCgJvaxgBIAEoCBIKCgJpZBgCIAEoCRIPCgdtZXNzYWdlGAMgASgJIikKG0RlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBIKCgJpZBgBIAEoCSI7ChxEZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiGQoXR2V0QmVuZWZpdFN0YXR1c1JlcXVlc3QidQoNQmVuZWZpdFN0YXR1cxITCgt1cHN0cmVhbV9pZBgBIAEoCRIPCgdzdW1tYXJ5GAIgASgJEg0KBWxpbmVzGAMgAygJEhIKCmNoZWNrZWRfYXQYBCABKAMSDwoHY3JlZGl0cxgFIAEoBRIKCgJvaxgGIAEoCCJLChhHZXRCZW5lZml0U3RhdHVzUmVzcG9uc2USLwoIYmVuZWZpdHMYASADKAsyHS5idWRkeS5hZG1pbi52MS5CZW5lZml0U3RhdHVzIhYKFFJ1bkJlbmVmaXROb3dSZXF1ZXN0IjIKFVJ1bkJlbmVmaXROb3dSZXNwb25zZRIKCgJvaxgBIAEoCBINCgVsaW5lcxgCIAMoCSIoChFMaXN0TW9kZWxzUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCSKyAQoMQ2F0YWxvZ01vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIWCg5jb250ZXh0X3dpbmRvdxgDIAEoBRIZChFtYXhfb3V0cHV0X3Rva2VucxgEIAEoBRIRCglyZWFzb25pbmcYBSABKAgSEQoJdG9vbF9jYWxsGAYgASgIEhYKDmVmZm9ydF9vcHRpb25zGAcgAygJEg8KB2NyZWRpdHMYCCABKAEiQgoSTGlzdE1vZGVsc1Jlc3BvbnNlEiwKBm1vZGVscxgBIAMoCzIcLmJ1ZGR5LmFkbWluLnYxLkNhdGFsb2dNb2RlbCIvCg5UYWlsTG9nUmVxdWVzdBINCgVsaW5lcxgBIAEoBRIOCgZmaWx0ZXIYAiABKAkiIAoPVGFpbExvZ1Jlc3BvbnNlEg0KBWxpbmVzGAEgAygJMp8PCgxBZG1pblNlcnZpY2USYgoPR2V0U3lzdGVtU3RhdHVzEiYuYnVkZHkuYWRtaW4udjEuR2V0U3lzdGVtU3RhdHVzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkdldFN5c3RlbVN0YXR1c1Jlc3BvbnNlElwKDVJlc3RhcnRTeXN0ZW0SJC5idWRkeS5hZG1pbi52MS5SZXN0YXJ0U3lzdGVtUmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLlJlc3RhcnRTeXN0ZW1SZXNwb25zZRJcCg1MaXN0VXBzdHJlYW1zEiQuYnVkZHkuYWRtaW4udjEuTGlzdFVwc3RyZWFtc1JlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5MaXN0VXBzdHJlYW1zUmVzcG9uc2USawoSU2V0VXBzdHJlYW1FbmFibGVkEikuYnVkZHkuYWRtaW4udjEuU2V0VXBzdHJlYW1FbmFibGVkUmVxdWVzdBoqLmJ1ZGR5LmFkbWluLnYxLlNldFVwc3RyZWFtRW5hYmxlZFJlc3BvbnNlElMKCkxpc3RDb25maWcSIS5idWRkeS5hZG1pbi52MS5MaXN0Q29uZmlnUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkxpc3RDb25maWdSZXNwb25zZRJQCglTZXRDb25maWcSIC5idWRkeS5hZG1pbi52MS5TZXRDb25maWdSZXF1ZXN0GiEuYnVkZHkuYWRtaW4udjEuU2V0Q29uZmlnUmVzcG9uc2USWQoMTGlzdEFjY291bnRzEiMuYnVkZHkuYWRtaW4udjEuTGlzdEFjY291bnRzUmVxdWVzdBokLmJ1ZGR5LmFkbWluLnYxLkxpc3RBY2NvdW50c1Jlc3BvbnNlEmIKD0xpc3RDcmVkZW50aWFscxImLmJ1ZGR5LmFkbWluLnYxLkxpc3RDcmVkZW50aWFsc1JlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5MaXN0Q3JlZGVudGlhbHNSZXNwb25zZRJfCg5UZXN0Q3JlZGVudGlhbBIlLmJ1ZGR5LmFkbWluLnYxLlRlc3RDcmVkZW50aWFsUmVxdWVzdBomLmJ1ZGR5LmFkbWluLnYxLlRlc3RDcmVkZW50aWFsUmVzcG9uc2USaAoRUmVmcmVzaENyZWRlbnRpYWwSKC5idWRkeS5hZG1pbi52MS5SZWZyZXNoQ3JlZGVudGlhbFJlcXVlc3QaKS5idWRkeS5hZG1pbi52MS5SZWZyZXNoQ3JlZGVudGlhbFJlc3BvbnNlElMKCkdldEJhbGFuY2USIS5idWRkeS5hZG1pbi52MS5HZXRCYWxhbmNlUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkdldEJhbGFuY2VSZXNwb25zZRJiCg9HZXRVc2FnZVN1bW1hcnkSJi5idWRkeS5hZG1pbi52MS5HZXRVc2FnZVN1bW1hcnlSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuR2V0VXNhZ2VTdW1tYXJ5UmVzcG9uc2USYgoPTGlzdFVzYWdlRXZlbnRzEiYuYnVkZHkuYWRtaW4udjEuTGlzdFVzYWdlRXZlbnRzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkxpc3RVc2FnZUV2ZW50c1Jlc3BvbnNlEm4KE0xpc3RQdWJsaXNoZWRNb2RlbHMSKi5idWRkeS5hZG1pbi52MS5MaXN0UHVibGlzaGVkTW9kZWxzUmVxdWVzdBorLmJ1ZGR5LmFkbWluLnYxLkxpc3RQdWJsaXNoZWRNb2RlbHNSZXNwb25zZRJrChJTYXZlUHVibGlzaGVkTW9kZWwSKS5idWRkeS5hZG1pbi52MS5TYXZlUHVibGlzaGVkTW9kZWxSZXF1ZXN0GiouYnVkZHkuYWRtaW4udjEuU2F2ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2UScQoURGVsZXRlUHVibGlzaGVkTW9kZWwSKy5idWRkeS5hZG1pbi52MS5EZWxldGVQdWJsaXNoZWRNb2RlbFJlcXVlc3QaLC5idWRkeS5hZG1pbi52MS5EZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEmUKEEdldEJlbmVmaXRTdGF0dXMSJy5idWRkeS5hZG1pbi52MS5HZXRCZW5lZml0U3RhdHVzUmVxdWVzdBooLmJ1ZGR5LmFkbWluLnYxLkdldEJlbmVmaXRTdGF0dXNSZXNwb25zZRJcCg1SdW5CZW5lZml0Tm93EiQuYnVkZHkuYWRtaW4udjEuUnVuQmVuZWZpdE5vd1JlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5SdW5CZW5lZml0Tm93UmVzcG9uc2USUwoKTGlzdE1vZGVscxIhLmJ1ZGR5LmFkbWluLnYxLkxpc3RNb2RlbHNSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuTGlzdE1vZGVsc1Jlc3BvbnNlEkoKB1RhaWxMb2cSHi5idWRkeS5hZG1pbi52MS5UYWlsTG9nUmVxdWVzdBofLmJ1ZGR5LmFkbWluLnYxLlRhaWxMb2dSZXNwb25zZWIGcHJvdG8z");
+  fileDesc("ChpidWRkeS9hZG1pbi92MS9hZG1pbi5wcm90bxIOYnVkZHkuYWRtaW4udjEi1AEKCFVwc3RyZWFtEgoKAmlkGAEgASgJEg0KBWxhYmVsGAIgASgJEg8KB2VuYWJsZWQYAyABKAgSEwoLbW9kZWxfY291bnQYBCABKAUSNAoKY3JlZGVudGlhbBgFIAEoCzIgLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWxTdGF0dXMSLwoHYmFsYW5jZRgGIAEoCzIeLmJ1ZGR5LmFkbWluLnYxLkJhbGFuY2VTdW1tYXJ5EhAKCGJhc2VfdXJsGAcgASgJEg4KBnJlZ2lvbhgIIAEoCSKlAQoQQ3JlZGVudGlhbFN0YXR1cxIMCgRraW5kGAEgASgJEg4KBnN0YXR1cxgCIAEoCRITCgtmaW5nZXJwcmludBgDIAEoCRISCgpleHBpcmVzX2F0GAQgASgDEhUKDXJlbWFpbmluZ19zZWMYBSABKAMSDwoHd2FybmluZxgGIAEoCBIOCgZkZXRhaWwYByABKAkSEgoKZ2VuZXJhdGlvbhgIIAEoBSK5AQoOQmFsYW5jZVN1bW1hcnkSEwoLdXBzdHJlYW1faWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIVCg1hdmFpbGFibGVfY255GAMgASgBEhAKCGN1cnJlbmN5GAQgASgJEicKBGxvdHMYBSADKAsyGS5idWRkeS5hZG1pbi52MS5DcmVkaXRMb3QSFgoObmV4dF9leHBpcnlfYXQYBiABKAMSFAoMZXhwaXJpbmdfY255GAcgASgBImgKCUNyZWRpdExvdBIKCgJpZBgBIAEoCRIUCgxzb3VyY2VfbGFiZWwYAiABKAkSFQoNcmVtYWluaW5nX2NueRgDIAEoARISCgpleHBpcmVzX2F0GAQgASgDEg4KBnN0YXR1cxgFIAEoCSIYChZHZXRTeXN0ZW1TdGF0dXNSZXF1ZXN0IrwBChdHZXRTeXN0ZW1TdGF0dXNSZXNwb25zZRIPCgd2ZXJzaW9uGAEgASgJEisKCXVwc3RyZWFtcxgCIAMoCzIYLmJ1ZGR5LmFkbWluLnYxLlVwc3RyZWFtEhcKD3BlbmRpbmdfcmVzdGFydBgDIAEoCBISCgp1cHRpbWVfc2VjGAQgASgDEh0KFXB1Ymxpc2hlZF9tb2RlbF9jb3VudBgFIAEoBRIXCg9hZG1pbl90b2tlbl9zZXQYBiABKAgiFgoUUmVzdGFydFN5c3RlbVJlcXVlc3QiOgoVUmVzdGFydFN5c3RlbVJlc3BvbnNlEhAKCGFjY2VwdGVkGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiFgoUTGlzdFVwc3RyZWFtc1JlcXVlc3QiRAoVTGlzdFVwc3RyZWFtc1Jlc3BvbnNlEisKCXVwc3RyZWFtcxgBIAMoCzIYLmJ1ZGR5LmFkbWluLnYxLlVwc3RyZWFtIkEKGVNldFVwc3RyZWFtRW5hYmxlZFJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSDwoHZW5hYmxlZBgCIAEoCCJSChpTZXRVcHN0cmVhbUVuYWJsZWRSZXNwb25zZRIKCgJvaxgBIAEoCBIXCg9wZW5kaW5nX3Jlc3RhcnQYAiABKAgSDwoHbWVzc2FnZRgDIAEoCSITChFMaXN0Q29uZmlnUmVxdWVzdCKRAQoKQ29uZmlnSXRlbRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSDgoGc291cmNlGAMgASgJEhAKCGZhbGxiYWNrGAQgASgJEg0KBWdyb3VwGAUgASgJEhMKC2Rlc2NyaXB0aW9uGAYgASgJEg4KBnNlY3JldBgHIAEoCBIRCgloYXNfdmFsdWUYCCABKAgiWAoSTGlzdENvbmZpZ1Jlc3BvbnNlEikKBWl0ZW1zGAEgAygLMhouYnVkZHkuYWRtaW4udjEuQ29uZmlnSXRlbRIXCg9wZW5kaW5nX3Jlc3RhcnQYAiABKAgiPQoQU2V0Q29uZmlnUmVxdWVzdBILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSDQoFY2xlYXIYAyABKAgiSQoRU2V0Q29uZmlnUmVzcG9uc2USCgoCb2sYASABKAgSFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIEg8KB21lc3NhZ2UYAyABKAkipAEKB0FjY291bnQSCgoCaWQYASABKAkSEwoLdXBzdHJlYW1faWQYAiABKAkSDQoFbGFiZWwYAyABKAkSDgoGc3RhdHVzGAQgASgJEhgKEGNyZWRlbnRpYWxfY291bnQYBSABKAUSDgoGZGV0YWlsGAYgASgJEi8KB2JhbGFuY2UYByABKAsyHi5idWRkeS5hZG1pbi52MS5CYWxhbmNlU3VtbWFyeSIVChNMaXN0QWNjb3VudHNSZXF1ZXN0IkEKFExpc3RBY2NvdW50c1Jlc3BvbnNlEikKCGFjY291bnRzGAEgAygLMhcuYnVkZHkuYWRtaW4udjEuQWNjb3VudCL3AQoKQ3JlZGVudGlhbBIKCgJpZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhMKC3Vwc3RyZWFtX2lkGAMgASgJEgwKBGtpbmQYBCABKAkSDQoFbGFiZWwYBSABKAkSDgoGbWFza2VkGAYgASgJEhMKC2ZpbmdlcnByaW50GAcgASgJEg4KBnN0YXR1cxgIIAEoCRISCgpnZW5lcmF0aW9uGAkgASgFEhIKCmV4cGlyZXNfYXQYCiABKAMSEgoKbGFzdF9va19hdBgLIAEoAxISCgpsYXN0X2Vycm9yGAwgASgJEhIKCnVwZGF0ZWRfYXQYDSABKAMiLAoWTGlzdENyZWRlbnRpYWxzUmVxdWVzdBISCgphY2NvdW50X2lkGAEgASgJIkoKF0xpc3RDcmVkZW50aWFsc1Jlc3BvbnNlEi8KC2NyZWRlbnRpYWxzGAEgAygLMhouYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbCIuChVUZXN0Q3JlZGVudGlhbFJlcXVlc3QSFQoNY3JlZGVudGlhbF9pZBgBIAEoCSJJChZUZXN0Q3JlZGVudGlhbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkSEgoKY2hlY2tlZF9hdBgDIAEoAyIxChhSZWZyZXNoQ3JlZGVudGlhbFJlcXVlc3QSFQoNY3JlZGVudGlhbF9pZBgBIAEoCSJMChlSZWZyZXNoQ3JlZGVudGlhbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkSEgoKZ2VuZXJhdGlvbhgDIAEoBSIoChFHZXRCYWxhbmNlUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCSJGChJHZXRCYWxhbmNlUmVzcG9uc2USMAoIYmFsYW5jZXMYASADKAsyHi5idWRkeS5hZG1pbi52MS5CYWxhbmNlU3VtbWFyeSKnAQoMVXNhZ2VTdW1tYXJ5EhAKCHJlcXVlc3RzGAEgASgDEhEKCXN1Y2NlZWRlZBgCIAEoAxIOCgZmYWlsZWQYAyABKAMSFQoNcHJvbXB0X3Rva2VucxgEIAEoAxIZChFjb21wbGV0aW9uX3Rva2VucxgFIAEoAxIYChByZWFzb25pbmdfdG9rZW5zGAYgASgDEhYKDmxhdGVuY3lfbXNfc3VtGAcgASgDIj0KFkdldFVzYWdlU3VtbWFyeVJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSDgoGd2luZG93GAIgASgJItQBChdHZXRVc2FnZVN1bW1hcnlSZXNwb25zZRIrCgV0b3RhbBgBIAEoCzIcLmJ1ZGR5LmFkbWluLnYxLlVzYWdlU3VtbWFyeRIwCgtieV91cHN0cmVhbRgCIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0Ei0KCGJ5X21vZGVsGAMgAygLMhsuYnVkZHkuYWRtaW4udjEuVXNhZ2VCdWNrZXQSKwoGYnlfZGF5GAQgAygLMhsuYnVkZHkuYWRtaW4udjEuVXNhZ2VCdWNrZXQiSQoLVXNhZ2VCdWNrZXQSCwoDa2V5GAEgASgJEi0KB3N1bW1hcnkYAiABKAsyHC5idWRkeS5hZG1pbi52MS5Vc2FnZVN1bW1hcnkiXgoWTGlzdFVzYWdlRXZlbnRzUmVxdWVzdBINCgVsaW1pdBgBIAEoBRITCgt1cHN0cmVhbV9pZBgCIAEoCRINCgVtb2RlbBgDIAEoCRIRCgliZWZvcmVfaWQYBCABKAMi/QEKClVzYWdlRXZlbnQSCgoCaWQYASABKAMSCgoCdHMYAiABKAMSEwoLdXBzdHJlYW1faWQYAyABKAkSDQoFbW9kZWwYBCABKAkSEwoLYWdlbnRfbW9kZWwYBSABKAkSDwoHZGlhbGVjdBgGIAEoCRIOCgZjbGllbnQYByABKAkSFQoNcHJvbXB0X3Rva2VucxgIIAEoAxIZChFjb21wbGV0aW9uX3Rva2VucxgJIAEoAxIYChByZWFzb25pbmdfdG9rZW5zGAogASgDEhIKCmxhdGVuY3lfbXMYCyABKAMSDgoGc3RhdHVzGAwgASgJEg0KBWVycm9yGA0gASgJIkUKF0xpc3RVc2FnZUV2ZW50c1Jlc3BvbnNlEioKBmV2ZW50cxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLlVzYWdlRXZlbnQi5QIKDlB1Ymxpc2hlZE1vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIPCgdlbmFibGVkGAMgASgIEhAKCHN0cmF0ZWd5GAQgASgJEhsKDmNvbnRleHRfd2luZG93GAUgASgFSACIAQESHgoRbWF4X291dHB1dF90b2tlbnMYBiABKAVIAYgBARIWCglyZWFzb25pbmcYByABKAhIAogBARIWCgl0b29sX2NhbGwYCCABKAhIA4gBARIWCg5lZmZvcnRfb3B0aW9ucxgJIAMoCRIwCgd0YXJnZXRzGAogAygLMh8uYnVkZHkuYWRtaW4udjEuUHVibGlzaGVkVGFyZ2V0EhIKCnVwZGF0ZWRfYXQYCyABKANCEQoPX2NvbnRleHRfd2luZG93QhQKEl9tYXhfb3V0cHV0X3Rva2Vuc0IMCgpfcmVhc29uaW5nQgwKCl90b29sX2NhbGwikgEKD1B1Ymxpc2hlZFRhcmdldBISCgpncm91cF9uYW1lGAEgASgJEhYKDnVwc3RyZWFtX21vZGVsGAIgASgJEg4KBndlaWdodBgDIAEoBRIQCghwb3NpdGlvbhgEIAEoBRIPCgdlbmFibGVkGAUgASgIEhAKCHJlcXVlc3RzGAYgASgDEg4KBmZhaWxlZBgHIAEoAyIcChpMaXN0UHVibGlzaGVkTW9kZWxzUmVxdWVzdCJNChtMaXN0UHVibGlzaGVkTW9kZWxzUmVzcG9uc2USLgoGbW9kZWxzGAEgAygLMh4uYnVkZHkuYWRtaW4udjEuUHVibGlzaGVkTW9kZWwiSgoZU2F2ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBItCgVtb2RlbBgBIAEoCzIeLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZE1vZGVsIkUKGlNhdmVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEgoKAm9rGAEgASgIEgoKAmlkGAIgASgJEg8KB21lc3NhZ2UYAyABKAkiKQobRGVsZXRlUHVibGlzaGVkTW9kZWxSZXF1ZXN0EgoKAmlkGAEgASgJIjsKHERlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2USCgoCb2sYASABKAgSDwoHbWVzc2FnZRgCIAEoCSIZChdHZXRCZW5lZml0U3RhdHVzUmVxdWVzdCJ1Cg1CZW5lZml0U3RhdHVzEhMKC3Vwc3RyZWFtX2lkGAEgASgJEg8KB3N1bW1hcnkYAiABKAkSDQoFbGluZXMYAyADKAkSEgoKY2hlY2tlZF9hdBgEIAEoAxIPCgdjcmVkaXRzGAUgASgFEgoKAm9rGAYgASgIIksKGEdldEJlbmVmaXRTdGF0dXNSZXNwb25zZRIvCghiZW5lZml0cxgBIAMoCzIdLmJ1ZGR5LmFkbWluLnYxLkJlbmVmaXRTdGF0dXMiFgoUUnVuQmVuZWZpdE5vd1JlcXVlc3QiMgoVUnVuQmVuZWZpdE5vd1Jlc3BvbnNlEgoKAm9rGAEgASgIEg0KBWxpbmVzGAIgAygJIigKEUxpc3RNb2RlbHNSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJIrIBCgxDYXRhbG9nTW9kZWwSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhYKDmNvbnRleHRfd2luZG93GAMgASgFEhkKEW1heF9vdXRwdXRfdG9rZW5zGAQgASgFEhEKCXJlYXNvbmluZxgFIAEoCBIRCgl0b29sX2NhbGwYBiABKAgSFgoOZWZmb3J0X29wdGlvbnMYByADKAkSDwoHY3JlZGl0cxgIIAEoASJCChJMaXN0TW9kZWxzUmVzcG9uc2USLAoGbW9kZWxzGAEgAygLMhwuYnVkZHkuYWRtaW4udjEuQ2F0YWxvZ01vZGVsIi8KDlRhaWxMb2dSZXF1ZXN0Eg0KBWxpbmVzGAEgASgFEg4KBmZpbHRlchgCIAEoCSIgCg9UYWlsTG9nUmVzcG9uc2USDQoFbGluZXMYASADKAkynw8KDEFkbWluU2VydmljZRJiCg9HZXRTeXN0ZW1TdGF0dXMSJi5idWRkeS5hZG1pbi52MS5HZXRTeXN0ZW1TdGF0dXNSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuR2V0U3lzdGVtU3RhdHVzUmVzcG9uc2USXAoNUmVzdGFydFN5c3RlbRIkLmJ1ZGR5LmFkbWluLnYxLlJlc3RhcnRTeXN0ZW1SZXF1ZXN0GiUuYnVkZHkuYWRtaW4udjEuUmVzdGFydFN5c3RlbVJlc3BvbnNlElwKDUxpc3RVcHN0cmVhbXMSJC5idWRkeS5hZG1pbi52MS5MaXN0VXBzdHJlYW1zUmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLkxpc3RVcHN0cmVhbXNSZXNwb25zZRJrChJTZXRVcHN0cmVhbUVuYWJsZWQSKS5idWRkeS5hZG1pbi52MS5TZXRVcHN0cmVhbUVuYWJsZWRSZXF1ZXN0GiouYnVkZHkuYWRtaW4udjEuU2V0VXBzdHJlYW1FbmFibGVkUmVzcG9uc2USUwoKTGlzdENvbmZpZxIhLmJ1ZGR5LmFkbWluLnYxLkxpc3RDb25maWdSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuTGlzdENvbmZpZ1Jlc3BvbnNlElAKCVNldENvbmZpZxIgLmJ1ZGR5LmFkbWluLnYxLlNldENvbmZpZ1JlcXVlc3QaIS5idWRkeS5hZG1pbi52MS5TZXRDb25maWdSZXNwb25zZRJZCgxMaXN0QWNjb3VudHMSIy5idWRkeS5hZG1pbi52MS5MaXN0QWNjb3VudHNSZXF1ZXN0GiQuYnVkZHkuYWRtaW4udjEuTGlzdEFjY291bnRzUmVzcG9uc2USYgoPTGlzdENyZWRlbnRpYWxzEiYuYnVkZHkuYWRtaW4udjEuTGlzdENyZWRlbnRpYWxzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkxpc3RDcmVkZW50aWFsc1Jlc3BvbnNlEl8KDlRlc3RDcmVkZW50aWFsEiUuYnVkZHkuYWRtaW4udjEuVGVzdENyZWRlbnRpYWxSZXF1ZXN0GiYuYnVkZHkuYWRtaW4udjEuVGVzdENyZWRlbnRpYWxSZXNwb25zZRJoChFSZWZyZXNoQ3JlZGVudGlhbBIoLmJ1ZGR5LmFkbWluLnYxLlJlZnJlc2hDcmVkZW50aWFsUmVxdWVzdBopLmJ1ZGR5LmFkbWluLnYxLlJlZnJlc2hDcmVkZW50aWFsUmVzcG9uc2USUwoKR2V0QmFsYW5jZRIhLmJ1ZGR5LmFkbWluLnYxLkdldEJhbGFuY2VSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuR2V0QmFsYW5jZVJlc3BvbnNlEmIKD0dldFVzYWdlU3VtbWFyeRImLmJ1ZGR5LmFkbWluLnYxLkdldFVzYWdlU3VtbWFyeVJlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5HZXRVc2FnZVN1bW1hcnlSZXNwb25zZRJiCg9MaXN0VXNhZ2VFdmVudHMSJi5idWRkeS5hZG1pbi52MS5MaXN0VXNhZ2VFdmVudHNSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuTGlzdFVzYWdlRXZlbnRzUmVzcG9uc2USbgoTTGlzdFB1Ymxpc2hlZE1vZGVscxIqLmJ1ZGR5LmFkbWluLnYxLkxpc3RQdWJsaXNoZWRNb2RlbHNSZXF1ZXN0GisuYnVkZHkuYWRtaW4udjEuTGlzdFB1Ymxpc2hlZE1vZGVsc1Jlc3BvbnNlEmsKElNhdmVQdWJsaXNoZWRNb2RlbBIpLmJ1ZGR5LmFkbWluLnYxLlNhdmVQdWJsaXNoZWRNb2RlbFJlcXVlc3QaKi5idWRkeS5hZG1pbi52MS5TYXZlUHVibGlzaGVkTW9kZWxSZXNwb25zZRJxChREZWxldGVQdWJsaXNoZWRNb2RlbBIrLmJ1ZGR5LmFkbWluLnYxLkRlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBosLmJ1ZGR5LmFkbWluLnYxLkRlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2USZQoQR2V0QmVuZWZpdFN0YXR1cxInLmJ1ZGR5LmFkbWluLnYxLkdldEJlbmVmaXRTdGF0dXNSZXF1ZXN0GiguYnVkZHkuYWRtaW4udjEuR2V0QmVuZWZpdFN0YXR1c1Jlc3BvbnNlElwKDVJ1bkJlbmVmaXROb3cSJC5idWRkeS5hZG1pbi52MS5SdW5CZW5lZml0Tm93UmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLlJ1bkJlbmVmaXROb3dSZXNwb25zZRJTCgpMaXN0TW9kZWxzEiEuYnVkZHkuYWRtaW4udjEuTGlzdE1vZGVsc1JlcXVlc3QaIi5idWRkeS5hZG1pbi52MS5MaXN0TW9kZWxzUmVzcG9uc2USSgoHVGFpbExvZxIeLmJ1ZGR5LmFkbWluLnYxLlRhaWxMb2dSZXF1ZXN0Gh8uYnVkZHkuYWRtaW4udjEuVGFpbExvZ1Jlc3BvbnNlYgZwcm90bzM");
 
 /**
  * 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
@@ -63,6 +63,20 @@ export type Upstream = Message<"buddy.admin.v1.Upstream"> & {
    * @generated from field: buddy.admin.v1.BalanceSummary balance = 6;
    */
   balance?: BalanceSummary;
+
+  /**
+   * 上游的地址。
+   *
+   * @generated from field: string base_url = 7;
+   */
+  baseUrl: string;
+
+  /**
+   * 区域：cn / global。
+   *
+   * @generated from field: string region = 8;
+   */
+  region: string;
 };
 
 /**
@@ -74,6 +88,7 @@ export const UpstreamSchema: GenMessage<Upstream> = /*@__PURE__*/
 
 /**
  * 凭据的状态。
+ * 时间戳一律 Unix 毫秒。只有名字里带 _sec 的才是秒。
  *
  * @generated from message buddy.admin.v1.CredentialStatus
  */
@@ -98,11 +113,15 @@ export type CredentialStatus = Message<"buddy.admin.v1.CredentialStatus"> & {
   fingerprint: string;
 
   /**
+   * Unix 毫秒。
+   *
    * @generated from field: int64 expires_at = 4;
    */
   expiresAt: bigint;
 
   /**
+   * 秒。
+   *
    * @generated from field: int64 remaining_sec = 5;
    */
   remainingSec: bigint;
@@ -137,31 +156,46 @@ export const CredentialStatusSchema: GenMessage<CredentialStatus> = /*@__PURE__*
  */
 export type BalanceSummary = Message<"buddy.admin.v1.BalanceSummary"> & {
   /**
-   * @generated from field: double available_cny = 1;
+   * 这个余额属于哪个上游。
+   *
+   * @generated from field: string upstream_id = 1;
+   */
+  upstreamId: string;
+
+  /**
+   * 属于哪个账号。同一个上游可能有多个账号（TokenRhythm 每个租户一条）。
+   *
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: double available_cny = 3;
    */
   availableCny: number;
 
   /**
-   * @generated from field: string currency = 2;
+   * @generated from field: string currency = 4;
    */
   currency: string;
 
   /**
    * 每一笔赠金。
    *
-   * @generated from field: repeated buddy.admin.v1.CreditLot lots = 3;
+   * @generated from field: repeated buddy.admin.v1.CreditLot lots = 5;
    */
   lots: CreditLot[];
 
   /**
    * 平台给的到期指针：最早到期的赠金是哪一批。
+   * Unix 毫秒。
    *
-   * @generated from field: int64 next_expiry_at = 4;
+   * @generated from field: int64 next_expiry_at = 6;
    */
   nextExpiryAt: bigint;
 
   /**
-   * @generated from field: double expiring_cny = 5;
+   * @generated from field: double expiring_cny = 7;
    */
   expiringCny: number;
 };
@@ -426,6 +460,8 @@ export type ConfigItem = Message<"buddy.admin.v1.ConfigItem"> & {
   source: string;
 
   /**
+   * 这个键在代码里的默认值。不是上一个来源的值。
+   *
    * @generated from field: string fallback = 4;
    */
   fallback: string;
@@ -443,9 +479,19 @@ export type ConfigItem = Message<"buddy.admin.v1.ConfigItem"> & {
   description: string;
 
   /**
+   * 这一项是不是敏感项。敏感项只写不读：value 不给真值。
+   *
    * @generated from field: bool secret = 7;
    */
   secret: boolean;
+
+  /**
+   * 敏感项现在有没有值。留着空表示不改，别把掩码当值回传。
+   * 敏感项的 value 是空串：只写不读，掩码长得像值。
+   *
+   * @generated from field: bool has_value = 8;
+   */
+  hasValue: boolean;
 };
 
 /**
@@ -570,6 +616,13 @@ export type Account = Message<"buddy.admin.v1.Account"> & {
    * @generated from field: string detail = 6;
    */
   detail: string;
+
+  /**
+   * 这个账号的余额摘要。没有余额的账号不带这个。
+   *
+   * @generated from field: buddy.admin.v1.BalanceSummary balance = 7;
+   */
+  balance?: BalanceSummary;
 };
 
 /**
@@ -655,6 +708,8 @@ export type Credential = Message<"buddy.admin.v1.Credential"> & {
   fingerprint: string;
 
   /**
+   * usable / expired / missing —— 与 Account.status 同一套词。
+   *
    * @generated from field: string status = 8;
    */
   status: string;
@@ -665,6 +720,8 @@ export type Credential = Message<"buddy.admin.v1.Credential"> & {
   generation: number;
 
   /**
+   * Unix 毫秒。
+   *
    * @generated from field: int64 expires_at = 10;
    */
   expiresAt: bigint;
@@ -697,6 +754,8 @@ export const CredentialSchema: GenMessage<Credential> = /*@__PURE__*/
  */
 export type ListCredentialsRequest = Message<"buddy.admin.v1.ListCredentialsRequest"> & {
   /**
+   * 空串表示全部账号的凭据。
+   *
    * @generated from field: string account_id = 1;
    */
   accountId: string;
@@ -758,6 +817,8 @@ export type TestCredentialResponse = Message<"buddy.admin.v1.TestCredentialRespo
   message: string;
 
   /**
+   * Unix 毫秒。
+   *
    * @generated from field: int64 checked_at = 3;
    */
   checkedAt: bigint;
@@ -907,7 +968,7 @@ export type GetUsageSummaryRequest = Message<"buddy.admin.v1.GetUsageSummaryRequ
   upstreamId: string;
 
   /**
-   * 按天 / 按小时。
+   * 时间窗。空 = 全部。hour / day / week / month，或 30d、12h 这样的写法。
    *
    * @generated from field: string window = 2;
    */
@@ -999,6 +1060,13 @@ export type ListUsageEventsRequest = Message<"buddy.admin.v1.ListUsageEventsRequ
    * @generated from field: string model = 3;
    */
   model: string;
+
+  /**
+   * 游标：只返回 id 比它小的。0 表示从头。
+   *
+   * @generated from field: int64 before_id = 4;
+   */
+  beforeId: bigint;
 };
 
 /**
@@ -1013,11 +1081,15 @@ export const ListUsageEventsRequestSchema: GenMessage<ListUsageEventsRequest> = 
  */
 export type UsageEvent = Message<"buddy.admin.v1.UsageEvent"> & {
   /**
+   * 按时间排出来的序号，只在这一批数据里有效，不是持久 id。
+   *
    * @generated from field: int64 id = 1;
    */
   id: bigint;
 
   /**
+   * Unix 毫秒。
+   *
    * @generated from field: int64 ts = 2;
    */
   ts: bigint;
@@ -1045,32 +1117,39 @@ export type UsageEvent = Message<"buddy.admin.v1.UsageEvent"> & {
   dialect: string;
 
   /**
-   * @generated from field: int64 prompt_tokens = 7;
+   * 这次请求模拟的是哪个桌面客户端。
+   *
+   * @generated from field: string client = 7;
+   */
+  client: string;
+
+  /**
+   * @generated from field: int64 prompt_tokens = 8;
    */
   promptTokens: bigint;
 
   /**
-   * @generated from field: int64 completion_tokens = 8;
+   * @generated from field: int64 completion_tokens = 9;
    */
   completionTokens: bigint;
 
   /**
-   * @generated from field: int64 reasoning_tokens = 9;
+   * @generated from field: int64 reasoning_tokens = 10;
    */
   reasoningTokens: bigint;
 
   /**
-   * @generated from field: int64 latency_ms = 10;
+   * @generated from field: int64 latency_ms = 11;
    */
   latencyMs: bigint;
 
   /**
-   * @generated from field: string status = 11;
+   * @generated from field: string status = 12;
    */
   status: string;
 
   /**
-   * @generated from field: string error = 12;
+   * @generated from field: string error = 13;
    */
   error: string;
 };
@@ -1128,26 +1207,30 @@ export type PublishedModel = Message<"buddy.admin.v1.PublishedModel"> & {
   strategy: string;
 
   /**
-   * @generated from field: int32 context_window = 5;
+   * 不给表示继承目标的值。给了就用这个值。
+   *
+   * @generated from field: optional int32 context_window = 5;
    */
-  contextWindow: number;
+  contextWindow?: number;
 
   /**
-   * @generated from field: int32 max_output_tokens = 6;
+   * @generated from field: optional int32 max_output_tokens = 6;
    */
-  maxOutputTokens: number;
+  maxOutputTokens?: number;
 
   /**
-   * @generated from field: bool reasoning = 7;
+   * @generated from field: optional bool reasoning = 7;
    */
-  reasoning: boolean;
+  reasoning?: boolean;
 
   /**
-   * @generated from field: bool tool_call = 8;
+   * @generated from field: optional bool tool_call = 8;
    */
-  toolCall: boolean;
+  toolCall?: boolean;
 
   /**
+   * 空表示继承目标支持的档位。
+   *
    * @generated from field: repeated string effort_options = 9;
    */
   effortOptions: string[];
@@ -1202,7 +1285,7 @@ export type PublishedTarget = Message<"buddy.admin.v1.PublishedTarget"> & {
   enabled: boolean;
 
   /**
-   * 这个目标分到了多少请求。
+   * 这个目标分到了多少请求。只读：保存时会被网关自己的计数覆盖。
    *
    * @generated from field: int64 requests = 6;
    */
@@ -1256,6 +1339,8 @@ export const ListPublishedModelsResponseSchema: GenMessage<ListPublishedModelsRe
  */
 export type SavePublishedModelRequest = Message<"buddy.admin.v1.SavePublishedModelRequest"> & {
   /**
+   * model.id 为空表示新建，非空表示改那一条。
+   *
    * @generated from field: buddy.admin.v1.PublishedModel model = 1;
    */
   model?: PublishedModel;

@@ -1,0 +1,6 @@
+# 面板是一个独立的包：依赖装在 web/node_modules 里，不跟根目录共享。
+#
+# pnpm 12 把构建脚本的白名单放在这里（不再读 package.json 的 pnpm 字段）。
+# esbuild 需要跑它的安装脚本把二进制准备好，否则 vite 起不来。
+allowBuilds:
+  esbuild: true

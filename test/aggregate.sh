@@ -8,6 +8,9 @@
 # list it always showed. Once the database holds a model, the database is the
 # catalog, and a model with more than one target falls back to the next one
 # when the first fails.
+#
+# The panel's side of it goes through Connect now: POST
+# /buddy.admin.v1.AdminService/<method> with the panel's token.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,6 +53,18 @@ for _ in $(seq 1 60); do
 done
 
 BASE="http://127.0.0.1:$ROUTER_PORT"
+ADMIN="$BASE/buddy.admin.v1.AdminService"
+# The panel's token: the gateway generated it into the data directory.
+TOKEN="$(cat "$BUDDY_DATA_DIR/admin-token" 2>/dev/null)"
+
+# One Connect call: the method, the body, and the answer.
+admin() {
+  local method="$1" body="${2:-{\}}"
+  curl -fsS -X POST "$ADMIN/$method" \
+    -H 'content-type: application/json' \
+    -H "authorization: Bearer $TOKEN" \
+    -d "$body"
+}
 
 echo ""
 echo "the aggregate catalog"
@@ -73,9 +88,9 @@ code=$(curl -s -o /tmp/opencode/aggregate-auto.json -w '%{http_code}' \
 echo ""
 echo "a model from the database"
 
-node --experimental-strip-types test/aggregate-setup.ts save "smart" "Smart" "fallback" \
-  "qoder:glm-5.3" "workbuddy-cn:glm-5.3-flash" > /dev/null
-curl -fsS -X POST "$BASE/admin/reload" > /dev/null
+saved=$(admin SavePublishedModel '{"model":{"id":"smart","displayName":"Smart","strategy":"fallback","enabled":true,"targets":[{"groupName":"qoder","upstreamModel":"glm-5.3","weight":1,"position":0,"enabled":true},{"groupName":"workbuddy-cn","upstreamModel":"glm-5.3-flash","weight":1,"position":1,"enabled":true}]}}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
+[ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
 
 count=$(curl -fsS "$BASE/v1/models" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
 [ "$count" = "1" ] && check "the database is the catalog" 1 || check "the database is the catalog" 0
@@ -98,42 +113,49 @@ code=$(curl -s -o /tmp/opencode/aggregate-fallback.json -w '%{http_code}' \
   -d '{"model":"smart","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{"type":"object","properties":{}}}}]}')
 [ "$code" = "200" ] && check "the second target answers" 1 || check "the second target answers" 0
 
-usage=$(curl -fsS "$BASE/admin/usage")
-first=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(sum(r["failed"] for r in d if r["group"]=="qoder"))')
-second=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(sum(r["succeeded"] for r in d if r["group"]=="workbuddy-cn"))')
+usage=$(admin GetUsageSummary '{}')
+first=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(int(b["summary"]["failed"]) for b in d.get("byUpstream",[]) if b["key"]=="qoder"))')
+second=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(int(b["summary"]["succeeded"]) for b in d.get("byUpstream",[]) if b["key"]=="workbuddy-cn"))')
 [ "$first" -ge 1 ] && check "the failure is counted against the first target" 1 || check "the failure is counted against the first target" 0
 [ "$second" -ge 1 ] && check "the success is counted against the second target" 1 || check "the success is counted against the second target" 0
+
+events=$(admin ListUsageEvents '{"limit":50}')
+rows=$(echo "$events" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("events",[])))')
+[ "$rows" -ge 1 ] && check "the traffic shows up in the events" 1 || check "the traffic shows up in the events" 0
 
 echo ""
 echo "the panel"
 
-saved=$(curl -fsS -X POST "$BASE/admin/models" -H 'content-type: application/json' \
-  -d '{"id":"from-panel","displayName":"From the panel","strategy":"single","targets":[{"group":"qoder","upstreamModel":"glm-5.3"}]}' \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("saved"))')
-[ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
-
-listed=$(curl -fsS "$BASE/admin/models" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
+listed=$(admin ListPublishedModels '{}' | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("models",[])))')
 [ "$listed" -ge 1 ] && check "the panel can read the models back" 1 || check "the panel can read the models back" 0
 
-# The save does not change anything until the panel asks for it.
+# A model that is not published is not served, and saving one is enough.
 before=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completions" \
   -H 'content-type: application/json' \
   -d '{"model":"from-panel","messages":[{"role":"user","content":"hi"}]}')
-[ "$before" = "404" ] && check "a saved model waits for the reload" 1 || check "a saved model waits for the reload" 0
+[ "$before" = "404" ] && check "an unsaved model is not served" 1 || check "an unsaved model is not served" 0
 
-curl -fsS -X POST "$BASE/admin/reload" > /dev/null
+saved=$(admin SavePublishedModel '{"model":{"id":"from-panel","displayName":"From the panel","strategy":"single","enabled":true,"targets":[{"groupName":"qoder","upstreamModel":"glm-5.3","weight":1,"position":0,"enabled":true}]}}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
+[ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
+
 after=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completions" \
   -H 'content-type: application/json' \
   -d '{"model":"from-panel","messages":[{"role":"user","content":"hi"}]}')
-[ "$after" = "200" ] && check "the reload makes the saved model live" 1 || check "the reload makes the saved model live" 0
+[ "$after" = "200" ] && check "a saved model is live right away" 1 || check "a saved model is live right away" 0
 
-deleted=$(curl -fsS -X DELETE "$BASE/admin/models/from-panel" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deleted"))')
+deleted=$(admin DeletePublishedModel '{"id":"from-panel"}' | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
 [ "$deleted" = "True" ] && check "the panel can delete a model" 1 || check "the panel can delete a model" 0
+
+gone=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completions" \
+  -H 'content-type: application/json' \
+  -d '{"model":"from-panel","messages":[{"role":"user","content":"hi"}]}')
+[ "$gone" = "404" ] && check "a deleted model is gone" 1 || check "a deleted model is gone" 0
 
 echo ""
 echo "the traffic"
 
-tokens=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(sum(r.get("completionTokens") or 0 for r in d))')
+tokens=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(int(d.get("total",{}).get("completionTokens",0) or 0))')
 [ "$tokens" -gt 0 ] && check "the tokens are counted" 1 || check "the tokens are counted" 0
 
 echo ""

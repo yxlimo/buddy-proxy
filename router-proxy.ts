@@ -17,28 +17,23 @@
 //   Anthropic → Qoder  converted to Anthropic on the way in
 //   Anthropic → MiniMax passes through
 
-import { configString, configFlag, configNumber, logConfig, reloadConfig } from "./lib/config.ts";
+import { configString, configFlag, configNumber, logConfig } from "./lib/config.ts";
 import Koa from "koa";
 import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
 import { authenticate, loadKeys, REQUIRE_API_KEY } from "./lib/api-keys.ts";
-import { readEnvFlag, readEnvNumber, readEnvString } from "./lib/env.ts";
-import { deleteSecret, listSecrets, peekCached, setCached } from "./lib/store.ts";
+import { deleteSecret, listSecrets } from "./lib/store.ts";
 import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder/transport.ts";
-import { QODER_MODELS, qoderModelsForRegion } from "./lib/qoder/models.ts";
+import { QODER_MODELS } from "./lib/qoder/models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax/models.ts";
-import { fetchMiniMaxBalance, miniMaxTokenPlan } from "./lib/minimax/credits.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
-import { tokenRhythmCatalogModels } from "./lib/router/catalog.ts";
 import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
 import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
 import { qoderStatus, type QoderRegion } from "./lib/qoder/auth.ts";
-import { checkAccountHealth, fetchQoderCredits, type QoderAccountHealth } from "./lib/qoder/credits.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
-import { workBuddyFallbackModels, type WorkBuddyModel } from "./lib/workbuddy/models.ts";
 import { ensureMinimaxSession, ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
 import {
   toMinimax,
@@ -48,7 +43,6 @@ import {
   type UpstreamContext,
 } from "./lib/router/upstreams.ts";
 import {
-  resolveRoute,
   routeInGroup,
   UPSTREAM_GROUPS,
   type Route,
@@ -56,77 +50,51 @@ import {
   type UpstreamGroup,
 } from "./lib/router/routes.ts";
 import {
-  anthropicCatalog,
   aggregateAnthropicCatalog,
   aggregateCatalog,
   aggregateOpenAICatalog,
   groupCatalog,
-  openaiCatalog,
-  qoderCatalogModels,
-  workbuddyCatalogModels,
-  minimaxCatalogModels,
   type AggregateEntry,
-  type CatalogGroup,
 } from "./lib/router/catalog.ts";
+import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
+// The panel: the Connect routes, the token, the static files.
+import { adminToken } from "./lib/admin/token.ts";
+import { CONNECT_PREFIX, connectMiddleware, hasWebDist, staticMiddleware, webDistDir } from "./lib/admin/http.ts";
+import { BENEFITS_INTERVAL_MS, benefitUpstreams, benefits } from "./lib/admin/benefits.ts";
 import {
-  aggregateModels,
-  deleteAggregateModel,
-  getAggregateModel,
-  listAggregateModels,
-  listAggregateUsage,
-  recordAggregateUsage,
-  reloadAggregate,
-  saveAggregateModel,
-  type AggregateModelInput,
-} from "./lib/aggregate.ts";
-import { type BenefitUpstream } from "./lib/benefits.ts";
-import { fetchWorkBuddyCredits } from "./lib/workbuddy/credits.ts";
-import { BenefitsRunner } from "./lib/router/benefits.ts";
+  HEALTH_CACHE_MS,
+  MINIMAX_VISIBLE,
+  QODER_CN,
+  QODER_CN_ALL,
+  QODER_GLOBAL,
+  QODER_GLOBAL_ALL,
+  UPSTREAM_FLAGS,
+  catalogGroups,
+  healthRefreshing,
+  healthSnapshot,
+  qoderRegions,
+  refreshHealthSnapshot,
+  setWorkbuddyCatalog,
+  workbuddyCatalog,
+  workbuddyModelIds,
+} from "./lib/admin/upstreams.ts";
 
 const PORT = configNumber("ROUTER_PORT", 6450);
 const HOST = configString("ROUTER_HOST", "0.0.0.0");
 // Which upstreams this router serves. Each flag turns on one reverse proxy; an
 // upstream that is off is not looked at at all — no credential read, no login,
 // no models advertised, and a request for one is refused with a clear message.
-const ENABLED_MINIMAX = configFlag("MINIMAX_CODE", false);
-const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
+const ENABLED_MINIMAX = UPSTREAM_FLAGS.minimax;
 // How often the MiniMax credential is looked at, so a warning reaches the log
 // even when nothing is being asked for.
 const MINIMAX_WATCH_MS = configNumber("MINIMAX_WATCH_MS", 5 * 60 * 1000);
-const ENABLED_QODER_GLOBAL = configFlag("QODER_GLOBAL", false);
-const ENABLED_QODER_CN = configFlag("QODER_CN", false);
-const ENABLED_WORKBUDDY_CN = configFlag("WORKBUDDY_CN", false);
-const ENABLED_TOKENRHYTHM = configFlag("TOKENRHYTHM", false);
+const ENABLED_QODER_GLOBAL = UPSTREAM_FLAGS.qoder;
+const ENABLED_QODER_CN = UPSTREAM_FLAGS["qoder-cn"];
+const ENABLED_WORKBUDDY_CN = UPSTREAM_FLAGS["workbuddy-cn"];
+const ENABLED_TOKENRHYTHM = UPSTREAM_FLAGS.tokenrhythm;
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 
-/* ------------------------------------------------------------------ *
- * The daily benefits of the China accounts
- * ------------------------------------------------------------------ */
-
-/**
- * How often the check-in runs. The day rolls over at midnight in China.
- *
- * An hour, not a day: the Buddy trip lasts one to four hours, so a gift that
- * is already waiting would otherwise sit for hours after it arrived.
- */
-const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
-
-/** The accounts that hand out credits and are switched on. */
-function benefitUpstreams(): BenefitUpstream[] {
-  if (configFlag("BENEFITS_DISABLED", false)) return [];
-  const out: BenefitUpstream[] = [];
-  if (ENABLED_WORKBUDDY_CN) out.push("workbuddy-cn");
-  if (ENABLED_QODER_CN) out.push("qoder-cn");
-  if (ENABLED_QODER_GLOBAL) out.push("qoder-global");
-  return out;
-}
-
-const benefits = new BenefitsRunner({ intervalMs: BENEFITS_INTERVAL_MS, upstreams: benefitUpstreams() });
-
-const QODER_REGIONS: QoderRegion[] = [
-  ...(ENABLED_QODER_GLOBAL ? (["global"] as QoderRegion[]) : []),
-  ...(ENABLED_QODER_CN ? (["cn"] as QoderRegion[]) : []),
-];
+const QODER_REGIONS: QoderRegion[] = qoderRegions();
 const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
 // The legacy endpoint queues models and reports 429 while a request waits. The
 // CLI retries these, so the proxy does too — with the same shape.
@@ -141,24 +109,17 @@ const WORKBUDDY_CATALOG_TTL_MS = configNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 6
 type Dialect = "anthropic" | "openai";
 
 const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
-const MINIMAX_VISIBLE = ENABLED_MINIMAX ? MINIMAX_MODELS : [];
-// Only the models each region can actually serve are advertised. The rest stay
-// in the catalog so a request for one gets a clear "not available here"
-// instead of being sent to an upstream that will not answer. A region that is
-// not enabled contributes no models at all.
-const QODER_GLOBAL = ENABLED_QODER_GLOBAL ? qoderModelsForRegion("global") : [];
-const QODER_CN = ENABLED_QODER_CN ? qoderModelsForRegion("cn") : [];
 const QODER_VISIBLE = [...QODER_GLOBAL, ...QODER_CN];
 const QODER_MODEL_IDS = new Set(QODER_VISIBLE.map((m) => m.id));
 const QODER_HIDDEN_IDS = new Set(QODER_MODELS.filter((m) => !QODER_MODEL_IDS.has(m.id)).map((m) => m.id));
-const GLOBAL_QODER_IDS = new Set(qoderModelsForRegion("global").map((m) => m.id));
-const CN_QODER_IDS = new Set(qoderModelsForRegion("cn").map((m) => m.id));
+const GLOBAL_QODER_IDS = new Set(QODER_GLOBAL_ALL.map((m) => m.id));
+const CN_QODER_IDS = new Set(QODER_CN_ALL.map((m) => m.id));
 // WorkBuddy's models are addressed by prefix only: several of them (glm-5.3,
 // kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
 // would be ambiguous. The list starts as the bundled snapshot and is replaced
-// by the upstream's own catalogue as soon as it can be fetched.
-let WORKBUDDY_CN: WorkBuddyModel[] = ENABLED_WORKBUDDY_CN ? workBuddyFallbackModels() : [];
-let WORKBUDDY_CN_IDS = new Set(WORKBUDDY_CN.map((m) => m.id));
+// by the upstream's own catalogue as soon as it can be fetched. The catalogue
+// itself lives in lib/admin/upstreams.ts, because the health endpoint and the
+// panel look at the same one.
 let workbuddyCatalogAt = 0;
 
 /** The upstream catalogue, refreshed at most every half hour. */
@@ -169,8 +130,7 @@ async function refreshWorkBuddyCatalog(force = false): Promise<void> {
   try {
     const models = await fetchWorkBuddyCatalog("cn");
     if (models?.length) {
-      WORKBUDDY_CN = models;
-      WORKBUDDY_CN_IDS = new Set(models.map((m) => m.id));
+      setWorkbuddyCatalog(models);
       workbuddyCatalogAt = Date.now();
     }
   } catch (e) {
@@ -222,60 +182,9 @@ const requireKey: Koa.Middleware = async (ctx, next) => {
 const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
 
 /**
- * The parts of /health that ask the upstreams.
- *
- * They are the slow part — a dozen calls to five different platforms — so they
- * are kept in the database and refreshed in the background. What the endpoint
- * answers with is the last known state, which is what a health check wants
- * anyway.
+ * The parts of /health that ask the upstreams live in lib/admin/upstreams.ts,
+ * because the management panel needs the same answers.
  */
-interface HealthSnapshot {
-  qoder: Record<string, { account: unknown; credits: unknown }>;
-  minimax: { balance: unknown; tokenPlan: unknown };
-  workbuddy: { credits: unknown };
-  tokenrhythm: { tenants: unknown };
-}
-
-const HEALTH_CACHE_ID = "health:upstreams";
-const HEALTH_CACHE_MS = configNumber("HEALTH_CACHE_MS", 300_000);
-let healthRefresh: Promise<void> | null = null;
-
-/** Ask the upstreams how they are, and remember the answer. */
-async function refreshHealthSnapshot(): Promise<void> {
-  const qoder: HealthSnapshot["qoder"] = {};
-  for (const region of QODER_REGIONS) {
-    let account: QoderAccountHealth | Record<string, unknown>;
-    try {
-      account = await checkAccountHealth(region);
-    } catch (e) {
-      account = { region, usable: false, reason: (e as Error)?.message };
-    }
-    qoder[region] = { account, credits: await fetchQoderCredits(region) };
-  }
-  const snapshot: HealthSnapshot = {
-    qoder,
-    minimax: { balance: await miniMaxBalance(), tokenPlan: await miniMaxTokenPlan() },
-    workbuddy: { credits: await fetchWorkBuddyCredits() },
-    tokenrhythm: { tenants: await tokenRhythmStatuses() },
-  };
-  setCached(HEALTH_CACHE_ID, snapshot);
-}
-
-/** The snapshot, and a refresh started if it is due. */
-function healthSnapshot(): { data: HealthSnapshot | null; at: number; stale: boolean } {
-  const cached = peekCached<HealthSnapshot>(HEALTH_CACHE_ID);
-  const at = cached?.at ?? 0;
-  const stale = !cached || Date.now() - at > HEALTH_CACHE_MS;
-  if (stale && !healthRefresh) {
-    healthRefresh = refreshHealthSnapshot()
-      .catch((e) => console.warn(`[HEALTH] refresh failed: ${(e as Error)?.message}`))
-      .finally(() => {
-        healthRefresh = null;
-      });
-  }
-  return { data: cached?.data ?? null, at, stale };
-}
-
 router.get("/health", async (ctx) => {
   const snapshot = healthSnapshot();
   const regions: Record<string, unknown> = {};
@@ -314,7 +223,7 @@ router.get("/health", async (ctx) => {
       workbuddy: ENABLED_WORKBUDDY_CN
         ? {
             region: "cn",
-            models: WORKBUDDY_CN.length,
+            models: workbuddyCatalog().length,
             credential: workbuddyStatus("cn"),
             credits: snapshot.data?.workbuddy?.credits ?? null,
           }
@@ -330,7 +239,7 @@ router.get("/health", async (ctx) => {
     snapshot: {
       at: snapshot.at ? new Date(snapshot.at).toISOString() : null,
       stale: snapshot.stale,
-      refreshing: healthRefresh !== null,
+      refreshing: healthRefreshing(),
       maxAgeMs: HEALTH_CACHE_MS,
     },
     auth: REQUIRE_API_KEY ? "api-key" : "public",
@@ -345,21 +254,9 @@ router.get("/health", async (ctx) => {
 });
 
 /**
- * One upstream's catalogue, with the real model ids.
- *
- * A client that talks to one upstream does not need the prefix: the path says
- * which upstream it is, so the ids are the plain ones.
+ * One upstream's catalogue, with the real model ids, is in
+ * lib/admin/upstreams.ts — the health endpoint and the panel want the same one.
  */
-/** The models of every enabled upstream, in the shape the list is built from. */
-function catalogGroups(): CatalogGroup[] {
-  const groups: CatalogGroup[] = [];
-  if (QODER_GLOBAL.length) groups.push({ group: "qoder", models: qoderCatalogModels(QODER_GLOBAL) });
-  if (QODER_CN.length) groups.push({ group: "qoder-cn", models: qoderCatalogModels(QODER_CN) });
-  if (WORKBUDDY_CN.length) groups.push({ group: "workbuddy-cn", models: workbuddyCatalogModels(WORKBUDDY_CN) });
-  if (MINIMAX_VISIBLE.length) groups.push({ group: "minimax", models: minimaxCatalogModels(MINIMAX_VISIBLE) });
-  if (ENABLED_TOKENRHYTHM) groups.push({ group: "tokenrhythm", models: tokenRhythmCatalogModels() });
-  return groups;
-}
 
 /** What the adapters need to know about the router they run in. */
 function upstreamContext(): UpstreamContext {
@@ -370,23 +267,9 @@ function upstreamContext(): UpstreamContext {
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
     tokenRhythmMaxAttempts: TOKENRHYTHM_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
-    workbuddyMaxOutput: (model: string) => WORKBUDDY_CN.find((m) => m.id === model)?.maxOutput ?? 64000,
-    workbuddyModel: (model: string) => WORKBUDDY_CN.find((m) => m.id === model) ?? null,
+    workbuddyMaxOutput: (model: string) => workbuddyCatalog().find((m) => m.id === model)?.maxOutput ?? 64000,
+    workbuddyModel: (model: string) => workbuddyCatalog().find((m) => m.id === model) ?? null,
   };
-}
-
-/**
- * The MiniMax account's balance.
- *
- * The router holds the session, so it is the one that can ask the platform.
- */
-async function miniMaxBalance(): Promise<unknown> {
-  try {
-    const cred = await readCredential();
-    return await fetchMiniMaxBalance(cred.accessToken, MINIMAX_REGION === "en" ? "global" : "cn");
-  } catch {
-    return null;
-  }
 }
 
 /** What the router is serving, and what it knows about. */
@@ -404,7 +287,7 @@ function routingContext(): RoutingContext {
       qoderCn: CN_QODER_IDS,
       qoderHidden: QODER_HIDDEN_IDS,
       minimax: MINIMAX_MODEL_IDS,
-      workbuddy: WORKBUDDY_CN_IDS,
+      workbuddy: workbuddyModelIds(),
       tokenrhythm: TOKENRHYTHM_MODEL_IDS,
     },
   };
@@ -540,7 +423,7 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
       ctx.status = 404;
       ctx.body = {
         error: { type: "invalid_request_error", message: "no published models" },
-        hint: "根路由还没有发布任何模型。在面板里配置并保存后，POST /admin/reload 生效。",
+        hint: "根路由还没有发布任何模型。在面板里配置并保存后生效。",
       };
       return;
     }
@@ -548,82 +431,29 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
   });
 }
 
+/**
+ * The panel's API: Connect over HTTP.
+ *
+ * The path is the Connect standard one — POST /buddy.admin.v1.AdminService/<方法>
+ * — and the token goes in the Authorization header. The JSON routes that used
+ * to live here (/admin/reload, /admin/usage, /admin/models) are gone: those
+ * are in the contract now.
+ */
+router.all(`${CONNECT_PREFIX}/:method`, connectMiddleware());
+
+/**
+ * The panel's own files.
+ *
+ * The frontend is a single-page app, so a deep link falls back to index.html
+ * and the frontend's router sorts it out. When web/dist is not there yet there
+ * is nothing to serve, and the API works all the same.
+ */
+if (hasWebDist()) {
+  app.use(staticMiddleware(webDistDir()));
+}
+
 app.use(router.routes());
 app.use(router.allowedMethods());
-
-/**
- * Read the configuration again.
- *
- * The settings and the published models are read once and then kept, so the
- * panel can change them without a restart. The panel calls this when it wants
- * the change to take effect now.
- */
-router.post("/admin/reload", (ctx) => {
-  const settings = reloadConfig();
-  const models = reloadAggregate();
-  console.log(`[RELOAD] ${settings} settings, ${models} published models`);
-  ctx.body = { reloaded: true, settings, models };
-});
-
-/** What the traffic table holds, for the panel. */
-router.get("/admin/usage", (ctx) => {
-  ctx.body = { data: listAggregateUsage() };
-});
-
-/** The published models, for the panel. */
-router.get("/admin/models", (ctx) => {
-  ctx.body = { data: listAggregateModels() };
-});
-
-/**
- * Save a published model.
- *
- * The panel sends the whole model — its name, its metadata and the upstreams
- * behind it — and the gateway stores it. Nothing changes for the clients until
- * the panel asks for the configuration to be read again, so a panel that
- * edits several models can save them all and reload once.
- */
-router.post("/admin/models", parseBody, (ctx) => {
-  const input = (ctx.request.body ?? {}) as Partial<AggregateModelInput>;
-  const id = String(input.id ?? "").trim();
-  if (!id) {
-    ctx.status = 400;
-    ctx.body = { error: { type: "invalid_request_error", message: "the model needs an id" } };
-    return;
-  }
-  if (!Array.isArray(input.targets) || input.targets.length === 0) {
-    ctx.status = 400;
-    ctx.body = { error: { type: "invalid_request_error", message: "the model needs at least one target" } };
-    return;
-  }
-  const model = saveAggregateModel({
-    ...input,
-    id,
-    displayName: String(input.displayName ?? id),
-    targets: input.targets.map((t, index) => ({
-      group: t.group,
-      upstreamModel: t.upstreamModel,
-      weight: t.weight ?? 1,
-      position: t.position ?? index,
-      enabled: t.enabled !== false,
-    })),
-  });
-  console.log(`[MODEL] saved ${model.id} with ${model.targets.length} targets`);
-  ctx.body = { saved: true, model };
-});
-
-/** Forget a published model. */
-router.delete("/admin/models/:id", (ctx) => {
-  const id = String(ctx.params.id ?? "");
-  if (!getAggregateModel(id)) {
-    ctx.status = 404;
-    ctx.body = { error: { type: "invalid_request_error", message: `unknown model "${id}"` } };
-    return;
-  }
-  deleteAggregateModel(id);
-  console.log(`[MODEL] deleted ${id}`);
-  ctx.body = { deleted: true, id };
-});
 
 async function handle(
   ctx: Koa.Context,
@@ -641,7 +471,7 @@ async function handle(
       ctx.status = 404;
       ctx.body = {
         error: { type: "invalid_request_error", message: `unknown model "${wanted}"` },
-        hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后，POST /admin/reload 生效。",
+        hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后生效。",
       };
       return;
     }
@@ -723,12 +553,17 @@ function sendError(ctx: Koa.Context, e: unknown): void {
 
 app.listen(PORT, HOST, () => {
   const base = `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`;
+  // The panel's token: generated once, kept in the data directory. The
+  // operator reads it from the file and hands it to the panel.
+  adminToken();
   console.log("");
   console.log(`  router listening on ${base}`);
   console.log(`    Anthropic  ${base}/v1/messages`);
   console.log(`    OpenAI     ${base}/v1/chat/completions`);
   console.log(`    Models     ${base}/v1/models`);
   console.log(`    Health     ${base}/health`);
+  console.log(`    Panel      ${base}/admin${hasWebDist() ? "" : " (还没有构建产物)"}`);
+  console.log(`    Admin API  ${base}${CONNECT_PREFIX}/<Method>  (Bearer 令牌)`);
   console.log("");
   console.log(`  upstreams:`);
   console.log(
@@ -739,7 +574,7 @@ app.listen(PORT, HOST, () => {
     `    minimax  ${ENABLED_MINIMAX ? `${MINIMAX_UPSTREAM}  models=${MINIMAX_VISIBLE.length}` : "off"}`,
   );
   console.log(
-    `    workbuddy cn=${ENABLED_WORKBUDDY_CN ? `${WORKBUDDY_CN.length} models` : "off"}`,
+    `    workbuddy cn=${ENABLED_WORKBUDDY_CN ? `${workbuddyCatalog().length} models` : "off"}`,
   );
   console.log(
     `    tokenrhythm ${ENABLED_TOKENRHYTHM ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
@@ -832,7 +667,7 @@ app.listen(PORT, HOST, () => {
         );
         // The catalogue needs a token, so it comes after the login.
         await refreshWorkBuddyCatalog(true);
-        console.log(`  [WORKBUDDY] catalogue: ${WORKBUDDY_CN.length} models`);
+        console.log(`  [WORKBUDDY] catalogue: ${workbuddyCatalog().length} models`);
         // A fresh session is worth a run right away.
         void benefits.runOnce();
       })

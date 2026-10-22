@@ -45,6 +45,15 @@ const settings = new Map<string, Setting>();
 const answers = new Map<string, { raw: string; source: ConfigSource }>();
 
 /**
+ * The value each setting had when the process started.
+ *
+ * The panel writes to the database, but the process keeps using the value it
+ * read at startup. The two differ means "changed, but not applied yet" — the
+ * panel has to say so.
+ */
+const startup = new Map<string, { raw: string; source: ConfigSource }>();
+
+/**
  * Which panel a setting belongs to.
  *
  * The name of the setting says it — the prefix is the upstream it is about.
@@ -81,6 +90,7 @@ function resolve(key: string, fallback: string | number | boolean): { raw: strin
     }
   }
   answers.set(key, { raw, source });
+  if (!startup.has(key)) startup.set(key, { raw, source });
   return { raw, source };
 }
 
@@ -186,6 +196,30 @@ export function reloadConfig(): number {
 /** Every setting the service asked for, with its value and its source. */
 export function configSnapshot(): Setting[] {
   return [...settings.values()].map((s) => ({ ...s }));
+}
+
+/**
+ * The value a setting had when the process started, and where it came from.
+ *
+ * `null` for a setting the service never asked for.
+ */
+export function configStartup(key: string): { raw: string; source: ConfigSource } | null {
+  return startup.get(key) ?? null;
+}
+
+/**
+ * True when the database holds a value the running process has not picked up.
+ *
+ * The panel writes an override, the process reads its settings at startup, so
+ * a changed override is waiting for a restart.
+ */
+export function configPendingRestart(): boolean {
+  for (const row of listConfig()) {
+    const atStart = startup.get(row.key);
+    if (!atStart) continue;
+    if (atStart.raw !== row.value) return true;
+  }
+  return false;
 }
 
 /** The settings that are written in the database, and nothing else. */

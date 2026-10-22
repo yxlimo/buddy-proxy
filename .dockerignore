@@ -30,3 +30,10 @@ tools/
 Dockerfile
 .dockerignore
 docker-compose.yml
+
+# The panel is built in its own stage; its sources never reach the runtime
+# image, only the built files do. But the stage needs the sources, so they
+# must not be ignored — web/node_modules and web/dist are rebuilt anyway.
+web/node_modules/
+web/dist/
+web/src/routeTree.gen.ts

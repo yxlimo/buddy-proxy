@@ -24,16 +24,23 @@ message Upstream {
   CredentialStatus credential = 5;
   // 余额的摘要，没有余额的上游不带这个。
   BalanceSummary balance = 6;
+  // 上游的地址。
+  string base_url = 7;
+  // 区域：cn / global。
+  string region = 8;
 }
 
 // 凭据的状态。
+// 时间戳一律 Unix 毫秒。只有名字里带 _sec 的才是秒。
 message CredentialStatus {
   string kind = 1;
   // authenticated / missing / expired / error
   string status = 2;
   // 只留前几位，不给全文。
   string fingerprint = 3;
+  // Unix 毫秒。
   int64 expires_at = 4;
+  // 秒。
   int64 remaining_sec = 5;
   bool warning = 6;
   string detail = 7;
@@ -42,13 +49,18 @@ message CredentialStatus {
 
 // 余额。
 message BalanceSummary {
-  double available_cny = 1;
-  string currency = 2;
+  // 这个余额属于哪个上游。
+  string upstream_id = 1;
+  // 属于哪个账号。同一个上游可能有多个账号（TokenRhythm 每个租户一条）。
+  string account_id = 2;
+  double available_cny = 3;
+  string currency = 4;
   // 每一笔赠金。
-  repeated CreditLot lots = 3;
+  repeated CreditLot lots = 5;
   // 平台给的到期指针：最早到期的赠金是哪一批。
-  int64 next_expiry_at = 4;
-  double expiring_cny = 5;
+  // Unix 毫秒。
+  int64 next_expiry_at = 6;
+  double expiring_cny = 7;
 }
 
 // 一笔赠金。
@@ -113,11 +125,16 @@ message ConfigItem {
   string value = 2;
   // database / environment / default —— 这个值现在从哪来。
   string source = 3;
+  // 这个键在代码里的默认值。不是上一个来源的值。
   string fallback = 4;
   // 归到面板的哪一组。
   string group = 5;
   string description = 6;
+  // 这一项是不是敏感项。敏感项只写不读：value 不给真值。
   bool secret = 7;
+  // 敏感项现在有没有值。留着空表示不改，别把掩码当值回传。
+  // 敏感项的 value 是空串：只写不读，掩码长得像值。
+  bool has_value = 8;
 }
 
 message ListConfigResponse {
@@ -149,6 +166,8 @@ message Account {
   string status = 4;
   int32 credential_count = 5;
   string detail = 6;
+  // 这个账号的余额摘要。没有余额的账号不带这个。
+  BalanceSummary balance = 7;
 }
 
 message ListAccountsRequest {}
@@ -168,8 +187,10 @@ message Credential {
   // 掩码后的值：只留前几位。
   string masked = 6;
   string fingerprint = 7;
+  // usable / expired / missing —— 与 Account.status 同一套词。
   string status = 8;
   int32 generation = 9;
+  // Unix 毫秒。
   int64 expires_at = 10;
   int64 last_ok_at = 11;
   string last_error = 12;
@@ -177,6 +198,7 @@ message Credential {
 }
 
 message ListCredentialsRequest {
+  // 空串表示全部账号的凭据。
   string account_id = 1;
 }
 
@@ -191,6 +213,7 @@ message TestCredentialRequest {
 message TestCredentialResponse {
   bool ok = 1;
   string message = 2;
+  // Unix 毫秒。
   int64 checked_at = 3;
 }
 
@@ -229,7 +252,7 @@ message UsageSummary {
 message GetUsageSummaryRequest {
   // 空表示全部。
   string upstream_id = 1;
-  // 按天 / 按小时。
+  // 时间窗。空 = 全部。hour / day / week / month，或 30d、12h 这样的写法。
   string window = 2;
 }
 
@@ -252,22 +275,28 @@ message ListUsageEventsRequest {
   int32 limit = 1;
   string upstream_id = 2;
   string model = 3;
+  // 游标：只返回 id 比它小的。0 表示从头。
+  int64 before_id = 4;
 }
 
 message UsageEvent {
+  // 按时间排出来的序号，只在这一批数据里有效，不是持久 id。
   int64 id = 1;
+  // Unix 毫秒。
   int64 ts = 2;
   string upstream_id = 3;
   string model = 4;
   // agent 写的模型 id。
   string agent_model = 5;
   string dialect = 6;
-  int64 prompt_tokens = 7;
-  int64 completion_tokens = 8;
-  int64 reasoning_tokens = 9;
-  int64 latency_ms = 10;
-  string status = 11;
-  string error = 12;
+  // 这次请求模拟的是哪个桌面客户端。
+  string client = 7;
+  int64 prompt_tokens = 8;
+  int64 completion_tokens = 9;
+  int64 reasoning_tokens = 10;
+  int64 latency_ms = 11;
+  string status = 12;
+  string error = 13;
 }
 
 message ListUsageEventsResponse {
@@ -283,10 +312,12 @@ message PublishedModel {
   bool enabled = 3;
   // single / fallback
   string strategy = 4;
-  int32 context_window = 5;
-  int32 max_output_tokens = 6;
-  bool reasoning = 7;
-  bool tool_call = 8;
+  // 不给表示继承目标的值。给了就用这个值。
+  optional int32 context_window = 5;
+  optional int32 max_output_tokens = 6;
+  optional bool reasoning = 7;
+  optional bool tool_call = 8;
+  // 空表示继承目标支持的档位。
   repeated string effort_options = 9;
   repeated PublishedTarget targets = 10;
   int64 updated_at = 11;
@@ -299,7 +330,7 @@ message PublishedTarget {
   int32 weight = 3;
   int32 position = 4;
   bool enabled = 5;
-  // 这个目标分到了多少请求。
+  // 这个目标分到了多少请求。只读：保存时会被网关自己的计数覆盖。
   int64 requests = 6;
   int64 failed = 7;
 }
@@ -311,6 +342,7 @@ message ListPublishedModelsResponse {
 }
 
 message SavePublishedModelRequest {
+  // model.id 为空表示新建，非空表示改那一条。
   PublishedModel model = 1;
 }
 
