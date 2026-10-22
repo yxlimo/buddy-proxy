@@ -114,3 +114,23 @@ export function codeLabel(code: Code): string {
 export function isAuthError(error: unknown): boolean {
   return error instanceof ConnectError && error.code === Code.Unauthenticated
 }
+
+/**
+ * 后端给的话是「中文（机器码）」。
+ *
+ * 机器码是给日志看的，不甩给人：面板上只显示中文那半句。括号里也是中文的
+ * （比如「每日签到（连签 2 天）」）就整句留着。
+ */
+export function humanMessage(
+  message: string | undefined | null
+): string {
+  const text = (message ?? '').trim()
+  if (!text) return ''
+  return text
+    .replace(
+      /(（|\()([^（()）]*)(）|\))\s*$/,
+      (whole, _open: string, inner: string) =>
+        /[\u4e00-\u9fff]/.test(inner) ? whole : ''
+    )
+    .trim()
+}

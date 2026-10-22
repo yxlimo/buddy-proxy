@@ -110,3 +110,12 @@ export function isFarFuture(
   if (ms === null) return false
   return ms >= Date.UTC(2099, 0, 1)
 }
+
+/** 倒计时（秒）。登录窗口、批次到期都用它。 */
+export function formatCountdown(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '已过期'
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  if (minutes > 0) return `${minutes} 分 ${rest} 秒`
+  return `${rest} 秒`
+}

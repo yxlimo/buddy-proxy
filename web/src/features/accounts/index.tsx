@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { RefreshCw, Stethoscope } from 'lucide-react'
+import { LogIn, RefreshCw, Stethoscope } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
@@ -30,6 +30,9 @@ import {
   useRefreshCredential,
   useTestCredential,
 } from '@/features/accounts/api'
+import { useBeginLogin } from '@/features/login/api'
+import { useLoginIdInHash } from '@/features/login/hash'
+import { LoginDialog } from '@/features/login/login-dialog'
 import { formatCny, formatDateTime } from '@/lib/format'
 
 export function AccountsPage() {
@@ -39,6 +42,15 @@ export function AccountsPage() {
   const testCredential = useTestCredential()
   const refreshCredential = useRefreshCredential()
 
+  // 没走完的登录放在 URL 的 hash 里：刷新页面还能接上。
+  const [loginId, setLoginId] = useLoginIdInHash()
+  const [loginTarget, setLoginTarget] = useState<{
+    upstreamId: string
+    accountId: string
+    label: string
+  } | null>(null)
+  const beginLogin = useBeginLogin()
+
   // 正在动的是哪条凭据：看 mutation 的 variables，不用自己存一份状态
   // （两个按钮连点的时候自己那份会串）。
   const testingId = testCredential.isPending
@@ -47,6 +59,34 @@ export function AccountsPage() {
   const refreshingId = refreshCredential.isPending
     ? refreshCredential.variables?.credentialId
     : undefined
+
+  /** 点「登录」：开一次会话，把 login_id 写进 hash。 */
+  const startLogin = (account: {
+    upstreamId: string
+    id: string
+    label: string
+  }) => {
+    setLoginTarget({
+      upstreamId: account.upstreamId,
+      accountId: account.id,
+      label: account.label || account.id,
+    })
+    beginLogin.mutate(
+      { upstreamId: account.upstreamId, accountId: account.id },
+      {
+        onSuccess: (session) => {
+          if (!session) {
+            setLoginTarget(null)
+            return
+          }
+          setLoginId(session.loginId)
+        },
+        onError: () => {
+          setLoginTarget(null)
+        },
+      }
+    )
+  }
 
   if (accounts.isPending) {
     return <LoadingState />
@@ -68,7 +108,7 @@ export function AccountsPage() {
       <Card className='mb-4'>
         <CardHeader>
           <CardTitle className='text-base'>账号</CardTitle>
-          <CardDescription>点账号名看它名下的凭据。</CardDescription>
+          <CardDescription>点账号名看它名下的凭据。没凭据的账号要点「登录」去授权。</CardDescription>
         </CardHeader>
         <CardContent className='px-0'>
           {list.length === 0 ? (
@@ -83,51 +123,85 @@ export function AccountsPage() {
                   <TableHead className='text-right'>凭据</TableHead>
                   <TableHead className='text-right'>余额</TableHead>
                   <TableHead className='text-right'>详情</TableHead>
+                  <TableHead className='text-right'>操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {list.map((account) => (
-                  <TableRow
-                    key={account.id}
-                    data-state={selected === account.id ? 'selected' : undefined}
-                    className='cursor-pointer'
-                    onClick={() => setSelected(account.id)}
-                  >
-                    <TableCell>
-                      <div className='grid gap-0.5'>
-                        {/* 账号名是一个真的按钮：光标点得到，键盘也走得到。 */}
+                {list.map((account) => {
+                  // 没有凭据的账号：登录按钮给它点，别让它淹没在一堆「可用」里。
+                  const withoutCredential =
+                    account.credentialCount === 0 ||
+                    account.status === 'missing' ||
+                    account.status === 'expired'
+                  return (
+                    <TableRow
+                      key={account.id}
+                      data-state={selected === account.id ? 'selected' : undefined}
+                      className='cursor-pointer'
+                      onClick={() => setSelected(account.id)}
+                    >
+                      <TableCell>
+                        <div className='grid gap-0.5'>
+                          {/* 账号名是一个真的按钮：光标点得到，键盘也走得到。 */}
+                          <Button
+                            variant='link'
+                            className='h-auto w-fit justify-start p-0 font-medium'
+                            aria-current={selected === account.id ? 'true' : undefined}
+                            onClick={() => setSelected(account.id)}
+                          >
+                            {account.label || account.id}
+                          </Button>
+                          <span className='font-mono text-xs text-muted-foreground'>
+                            {account.id}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className='text-xs'>{account.upstreamId}</span>
+                      </TableCell>
+                      <TableCell>
+                        <div className='grid gap-0.5'>
+                          <StatusBadge status={account.status} />
+                          {withoutCredential ? (
+                            <span className='text-xs text-muted-foreground'>
+                              没有凭据，登录一下
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell className='text-right font-mono'>
+                        {account.credentialCount}
+                      </TableCell>
+                      <TableCell className='text-right font-mono'>
+                        {account.balance
+                          ? formatCny(account.balance.availableCny)
+                          : '—'}
+                      </TableCell>
+                      <TableCell className='text-right text-xs text-muted-foreground'>
+                        {account.detail || '—'}
+                      </TableCell>
+                      <TableCell className='text-right'>
                         <Button
-                          variant='link'
-                          className='h-auto w-fit justify-start p-0 font-medium'
-                          aria-current={selected === account.id ? 'true' : undefined}
-                          onClick={() => setSelected(account.id)}
+                          variant={withoutCredential ? 'default' : 'outline'}
+                          size='sm'
+                          disabled={beginLogin.isPending}
+                          onClick={(event) => {
+                            // 点登录按钮别顺带把行也选中。
+                            event.stopPropagation()
+                            startLogin({
+                              upstreamId: account.upstreamId,
+                              id: account.id,
+                              label: account.label || account.id,
+                            })
+                          }}
                         >
-                          {account.label || account.id}
+                          <LogIn />
+                          登录
                         </Button>
-                        <span className='font-mono text-xs text-muted-foreground'>
-                          {account.id}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className='text-xs'>{account.upstreamId}</span>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={account.status} />
-                    </TableCell>
-                    <TableCell className='text-right font-mono'>
-                      {account.credentialCount}
-                    </TableCell>
-                    <TableCell className='text-right font-mono'>
-                      {account.balance
-                        ? formatCny(account.balance.availableCny)
-                        : '—'}
-                    </TableCell>
-                    <TableCell className='text-right text-xs text-muted-foreground'>
-                      {account.detail || '—'}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}
@@ -246,6 +320,30 @@ export function AccountsPage() {
           )}
         </CardContent>
       </Card>
+
+      <LoginDialog
+        open={loginTarget !== null || loginId !== ''}
+        loginId={loginId}
+        upstreamId={loginTarget?.upstreamId}
+        accountId={loginTarget?.accountId}
+        accountLabel={loginTarget?.label}
+        onOpenChange={(open) => {
+          if (open) return
+          setLoginTarget(null)
+          // 登录没了就把 hash 里的 login_id 也清掉，别留个接不上的会话。
+          setLoginId('')
+        }}
+        onRestart={
+          loginTarget
+            ? () =>
+                startLogin({
+                  upstreamId: loginTarget.upstreamId,
+                  id: loginTarget.accountId,
+                  label: loginTarget.label,
+                })
+            : undefined
+        }
+      />
     </PageShell>
   )
 }
