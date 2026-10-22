@@ -15,6 +15,7 @@
 // account's own domain decides which one answers for it.
 
 import { configString, configNumber } from "../config.ts";
+import { cliFetch } from "../http.ts";
 import { readEnvValue } from "../env.ts";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -170,7 +171,7 @@ async function requestJson(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 30000);
   try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
+    const res = await cliFetch(url, { ...init, signal: controller.signal });
     const text = await res.text();
     let body: any = null;
     try {

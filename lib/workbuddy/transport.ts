@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
 import { chatBase, chatHeaders, refreshSession, CONFIG_PATH, type WorkBuddyRegion, type WorkBuddySession } from "./auth.ts";
 import { clampEffort, curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./models.ts";
+import { cliFetch } from "../http.ts";
 import { readOpenAIChunks, SSE_DONE } from "../sse-stream.ts";
 import { peekCached, setCached } from "../store.ts";
 
@@ -160,7 +161,7 @@ export async function workbuddyChat(
     const headers = chatHeaders(session, { conversationId: opts.conversationId });
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await cliFetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
@@ -246,7 +247,7 @@ export async function fetchWorkBuddyCatalog(region: WorkBuddyRegion = "cn"): Pro
 
   try {
     const session = await refreshSession(false, region);
-    const res = await fetch(`${chatBase(session)}${CONFIG_PATH}`, {
+    const res = await cliFetch(`${chatBase(session)}${CONFIG_PATH}`, {
       headers: { ...chatHeaders(session), "Content-Type": "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

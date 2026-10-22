@@ -9,6 +9,8 @@ import { buildChatBody, conversationIdFor } from "../lib/workbuddy/transport.ts"
 import { clampEffort } from "../lib/workbuddy/models.ts";
 import { chatHeaders } from "../lib/workbuddy/auth.ts";
 import { uuidv7Hex } from "../lib/ids.ts";
+import { cliFetch } from "../lib/http.ts";
+import http from "node:http";
 
 let pass = 0;
 let fail = 0;
@@ -134,6 +136,27 @@ check("the runtime header is not sent", !("X-Agent-Runtime" in headers));
 
 const stainless = Object.keys(headers).filter((k) => k.startsWith("x-stainless-"));
 check("the SDK fingerprint is exactly the seven the client sends", stainless.length === 7, stainless.join(","));
+
+console.log("");
+console.log("the request itself");
+
+// A request that goes out the way the official client's does: none of the
+// headers a browser's fetch adds.
+const seen: Record<string, string | undefined> = {};
+const server = http.createServer((req, res) => {
+  seen["sec-fetch-mode"] = req.headers["sec-fetch-mode"] as any;
+  seen["accept-language"] = req.headers["accept-language"] as any;
+  seen["x-custom"] = req.headers["x-custom"] as any;
+  res.end("ok");
+});
+await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+const port = (server.address() as any).port;
+await cliFetch(`http://127.0.0.1:${port}/`, { headers: { "x-custom": "kept" } });
+server.close();
+
+check("the request carries no browser mode", seen["sec-fetch-mode"] === undefined, String(seen["sec-fetch-mode"]));
+check("the request carries no browser language", seen["accept-language"] === undefined, String(seen["accept-language"]));
+check("the request keeps the headers it was given", seen["x-custom"] === "kept", String(seen["x-custom"]));
 
 console.log("");
 console.log("the identifiers");
