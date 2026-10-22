@@ -305,12 +305,13 @@ const NON_CHAT_SUFFIXES = ["-image-alpha", "-image-alpha-edit", "-taco-completio
 const NON_CHAT_MODELS = new Set(["lite", "default", "default-1", "default-1.1", "default-1.2"]);
 
 /**
- * Models the upstream lists but cannot serve.
+ * Models the upstream cannot serve.
  *
- * Measured 2026-10-21: every request for glm-5.1 is rejected with code 11133
+ * Measured 2026-10-21: every request for glm-5.1 was rejected with code 11133
  * ("the request parameters were rejected by the model provider"), whatever the
- * body says. It is in the upstream's own catalogue, so it would show up in
- * every list — and then fail every time it was picked.
+ * body says. The upstream has since dropped it from its catalogue, but the
+ * snapshot still carries it — and a model that fails every time it is picked
+ * must not show up in a list.
  */
 const BROKEN_MODELS = new Set(["glm-5.1"]);
 
@@ -327,8 +328,7 @@ function isChatModel(id: string): boolean {
  *
  * The snapshot is what the router publishes when the upstream cannot be
  * reached, so it has to go through the same rules: a model the upstream
- * rejects, or a paid build of a name that is already in the list, must not
- * show up there either.
+ * rejects must not show up there either.
  */
 export function workBuddyFallbackModels(): WorkBuddyModel[] {
   return WORKBUDDY_CN_MODELS.filter((m) => isChatModel(m.id) && !BROKEN_MODELS.has(m.id));
