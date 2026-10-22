@@ -180,10 +180,11 @@ app.use(async (ctx, next) => {
   const model = typeof body?.model === "string" ? body.model : "";
   const ms = Date.now() - started;
   const status = ctx.status;
-  // 上游自己的路径（/qoder/v1/…）用前缀写在路径里，根路由的模型名在模型
-  // 那一栏 —— 两边都记下来，排查的时候不用猜是谁在说话。
-  const who = ctx.path.startsWith("/v1") ? model : ctx.path.replace(/^\//, "").split("/")[0];
-  const line = `${ctx.method} ${ctx.path}${model ? ` model=${model}` : ""} → ${status} ${ms}ms${who ? ` via=${who}` : ""}`;
+  // 上游自己的路径（/qoder/v1/…）的前缀就是上游是谁；根路由是按模型名分的，
+  // 模型名已经在那一栏了，不用再说一遍。
+  const first = ctx.path.replace(/^\//, "").split("/")[0];
+  const via = first === "v1" || first === "admin" || first === "health" ? "" : first;
+  const line = `${ctx.method} ${ctx.path}${model ? ` model=${model}` : ""} → ${status} ${ms}ms${via ? ` via=${via}` : ""}`;
   // 失败的两级：5xx 是服务自己的问题，4xx 是请求本身的问题。
   if (status >= 500) console.error(`[REQ] ${line}`);
   else if (status >= 400) console.warn(`[REQ] ${line}`);
