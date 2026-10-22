@@ -168,8 +168,10 @@ export async function workbuddyChat(
 
     if (res.status === 401 || res.status === 403) {
       const detail = await res.text().catch(() => "");
-      // A refused token means the token is old, not that the account is gone.
-      if (attempt === 1) {
+      // A refused token means the token is old, not that the account is gone —
+      // and only a 401 says that. A 403 is the account's business, and
+      // refreshing for it would turn the token over for nothing.
+      if (res.status === 401 && attempt === 1) {
         session = await refreshSession(true, region);
         continue;
       }
