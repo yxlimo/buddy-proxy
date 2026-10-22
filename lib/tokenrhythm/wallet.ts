@@ -5,14 +5,13 @@
 // the date the next batch expires — the platform moves that date on its own as
 // a batch is used up, and the account switches by itself.
 
-import { deleteSecret } from "../store.ts";
+import { platformApi } from "./platform.ts";
+import { ensureApiKey } from "./keys.ts";
 import {
-  TOKENRHYTHM_API_BASE,
   TokenRhythmError,
   loadSession,
   login,
   sessionFor,
-  sessionId,
   tokenRhythmTenant,
   tokenRhythmTenants,
   type TokenRhythmSession,
@@ -62,46 +61,8 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Ask the platform for something, with the session cookie. */
-async function apiGet<T>(path: string, session: TokenRhythmSession): Promise<T> {
-  const r = await fetch(`${TOKENRHYTHM_API_BASE}${path}`, {
-    headers: {
-      Cookie: session.cookie,
-      Accept: "application/json",
-      "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
-    },
-    signal: AbortSignal.timeout(20_000),
-  });
-  const text = await r.text();
-  let body: any = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = null;
-  }
-  if (r.status === 401 || r.status === 403) {
-    // The session is gone: drop it, so the next call logs in again.
-    try {
-      deleteSecret(sessionId(session.index));
-    } catch {
-      /* nothing to clean up */
-    }
-    throw new TokenRhythmError("登录已过期", 503);
-  }
-  if (!r.ok) {
-    throw new TokenRhythmError(`接口失败（HTTP ${r.status}）：${body?.message ?? text.slice(0, 200)}`);
-  }
-  if (body && typeof body.code !== "undefined" && body.code !== 0) {
-    throw new TokenRhythmError(`接口返回 code=${body.code}：${body.message ?? ""}`);
-  }
-  if (!body || typeof body.data === "undefined") {
-    throw new TokenRhythmError("接口响应结构异常，缺少 data 字段");
-  }
-  return body.data as T;
-}
-
 export async function wallet(session: TokenRhythmSession): Promise<TokenRhythmWallet> {
-  const data = await apiGet<any>("/api/wallet/summary", session);
+  const data = await platformApi<any>("/api/wallet/summary", session);
   return {
     currency: String(data?.currency ?? "CNY"),
     availableCny: num(data?.availableBalanceCny),
@@ -114,7 +75,7 @@ export async function wallet(session: TokenRhythmSession): Promise<TokenRhythmWa
 }
 
 export async function credits(session: TokenRhythmSession): Promise<TokenRhythmCredits> {
-  const data = await apiGet<any>(
+  const data = await platformApi<any>(
     "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
     session,
   );
@@ -172,6 +133,14 @@ export async function tenantStatuses(): Promise<TokenRhythmTenantStatus[]> {
     try {
       const session = await sessionFor(tenant.index);
       status.name = session.name;
+      // An account with no key cannot serve a request, and the key is only
+      // ever shown in full in the answer to the call that makes it. So the
+      // gateway makes one and keeps it — a new account works without anybody
+      // putting a key in the environment.
+      if (!tenant.apiKey) {
+        const made = await ensureApiKey(session, tenant.index, null);
+        status.hasKey = Boolean(made);
+      }
       status.wallet = await wallet(session);
       status.credits = await credits(session);
     } catch (e) {
