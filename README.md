@@ -814,7 +814,7 @@ The Qoder numbers look like this:
 
 | Variable | Default | What |
 |----------|---------|------|
-| `BENEFITS_INTERVAL_MS` | `21600000` | how often the check-in runs |
+| `BENEFITS_INTERVAL_MS` | `3600000` | how often the check-in runs |
 
 ## Deployment (Docker)
 

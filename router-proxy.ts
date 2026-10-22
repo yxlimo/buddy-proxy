@@ -82,8 +82,13 @@ const TOKENRHYTHM_MAX_ATTEMPTS = readEnvNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
  * The daily benefits of the China accounts
  * ------------------------------------------------------------------ */
 
-/** How often the check-in runs. The day rolls over at midnight in China. */
-const BENEFITS_INTERVAL_MS = Number(readEnvString("BENEFITS_INTERVAL_MS", "") || 6 * 3600 * 1000);
+/**
+ * How often the check-in runs. The day rolls over at midnight in China.
+ *
+ * An hour, not a day: the Buddy trip lasts one to four hours, so a gift that
+ * is already waiting would otherwise sit for hours after it arrived.
+ */
+const BENEFITS_INTERVAL_MS = Number(readEnvString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
 
 /** The accounts that hand out credits and are switched on. */
 function benefitUpstreams(): BenefitUpstream[] {
