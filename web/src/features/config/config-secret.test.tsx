@@ -32,7 +32,7 @@ describe('配置页的敏感项', () => {
               value: '***',
               source: 'database',
               fallback: 'false',
-              group: '上游开关',
+              group: 'gateway',
               secret: true,
               hasValue: true,
             }),
@@ -46,6 +46,8 @@ describe('配置页的敏感项', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
+    // 配置页默认停在「常规」，切到「网关」那一组。
+    await user.click(await screen.findByRole('tab', { name: /网关/ }))
     await screen.findByText('REQUIRE_API_KEY')
 
     // 界面上不说掩码，只说有没有值。
@@ -80,7 +82,7 @@ describe('配置页的敏感项', () => {
               value: '***',
               source: 'database',
               fallback: 'false',
-              group: '上游开关',
+              group: 'gateway',
               secret: true,
               hasValue: true,
             }),
@@ -94,6 +96,8 @@ describe('配置页的敏感项', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
+    // 配置页默认停在「常规」，切到「网关」那一组。
+    await user.click(await screen.findByRole('tab', { name: /网关/ }))
     await screen.findByText('REQUIRE_API_KEY')
     await user.click(screen.getByRole('button', { name: '改' }))
 
@@ -119,7 +123,7 @@ describe('配置页的敏感项', () => {
               value: '',
               source: 'environment',
               fallback: 'false',
-              group: '上游开关',
+              group: 'gateway',
               secret: true,
             }),
           ],
@@ -133,6 +137,8 @@ describe('配置页的敏感项', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
+    // 配置页默认停在「常规」，切到「网关」那一组。
+    await user.click(await screen.findByRole('tab', { name: /网关/ }))
     await screen.findByText('REQUIRE_API_KEY')
     await user.click(screen.getByRole('button', { name: '改' }))
     await user.type(screen.getByLabelText('新值'), 'sk-new-value')
@@ -145,6 +151,7 @@ describe('配置页的敏感项', () => {
   })
 
   it('默认值只在和当前值不一样的时候露出来', async () => {
+    const user = userEvent.setup()
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {
@@ -154,14 +161,14 @@ describe('配置页的敏感项', () => {
               value: 'true',
               source: 'database',
               fallback: 'false',
-              group: '上游开关',
+              group: 'gateway',
             }),
             create(ConfigItemSchema, {
               key: 'B_PLAIN',
               value: '30000',
               source: 'environment',
               fallback: '30000',
-              group: '上游开关',
+              group: 'gateway',
             }),
           ],
         }),
@@ -169,6 +176,7 @@ describe('配置页的敏感项', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
+    await user.click(await screen.findByRole('tab', { name: /网关/ }))
     await screen.findByText('A_OVERRIDDEN')
     expect(screen.getByText('默认值 false')).toBeInTheDocument()
     // 值和默认值一样的时候不用再重复一遍。

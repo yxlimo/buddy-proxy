@@ -51,12 +51,19 @@ export interface CredentialRow {
   updatedAt: number;
 }
 
-/** 固定的四个账号：一个上游一个登录身份。 */
+/**
+ * 固定的账号：一个上游一个登录身份。
+ *
+ * SenseNova 与 intern-ai 也在里面：这两个上游还没有接进路由（不在上游的
+ * 列表里），但它们的登录是可以做的，面板上要有地方点。
+ */
 const FIXED_ACCOUNTS: { id: string; upstream: string; label: string }[] = [
   { id: "minimax", upstream: "minimax", label: "MiniMax Code" },
   { id: "qoder", upstream: "qoder", label: "Qoder（全球区）" },
   { id: "qoder-cn", upstream: "qoder-cn", label: "Qoder（中国区）" },
   { id: "workbuddy-cn", upstream: "workbuddy-cn", label: "WorkBuddy（中国区）" },
+  { id: "sensenova", upstream: "sensenova", label: "SenseNova" },
+  { id: "intern-ai", upstream: "intern-ai", label: "intern-ai" },
 ];
 
 /** 指纹：同一个值永远是同一个指纹，换一个值就是另一个。 */
@@ -152,6 +159,54 @@ export function credentialsOf(accountId: string): CredentialRow[] {
     case "workbuddy-cn":
       out.push(sessionCredential("session:workbuddy:cn", "workbuddy-cn", "workbuddy-cn", "登录会话"));
       return out;
+    case "sensenova": {
+      out.push(sessionCredential("session:sensenova", accountId, "sensenova", "登录会话"));
+      const loginId = "account:sensenova";
+      const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
+      const login = loginRow?.data as any;
+      if (login?.user) {
+        out.push({
+          id: loginId,
+          accountId,
+          upstreamId: "sensenova",
+          kind: "login",
+          label: "登录账号",
+          masked: maskOf(String(login.user)),
+          fingerprint: fingerprintOf(String(login.user)),
+          status: "usable",
+          generation: 0,
+          expiresAt: 0,
+          lastOkAt: 0,
+          lastError: "",
+          updatedAt: Number(loginRow?.updatedAt ?? 0),
+        });
+      }
+      return out;
+    }
+    case "intern-ai": {
+      // 会话里是每个子站一份 token。
+      const id = "session:intern-ai";
+      const row = listSecrets(id).find((r) => r.id === id);
+      const session = row?.data as any;
+      const sites = Array.isArray(session?.sites) ? session.sites : [];
+      const token = String(sites[0]?.token ?? "");
+      out.push({
+        id,
+        accountId,
+        upstreamId: "intern-ai",
+        kind: "session",
+        label: sites.length ? `子站 token（${sites.map((s: any) => s.name).join(" / ")}）` : "登录会话",
+        masked: maskOf(token),
+        fingerprint: fingerprintOf(token),
+        status: token ? "usable" : "missing",
+        generation: 0,
+        expiresAt: 0,
+        lastOkAt: Number(session?.obtainedAtMs ?? 0),
+        lastError: "",
+        updatedAt: Number(row?.updatedAt ?? 0),
+      });
+      return out;
+    }
   }
   // TokenRhythm：登录账号、推理 key、会话 cookie。
   const match = /^tokenrhythm:(\d+)$/.exec(accountId);

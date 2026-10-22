@@ -392,6 +392,15 @@ check("查不到就说查不到", unknownStatus.body?.ok !== true, JSON.stringif
 console.log("");
 console.log("账号密码、换码与回填");
 
+// 面板上要有地方点：能登录的账号都在列表里。
+const accounts = await call("ListAccounts", {});
+const accountList = Array.isArray(accounts.body?.accounts) ? accounts.body.accounts : [];
+check("MiniMax 在账号列表里", accountList.some((a: any) => a.id === "minimax"));
+check("Qoder 中国区在账号列表里", accountList.some((a: any) => a.id === "qoder-cn"));
+check("WorkBuddy 在账号列表里", accountList.some((a: any) => a.id === "workbuddy-cn"));
+check("SenseNova 在账号列表里", accountList.some((a: any) => a.id === "sensenova"));
+check("intern-ai 在账号列表里", accountList.some((a: any) => a.id === "intern-ai"));
+
 // 密码型上游不走 BeginLogin 的轮询；这里只验分派与错误。
 const wrongUpstream = await call("LoginWithPassword", { upstreamId: "qoder", username: "x", password: "y" });
 check("不用密码的上游会拒绝", wrongUpstream.body?.ok !== true, JSON.stringify(wrongUpstream.body));

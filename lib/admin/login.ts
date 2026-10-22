@@ -175,7 +175,9 @@ function startPassword(upstreamId: string): Started {
     method: "password",
     authorizationUrl: "",
     userCode: "",
-    expiresAt: Date.now() + 10 * 60 * 1000,
+    // 面板上填账号密码这件事没有「窗口」可言，但给个时刻，面板好算倒计时
+    // （密码流的面板上没有倒计时，这一栏只是让它有个值）。
+    expiresAt: Date.now() + 30 * 60 * 1000,
     message: "在面板上填账号与密码，然后点「登录」。",
     poll: null,
   };
@@ -189,6 +191,7 @@ function startInternAi(site: string): Started {
     method: "token",
     authorizationUrl: url,
     userCode: "",
+    // 人在浏览器里登录、打开开发者工具、复制 token，都要时间：半小时够。
     expiresAt: Date.now() + 30 * 60 * 1000,
     message:
       `在浏览器里打开上面的链接登录，然后从开发者工具的 Cookie 里复制 uaa-token，贴回面板（${which}）。` +

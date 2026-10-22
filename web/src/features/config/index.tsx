@@ -34,6 +34,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfig, useSetConfig } from '@/features/config/api'
 import type { ConfigItem } from '@/gen/buddy/admin/v1/admin_pb'
 
@@ -41,6 +42,45 @@ const SOURCE_LABELS: Record<string, string> = {
   database: '数据库覆盖',
   environment: '环境变量',
   default: '默认值',
+}
+
+/**
+ * 分组的中文名。
+ *
+ * 服务端给的 group 是英文的键（minimax、gateway……），那是给机器看的。
+ * 认不出来的组就原样显示，不猜。
+ */
+const GROUP_LABELS: Record<string, string> = {
+  general: '常规',
+  gateway: '网关',
+  minimax: 'MiniMax',
+  qoder: 'Qoder',
+  workbuddy: 'WorkBuddy',
+  tokenrhythm: 'TokenRhythm',
+  benefits: '每日权益',
+  sensenova: 'SenseNova',
+  'intern-ai': 'InternAI',
+}
+
+/**
+ * tab 的顺序。
+ *
+ * 常规排第一个：用户说打开配置页先看它，哪怕那一组是空的。
+ */
+const GROUP_ORDER = [
+  'general',
+  'gateway',
+  'minimax',
+  'qoder',
+  'workbuddy',
+  'tokenrhythm',
+  'benefits',
+  'sensenova',
+  'intern-ai',
+]
+
+function groupLabel(group: string): string {
+  return GROUP_LABELS[group] ?? group
 }
 
 /**
@@ -109,17 +149,35 @@ export function ConfigPage() {
   } | null>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  // 打开配置页停在「常规」那一组。
+  const [tab, setTab] = useState('general')
 
   const groups = useMemo(() => {
-    const map = new Map<string, NonNullable<typeof config.data>['items']>()
+    const map = new Map<string, ConfigItem[]>()
     for (const item of config.data?.items ?? []) {
-      const group = item.group || '其他'
+      // 服务端没给分组就归到常规。
+      const group = item.group || 'general'
       const list = map.get(group) ?? []
       list.push(item)
       map.set(group, list)
     }
-    return [...map.entries()]
+    // 「常规」这一组永远在：用户说打开配置页先看到它，哪怕它暂时是空的。
+    if (!map.has('general')) {
+      map.set('general', [])
+    }
+    // 顺序：固定的那些按 GROUP_ORDER 走，数据里冒出来的组按出现的顺序
+    // 接在后面。
+    const known = GROUP_ORDER.filter((group) => map.has(group))
+    const extra = [...map.keys()].filter((group) => !GROUP_ORDER.includes(group))
+    return [...known, ...extra].map((group) => ({
+      key: group,
+      label: groupLabel(group),
+      items: map.get(group) ?? [],
+    }))
   }, [config.data])
+
+  // 选中的那一组没了（比如重取之后分组变了），退回常规。
+  const activeTab = groups.some((group) => group.key === tab) ? tab : 'general'
 
   if (config.isPending) {
     return <LoadingState />
@@ -158,106 +216,133 @@ export function ConfigPage() {
           </CardContent>
         </Card>
       ) : (
-        groups.map(([group, items]) => (
-          <Card key={group} className='mb-4'>
-            <CardHeader>
-              <CardTitle className='text-base'>{group}</CardTitle>
-              <CardDescription>
-                改动会写进数据库，标上「待重启」，重启网关之后才生效。
-              </CardDescription>
-            </CardHeader>
-            <CardContent className='px-0'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>键</TableHead>
-                    <TableHead>当前值</TableHead>
-                    <TableHead>来源</TableHead>
-                    <TableHead className='text-right'>操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((item) => (
-                    <TableRow key={item.key}>
-                      <TableCell>
-                        <div className='grid gap-0.5'>
-                          {/* 主要显示是给人看的名字，键名放次要位置。 */}
-                          <span className='font-medium'>
-                            {itemTitle(item)}
-                          </span>
-                          {showKey(item) ? (
-                            <span className='font-mono text-xs text-muted-foreground'>
-                              {item.key}
-                            </span>
-                          ) : null}
-                          {itemDescription(item) ? (
-                            <span className='text-xs text-muted-foreground'>
-                              {itemDescription(item)}
-                            </span>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {item.secret ? (
-                          // 敏感项的值读不出来，只说有没有。
-                          <span className='text-xs'>
-                            {hasValue(item) ? '已设置' : '未设置'}
-                          </span>
-                        ) : (
-                          <span className='font-mono text-xs'>
-                            {item.value || '—'}
-                          </span>
-                        )}
-                        {item.fallback && item.fallback !== item.value ? (
-                          <div className='text-xs text-muted-foreground'>
-                            默认值 {item.fallback}
-                          </div>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant='outline'>
-                          {SOURCE_LABELS[item.source] ?? item.source ?? '未知'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className='text-right'>
-                        <div className='flex justify-end gap-2'>
-                          <Button
-                            variant='outline'
-                            size='sm'
-                            onClick={() => {
-                              setEditing({
-                                key: item.key,
-                                title: itemTitle(item),
-                                description: item.description,
-                                secret: item.secret,
-                              })
-                              // 敏感项的值读不出来，输入框一律从空开始。
-                              setDraft(item.secret ? '' : item.value)
-                            }}
-                          >
-                            <Save />
-                            改
-                          </Button>
-                          {item.source === 'database' ? (
-                            <Button
-                              variant='ghost'
-                              size='sm'
-                              disabled={busy}
-                              onClick={() => void save(item.key, '', true)}
-                            >
-                              <RotateCcw />
-                              清回默认
-                            </Button>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        ))
+        <Tabs value={activeTab} onValueChange={setTab}>
+          <TabsList className='w-full justify-start overflow-x-auto'>
+            {groups.map((group) => (
+              <TabsTrigger key={group.key} value={group.key}>
+                {group.label}
+                <span className='text-xs text-muted-foreground'>
+                  ({group.items.length})
+                </span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {groups.map((group) => (
+            <TabsContent key={group.key} value={group.key}>
+              <Card>
+                <CardHeader>
+                  <CardTitle className='text-base'>{group.label}</CardTitle>
+                  <CardDescription>
+                    改动会写进数据库，标上「待重启」，重启网关之后才生效。
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className='px-0'>
+                  {group.items.length === 0 ? (
+                    <EmptyState
+                      title='这一组暂时没有可改的设置'
+                      description='服务端没公布这一组的任何设置项。'
+                    />
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>设置</TableHead>
+                          <TableHead>当前值</TableHead>
+                          <TableHead>来源</TableHead>
+                          <TableHead className='text-right'>操作</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {group.items.map((item) => (
+                          <TableRow key={item.key}>
+                            <TableCell>
+                              <div className='grid gap-0.5'>
+                                {/* 主要显示是给人看的名字，键名放次要位置。 */}
+                                <span className='font-medium'>
+                                  {itemTitle(item)}
+                                </span>
+                                {showKey(item) ? (
+                                  <span className='font-mono text-xs text-muted-foreground'>
+                                    {item.key}
+                                  </span>
+                                ) : null}
+                                {itemDescription(item) ? (
+                                  <span className='text-xs text-muted-foreground'>
+                                    {itemDescription(item)}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {item.secret ? (
+                                // 敏感项的值读不出来，只说有没有。
+                                <span className='text-xs'>
+                                  {hasValue(item) ? '已设置' : '未设置'}
+                                </span>
+                              ) : (
+                                <span className='font-mono text-xs'>
+                                  {item.value || '—'}
+                                </span>
+                              )}
+                              {item.fallback &&
+                              item.fallback !== item.value ? (
+                                <div className='text-xs text-muted-foreground'>
+                                  默认值 {item.fallback}
+                                </div>
+                              ) : null}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant='outline'>
+                                {SOURCE_LABELS[item.source] ??
+                                  item.source ??
+                                  '未知'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className='text-right'>
+                              <div className='flex justify-end gap-2'>
+                                <Button
+                                  variant='outline'
+                                  size='sm'
+                                  onClick={() => {
+                                    setEditing({
+                                      key: item.key,
+                                      title: itemTitle(item),
+                                      description: item.description,
+                                      secret: item.secret,
+                                    })
+                                    // 敏感项的值读不出来，输入框一律从空开始。
+                                    setDraft(item.secret ? '' : item.value)
+                                  }}
+                                >
+                                  <Save />
+                                  改
+                                </Button>
+                                {item.source === 'database' ? (
+                                  <Button
+                                    variant='ghost'
+                                    size='sm'
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void save(item.key, '', true)
+                                    }
+                                  >
+                                    <RotateCcw />
+                                    清回默认
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          ))}
+        </Tabs>
       )}
 
       <Dialog
