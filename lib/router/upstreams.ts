@@ -118,11 +118,11 @@ export async function toWorkBuddy(
         502,
       );
     }
-    deliverJson(out, dialect, "openai", json, model, ctx.onUsage);
+    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIStream(out, response.body!, dialect, model, undefined, ctx.onUsage);
+  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
 }
 
 /**
@@ -172,7 +172,7 @@ export async function toQoder(
     console.log(`[ROUTE] model=${route.model} region=${region} effort=${effort ?? "-"} -> upstream key=${key}`);
   }
   if (model && qoderProtocolForRegion(model, region) === "legacy") {
-    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, out, region);
+    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, out, region, route.label);
     return;
   }
 
@@ -211,6 +211,7 @@ export async function toQoderLegacy(
   stream: boolean,
   out: Koa.Context,
   region: QoderRegion,
+  label?: string,
 ): Promise<void> {
   const chunks = legacyWithRetry(
     () =>
@@ -235,11 +236,11 @@ export async function toQoderLegacy(
     // The legacy protocol has no non-streaming answer, so the chunks are
     // collected and reassembled into one completion.
     const completion = await collectOpenAIChunks(chunks, model.id);
-    deliverJson(out, dialect, "openai", completion, model.id, ctx.onUsage);
+    deliverJson(out, dialect, "openai", completion, label ?? model.id, ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIChunks(out, chunks, dialect, model.id, ctx.onUsage);
+  await deliverOpenAIChunks(out, chunks, dialect, label ?? model.id, ctx.onUsage);
 }
 
 export function legacyError(error: { code?: string; message?: string; status?: number }): AuthError {
@@ -473,11 +474,11 @@ export async function toTokenRhythm(
     const json = await response.json();
     const reason = json?.choices?.[0]?.finish_reason;
     if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-    deliverJson(out, dialect, "openai", json, model, ctx.onUsage);
+    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIStream(out, response.body!, dialect, model, (reason) => {
+  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, (reason) => {
     if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
   }, ctx.onUsage);
 }

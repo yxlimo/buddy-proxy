@@ -119,6 +119,12 @@ export function deliverJson(
       : from === "openai"
         ? openaiToAnthropicResponse(json, model)
         : anthropicToOpenAIResponse(json, model);
+  // The answer names the model the client asked for. The upstream may know it
+  // by another name — a tier key, or the name behind a published model — but
+  // the client asked for this one.
+  if (dialect === "openai" && payload && typeof payload === "object") {
+    payload.model = model;
+  }
   onUsage?.(payload?.usage);
   ctx.body = payload;
 }
@@ -165,7 +171,7 @@ export async function deliverOpenAIStream(
   takeOver(ctx);
   sseHead(ctx);
   if (dialect === "openai") {
-    await pipeOpenAIChunks(upstream, ctx, onFinish, onUsage);
+    await pipeOpenAIChunks(upstream, ctx, onFinish, onUsage, model);
     return;
   }
   try {
@@ -220,6 +226,7 @@ export async function deliverOpenAIChunks(
     try {
       for await (const chunk of chunks) {
         if (chunk?.usage && onUsage) onUsage(chunk.usage);
+        if (model && chunk && typeof chunk === "object") chunk.model = model;
         if (!writeSafe(ctx, sseData(chunk))) break;
       }
       writeSafe(ctx, SSE_DONE);
@@ -249,9 +256,11 @@ async function pipeOpenAIChunks(
   ctx: Koa.Context,
   onFinish?: (reason: string) => void,
   onUsage?: (usage: any) => void,
+  model?: string,
 ): Promise<void> {
   try {
     for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish, onUsage)) {
+      if (model && chunk && typeof chunk === "object") chunk.model = model;
       if (!writeSafe(ctx, sseData(chunk))) break;
     }
     writeSafe(ctx, SSE_DONE);
