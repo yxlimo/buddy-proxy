@@ -1,7 +1,7 @@
 {
   "name": "buddy-proxy",
   "version": "1.0.0",
-  "description": "Free model providers (MiniMax Code, Qoder) behind OpenAI/Anthropic compatible APIs",
+  "description": "Free model providers (MiniMax Code, Qoder, WorkBuddy, TokenRhythm) behind OpenAI/Anthropic compatible APIs",
   "type": "module",
   "main": "router-proxy.ts",
   "scripts": {
@@ -9,16 +9,20 @@
     "serve": "node router-proxy.ts",
     "typecheck": "tsc --noEmit"
   },
+  "license": "MIT",
   "dependencies": {
-    "express": "^4.21.0"
+    "@koa/router": "^15.7.0",
+    "koa": "^3.2.1",
+    "koa-bodyparser": "^4.4.1"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
+    "@types/koa": "^3.0.3",
+    "@types/koa-bodyparser": "^4.3.13",
+    "@types/koa__router": "^15.0.0",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   },
   "engines": {
     "node": ">=18"
-  },
-  "license": "MIT"
+  }
 }

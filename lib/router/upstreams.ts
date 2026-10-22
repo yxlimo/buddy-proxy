@@ -7,7 +7,7 @@
 // over.
 
 import crypto from "node:crypto";
-import type express from "express";
+import type Koa from "koa";
 import { AuthError } from "../credential.ts";
 import { anthropicToOpenAI, effortFromBudget, openaiToAnthropic } from "../dialect/request.ts";
 import {
@@ -75,7 +75,7 @@ export async function toWorkBuddy(
   route: Route,
   dialect: Dialect,
   stream: boolean,
-  res: express.Response,
+  out: Koa.Context,
 ): Promise<void> {
   const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
   const model = upstreamModel(route);
@@ -105,11 +105,11 @@ export async function toWorkBuddy(
         502,
       );
     }
-    deliverJson(res, dialect, "openai", json, model);
+    deliverJson(out, dialect, "openai", json, model);
     return;
   }
 
-  await deliverOpenAIStream(res, response.body!, dialect, model);
+  await deliverOpenAIStream(out, response.body!, dialect, model);
 }
 
 /**
@@ -142,7 +142,7 @@ export async function toQoder(
   route: Route,
   dialect: Dialect,
   stream: boolean,
-  res: express.Response,
+  out: Koa.Context,
 ): Promise<void> {
   // Qoder speaks OpenAI natively, so the request is either already OpenAI or is
   // converted once.
@@ -159,7 +159,7 @@ export async function toQoder(
     console.log(`[ROUTE] model=${route.model} region=${region} effort=${effort ?? "-"} -> upstream key=${key}`);
   }
   if (model && qoderProtocolForRegion(model, region) === "legacy") {
-    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, res, region);
+    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, out, region);
     return;
   }
 
@@ -175,11 +175,11 @@ export async function toQoder(
 
   if (!stream) {
     const json = await upstream.json();
-    deliverJson(res, dialect, "openai", json, upstreamModel(route));
+    deliverJson(out, dialect, "openai", json, upstreamModel(route));
     return;
   }
 
-  await deliverOpenAIStream(res, upstream.body!, dialect, upstreamModel(route));
+  await deliverOpenAIStream(out, upstream.body!, dialect, upstreamModel(route));
 }
 
 /**
@@ -196,7 +196,7 @@ export async function toQoderLegacy(
   model: QoderModel,
   dialect: Dialect,
   stream: boolean,
-  res: express.Response,
+  out: Koa.Context,
   region: QoderRegion,
 ): Promise<void> {
   const chunks = legacyWithRetry(
@@ -222,11 +222,11 @@ export async function toQoderLegacy(
     // The legacy protocol has no non-streaming answer, so the chunks are
     // collected and reassembled into one completion.
     const completion = await collectOpenAIChunks(chunks, model.id);
-    deliverJson(res, dialect, "openai", completion, model.id);
+    deliverJson(out, dialect, "openai", completion, model.id);
     return;
   }
 
-  await deliverOpenAIChunks(res, chunks, dialect, model.id);
+  await deliverOpenAIChunks(out, chunks, dialect, model.id);
 }
 
 export function legacyError(error: { code?: string; message?: string; status?: number }): AuthError {
@@ -366,7 +366,7 @@ export async function toMinimax(
   route: Route,
   dialect: Dialect,
   stream: boolean,
-  res: express.Response,
+  out: Koa.Context,
 ): Promise<void> {
   // MiniMax speaks Anthropic natively. The Anthropic dialect insists on a
   // limit, so when the client did not name one the model's own is used.
@@ -397,11 +397,11 @@ export async function toMinimax(
 
   if (!stream) {
     const json = await r.json();
-    deliverJson(res, dialect, "anthropic", json, upstreamModel(route));
+    deliverJson(out, dialect, "anthropic", json, upstreamModel(route));
     return;
   }
 
-  await deliverAnthropicStream(res, r.body!, dialect, upstreamModel(route), PING_MS);
+  await deliverAnthropicStream(out, r.body!, dialect, upstreamModel(route), PING_MS);
 }
 
 
@@ -422,7 +422,7 @@ export async function toTokenRhythm(
   route: Route,
   dialect: Dialect,
   stream: boolean,
-  res: express.Response,
+  out: Koa.Context,
 ): Promise<void> {
   const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
   const model = upstreamModel(route);
@@ -460,11 +460,11 @@ export async function toTokenRhythm(
     const json = await response.json();
     const reason = json?.choices?.[0]?.finish_reason;
     if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-    deliverJson(res, dialect, "openai", json, model);
+    deliverJson(out, dialect, "openai", json, model);
     return;
   }
 
-  await deliverOpenAIStream(res, response.body!, dialect, model, (reason) => {
+  await deliverOpenAIStream(out, response.body!, dialect, model, (reason) => {
     if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
   });
 }

@@ -6,7 +6,7 @@
 // headers, the frames, the error events — is the same for every upstream.
 
 import crypto from "node:crypto";
-import type express from "express";
+import type Koa from "koa";
 import { AuthError } from "../credential.ts";
 import { anthropicStreamToOpenAI, openaiStreamToAnthropic } from "../dialect/stream.ts";
 import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect/response.ts";
@@ -19,19 +19,30 @@ export type UpstreamDialect = Dialect;
 
 const rid = (prefix: string) => prefix + crypto.randomBytes(12).toString("hex");
 
+/**
+ * Take the response over.
+ *
+ * A stream is written frame by frame, so Koa must not also write a body of its
+ * own when the middleware chain ends. `respond = false` says that the raw
+ * response belongs to us from here on.
+ */
+function takeOver(ctx: Koa.Context): void {
+  ctx.respond = false;
+}
+
 /** The headers of a streaming answer. */
-function sseHead(res: express.Response): void {
-  res.setHeader("content-type", "text/event-stream; charset=utf-8");
-  res.setHeader("cache-control", "no-cache, no-transform");
-  res.setHeader("connection", "keep-alive");
-  res.setHeader("x-accel-buffering", "no");
-  res.flushHeaders?.();
+function sseHead(ctx: Koa.Context): void {
+  ctx.res.setHeader("content-type", "text/event-stream; charset=utf-8");
+  ctx.res.setHeader("cache-control", "no-cache, no-transform");
+  ctx.res.setHeader("connection", "keep-alive");
+  ctx.res.setHeader("x-accel-buffering", "no");
+  ctx.res.flushHeaders?.();
 }
 
 /** Write a frame, and say whether the client is still there. */
-function writeSafe(res: express.Response, chunk: string | Uint8Array): boolean {
+function writeSafe(ctx: Koa.Context, chunk: string | Uint8Array): boolean {
   try {
-    return res.write(chunk);
+    return ctx.res.write(chunk);
   } catch {
     return false;
   }
@@ -90,7 +101,7 @@ export function upstreamError(detail: any): AuthError {
 
 /** The whole answer, for a client that did not ask for a stream. */
 export function deliverJson(
-  res: express.Response,
+  ctx: Koa.Context,
   dialect: Dialect,
   from: UpstreamDialect,
   json: any,
@@ -103,7 +114,7 @@ export function deliverJson(
       : from === "openai"
         ? openaiToAnthropicResponse(json, model)
         : anthropicToOpenAIResponse(json, model);
-  res.json(payload);
+  ctx.body = payload;
 }
 
 /**
@@ -134,83 +145,86 @@ async function* watchFinish(
  * and the usage with it.
  */
 export async function deliverOpenAIStream(
-  res: express.Response,
+  ctx: Koa.Context,
   body: ReadableStream<Uint8Array>,
   dialect: Dialect,
   model: string,
   onFinish?: (reason: string) => void,
 ): Promise<void> {
   const upstream = await peekStream(body);
-  res.setHeader("x-request-id", rid("req_"));
-  sseHead(res);
+  ctx.res.setHeader("x-request-id", rid("req_"));
+  takeOver(ctx);
+  sseHead(ctx);
   if (dialect === "openai") {
-    await pipeOpenAIChunks(upstream, res, onFinish);
+    await pipeOpenAIChunks(upstream, ctx, onFinish);
     return;
   }
   try {
     for await (const chunk of openaiStreamToAnthropic(watchFinish(readOpenAIChunks(upstream), onFinish), model)) {
-      if (!writeSafe(res, chunk)) break;
+      if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
     // The headers are already out, so the failure goes back as an error event.
-    writeSafe(res, errorEvent((e as Error)?.message));
+    writeSafe(ctx, errorEvent((e as Error)?.message));
   }
-  res.end();
+  ctx.res.end();
 }
 
 /** A stream of Anthropic bytes. */
 export async function deliverAnthropicStream(
-  res: express.Response,
+  ctx: Koa.Context,
   body: ReadableStream<Uint8Array>,
   dialect: Dialect,
   model: string,
   pingMs = 0,
 ): Promise<void> {
-  res.setHeader("x-request-id", rid("req_"));
-  sseHead(res);
+  ctx.res.setHeader("x-request-id", rid("req_"));
+  takeOver(ctx);
+  sseHead(ctx);
   if (dialect === "anthropic") {
-    await pipeStream(body, res, pingMs);
+    await pipeStream(body, ctx, pingMs);
     return;
   }
   try {
     for await (const chunk of anthropicStreamToOpenAI(body, model)) {
-      if (!writeSafe(res, chunk)) break;
+      if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
-    writeSafe(res, errorEvent((e as Error)?.message));
+    writeSafe(ctx, errorEvent((e as Error)?.message));
   }
-  res.end();
+  ctx.res.end();
 }
 
 /** A stream of OpenAI chunks that are already parsed (the legacy protocol). */
 export async function deliverOpenAIChunks(
-  res: express.Response,
+  ctx: Koa.Context,
   chunks: AsyncIterable<any>,
   dialect: Dialect,
   model: string,
 ): Promise<void> {
-  res.setHeader("x-request-id", rid("req_"));
-  sseHead(res);
+  ctx.res.setHeader("x-request-id", rid("req_"));
+  takeOver(ctx);
+  sseHead(ctx);
   if (dialect === "openai") {
     try {
       for await (const chunk of chunks) {
-        if (!writeSafe(res, sseData(chunk))) break;
+        if (!writeSafe(ctx, sseData(chunk))) break;
       }
-      writeSafe(res, SSE_DONE);
+      writeSafe(ctx, SSE_DONE);
     } catch (e) {
-      writeSafe(res, errorEvent((e as Error)?.message));
+      writeSafe(ctx, errorEvent((e as Error)?.message));
     }
-    res.end();
+    ctx.res.end();
     return;
   }
   try {
     for await (const chunk of openaiStreamToAnthropic(chunks, model)) {
-      if (!writeSafe(res, chunk)) break;
+      if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
-    writeSafe(res, errorEvent((e as Error)?.message));
+    writeSafe(ctx, errorEvent((e as Error)?.message));
   }
-  res.end();
+  ctx.res.end();
 }
 
 function errorEvent(message: string): string {
@@ -220,21 +234,21 @@ function errorEvent(message: string): string {
 /** Forward an OpenAI stream, frame by frame. */
 async function pipeOpenAIChunks(
   body: ReadableStream<Uint8Array>,
-  res: express.Response,
+  ctx: Koa.Context,
   onFinish?: (reason: string) => void,
 ): Promise<void> {
   try {
     for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish)) {
-      if (!writeSafe(res, sseData(chunk))) break;
+      if (!writeSafe(ctx, sseData(chunk))) break;
     }
-    writeSafe(res, SSE_DONE);
+    writeSafe(ctx, SSE_DONE);
   } catch (e) {
-    writeSafe(res, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
-    writeSafe(res, SSE_DONE);
+    writeSafe(ctx, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
+    writeSafe(ctx, SSE_DONE);
   } finally {
     // The response has to end, or the client waits for a connection that never
     // closes.
-    res.end();
+    ctx.res.end();
   }
 }
 
@@ -256,18 +270,18 @@ async function pipeOpenAIChunks(
  */
 async function pipeStream(
   body: ReadableStream<Uint8Array>,
-  res: express.Response,
+  ctx: Koa.Context,
   pingMs = 0,
 ): Promise<void> {
   const reader = body.getReader();
   let tail = Buffer.alloc(0); // last bytes written, used to detect a frame boundary
   let lastActivity = Date.now();
   const writePing = () => {
-    if (res.writableEnded || res.destroyed) return;
+    if (ctx.res.writableEnded || ctx.res.destroyed) return;
     if (Date.now() - lastActivity < pingMs) return; // upstream is still talking
     if (!/\r?\n\r?\n$/.test(tail.toString("latin1"))) return; // mid-frame: wait
     // Same payload the gateway itself sends, so clients see nothing unusual.
-    if (writeSafe(res, 'event: ping\ndata: {"type":"ping"}\n\n')) lastActivity = Date.now();
+    if (writeSafe(ctx, 'event: ping\ndata: {"type":"ping"}\n\n')) lastActivity = Date.now();
   };
   const pingTimer = pingMs > 0 ? setInterval(writePing, Math.min(pingMs, 5000)) : null;
   pingTimer?.unref?.();
@@ -277,13 +291,13 @@ async function pipeStream(
       if (done) break;
       // The bytes go out as they came in: this path forwards the upstream's own
       // SSE, and decoding it would only risk breaking a character across chunks.
-      if (!writeSafe(res, value)) break;
+      if (!writeSafe(ctx, value)) break;
       lastActivity = Date.now();
       tail = Buffer.concat([tail, Buffer.from(value)]).slice(-4);
     }
   } finally {
     if (pingTimer) clearInterval(pingTimer);
     reader.releaseLock();
-    res.end();
+    ctx.res.end();
   }
 }

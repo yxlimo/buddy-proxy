@@ -94,6 +94,10 @@ The code runs through Node's type stripping, so there is no build step — and
 no TypeScript feature that needs more than stripping (no parameter properties,
 no enums).
 
+The HTTP layer is Koa 3, with `@koa/router` for the paths and
+`koa-bodyparser` for the JSON body. The body is parsed after the key is
+checked, so a request that is turned away costs no parsing at all.
+
 ## Testing
 
 The self-test runs against a mock of the upstreams, so it costs no tokens and

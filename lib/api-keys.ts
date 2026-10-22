@@ -46,14 +46,14 @@ export function loadKeys(prefix = "oc-"): KeyStore {
 }
 
 /** Bearer token, x-api-key header, or raw Authorization header. */
-export function extractToken(req: { headers: Record<string, unknown> }): string {
-  const hdr: string = (req.headers.authorization as string) || (req.headers["x-api-key"] as string) || "";
+export function extractToken(headers: Record<string, unknown>): string {
+  const hdr: string = (headers.authorization as string) || (headers["x-api-key"] as string) || "";
   return hdr.startsWith("Bearer ") ? hdr.slice(7) : hdr;
 }
 
 /** Returns the key name, or null when a required key is missing/unknown. */
-export function authenticate(req: { headers: Record<string, unknown> }, keys: KeyStore): string | null {
-  const tok = extractToken(req);
+export function authenticate(headers: Record<string, unknown>, keys: KeyStore): string | null {
+  const tok = extractToken(headers);
   // Public mode (default): accept anything, even a blank token.
   if (!REQUIRE_API_KEY) return "public";
   for (const [name, key] of Object.entries(keys)) if (tok === key) return name;

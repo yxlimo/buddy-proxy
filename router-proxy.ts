@@ -17,7 +17,9 @@
 //   Anthropic → Qoder  converted to Anthropic on the way in
 //   Anthropic → MiniMax passes through
 
-import express from "express";
+import Koa from "koa";
+import Router from "@koa/router";
+import bodyParser from "koa-bodyparser";
 import { authenticate, loadKeys, REQUIRE_API_KEY } from "./lib/api-keys.ts";
 import { readEnvFlag, readEnvNumber, readEnvString } from "./lib/env.ts";
 import { AuthError } from "./lib/credential.ts";
@@ -160,10 +162,32 @@ async function refreshWorkBuddyCatalog(force = false): Promise<void> {
 }
 
 const keys = loadKeys();
-const app = express();
-app.use(express.json({ limit: "64mb" }));
+const app = new Koa();
+const router = new Router();
 
-app.get("/health", async (_req, res) => {
+// Every failure leaves in the shape the clients expect: a JSON body with an
+// `error` object, not Koa's plain-text default.
+app.use(async (ctx, next) => {
+  try {
+    await next();
+  } catch (e) {
+    sendError(ctx, e);
+  }
+});
+
+// The body is only parsed once the caller is allowed in: a request with a bad
+// key should not cost a megabyte of parsing.
+const requireKey: Koa.Middleware = async (ctx, next) => {
+  if (!authenticate(ctx.headers as Record<string, unknown>, keys)) {
+    ctx.status = 401;
+    ctx.body = { error: { type: "authentication_error", message: "invalid api key" } };
+    return;
+  }
+  await next();
+};
+const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
+
+router.get("/health", async (ctx) => {
   // The account's own standing is checked live: a valid token still means nothing
   // if the account is not allowed to make requests from here. A region that is
   // not enabled is not looked at at all.
@@ -182,7 +206,7 @@ app.get("/health", async (_req, res) => {
       credits: await fetchQoderCredits(region),
     };
   }
-  res.json({
+  ctx.body = {
     status: "ok",
     dialects: ["anthropic", "openai"],
     enabled: {
@@ -229,7 +253,7 @@ app.get("/health", async (_req, res) => {
       running: benefits.lastRun.running,
       lastOutcome: benefits.lastRun.lastOutcome,
     },
-  });
+  };
 });
 
 /**
@@ -307,86 +331,84 @@ function routingContext(): RoutingContext {
 for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
   const base = group ? `/${group}` : "";
 
-  app.post(`${base}/v1/messages`, async (req: express.Request, res: express.Response) => {
-    if (!authenticate(req, keys)) {
-      return res.status(401).json({ error: { type: "authentication_error", message: "invalid api key" } });
-    }
-    await handle(req, res, "anthropic", group || undefined);
+  router.post(`${base}/v1/messages`, requireKey, parseBody, async (ctx) => {
+    await handle(ctx, "anthropic", group || undefined);
   });
 
-  app.post(`${base}/v1/chat/completions`, async (req: express.Request, res: express.Response) => {
-    if (!authenticate(req, keys)) {
-      return res.status(401).json({ error: { type: "authentication_error", message: "invalid api key" } });
-    }
-    await handle(req, res, "openai", group || undefined);
+  router.post(`${base}/v1/chat/completions`, requireKey, parseBody, async (ctx) => {
+    await handle(ctx, "openai", group || undefined);
   });
 
-  app.get(`${base}/v1/models`, (req: express.Request, res: express.Response) => {
-    const dialect = String(req.query.dialect ?? "").toLowerCase();
+  router.get(`${base}/v1/models`, (ctx) => {
+    const dialect = String(ctx.query.dialect ?? "").toLowerCase();
     // The upstream's catalogue is the source of truth; fetch it in the background
     // so this answer is never blocked by it.
     if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
     const groups = catalogGroups();
-    if (group) return res.json(groupCatalog(group, groups, dialect === "openai"));
-    if (dialect === "openai") return res.json(openaiCatalog(groups));
-    return res.json(anthropicCatalog(groups));
+    if (group) ctx.body = groupCatalog(group, groups, dialect === "openai");
+    else if (dialect === "openai") ctx.body = openaiCatalog(groups);
+    else ctx.body = anthropicCatalog(groups);
   });
 }
 
+app.use(router.routes());
+app.use(router.allowedMethods());
+
 async function handle(
-  req: express.Request,
-  res: express.Response,
+  ctx: Koa.Context,
   dialect: Dialect,
   group?: UpstreamGroup,
 ): Promise<void> {
-  const body = (req.body ?? {}) as Record<string, any>;
+  const body = (ctx.request.body ?? {}) as Record<string, any>;
   let route: Route;
   try {
-    const ctx = routingContext();
-    route = group ? routeInGroup(group, String(body.model ?? "").trim(), ctx) : resolveRoute(body.model, ctx);
+    const rctx = routingContext();
+    route = group ? routeInGroup(group, String(body.model ?? "").trim(), rctx) : resolveRoute(body.model, rctx);
   } catch (e) {
-    sendError(res, e);
+    sendError(ctx, e);
     return;
   }
 
   const stream = body.stream === true;
   try {
-    const ctx = upstreamContext();
+    const uctx = upstreamContext();
     if (route.upstream === "qoder") {
-      await toQoder(ctx, body, route, dialect, stream, res);
+      await toQoder(uctx, body, route, dialect, stream, ctx);
     } else if (route.upstream === "workbuddy") {
-      await toWorkBuddy(ctx, body, route, dialect, stream, res);
+      await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
     } else if (route.upstream === "tokenrhythm") {
-      await toTokenRhythm(ctx, body, route, dialect, stream, res);
+      await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
     } else {
-      await toMinimax(ctx, body, route, dialect, stream, res);
+      await toMinimax(uctx, body, route, dialect, stream, ctx);
     }
   } catch (e) {
-    sendError(res, e);
+    sendError(ctx, e);
   }
 }
 
 /* ---------------- plumbing ---------------- */
 
-function sendError(res: express.Response, e: unknown): void {
+function sendError(ctx: Koa.Context, e: unknown): void {
   const err = e as AuthError;
   if (e instanceof LimitError) {
-    if (res.headersSent) {
-      res.end();
+    if (ctx.res.headersSent) {
+      ctx.res.end();
       return;
     }
-    res.status(503).json({
+    ctx.status = 503;
+    ctx.body = {
       error: { type: "api_error", message: e.message },
       hint: e.detail,
-    });
+    };
     return;
   }
   const status = typeof err?.status === "number" ? err.status : 500;
-  if (res.headersSent) {
-    res.end();
+  if (ctx.res.headersSent) {
+    ctx.res.end();
     return;
   }
-  res.status(status).json({
+  ctx.status = status;
+  ctx.body = {
     error: {
       // 503 means the credential is the problem; everything else is the request
       // or the upstream failing. A failure that says otherwise says so.
@@ -396,7 +418,7 @@ function sendError(res: express.Response, e: unknown): void {
       message: err?.message ?? "request failed",
     },
     ...(err?.hint ? { hint: err.hint } : {}),
-  });
+  };
 }
 
 app.listen(PORT, HOST, () => {
