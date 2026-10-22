@@ -6,7 +6,6 @@
 import os from "node:os";
 import {
   ENDPOINTS,
-  deviceIdentity,
   loadSession as loadQoderSession,
   type QoderRegion,
   type QoderSession,
@@ -31,16 +30,16 @@ function qoderClaimHeaders(session: QoderSession): Record<string, string> {
     // Without this one the server answers with an empty list of campaigns.
     "Cosy-ClientType": "10",
   };
-  // The machine identity the desktop app sends along; the server is happier
-  // with a request that looks like the app's. It is the account's own
-  // fingerprint, so it never links two accounts.
-  const identity = deviceIdentity("cn");
-  if (identity) {
-    headers["Cosy-MachineId"] = identity.machineId;
-    headers["Cosy-MachineToken"] = identity.machineToken;
-    headers["Cosy-MachineType"] = identity.machineType;
-    headers["Cosy-MachineCode"] = identity.machineCode;
-  }
+  // The machine identity the account registered with, not the derived one.
+  //
+  // The campaign service resolves the device behind the machine token before
+  // it answers. The derived fingerprint is not registered, so the risk check
+  // finds no device: the daily campaign is left out of the list, and claiming
+  // it by id answers 503 RISK_DEPENDENCY_UNAVAILABLE. The identity stored at
+  // login is the one the platform knows, so that is the one to send here.
+  if (session.machineId) headers["Cosy-MachineId"] = session.machineId;
+  if (session.machineToken) headers["Cosy-MachineToken"] = session.machineToken;
+  if (session.machineType) headers["Cosy-MachineType"] = session.machineType;
   headers["Cosy-MachineOS"] = `${os.arch()}_linux`;
   headers["Cosy-MachineHostname"] = os.hostname();
   return headers;
@@ -86,6 +85,15 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
       return { upstream, ok: false, credits, report, at: new Date().toISOString() };
     }
     const rows: any[] = Array.isArray(campaigns.body?.campaigns) ? campaigns.body.campaigns : [];
+    // The list is worth a line of its own: when the daily campaign is missing
+    // from it there is nothing to claim, and that is invisible in the report
+    // unless the campaigns are named.
+    console.log(
+      `[BENEFITS] ${upstream}: ${rows.length} campaign(s)` +
+        (rows.length
+          ? ` — ${rows.map((r: any) => `${r.campaignKey}:${r.claimStatus}`).join(", ")}`
+          : ""),
+    );
     if (!rows.length) {
       report.push("没有可领的活动");
     }
@@ -124,9 +132,19 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
         } else {
           credits += amount;
           report.push(`领活动「${row.campaignKey ?? row.campaignId}」+${amount} ${kind}`);
+          console.log(`[BENEFITS] ${upstream}: claimed ${row.campaignKey} +${amount} ${kind}`);
         }
       } else {
-        report.push(`领活动「${row.campaignKey ?? row.campaignId}」失败：${claim.body?.msg ?? `HTTP ${claim.status}`}`);
+        // The platform says why when it refuses. 503 RISK_DEPENDENCY_UNAVAILABLE
+        // means it could not find the device behind the machine token, which is
+        // a fingerprint problem and not a claim that ran out of time.
+        const why =
+          claim.body?.errorMessage ??
+          claim.body?.msg ??
+          claim.body?.message ??
+          `HTTP ${claim.status}`;
+        report.push(`领活动「${row.campaignKey ?? row.campaignId}」失败：${why}`);
+        console.log(`[BENEFITS] ${upstream}: claim ${row.campaignKey} failed (HTTP ${claim.status}): ${why}`);
       }
     }
     if (!creditCampaigns) report.push("没有可领积分的活动");
