@@ -7,7 +7,8 @@
 // 开关在启动时读一次（跟 lib/config.ts 的规矩一样）：改了要重启才生效，
 // 所以面板改开关之后看到的是「待重启」，不是立刻变。
 
-import { configFlag, configNumber, configString } from "../config.ts";
+import { configFlag, configNumber, configOverrides, configString } from "../config.ts";
+import { parseBool } from "../env.ts";
 import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
 import { credentialStatus, readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
@@ -62,6 +63,42 @@ export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
 
 /** 所有上游，顺序就是面板里显示的顺序。 */
 export const UPSTREAM_IDS: UpstreamId[] = ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm"];
+
+/** 一个上游的开关状态。 */
+export interface UpstreamState {
+  /** 将要生效的值：面板改了但还没重启时，这里已经是改后的值。 */
+  enabled: boolean;
+  /** 改过、还没重启。 */
+  pending: boolean;
+}
+
+/**
+ * 每个上游的开关状态。
+ *
+ * 开关有两个来源：进程启动时读的那份（真的在生效的那份），以及数据库里的
+ * 覆盖值（面板改的，还没重启）。所以：
+ *
+ *   enabled  数据库里有就用数据库的，没有就用启动时的 —— 也就是「将要生效」
+ *   pending  两个不一样就是要重启
+ *
+ * 数据库只读一次：五个上游查五遍没有意义。
+ */
+export function upstreamStates(): Record<UpstreamId, UpstreamState> {
+  const overrides = new Map(configOverrides().map((row) => [row.key, row.value]));
+  const out = {} as Record<UpstreamId, UpstreamState>;
+  for (const id of UPSTREAM_IDS) {
+    const raw = overrides.get(UPSTREAM_FLAG_KEYS[id]);
+    const parsed = raw === undefined ? null : parseBool(raw);
+    const enabled = parsed ?? UPSTREAM_FLAGS[id];
+    out[id] = { enabled, pending: enabled !== UPSTREAM_FLAGS[id] };
+  }
+  return out;
+}
+
+/** 一个上游的开关状态。 */
+export function upstreamState(id: UpstreamId): UpstreamState {
+  return upstreamStates()[id];
+}
 
 /**
  * 上游的地址。
@@ -428,6 +465,21 @@ export interface BalanceLotView {
   status: string;
 }
 
+/** 套餐额度的一个窗口。 */
+export interface TokenPlanWindowView {
+  /** general / video。 */
+  label: string;
+  intervalPercent: number;
+  weeklyPercent: number;
+  intervalEndsAt: number;
+  weeklyEndsAt: number;
+}
+
+/** 套餐额度。 */
+export interface TokenPlanView {
+  windows: TokenPlanWindowView[];
+}
+
 /** 余额的摘要。 */
 export interface BalanceView {
   /** 这个余额属于哪个上游。 */
@@ -439,6 +491,8 @@ export interface BalanceView {
   lots: BalanceLotView[];
   nextExpiryAt: number;
   expiringCny: number;
+  /** 套餐额度。只有 MiniMax 有套餐。 */
+  tokenPlan?: TokenPlanView;
 }
 
 /**
@@ -490,8 +544,39 @@ function minimaxBalances(snapshot: HealthSnapshot): BalanceView[] {
       lots,
       nextExpiryAt: 0,
       expiringCny: 0,
+      tokenPlan: minimaxTokenPlan(snapshot),
     },
   ];
+}
+
+/**
+ * MiniMax 的套餐额度。
+ *
+ * 平台给的是 ISO 字符串，这里换成毫秒时间戳。到期时间没有就是 0。
+ */
+export function tokenPlanView(plan: unknown): TokenPlanView | undefined {
+  const raw = plan as any;
+  const windows = Array.isArray(raw?.windows) ? raw.windows : [];
+  if (!windows.length) return undefined;
+  const at = (value: unknown): number => {
+    if (!value) return 0;
+    const parsed = Date.parse(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    windows: windows.map((window: any) => ({
+      label: String(window?.model ?? ""),
+      intervalPercent: Math.round(Number(window?.intervalPercent ?? 0)),
+      weeklyPercent: Math.round(Number(window?.weeklyPercent ?? 0)),
+      intervalEndsAt: at(window?.intervalEndsAt),
+      weeklyEndsAt: at(window?.weeklyEndsAt),
+    })),
+  };
+}
+
+/** 从快照里取 MiniMax 的套餐额度。 */
+function minimaxTokenPlan(snapshot: HealthSnapshot): TokenPlanView | undefined {
+  return tokenPlanView(snapshot.minimax?.tokenPlan);
 }
 
 /** Qoder 的余额：套餐额度与加油包，都是点数不是钱。 */

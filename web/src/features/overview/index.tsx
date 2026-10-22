@@ -100,13 +100,13 @@ export function OverviewPage() {
           <CardHeader>
             <CardDescription className='flex items-center gap-1.5'>
               <Layers className='size-3.5' />
-              公布的模型
+              主路由模型
             </CardDescription>
             <CardTitle className='text-2xl'>{data.publishedModelCount}</CardTitle>
           </CardHeader>
           <CardContent className='text-sm text-muted-foreground'>
             <Link to='/models' className='underline underline-offset-4'>
-              管理聚合路由
+              管理主路由模型
             </Link>
           </CardContent>
         </Card>

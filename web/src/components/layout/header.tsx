@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useIsFetching, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+
+import { RefreshButton } from '@/components/layout/refresh-button'
+import { ThemeToggle } from '@/components/layout/theme-toggle'
 
 type HeaderProps = React.HTMLAttributes<HTMLElement> & {
   fixed?: boolean
@@ -44,33 +44,11 @@ export function Header({ className, fixed, children, ...props }: HeaderProps) {
         <SidebarTrigger variant='outline' className='max-md:scale-125' />
         <Separator orientation='vertical' className='h-6' />
         {children}
-        <RefreshButton />
+        <div className='ms-auto flex items-center gap-1'>
+          <RefreshButton />
+          <ThemeToggle />
+        </div>
       </div>
     </header>
-  )
-}
-
-/**
- * 手动刷新。面板不自动重取（refetchOnWindowFocus 关着），总得有个地方
- * 能让用户自己按一下。
- */
-function RefreshButton() {
-  const queryClient = useQueryClient()
-  const fetching = useIsFetching() > 0
-
-  return (
-    <Button
-      variant='ghost'
-      size='icon'
-      className='ms-auto'
-      aria-label='刷新'
-      title='刷新'
-      disabled={fetching}
-      onClick={() => {
-        void queryClient.invalidateQueries()
-      }}
-    >
-      <RefreshCw className={cn('size-4', fetching && 'animate-spin')} />
-    </Button>
   )
 }

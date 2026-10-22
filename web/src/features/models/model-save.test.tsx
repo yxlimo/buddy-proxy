@@ -1,8 +1,9 @@
 import { create } from '@bufbuild/protobuf'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
+  ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
   PublishedModelSchema,
   SavePublishedModelResponseSchema,
@@ -66,13 +67,17 @@ describe('模型保存失败的时候', () => {
   it('目标没填全的时候保存按钮是灰的', async () => {
     const user = userEvent.setup()
 
-    render(
-      <ModelDialog
-        open
-        onOpenChange={() => {}}
-        onSubmit={() => {}}
-      />
-    )
+    // 弹窗里的模型下拉要查目录，得有客户端。
+    const client = mockAdminClient({
+      ListModels: () => create(ListModelsResponseSchema, { models: [] }),
+    })
+
+    renderWithClient({
+      client,
+      children: (
+        <ModelDialog open onOpenChange={() => {}} onSubmit={() => {}} />
+      ),
+    })
 
     const save = screen.getByRole('button', { name: '保存' })
     expect(save).toBeDisabled()
@@ -141,8 +146,18 @@ describe('元数据的继承', () => {
   it('没填全的目标不会发出去', () => {
     const draft = toDraft(undefined)
     draft.targets = [
-      { groupName: 'qoder', upstreamModel: '', weight: '1', position: '0', enabled: true },
-      { groupName: '', upstreamModel: 'claude', weight: '1', position: '0', enabled: true },
+      {
+        groupName: 'qoder',
+        upstreamModel: '',
+        weight: '1',
+        enabled: true,
+      },
+      {
+        groupName: '',
+        upstreamModel: 'claude',
+        weight: '1',
+        enabled: true,
+      },
     ]
     expect(fromDraft(draft).targets).toHaveLength(0)
   })

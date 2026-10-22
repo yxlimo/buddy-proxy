@@ -471,6 +471,32 @@ check(
   JSON.stringify(listConfigAfter.body?.items?.find((i: any) => i.key === "HEALTH_CACHE_MS")),
 );
 
+// 上游的开关：enabled 是将要生效的值，pending 是改过还没重启。
+const switched = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+check("上游开关改得掉", switched.body?.ok === true, JSON.stringify(switched.body));
+const afterSwitch = await call("ListUpstreams");
+const switchedUpstream = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "qoder");
+check("改完 enabled 是改后的值", switchedUpstream?.enabled === true, JSON.stringify(switchedUpstream));
+check("改完 pending 是真", switchedUpstream?.pending === true, JSON.stringify(switchedUpstream));
+const untouched = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "minimax");
+check("没动的上游 pending 是假", untouched?.pending === false, JSON.stringify(untouched));
+
+// 配置项：每项都有给人看的名字，名字不是 env 的键名。
+check("配置项都有名字", items.every((i: any) => typeof i.label === "string" && i.label.length > 0));
+check("名字不是键名", items.every((i: any) => i.label !== i.key));
+check(
+  "名字不是 env 键名的样子",
+  items.every((i: any) => !/^[A-Z][A-Z0-9_]+$/.test(i.label)),
+  JSON.stringify(items.filter((i: any) => /^[A-Z][A-Z0-9_]+$/.test(i.label)).map((i: any) => i.key)),
+);
+
+// 套餐额度：只有 MiniMax 有这个。
+check(
+  "套餐额度只有 MiniMax 有",
+  balances.every((b: any) => b.tokenPlan === undefined || b.upstreamId === "minimax"),
+  JSON.stringify(balances.map((b: any) => [b.upstreamId, b.tokenPlan !== undefined])),
+);
+
 // 时间：毫秒还是秒。
 const upstreams = await call("ListUpstreams");
 const list: any[] = Array.isArray(upstreams.body?.upstreams) ? upstreams.body.upstreams : [];

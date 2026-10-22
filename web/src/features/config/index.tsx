@@ -66,11 +66,44 @@ function hasValue(item: ConfigItem): boolean {
   return Boolean(item.value) && item.value !== SECRET_MASK
 }
 
+/**
+ * 这一项叫什么。
+ *
+ * 契约里给了 label（自然语言的名字）。没有 label 就用 description 的第一句，
+ * 实在没有才退回键名 —— 键名是给机器看的，不当主要显示。
+ */
+function itemTitle(item: ConfigItem): string {
+  if (item.label.trim()) return item.label.trim()
+  const firstSentence = item.description.split(/[。\n]/)[0]?.trim()
+  if (firstSentence) return firstSentence
+  return item.key
+}
+
+/**
+ * 标题下面那一行说明。
+ *
+ * 标题是 label 的时候，描述整段显示；标题是从描述里取的第一句时，描述的
+ * 剩下那半句显示在这儿，不重复一遍。
+ */
+function itemDescription(item: ConfigItem): string {
+  const description = item.description.trim()
+  if (!description) return ''
+  if (item.label.trim()) return description
+  const first = description.split(/[。\n]/)[0]?.trim() ?? ''
+  return description.slice(first.length).replace(/^[。\s]+/, '').trim()
+}
+
+/** 标题用的是键名的时候，就不用再在下面重复一遍了。 */
+function showKey(item: ConfigItem): boolean {
+  return itemTitle(item) !== item.key
+}
+
 export function ConfigPage() {
   const config = useConfig()
   const setConfig = useSetConfig()
   const [editing, setEditing] = useState<{
     key: string
+    title: string
     description: string
     secret: boolean
   } | null>(null)
@@ -148,10 +181,18 @@ export function ConfigPage() {
                     <TableRow key={item.key}>
                       <TableCell>
                         <div className='grid gap-0.5'>
-                          <span className='font-mono text-xs'>{item.key}</span>
-                          {item.description ? (
+                          {/* 主要显示是给人看的名字，键名放次要位置。 */}
+                          <span className='font-medium'>
+                            {itemTitle(item)}
+                          </span>
+                          {showKey(item) ? (
+                            <span className='font-mono text-xs text-muted-foreground'>
+                              {item.key}
+                            </span>
+                          ) : null}
+                          {itemDescription(item) ? (
                             <span className='text-xs text-muted-foreground'>
-                              {item.description}
+                              {itemDescription(item)}
                             </span>
                           ) : null}
                         </div>
@@ -186,6 +227,7 @@ export function ConfigPage() {
                             onClick={() => {
                               setEditing({
                                 key: item.key,
+                                title: itemTitle(item),
                                 description: item.description,
                                 secret: item.secret,
                               })
@@ -228,10 +270,10 @@ export function ConfigPage() {
           <DialogHeader>
             <DialogTitle className='flex items-center gap-2'>
               {editing?.secret ? <KeyRound className='size-4' /> : null}
-              改配置
+              {editing?.title ?? '改配置'}
             </DialogTitle>
             <DialogDescription>
-              <span className='font-mono'>{editing?.key}</span>
+              <span className='font-mono text-xs'>{editing?.key}</span>
               {editing?.description ? ` —— ${editing.description}` : ''}
             </DialogDescription>
           </DialogHeader>

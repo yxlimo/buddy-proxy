@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file buddy/admin/v1/admin.proto.
  */
 export const file_buddy_admin_v1_admin: GenFile = /*@__PURE__*/
-  fileDesc("ChpidWRkeS9hZG1pbi92MS9hZG1pbi5wcm90bxIOYnVkZHkuYWRtaW4udjEi5QEKCFVwc3RyZWFtEgoKAmlkGAEgASgJEg0KBWxhYmVsGAIgASgJEg8KB2VuYWJsZWQYAyABKAgSDwoHcGVuZGluZxgEIAEoCBITCgttb2RlbF9jb3VudBgFIAEoBRI0CgpjcmVkZW50aWFsGAYgASgLMiAuYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbFN0YXR1cxIvCgdiYWxhbmNlGAcgASgLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkSEAoIYmFzZV91cmwYCCABKAkSDgoGcmVnaW9uGAkgASgJIqUBChBDcmVkZW50aWFsU3RhdHVzEgwKBGtpbmQYASABKAkSDgoGc3RhdHVzGAIgASgJEhMKC2ZpbmdlcnByaW50GAMgASgJEhIKCmV4cGlyZXNfYXQYBCABKAMSFQoNcmVtYWluaW5nX3NlYxgFIAEoAxIPCgd3YXJuaW5nGAYgASgIEg4KBmRldGFpbBgHIAEoCRISCgpnZW5lcmF0aW9uGAggASgFIugBCg5CYWxhbmNlU3VtbWFyeRITCgt1cHN0cmVhbV9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhUKDWF2YWlsYWJsZV9jbnkYAyABKAESEAoIY3VycmVuY3kYBCABKAkSJwoEbG90cxgFIAMoCzIZLmJ1ZGR5LmFkbWluLnYxLkNyZWRpdExvdBIWCg5uZXh0X2V4cGlyeV9hdBgGIAEoAxIUCgxleHBpcmluZ19jbnkYByABKAESLQoKdG9rZW5fcGxhbhgIIAEoCzIZLmJ1ZGR5LmFkbWluLnYxLlRva2VuUGxhbiKEAQoPVG9rZW5QbGFuV2luZG93Eg0KBWxhYmVsGAEgASgJEhgKEGludGVydmFsX3BlcmNlbnQYAiABKAUSFgoOd2Vla2x5X3BlcmNlbnQYAyABKAUSGAoQaW50ZXJ2YWxfZW5kc19hdBgEIAEoAxIWCg53ZWVrbHlfZW5kc19hdBgFIAEoAyI9CglUb2tlblBsYW4SMAoHd2luZG93cxgBIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlRva2VuUGxhbldpbmRvdyJoCglDcmVkaXRMb3QSCgoCaWQYASABKAkSFAoMc291cmNlX2xhYmVsGAIgASgJEhUKDXJlbWFpbmluZ19jbnkYAyABKAESEgoKZXhwaXJlc19hdBgEIAEoAxIOCgZzdGF0dXMYBSABKAkiGAoWR2V0U3lzdGVtU3RhdHVzUmVxdWVzdCK8AQoXR2V0U3lzdGVtU3RhdHVzUmVzcG9uc2USDwoHdmVyc2lvbhgBIAEoCRIrCgl1cHN0cmVhbXMYAiADKAsyGC5idWRkeS5hZG1pbi52MS5VcHN0cmVhbRIXCg9wZW5kaW5nX3Jlc3RhcnQYAyABKAgSEgoKdXB0aW1lX3NlYxgEIAEoAxIdChVwdWJsaXNoZWRfbW9kZWxfY291bnQYBSABKAUSFwoPYWRtaW5fdG9rZW5fc2V0GAYgASgIIhYKFFJlc3RhcnRTeXN0ZW1SZXF1ZXN0IjoKFVJlc3RhcnRTeXN0ZW1SZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoCBIPCgdtZXNzYWdlGAIgASgJIhYKFExpc3RVcHN0cmVhbXNSZXF1ZXN0IkQKFUxpc3RVcHN0cmVhbXNSZXNwb25zZRIrCgl1cHN0cmVhbXMYASADKAsyGC5idWRkeS5hZG1pbi52MS5VcHN0cmVhbSJBChlTZXRVcHN0cmVhbUVuYWJsZWRSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEg8KB2VuYWJsZWQYAiABKAgiUgoaU2V0VXBzdHJlYW1FbmFibGVkUmVzcG9uc2USCgoCb2sYASABKAgSFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIEg8KB21lc3NhZ2UYAyABKAkiEwoRTGlzdENvbmZpZ1JlcXVlc3QioAEKCkNvbmZpZ0l0ZW0SCwoDa2V5GAEgASgJEg0KBWxhYmVsGAIgASgJEg0KBXZhbHVlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIQCghmYWxsYmFjaxgFIAEoCRINCgVncm91cBgGIAEoCRITCgtkZXNjcmlwdGlvbhgHIAEoCRIOCgZzZWNyZXQYCCABKAgSEQoJaGFzX3ZhbHVlGAkgASgIIlgKEkxpc3RDb25maWdSZXNwb25zZRIpCgVpdGVtcxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNvbmZpZ0l0ZW0SFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIIj0KEFNldENvbmZpZ1JlcXVlc3QSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEg0KBWNsZWFyGAMgASgIIkkKEVNldENvbmZpZ1Jlc3BvbnNlEgoKAm9rGAEgASgIEhcKD3BlbmRpbmdfcmVzdGFydBgCIAEoCBIPCgdtZXNzYWdlGAMgASgJIqQBCgdBY2NvdW50EgoKAmlkGAEgASgJEhMKC3Vwc3RyZWFtX2lkGAIgASgJEg0KBWxhYmVsGAMgASgJEg4KBnN0YXR1cxgEIAEoCRIYChBjcmVkZW50aWFsX2NvdW50GAUgASgFEg4KBmRldGFpbBgGIAEoCRIvCgdiYWxhbmNlGAcgASgLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkiFQoTTGlzdEFjY291bnRzUmVxdWVzdCJBChRMaXN0QWNjb3VudHNSZXNwb25zZRIpCghhY2NvdW50cxgBIAMoCzIXLmJ1ZGR5LmFkbWluLnYxLkFjY291bnQi9wEKCkNyZWRlbnRpYWwSCgoCaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRITCgt1cHN0cmVhbV9pZBgDIAEoCRIMCgRraW5kGAQgASgJEg0KBWxhYmVsGAUgASgJEg4KBm1hc2tlZBgGIAEoCRITCgtmaW5nZXJwcmludBgHIAEoCRIOCgZzdGF0dXMYCCABKAkSEgoKZ2VuZXJhdGlvbhgJIAEoBRISCgpleHBpcmVzX2F0GAogASgDEhIKCmxhc3Rfb2tfYXQYCyABKAMSEgoKbGFzdF9lcnJvchgMIAEoCRISCgp1cGRhdGVkX2F0GA0gASgDIiwKFkxpc3RDcmVkZW50aWFsc1JlcXVlc3QSEgoKYWNjb3VudF9pZBgBIAEoCSJKChdMaXN0Q3JlZGVudGlhbHNSZXNwb25zZRIvCgtjcmVkZW50aWFscxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWwiLgoVVGVzdENyZWRlbnRpYWxSZXF1ZXN0EhUKDWNyZWRlbnRpYWxfaWQYASABKAkiSQoWVGVzdENyZWRlbnRpYWxSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEhIKCmNoZWNrZWRfYXQYAyABKAMiMQoYUmVmcmVzaENyZWRlbnRpYWxSZXF1ZXN0EhUKDWNyZWRlbnRpYWxfaWQYASABKAkiTAoZUmVmcmVzaENyZWRlbnRpYWxSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEhIKCmdlbmVyYXRpb24YAyABKAUiKAoRR2V0QmFsYW5jZVJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkiRgoSR2V0QmFsYW5jZVJlc3BvbnNlEjAKCGJhbGFuY2VzGAEgAygLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkipwEKDFVzYWdlU3VtbWFyeRIQCghyZXF1ZXN0cxgBIAEoAxIRCglzdWNjZWVkZWQYAiABKAMSDgoGZmFpbGVkGAMgASgDEhUKDXByb21wdF90b2tlbnMYBCABKAMSGQoRY29tcGxldGlvbl90b2tlbnMYBSABKAMSGAoQcmVhc29uaW5nX3Rva2VucxgGIAEoAxIWCg5sYXRlbmN5X21zX3N1bRgHIAEoAyI9ChZHZXRVc2FnZVN1bW1hcnlSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEg4KBndpbmRvdxgCIAEoCSLUAQoXR2V0VXNhZ2VTdW1tYXJ5UmVzcG9uc2USKwoFdG90YWwYASABKAsyHC5idWRkeS5hZG1pbi52MS5Vc2FnZVN1bW1hcnkSMAoLYnlfdXBzdHJlYW0YAiADKAsyGy5idWRkeS5hZG1pbi52MS5Vc2FnZUJ1Y2tldBItCghieV9tb2RlbBgDIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0EisKBmJ5X2RheRgEIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0IkkKC1VzYWdlQnVja2V0EgsKA2tleRgBIAEoCRItCgdzdW1tYXJ5GAIgASgLMhwuYnVkZHkuYWRtaW4udjEuVXNhZ2VTdW1tYXJ5Il4KFkxpc3RVc2FnZUV2ZW50c1JlcXVlc3QSDQoFbGltaXQYASABKAUSEwoLdXBzdHJlYW1faWQYAiABKAkSDQoFbW9kZWwYAyABKAkSEQoJYmVmb3JlX2lkGAQgASgDIv0BCgpVc2FnZUV2ZW50EgoKAmlkGAEgASgDEgoKAnRzGAIgASgDEhMKC3Vwc3RyZWFtX2lkGAMgASgJEg0KBW1vZGVsGAQgASgJEhMKC2FnZW50X21vZGVsGAUgASgJEg8KB2RpYWxlY3QYBiABKAkSDgoGY2xpZW50GAcgASgJEhUKDXByb21wdF90b2tlbnMYCCABKAMSGQoRY29tcGxldGlvbl90b2tlbnMYCSABKAMSGAoQcmVhc29uaW5nX3Rva2VucxgKIAEoAxISCgpsYXRlbmN5X21zGAsgASgDEg4KBnN0YXR1cxgMIAEoCRINCgVlcnJvchgNIAEoCSJFChdMaXN0VXNhZ2VFdmVudHNSZXNwb25zZRIqCgZldmVudHMYASADKAsyGi5idWRkeS5hZG1pbi52MS5Vc2FnZUV2ZW50IuUCCg5QdWJsaXNoZWRNb2RlbBIKCgJpZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSDwoHZW5hYmxlZBgDIAEoCBIQCghzdHJhdGVneRgEIAEoCRIbCg5jb250ZXh0X3dpbmRvdxgFIAEoBUgAiAEBEh4KEW1heF9vdXRwdXRfdG9rZW5zGAYgASgFSAGIAQESFgoJcmVhc29uaW5nGAcgASgISAKIAQESFgoJdG9vbF9jYWxsGAggASgISAOIAQESFgoOZWZmb3J0X29wdGlvbnMYCSADKAkSMAoHdGFyZ2V0cxgKIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZFRhcmdldBISCgp1cGRhdGVkX2F0GAsgASgDQhEKD19jb250ZXh0X3dpbmRvd0IUChJfbWF4X291dHB1dF90b2tlbnNCDAoKX3JlYXNvbmluZ0IMCgpfdG9vbF9jYWxsIoABCg9QdWJsaXNoZWRUYXJnZXQSEgoKZ3JvdXBfbmFtZRgBIAEoCRIWCg51cHN0cmVhbV9tb2RlbBgCIAEoCRIOCgZ3ZWlnaHQYAyABKAUSDwoHZW5hYmxlZBgEIAEoCBIQCghyZXF1ZXN0cxgFIAEoAxIOCgZmYWlsZWQYBiABKAMiHAoaTGlzdFB1Ymxpc2hlZE1vZGVsc1JlcXVlc3QiTQobTGlzdFB1Ymxpc2hlZE1vZGVsc1Jlc3BvbnNlEi4KBm1vZGVscxgBIAMoCzIeLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZE1vZGVsIkoKGVNhdmVQdWJsaXNoZWRNb2RlbFJlcXVlc3QSLQoFbW9kZWwYASABKAsyHi5idWRkeS5hZG1pbi52MS5QdWJsaXNoZWRNb2RlbCJFChpTYXZlUHVibGlzaGVkTW9kZWxSZXNwb25zZRIKCgJvaxgBIAEoCBIKCgJpZBgCIAEoCRIPCgdtZXNzYWdlGAMgASgJIikKG0RlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBIKCgJpZBgBIAEoCSI7ChxEZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiGQoXR2V0QmVuZWZpdFN0YXR1c1JlcXVlc3QidQoNQmVuZWZpdFN0YXR1cxITCgt1cHN0cmVhbV9pZBgBIAEoCRIPCgdzdW1tYXJ5GAIgASgJEg0KBWxpbmVzGAMgAygJEhIKCmNoZWNrZWRfYXQYBCABKAMSDwoHY3JlZGl0cxgFIAEoBRIKCgJvaxgGIAEoCCJLChhHZXRCZW5lZml0U3RhdHVzUmVzcG9uc2USLwoIYmVuZWZpdHMYASADKAsyHS5idWRkeS5hZG1pbi52MS5CZW5lZml0U3RhdHVzIhYKFFJ1bkJlbmVmaXROb3dSZXF1ZXN0IjIKFVJ1bkJlbmVmaXROb3dSZXNwb25zZRIKCgJvaxgBIAEoCBINCgVsaW5lcxgCIAMoCSIoChFMaXN0TW9kZWxzUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCSKyAQoMQ2F0YWxvZ01vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIWCg5jb250ZXh0X3dpbmRvdxgDIAEoBRIZChFtYXhfb3V0cHV0X3Rva2VucxgEIAEoBRIRCglyZWFzb25pbmcYBSABKAgSEQoJdG9vbF9jYWxsGAYgASgIEhYKDmVmZm9ydF9vcHRpb25zGAcgAygJEg8KB2NyZWRpdHMYCCABKAEiQgoSTGlzdE1vZGVsc1Jlc3BvbnNlEiwKBm1vZGVscxgBIAMoCzIcLmJ1ZGR5LmFkbWluLnYxLkNhdGFsb2dNb2RlbCIvCg5UYWlsTG9nUmVxdWVzdBINCgVsaW5lcxgBIAEoBRIOCgZmaWx0ZXIYAiABKAkiIAoPVGFpbExvZ1Jlc3BvbnNlEg0KBWxpbmVzGAEgAygJMp8PCgxBZG1pblNlcnZpY2USYgoPR2V0U3lzdGVtU3RhdHVzEiYuYnVkZHkuYWRtaW4udjEuR2V0U3lzdGVtU3RhdHVzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkdldFN5c3RlbVN0YXR1c1Jlc3BvbnNlElwKDVJlc3RhcnRTeXN0ZW0SJC5idWRkeS5hZG1pbi52MS5SZXN0YXJ0U3lzdGVtUmVxdWVzdBolLmJ1ZGR5LmFkbWluLnYxLlJlc3RhcnRTeXN0ZW1SZXNwb25zZRJcCg1MaXN0VXBzdHJlYW1zEiQuYnVkZHkuYWRtaW4udjEuTGlzdFVwc3RyZWFtc1JlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5MaXN0VXBzdHJlYW1zUmVzcG9uc2USawoSU2V0VXBzdHJlYW1FbmFibGVkEikuYnVkZHkuYWRtaW4udjEuU2V0VXBzdHJlYW1FbmFibGVkUmVxdWVzdBoqLmJ1ZGR5LmFkbWluLnYxLlNldFVwc3RyZWFtRW5hYmxlZFJlc3BvbnNlElMKCkxpc3RDb25maWcSIS5idWRkeS5hZG1pbi52MS5MaXN0Q29uZmlnUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkxpc3RDb25maWdSZXNwb25zZRJQCglTZXRDb25maWcSIC5idWRkeS5hZG1pbi52MS5TZXRDb25maWdSZXF1ZXN0GiEuYnVkZHkuYWRtaW4udjEuU2V0Q29uZmlnUmVzcG9uc2USWQoMTGlzdEFjY291bnRzEiMuYnVkZHkuYWRtaW4udjEuTGlzdEFjY291bnRzUmVxdWVzdBokLmJ1ZGR5LmFkbWluLnYxLkxpc3RBY2NvdW50c1Jlc3BvbnNlEmIKD0xpc3RDcmVkZW50aWFscxImLmJ1ZGR5LmFkbWluLnYxLkxpc3RDcmVkZW50aWFsc1JlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5MaXN0Q3JlZGVudGlhbHNSZXNwb25zZRJfCg5UZXN0Q3JlZGVudGlhbBIlLmJ1ZGR5LmFkbWluLnYxLlRlc3RDcmVkZW50aWFsUmVxdWVzdBomLmJ1ZGR5LmFkbWluLnYxLlRlc3RDcmVkZW50aWFsUmVzcG9uc2USaAoRUmVmcmVzaENyZWRlbnRpYWwSKC5idWRkeS5hZG1pbi52MS5SZWZyZXNoQ3JlZGVudGlhbFJlcXVlc3QaKS5idWRkeS5hZG1pbi52MS5SZWZyZXNoQ3JlZGVudGlhbFJlc3BvbnNlElMKCkdldEJhbGFuY2USIS5idWRkeS5hZG1pbi52MS5HZXRCYWxhbmNlUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkdldEJhbGFuY2VSZXNwb25zZRJiCg9HZXRVc2FnZVN1bW1hcnkSJi5idWRkeS5hZG1pbi52MS5HZXRVc2FnZVN1bW1hcnlSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuR2V0VXNhZ2VTdW1tYXJ5UmVzcG9uc2USYgoPTGlzdFVzYWdlRXZlbnRzEiYuYnVkZHkuYWRtaW4udjEuTGlzdFVzYWdlRXZlbnRzUmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkxpc3RVc2FnZUV2ZW50c1Jlc3BvbnNlEm4KE0xpc3RQdWJsaXNoZWRNb2RlbHMSKi5idWRkeS5hZG1pbi52MS5MaXN0UHVibGlzaGVkTW9kZWxzUmVxdWVzdBorLmJ1ZGR5LmFkbWluLnYxLkxpc3RQdWJsaXNoZWRNb2RlbHNSZXNwb25zZRJrChJTYXZlUHVibGlzaGVkTW9kZWwSKS5idWRkeS5hZG1pbi52MS5TYXZlUHVibGlzaGVkTW9kZWxSZXF1ZXN0GiouYnVkZHkuYWRtaW4udjEuU2F2ZVB1Ymxpc2hlZE1vZGVsUmVzcG9uc2UScQoURGVsZXRlUHVibGlzaGVkTW9kZWwSKy5idWRkeS5hZG1pbi52MS5EZWxldGVQdWJsaXNoZWRNb2RlbFJlcXVlc3QaLC5idWRkeS5hZG1pbi52MS5EZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEmUKEEdldEJlbmVmaXRTdGF0dXMSJy5idWRkeS5hZG1pbi52MS5HZXRCZW5lZml0U3RhdHVzUmVxdWVzdBooLmJ1ZGR5LmFkbWluLnYxLkdldEJlbmVmaXRTdGF0dXNSZXNwb25zZRJcCg1SdW5CZW5lZml0Tm93EiQuYnVkZHkuYWRtaW4udjEuUnVuQmVuZWZpdE5vd1JlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5SdW5CZW5lZml0Tm93UmVzcG9uc2USUwoKTGlzdE1vZGVscxIhLmJ1ZGR5LmFkbWluLnYxLkxpc3RNb2RlbHNSZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuTGlzdE1vZGVsc1Jlc3BvbnNlEkoKB1RhaWxMb2cSHi5idWRkeS5hZG1pbi52MS5UYWlsTG9nUmVxdWVzdBofLmJ1ZGR5LmFkbWluLnYxLlRhaWxMb2dSZXNwb25zZWIGcHJvdG8z");
+  fileDesc("ChpidWRkeS9hZG1pbi92MS9hZG1pbi5wcm90bxIOYnVkZHkuYWRtaW4udjEi5QEKCFVwc3RyZWFtEgoKAmlkGAEgASgJEg0KBWxhYmVsGAIgASgJEg8KB2VuYWJsZWQYAyABKAgSDwoHcGVuZGluZxgEIAEoCBITCgttb2RlbF9jb3VudBgFIAEoBRI0CgpjcmVkZW50aWFsGAYgASgLMiAuYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbFN0YXR1cxIvCgdiYWxhbmNlGAcgASgLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkSEAoIYmFzZV91cmwYCCABKAkSDgoGcmVnaW9uGAkgASgJIqUBChBDcmVkZW50aWFsU3RhdHVzEgwKBGtpbmQYASABKAkSDgoGc3RhdHVzGAIgASgJEhMKC2ZpbmdlcnByaW50GAMgASgJEhIKCmV4cGlyZXNfYXQYBCABKAMSFQoNcmVtYWluaW5nX3NlYxgFIAEoAxIPCgd3YXJuaW5nGAYgASgIEg4KBmRldGFpbBgHIAEoCRISCgpnZW5lcmF0aW9uGAggASgFIugBCg5CYWxhbmNlU3VtbWFyeRITCgt1cHN0cmVhbV9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhUKDWF2YWlsYWJsZV9jbnkYAyABKAESEAoIY3VycmVuY3kYBCABKAkSJwoEbG90cxgFIAMoCzIZLmJ1ZGR5LmFkbWluLnYxLkNyZWRpdExvdBIWCg5uZXh0X2V4cGlyeV9hdBgGIAEoAxIUCgxleHBpcmluZ19jbnkYByABKAESLQoKdG9rZW5fcGxhbhgIIAEoCzIZLmJ1ZGR5LmFkbWluLnYxLlRva2VuUGxhbiKEAQoPVG9rZW5QbGFuV2luZG93Eg0KBWxhYmVsGAEgASgJEhgKEGludGVydmFsX3BlcmNlbnQYAiABKAUSFgoOd2Vla2x5X3BlcmNlbnQYAyABKAUSGAoQaW50ZXJ2YWxfZW5kc19hdBgEIAEoAxIWCg53ZWVrbHlfZW5kc19hdBgFIAEoAyI9CglUb2tlblBsYW4SMAoHd2luZG93cxgBIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlRva2VuUGxhbldpbmRvdyJoCglDcmVkaXRMb3QSCgoCaWQYASABKAkSFAoMc291cmNlX2xhYmVsGAIgASgJEhUKDXJlbWFpbmluZ19jbnkYAyABKAESEgoKZXhwaXJlc19hdBgEIAEoAxIOCgZzdGF0dXMYBSABKAkiGAoWR2V0U3lzdGVtU3RhdHVzUmVxdWVzdCK8AQoXR2V0U3lzdGVtU3RhdHVzUmVzcG9uc2USDwoHdmVyc2lvbhgBIAEoCRIrCgl1cHN0cmVhbXMYAiADKAsyGC5idWRkeS5hZG1pbi52MS5VcHN0cmVhbRIXCg9wZW5kaW5nX3Jlc3RhcnQYAyABKAgSEgoKdXB0aW1lX3NlYxgEIAEoAxIdChVwdWJsaXNoZWRfbW9kZWxfY291bnQYBSABKAUSFwoPYWRtaW5fdG9rZW5fc2V0GAYgASgIIhYKFFJlc3RhcnRTeXN0ZW1SZXF1ZXN0IjoKFVJlc3RhcnRTeXN0ZW1SZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoCBIPCgdtZXNzYWdlGAIgASgJIhYKFExpc3RVcHN0cmVhbXNSZXF1ZXN0IkQKFUxpc3RVcHN0cmVhbXNSZXNwb25zZRIrCgl1cHN0cmVhbXMYASADKAsyGC5idWRkeS5hZG1pbi52MS5VcHN0cmVhbSJBChlTZXRVcHN0cmVhbUVuYWJsZWRSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEg8KB2VuYWJsZWQYAiABKAgiUgoaU2V0VXBzdHJlYW1FbmFibGVkUmVzcG9uc2USCgoCb2sYASABKAgSFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIEg8KB21lc3NhZ2UYAyABKAkiEwoRTGlzdENvbmZpZ1JlcXVlc3QioAEKCkNvbmZpZ0l0ZW0SCwoDa2V5GAEgASgJEg0KBWxhYmVsGAIgASgJEg0KBXZhbHVlGAMgASgJEg4KBnNvdXJjZRgEIAEoCRIQCghmYWxsYmFjaxgFIAEoCRINCgVncm91cBgGIAEoCRITCgtkZXNjcmlwdGlvbhgHIAEoCRIOCgZzZWNyZXQYCCABKAgSEQoJaGFzX3ZhbHVlGAkgASgIIlgKEkxpc3RDb25maWdSZXNwb25zZRIpCgVpdGVtcxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNvbmZpZ0l0ZW0SFwoPcGVuZGluZ19yZXN0YXJ0GAIgASgIIj0KEFNldENvbmZpZ1JlcXVlc3QSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEg0KBWNsZWFyGAMgASgIIkkKEVNldENvbmZpZ1Jlc3BvbnNlEgoKAm9rGAEgASgIEhcKD3BlbmRpbmdfcmVzdGFydBgCIAEoCBIPCgdtZXNzYWdlGAMgASgJIqQBCgdBY2NvdW50EgoKAmlkGAEgASgJEhMKC3Vwc3RyZWFtX2lkGAIgASgJEg0KBWxhYmVsGAMgASgJEg4KBnN0YXR1cxgEIAEoCRIYChBjcmVkZW50aWFsX2NvdW50GAUgASgFEg4KBmRldGFpbBgGIAEoCRIvCgdiYWxhbmNlGAcgASgLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkiFQoTTGlzdEFjY291bnRzUmVxdWVzdCJBChRMaXN0QWNjb3VudHNSZXNwb25zZRIpCghhY2NvdW50cxgBIAMoCzIXLmJ1ZGR5LmFkbWluLnYxLkFjY291bnQi9wEKCkNyZWRlbnRpYWwSCgoCaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRITCgt1cHN0cmVhbV9pZBgDIAEoCRIMCgRraW5kGAQgASgJEg0KBWxhYmVsGAUgASgJEg4KBm1hc2tlZBgGIAEoCRITCgtmaW5nZXJwcmludBgHIAEoCRIOCgZzdGF0dXMYCCABKAkSEgoKZ2VuZXJhdGlvbhgJIAEoBRISCgpleHBpcmVzX2F0GAogASgDEhIKCmxhc3Rfb2tfYXQYCyABKAMSEgoKbGFzdF9lcnJvchgMIAEoCRISCgp1cGRhdGVkX2F0GA0gASgDIiwKFkxpc3RDcmVkZW50aWFsc1JlcXVlc3QSEgoKYWNjb3VudF9pZBgBIAEoCSJKChdMaXN0Q3JlZGVudGlhbHNSZXNwb25zZRIvCgtjcmVkZW50aWFscxgBIAMoCzIaLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWwiLgoVVGVzdENyZWRlbnRpYWxSZXF1ZXN0EhUKDWNyZWRlbnRpYWxfaWQYASABKAkiSQoWVGVzdENyZWRlbnRpYWxSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEhIKCmNoZWNrZWRfYXQYAyABKAMiMQoYUmVmcmVzaENyZWRlbnRpYWxSZXF1ZXN0EhUKDWNyZWRlbnRpYWxfaWQYASABKAkiTAoZUmVmcmVzaENyZWRlbnRpYWxSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEhIKCmdlbmVyYXRpb24YAyABKAUiKAoRR2V0QmFsYW5jZVJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkiRgoSR2V0QmFsYW5jZVJlc3BvbnNlEjAKCGJhbGFuY2VzGAEgAygLMh4uYnVkZHkuYWRtaW4udjEuQmFsYW5jZVN1bW1hcnkipwEKDFVzYWdlU3VtbWFyeRIQCghyZXF1ZXN0cxgBIAEoAxIRCglzdWNjZWVkZWQYAiABKAMSDgoGZmFpbGVkGAMgASgDEhUKDXByb21wdF90b2tlbnMYBCABKAMSGQoRY29tcGxldGlvbl90b2tlbnMYBSABKAMSGAoQcmVhc29uaW5nX3Rva2VucxgGIAEoAxIWCg5sYXRlbmN5X21zX3N1bRgHIAEoAyI9ChZHZXRVc2FnZVN1bW1hcnlSZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEg4KBndpbmRvdxgCIAEoCSLUAQoXR2V0VXNhZ2VTdW1tYXJ5UmVzcG9uc2USKwoFdG90YWwYASABKAsyHC5idWRkeS5hZG1pbi52MS5Vc2FnZVN1bW1hcnkSMAoLYnlfdXBzdHJlYW0YAiADKAsyGy5idWRkeS5hZG1pbi52MS5Vc2FnZUJ1Y2tldBItCghieV9tb2RlbBgDIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0EisKBmJ5X2RheRgEIAMoCzIbLmJ1ZGR5LmFkbWluLnYxLlVzYWdlQnVja2V0IkkKC1VzYWdlQnVja2V0EgsKA2tleRgBIAEoCRItCgdzdW1tYXJ5GAIgASgLMhwuYnVkZHkuYWRtaW4udjEuVXNhZ2VTdW1tYXJ5Il4KFkxpc3RVc2FnZUV2ZW50c1JlcXVlc3QSDQoFbGltaXQYASABKAUSEwoLdXBzdHJlYW1faWQYAiABKAkSDQoFbW9kZWwYAyABKAkSEQoJYmVmb3JlX2lkGAQgASgDIv0BCgpVc2FnZUV2ZW50EgoKAmlkGAEgASgDEgoKAnRzGAIgASgDEhMKC3Vwc3RyZWFtX2lkGAMgASgJEg0KBW1vZGVsGAQgASgJEhMKC2FnZW50X21vZGVsGAUgASgJEg8KB2RpYWxlY3QYBiABKAkSDgoGY2xpZW50GAcgASgJEhUKDXByb21wdF90b2tlbnMYCCABKAMSGQoRY29tcGxldGlvbl90b2tlbnMYCSABKAMSGAoQcmVhc29uaW5nX3Rva2VucxgKIAEoAxISCgpsYXRlbmN5X21zGAsgASgDEg4KBnN0YXR1cxgMIAEoCRINCgVlcnJvchgNIAEoCSJFChdMaXN0VXNhZ2VFdmVudHNSZXNwb25zZRIqCgZldmVudHMYASADKAsyGi5idWRkeS5hZG1pbi52MS5Vc2FnZUV2ZW50IuUCCg5QdWJsaXNoZWRNb2RlbBIKCgJpZBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSDwoHZW5hYmxlZBgDIAEoCBIQCghzdHJhdGVneRgEIAEoCRIbCg5jb250ZXh0X3dpbmRvdxgFIAEoBUgAiAEBEh4KEW1heF9vdXRwdXRfdG9rZW5zGAYgASgFSAGIAQESFgoJcmVhc29uaW5nGAcgASgISAKIAQESFgoJdG9vbF9jYWxsGAggASgISAOIAQESFgoOZWZmb3J0X29wdGlvbnMYCSADKAkSMAoHdGFyZ2V0cxgKIAMoCzIfLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZFRhcmdldBISCgp1cGRhdGVkX2F0GAsgASgDQhEKD19jb250ZXh0X3dpbmRvd0IUChJfbWF4X291dHB1dF90b2tlbnNCDAoKX3JlYXNvbmluZ0IMCgpfdG9vbF9jYWxsIoABCg9QdWJsaXNoZWRUYXJnZXQSEgoKZ3JvdXBfbmFtZRgBIAEoCRIWCg51cHN0cmVhbV9tb2RlbBgCIAEoCRIOCgZ3ZWlnaHQYAyABKAUSDwoHZW5hYmxlZBgEIAEoCBIQCghyZXF1ZXN0cxgFIAEoAxIOCgZmYWlsZWQYBiABKAMiHAoaTGlzdFB1Ymxpc2hlZE1vZGVsc1JlcXVlc3QiTQobTGlzdFB1Ymxpc2hlZE1vZGVsc1Jlc3BvbnNlEi4KBm1vZGVscxgBIAMoCzIeLmJ1ZGR5LmFkbWluLnYxLlB1Ymxpc2hlZE1vZGVsIkoKGVNhdmVQdWJsaXNoZWRNb2RlbFJlcXVlc3QSLQoFbW9kZWwYASABKAsyHi5idWRkeS5hZG1pbi52MS5QdWJsaXNoZWRNb2RlbCJFChpTYXZlUHVibGlzaGVkTW9kZWxSZXNwb25zZRIKCgJvaxgBIAEoCBIKCgJpZBgCIAEoCRIPCgdtZXNzYWdlGAMgASgJIikKG0RlbGV0ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBIKCgJpZBgBIAEoCSI7ChxEZWxldGVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiGQoXR2V0QmVuZWZpdFN0YXR1c1JlcXVlc3QidQoNQmVuZWZpdFN0YXR1cxITCgt1cHN0cmVhbV9pZBgBIAEoCRIPCgdzdW1tYXJ5GAIgASgJEg0KBWxpbmVzGAMgAygJEhIKCmNoZWNrZWRfYXQYBCABKAMSDwoHY3JlZGl0cxgFIAEoBRIKCgJvaxgGIAEoCCJLChhHZXRCZW5lZml0U3RhdHVzUmVzcG9uc2USLwoIYmVuZWZpdHMYASADKAsyHS5idWRkeS5hZG1pbi52MS5CZW5lZml0U3RhdHVzIhYKFFJ1bkJlbmVmaXROb3dSZXF1ZXN0IjIKFVJ1bkJlbmVmaXROb3dSZXNwb25zZRIKCgJvaxgBIAEoCBINCgVsaW5lcxgCIAMoCSIoChFMaXN0TW9kZWxzUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCSKyAQoMQ2F0YWxvZ01vZGVsEgoKAmlkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRIWCg5jb250ZXh0X3dpbmRvdxgDIAEoBRIZChFtYXhfb3V0cHV0X3Rva2VucxgEIAEoBRIRCglyZWFzb25pbmcYBSABKAgSEQoJdG9vbF9jYWxsGAYgASgIEhYKDmVmZm9ydF9vcHRpb25zGAcgAygJEg8KB2NyZWRpdHMYCCABKAEiQgoSTGlzdE1vZGVsc1Jlc3BvbnNlEiwKBm1vZGVscxgBIAMoCzIcLmJ1ZGR5LmFkbWluLnYxLkNhdGFsb2dNb2RlbCIvCg5UYWlsTG9nUmVxdWVzdBINCgVsaW5lcxgBIAEoBRIOCgZmaWx0ZXIYAiABKAkiIAoPVGFpbExvZ1Jlc3BvbnNlEg0KBWxpbmVzGAEgAygJIoQCCgxMb2dpblNlc3Npb24SEAoIbG9naW5faWQYASABKAkSEwoLdXBzdHJlYW1faWQYAiABKAkSEgoKYWNjb3VudF9pZBgDIAEoCRIOCgZzdGF0dXMYBCABKAkSDgoGbWV0aG9kGAUgASgJEhkKEWF1dGhvcml6YXRpb25fdXJsGAYgASgJEhEKCXVzZXJfY29kZRgHIAEoCRISCgpleHBpcmVzX2F0GAggASgDEg8KB21lc3NhZ2UYCSABKAkSNAoKY3JlZGVudGlhbBgKIAEoCzIgLmJ1ZGR5LmFkbWluLnYxLkNyZWRlbnRpYWxTdGF0dXMSEAoIdXNlcm5hbWUYCyABKAkiSgoRQmVnaW5Mb2dpblJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIMCgRzaXRlGAMgASgJImAKEkJlZ2luTG9naW5SZXNwb25zZRItCgdzZXNzaW9uGAEgASgLMhwuYnVkZHkuYWRtaW4udjEuTG9naW5TZXNzaW9uEgoKAm9rGAIgASgIEg8KB21lc3NhZ2UYAyABKAkiKQoVR2V0TG9naW5TdGF0dXNSZXF1ZXN0EhAKCGxvZ2luX2lkGAEgASgJImQKFkdldExvZ2luU3RhdHVzUmVzcG9uc2USLQoHc2Vzc2lvbhgBIAEoCzIcLmJ1ZGR5LmFkbWluLnYxLkxvZ2luU2Vzc2lvbhIKCgJvaxgCIAEoCBIPCgdtZXNzYWdlGAMgASgJIiYKEkNhbmNlbExvZ2luUmVxdWVzdBIQCghsb2dpbl9pZBgBIAEoCSIyChNDYW5jZWxMb2dpblJlc3BvbnNlEgoKAm9rGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiyQEKGExvZ2luV2l0aFBhc3N3b3JkUmVxdWVzdBITCgt1cHN0cmVhbV9pZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJEhwKFGNhcHRjaGFfdmVyaWZ5X3BhcmFtGAUgASgJEhgKEGNhcHRjaGFfc2NlbmVfaWQYBiABKAkSFgoOY2FwdGNoYV9wcmVmaXgYByABKAkSEAoIcmVtZW1iZXIYCCABKAgikgEKGUxvZ2luV2l0aFBhc3N3b3JkUmVzcG9uc2USCgoCb2sYASABKAgSDwoHbWVzc2FnZRgCIAEoCRIoCgdhY2NvdW50GAMgASgLMhcuYnVkZHkuYWRtaW4udjEuQWNjb3VudBIuCgpjcmVkZW50aWFsGAQgASgLMhouYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbCJfChhFeGNoYW5nZUxvZ2luQ29kZVJlcXVlc3QSEwoLdXBzdHJlYW1faWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIMCgRjb2RlGAMgASgJEgwKBHNpdGUYBCABKAkiaAoZRXhjaGFuZ2VMb2dpbkNvZGVSZXNwb25zZRIKCgJvaxgBIAEoCBIPCgdtZXNzYWdlGAIgASgJEi4KCmNyZWRlbnRpYWwYAyABKAsyGi5idWRkeS5hZG1pbi52MS5DcmVkZW50aWFsIl8KF0ltcG9ydExvZ2luVG9rZW5SZXF1ZXN0EhMKC3Vwc3RyZWFtX2lkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSDQoFdG9rZW4YAyABKAkSDAoEc2l0ZRgEIAEoCSJnChhJbXBvcnRMb2dpblRva2VuUmVzcG9uc2USCgoCb2sYASABKAgSDwoHbWVzc2FnZRgCIAEoCRIuCgpjcmVkZW50aWFsGAMgASgLMhouYnVkZHkuYWRtaW4udjEuQ3JlZGVudGlhbDLoEwoMQWRtaW5TZXJ2aWNlEmIKD0dldFN5c3RlbVN0YXR1cxImLmJ1ZGR5LmFkbWluLnYxLkdldFN5c3RlbVN0YXR1c1JlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5HZXRTeXN0ZW1TdGF0dXNSZXNwb25zZRJcCg1SZXN0YXJ0U3lzdGVtEiQuYnVkZHkuYWRtaW4udjEuUmVzdGFydFN5c3RlbVJlcXVlc3QaJS5idWRkeS5hZG1pbi52MS5SZXN0YXJ0U3lzdGVtUmVzcG9uc2USXAoNTGlzdFVwc3RyZWFtcxIkLmJ1ZGR5LmFkbWluLnYxLkxpc3RVcHN0cmVhbXNSZXF1ZXN0GiUuYnVkZHkuYWRtaW4udjEuTGlzdFVwc3RyZWFtc1Jlc3BvbnNlEmsKElNldFVwc3RyZWFtRW5hYmxlZBIpLmJ1ZGR5LmFkbWluLnYxLlNldFVwc3RyZWFtRW5hYmxlZFJlcXVlc3QaKi5idWRkeS5hZG1pbi52MS5TZXRVcHN0cmVhbUVuYWJsZWRSZXNwb25zZRJTCgpMaXN0Q29uZmlnEiEuYnVkZHkuYWRtaW4udjEuTGlzdENvbmZpZ1JlcXVlc3QaIi5idWRkeS5hZG1pbi52MS5MaXN0Q29uZmlnUmVzcG9uc2USUAoJU2V0Q29uZmlnEiAuYnVkZHkuYWRtaW4udjEuU2V0Q29uZmlnUmVxdWVzdBohLmJ1ZGR5LmFkbWluLnYxLlNldENvbmZpZ1Jlc3BvbnNlElkKDExpc3RBY2NvdW50cxIjLmJ1ZGR5LmFkbWluLnYxLkxpc3RBY2NvdW50c1JlcXVlc3QaJC5idWRkeS5hZG1pbi52MS5MaXN0QWNjb3VudHNSZXNwb25zZRJiCg9MaXN0Q3JlZGVudGlhbHMSJi5idWRkeS5hZG1pbi52MS5MaXN0Q3JlZGVudGlhbHNSZXF1ZXN0GicuYnVkZHkuYWRtaW4udjEuTGlzdENyZWRlbnRpYWxzUmVzcG9uc2USXwoOVGVzdENyZWRlbnRpYWwSJS5idWRkeS5hZG1pbi52MS5UZXN0Q3JlZGVudGlhbFJlcXVlc3QaJi5idWRkeS5hZG1pbi52MS5UZXN0Q3JlZGVudGlhbFJlc3BvbnNlEmgKEVJlZnJlc2hDcmVkZW50aWFsEiguYnVkZHkuYWRtaW4udjEuUmVmcmVzaENyZWRlbnRpYWxSZXF1ZXN0GikuYnVkZHkuYWRtaW4udjEuUmVmcmVzaENyZWRlbnRpYWxSZXNwb25zZRJTCgpHZXRCYWxhbmNlEiEuYnVkZHkuYWRtaW4udjEuR2V0QmFsYW5jZVJlcXVlc3QaIi5idWRkeS5hZG1pbi52MS5HZXRCYWxhbmNlUmVzcG9uc2USYgoPR2V0VXNhZ2VTdW1tYXJ5EiYuYnVkZHkuYWRtaW4udjEuR2V0VXNhZ2VTdW1tYXJ5UmVxdWVzdBonLmJ1ZGR5LmFkbWluLnYxLkdldFVzYWdlU3VtbWFyeVJlc3BvbnNlEmIKD0xpc3RVc2FnZUV2ZW50cxImLmJ1ZGR5LmFkbWluLnYxLkxpc3RVc2FnZUV2ZW50c1JlcXVlc3QaJy5idWRkeS5hZG1pbi52MS5MaXN0VXNhZ2VFdmVudHNSZXNwb25zZRJuChNMaXN0UHVibGlzaGVkTW9kZWxzEiouYnVkZHkuYWRtaW4udjEuTGlzdFB1Ymxpc2hlZE1vZGVsc1JlcXVlc3QaKy5idWRkeS5hZG1pbi52MS5MaXN0UHVibGlzaGVkTW9kZWxzUmVzcG9uc2USawoSU2F2ZVB1Ymxpc2hlZE1vZGVsEikuYnVkZHkuYWRtaW4udjEuU2F2ZVB1Ymxpc2hlZE1vZGVsUmVxdWVzdBoqLmJ1ZGR5LmFkbWluLnYxLlNhdmVQdWJsaXNoZWRNb2RlbFJlc3BvbnNlEnEKFERlbGV0ZVB1Ymxpc2hlZE1vZGVsEisuYnVkZHkuYWRtaW4udjEuRGVsZXRlUHVibGlzaGVkTW9kZWxSZXF1ZXN0GiwuYnVkZHkuYWRtaW4udjEuRGVsZXRlUHVibGlzaGVkTW9kZWxSZXNwb25zZRJlChBHZXRCZW5lZml0U3RhdHVzEicuYnVkZHkuYWRtaW4udjEuR2V0QmVuZWZpdFN0YXR1c1JlcXVlc3QaKC5idWRkeS5hZG1pbi52MS5HZXRCZW5lZml0U3RhdHVzUmVzcG9uc2USXAoNUnVuQmVuZWZpdE5vdxIkLmJ1ZGR5LmFkbWluLnYxLlJ1bkJlbmVmaXROb3dSZXF1ZXN0GiUuYnVkZHkuYWRtaW4udjEuUnVuQmVuZWZpdE5vd1Jlc3BvbnNlElMKCkxpc3RNb2RlbHMSIS5idWRkeS5hZG1pbi52MS5MaXN0TW9kZWxzUmVxdWVzdBoiLmJ1ZGR5LmFkbWluLnYxLkxpc3RNb2RlbHNSZXNwb25zZRJKCgdUYWlsTG9nEh4uYnVkZHkuYWRtaW4udjEuVGFpbExvZ1JlcXVlc3QaHy5idWRkeS5hZG1pbi52MS5UYWlsTG9nUmVzcG9uc2USUwoKQmVnaW5Mb2dpbhIhLmJ1ZGR5LmFkbWluLnYxLkJlZ2luTG9naW5SZXF1ZXN0GiIuYnVkZHkuYWRtaW4udjEuQmVnaW5Mb2dpblJlc3BvbnNlEl8KDkdldExvZ2luU3RhdHVzEiUuYnVkZHkuYWRtaW4udjEuR2V0TG9naW5TdGF0dXNSZXF1ZXN0GiYuYnVkZHkuYWRtaW4udjEuR2V0TG9naW5TdGF0dXNSZXNwb25zZRJWCgtDYW5jZWxMb2dpbhIiLmJ1ZGR5LmFkbWluLnYxLkNhbmNlbExvZ2luUmVxdWVzdBojLmJ1ZGR5LmFkbWluLnYxLkNhbmNlbExvZ2luUmVzcG9uc2USaAoRTG9naW5XaXRoUGFzc3dvcmQSKC5idWRkeS5hZG1pbi52MS5Mb2dpbldpdGhQYXNzd29yZFJlcXVlc3QaKS5idWRkeS5hZG1pbi52MS5Mb2dpbldpdGhQYXNzd29yZFJlc3BvbnNlEmgKEUV4Y2hhbmdlTG9naW5Db2RlEiguYnVkZHkuYWRtaW4udjEuRXhjaGFuZ2VMb2dpbkNvZGVSZXF1ZXN0GikuYnVkZHkuYWRtaW4udjEuRXhjaGFuZ2VMb2dpbkNvZGVSZXNwb25zZRJlChBJbXBvcnRMb2dpblRva2VuEicuYnVkZHkuYWRtaW4udjEuSW1wb3J0TG9naW5Ub2tlblJlcXVlc3QaKC5idWRkeS5hZG1pbi52MS5JbXBvcnRMb2dpblRva2VuUmVzcG9uc2ViBnByb3RvMw");
 
 /**
  * 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
@@ -1742,6 +1742,450 @@ export const TailLogResponseSchema: GenMessage<TailLogResponse> = /*@__PURE__*/
   messageDesc(file_buddy_admin_v1_admin, 55);
 
 /**
+ * 一次登录会话。面板靠它画对话框、显示倒计时。
+ *
+ * @generated from message buddy.admin.v1.LoginSession
+ */
+export type LoginSession = Message<"buddy.admin.v1.LoginSession"> & {
+  /**
+   * 本地的一次登录 id。
+   *
+   * @generated from field: string login_id = 1;
+   */
+  loginId: string;
+
+  /**
+   * @generated from field: string upstream_id = 2;
+   */
+  upstreamId: string;
+
+  /**
+   * 账号的槽位。空 = 这个上游的默认账号。
+   *
+   * @generated from field: string account_id = 3;
+   */
+  accountId: string;
+
+  /**
+   * pending / approved / failed / expired / cancelled
+   *
+   * @generated from field: string status = 4;
+   */
+  status: string;
+
+  /**
+   * 面板按它决定画什么：device / browser / password / code / token。
+   *
+   * @generated from field: string method = 5;
+   */
+  method: string;
+
+  /**
+   * 用户要点的那个地址。
+   *
+   * @generated from field: string authorization_url = 6;
+   */
+  authorizationUrl: string;
+
+  /**
+   * 设备流的大字码。MiniMax 有；Qoder、WorkBuddy 没有。
+   *
+   * @generated from field: string user_code = 7;
+   */
+  userCode: string;
+
+  /**
+   * 过期时刻。Unix 毫秒。
+   *
+   * @generated from field: int64 expires_at = 8;
+   */
+  expiresAt: bigint;
+
+  /**
+   * 给人看的一句话。
+   *
+   * @generated from field: string message = 9;
+   */
+  message: string;
+
+  /**
+   * 登录成功后这条凭据的状态摘要。
+   *
+   * @generated from field: buddy.admin.v1.CredentialStatus credential = 10;
+   */
+  credential?: CredentialStatus;
+
+  /**
+   * 账号密码型上游的账号名。
+   *
+   * @generated from field: string username = 11;
+   */
+  username: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.LoginSession.
+ * Use `create(LoginSessionSchema)` to create a new message.
+ */
+export const LoginSessionSchema: GenMessage<LoginSession> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 56);
+
+/**
+ * @generated from message buddy.admin.v1.BeginLoginRequest
+ */
+export type BeginLoginRequest = Message<"buddy.admin.v1.BeginLoginRequest"> & {
+  /**
+   * minimax / qoder / qoder-cn / workbuddy-cn / tokenrhythm / sensenova / intern-ai
+   *
+   * @generated from field: string upstream_id = 1;
+   */
+  upstreamId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * intern-ai：登哪个子站。discovery / chat。空 = 两个都要。
+   *
+   * @generated from field: string site = 3;
+   */
+  site: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.BeginLoginRequest.
+ * Use `create(BeginLoginRequestSchema)` to create a new message.
+ */
+export const BeginLoginRequestSchema: GenMessage<BeginLoginRequest> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 57);
+
+/**
+ * @generated from message buddy.admin.v1.BeginLoginResponse
+ */
+export type BeginLoginResponse = Message<"buddy.admin.v1.BeginLoginResponse"> & {
+  /**
+   * @generated from field: buddy.admin.v1.LoginSession session = 1;
+   */
+  session?: LoginSession;
+
+  /**
+   * @generated from field: bool ok = 2;
+   */
+  ok: boolean;
+
+  /**
+   * @generated from field: string message = 3;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.BeginLoginResponse.
+ * Use `create(BeginLoginResponseSchema)` to create a new message.
+ */
+export const BeginLoginResponseSchema: GenMessage<BeginLoginResponse> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 58);
+
+/**
+ * @generated from message buddy.admin.v1.GetLoginStatusRequest
+ */
+export type GetLoginStatusRequest = Message<"buddy.admin.v1.GetLoginStatusRequest"> & {
+  /**
+   * @generated from field: string login_id = 1;
+   */
+  loginId: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.GetLoginStatusRequest.
+ * Use `create(GetLoginStatusRequestSchema)` to create a new message.
+ */
+export const GetLoginStatusRequestSchema: GenMessage<GetLoginStatusRequest> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 59);
+
+/**
+ * @generated from message buddy.admin.v1.GetLoginStatusResponse
+ */
+export type GetLoginStatusResponse = Message<"buddy.admin.v1.GetLoginStatusResponse"> & {
+  /**
+   * @generated from field: buddy.admin.v1.LoginSession session = 1;
+   */
+  session?: LoginSession;
+
+  /**
+   * @generated from field: bool ok = 2;
+   */
+  ok: boolean;
+
+  /**
+   * @generated from field: string message = 3;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.GetLoginStatusResponse.
+ * Use `create(GetLoginStatusResponseSchema)` to create a new message.
+ */
+export const GetLoginStatusResponseSchema: GenMessage<GetLoginStatusResponse> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 60);
+
+/**
+ * @generated from message buddy.admin.v1.CancelLoginRequest
+ */
+export type CancelLoginRequest = Message<"buddy.admin.v1.CancelLoginRequest"> & {
+  /**
+   * @generated from field: string login_id = 1;
+   */
+  loginId: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.CancelLoginRequest.
+ * Use `create(CancelLoginRequestSchema)` to create a new message.
+ */
+export const CancelLoginRequestSchema: GenMessage<CancelLoginRequest> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 61);
+
+/**
+ * @generated from message buddy.admin.v1.CancelLoginResponse
+ */
+export type CancelLoginResponse = Message<"buddy.admin.v1.CancelLoginResponse"> & {
+  /**
+   * @generated from field: bool ok = 1;
+   */
+  ok: boolean;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.CancelLoginResponse.
+ * Use `create(CancelLoginResponseSchema)` to create a new message.
+ */
+export const CancelLoginResponseSchema: GenMessage<CancelLoginResponse> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 62);
+
+/**
+ * @generated from message buddy.admin.v1.LoginWithPasswordRequest
+ */
+export type LoginWithPasswordRequest = Message<"buddy.admin.v1.LoginWithPasswordRequest"> & {
+  /**
+   * @generated from field: string upstream_id = 1;
+   */
+  upstreamId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: string username = 3;
+   */
+  username: string;
+
+  /**
+   * 密码。只在这一次请求里出现，不回显、不进日志。
+   *
+   * @generated from field: string password = 4;
+   */
+  password: string;
+
+  /**
+   * intern-ai：人机校验的三个值（浏览器里过一次阿里云验证码后拿到）。
+   *
+   * @generated from field: string captcha_verify_param = 5;
+   */
+  captchaVerifyParam: string;
+
+  /**
+   * @generated from field: string captcha_scene_id = 6;
+   */
+  captchaSceneId: string;
+
+  /**
+   * @generated from field: string captcha_prefix = 7;
+   */
+  captchaPrefix: string;
+
+  /**
+   * 记住密码吗？true = 存进 secrets。
+   *
+   * @generated from field: bool remember = 8;
+   */
+  remember: boolean;
+};
+
+/**
+ * Describes the message buddy.admin.v1.LoginWithPasswordRequest.
+ * Use `create(LoginWithPasswordRequestSchema)` to create a new message.
+ */
+export const LoginWithPasswordRequestSchema: GenMessage<LoginWithPasswordRequest> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 63);
+
+/**
+ * @generated from message buddy.admin.v1.LoginWithPasswordResponse
+ */
+export type LoginWithPasswordResponse = Message<"buddy.admin.v1.LoginWithPasswordResponse"> & {
+  /**
+   * @generated from field: bool ok = 1;
+   */
+  ok: boolean;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: buddy.admin.v1.Account account = 3;
+   */
+  account?: Account;
+
+  /**
+   * @generated from field: buddy.admin.v1.Credential credential = 4;
+   */
+  credential?: Credential;
+};
+
+/**
+ * Describes the message buddy.admin.v1.LoginWithPasswordResponse.
+ * Use `create(LoginWithPasswordResponseSchema)` to create a new message.
+ */
+export const LoginWithPasswordResponseSchema: GenMessage<LoginWithPasswordResponse> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 64);
+
+/**
+ * @generated from message buddy.admin.v1.ExchangeLoginCodeRequest
+ */
+export type ExchangeLoginCodeRequest = Message<"buddy.admin.v1.ExchangeLoginCodeRequest"> & {
+  /**
+   * @generated from field: string upstream_id = 1;
+   */
+  upstreamId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * 浏览器里拿到的 code。
+   *
+   * @generated from field: string code = 3;
+   */
+  code: string;
+
+  /**
+   * intern-ai：code 是给哪个子站签的。
+   *
+   * @generated from field: string site = 4;
+   */
+  site: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.ExchangeLoginCodeRequest.
+ * Use `create(ExchangeLoginCodeRequestSchema)` to create a new message.
+ */
+export const ExchangeLoginCodeRequestSchema: GenMessage<ExchangeLoginCodeRequest> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 65);
+
+/**
+ * @generated from message buddy.admin.v1.ExchangeLoginCodeResponse
+ */
+export type ExchangeLoginCodeResponse = Message<"buddy.admin.v1.ExchangeLoginCodeResponse"> & {
+  /**
+   * @generated from field: bool ok = 1;
+   */
+  ok: boolean;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: buddy.admin.v1.Credential credential = 3;
+   */
+  credential?: Credential;
+};
+
+/**
+ * Describes the message buddy.admin.v1.ExchangeLoginCodeResponse.
+ * Use `create(ExchangeLoginCodeResponseSchema)` to create a new message.
+ */
+export const ExchangeLoginCodeResponseSchema: GenMessage<ExchangeLoginCodeResponse> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 66);
+
+/**
+ * @generated from message buddy.admin.v1.ImportLoginTokenRequest
+ */
+export type ImportLoginTokenRequest = Message<"buddy.admin.v1.ImportLoginTokenRequest"> & {
+  /**
+   * @generated from field: string upstream_id = 1;
+   */
+  upstreamId: string;
+
+  /**
+   * @generated from field: string account_id = 2;
+   */
+  accountId: string;
+
+  /**
+   * intern-ai 的 uaa-token。
+   *
+   * @generated from field: string token = 3;
+   */
+  token: string;
+
+  /**
+   * @generated from field: string site = 4;
+   */
+  site: string;
+};
+
+/**
+ * Describes the message buddy.admin.v1.ImportLoginTokenRequest.
+ * Use `create(ImportLoginTokenRequestSchema)` to create a new message.
+ */
+export const ImportLoginTokenRequestSchema: GenMessage<ImportLoginTokenRequest> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 67);
+
+/**
+ * @generated from message buddy.admin.v1.ImportLoginTokenResponse
+ */
+export type ImportLoginTokenResponse = Message<"buddy.admin.v1.ImportLoginTokenResponse"> & {
+  /**
+   * @generated from field: bool ok = 1;
+   */
+  ok: boolean;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: buddy.admin.v1.Credential credential = 3;
+   */
+  credential?: Credential;
+};
+
+/**
+ * Describes the message buddy.admin.v1.ImportLoginTokenResponse.
+ * Use `create(ImportLoginTokenResponseSchema)` to create a new message.
+ */
+export const ImportLoginTokenResponseSchema: GenMessage<ImportLoginTokenResponse> = /*@__PURE__*/
+  messageDesc(file_buddy_admin_v1_admin, 68);
+
+/**
  * @generated from service buddy.admin.v1.AdminService
  */
 export const AdminService: GenService<{
@@ -1904,6 +2348,54 @@ export const AdminService: GenService<{
     methodKind: "unary";
     input: typeof TailLogRequestSchema;
     output: typeof TailLogResponseSchema;
+  },
+  /**
+   * @generated from rpc buddy.admin.v1.AdminService.BeginLogin
+   */
+  beginLogin: {
+    methodKind: "unary";
+    input: typeof BeginLoginRequestSchema;
+    output: typeof BeginLoginResponseSchema;
+  },
+  /**
+   * @generated from rpc buddy.admin.v1.AdminService.GetLoginStatus
+   */
+  getLoginStatus: {
+    methodKind: "unary";
+    input: typeof GetLoginStatusRequestSchema;
+    output: typeof GetLoginStatusResponseSchema;
+  },
+  /**
+   * @generated from rpc buddy.admin.v1.AdminService.CancelLogin
+   */
+  cancelLogin: {
+    methodKind: "unary";
+    input: typeof CancelLoginRequestSchema;
+    output: typeof CancelLoginResponseSchema;
+  },
+  /**
+   * @generated from rpc buddy.admin.v1.AdminService.LoginWithPassword
+   */
+  loginWithPassword: {
+    methodKind: "unary";
+    input: typeof LoginWithPasswordRequestSchema;
+    output: typeof LoginWithPasswordResponseSchema;
+  },
+  /**
+   * @generated from rpc buddy.admin.v1.AdminService.ExchangeLoginCode
+   */
+  exchangeLoginCode: {
+    methodKind: "unary";
+    input: typeof ExchangeLoginCodeRequestSchema;
+    output: typeof ExchangeLoginCodeResponseSchema;
+  },
+  /**
+   * @generated from rpc buddy.admin.v1.AdminService.ImportLoginToken
+   */
+  importLoginToken: {
+    methodKind: "unary";
+    input: typeof ImportLoginTokenRequestSchema;
+    output: typeof ImportLoginTokenResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_buddy_admin_v1_admin, 0);

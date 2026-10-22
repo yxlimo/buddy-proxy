@@ -10,6 +10,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { useBalance } from '@/features/balance/api'
 import { CreditLotsTable } from '@/features/balance/credit-lots'
+import { TokenPlanPanel } from '@/features/balance/token-plan'
 import { formatCny, formatDate } from '@/lib/format'
 
 export function BalancePage() {
@@ -61,6 +62,12 @@ export function BalancePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className='px-0'>
+                {summary.tokenPlan && summary.tokenPlan.windows.length > 0 ? (
+                  <div className='border-b px-6 pb-4'>
+                    <p className='mb-2 text-sm font-medium'>套餐额度</p>
+                    <TokenPlanPanel windows={summary.tokenPlan.windows} />
+                  </div>
+                ) : null}
                 <CreditLotsTable lots={summary.lots} />
               </CardContent>
             </Card>

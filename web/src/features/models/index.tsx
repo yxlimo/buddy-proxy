@@ -98,8 +98,8 @@ export function PublishedModelsPage() {
 
   return (
     <PageShell
-      title='公布的模型'
-      description='聚合路由：对外面公布一个 id，背后挂几个上游模型，客户端只看见公布的这一层。'
+      title='主路由模型'
+      description='主路由：对外面公布一个 id，背后挂几个上游模型，客户端只看见公布的这一层。'
       actions={
         <Button onClick={openCreate}>
           <Plus />
@@ -109,7 +109,7 @@ export function PublishedModelsPage() {
     >
       <Card>
         <CardHeader>
-          <CardTitle className='text-base'>公布的模型</CardTitle>
+          <CardTitle className='text-base'>主路由模型</CardTitle>
           <CardDescription>
             目标分到了多少请求，是网关跑出来的统计。
           </CardDescription>
@@ -117,7 +117,7 @@ export function PublishedModelsPage() {
         <CardContent className='px-0'>
           {list.length === 0 ? (
             <EmptyState
-              title='还没有公布任何模型'
+              title='还没有主路由模型'
               description='根路由只服务这里公布出来的模型。'
               action={
                 <Button onClick={openCreate}>

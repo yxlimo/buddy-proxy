@@ -27,6 +27,8 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ModelPicker } from '@/features/models/model-picker'
+import { cn } from '@/lib/utils'
 
 const GROUPS = [
   'qoder',
@@ -61,7 +63,6 @@ export type ModelDraft = {
     groupName: string
     upstreamModel: string
     weight: string
-    position: string
     enabled: boolean
   }[]
 }
@@ -71,7 +72,6 @@ function emptyTarget() {
     groupName: '',
     upstreamModel: '',
     weight: '1',
-    position: '0',
     enabled: true,
   }
 }
@@ -119,7 +119,6 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
       groupName: target.groupName,
       upstreamModel: target.upstreamModel,
       weight: String(target.weight || 1),
-      position: String(target.position ?? 0),
       enabled: target.enabled,
     })),
   }
@@ -154,12 +153,11 @@ export function fromDraft(draft: ModelDraft): PublishedModel {
     targets: draft.targets
       .filter(targetFilled)
       .map(
-        (target, index): PublishedTarget => ({
+        (target): PublishedTarget => ({
           ...create(PublishedTargetSchema),
           groupName: target.groupName.trim(),
           upstreamModel: target.upstreamModel.trim(),
           weight: Number(target.weight) || 1,
-          position: target.position ? Number(target.position) : index,
           enabled: target.enabled,
           // requests / failed 是网关的计数，只读：保存时会被覆盖。
           requests: 0n,
@@ -191,6 +189,7 @@ export function ModelDialog({
   busy,
 }: ModelDialogProps) {
   const [draft, setDraft] = useState<ModelDraft>(() => toDraft(model))
+  const [tab, setTab] = useState('basic')
 
   useEffect(() => {
     if (open) setDraft(toDraft(model))
@@ -213,23 +212,36 @@ export function ModelDialog({
   // 按填全了的目标数算，不是按行数：没填全的行会被过滤掉，拿行数算会
   // 放行一个「发出去是空 targets」的请求。
   const filledTargets = draft.targets.filter(targetFilled)
-  const valid = draft.id.trim().length > 0 && filledTargets.length > 0
+
+  // 哪个分组里有没填的必填项：分组标题上标红，切过去给行内提示。
+  const basicMissing = draft.id.trim().length === 0
+  const targetsMissing = filledTargets.length === 0
+
+  const valid = !basicMissing && !targetsMissing
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-2xl'>
         <DialogHeader>
-          <DialogTitle>{model ? '改公布的模型' : '新公布一个模型'}</DialogTitle>
+          <DialogTitle>
+            {model ? '改主路由模型' : '新建一个主路由模型'}
+          </DialogTitle>
           <DialogDescription>
-            对外公布一个 id，背后挂几个上游模型。single 是走第一个，
-            fallback 是前面挂了就换下一个。
+            对外公布一个 id，背后挂几个上游模型。single 是走权重最大的那个，
+            fallback 是它挂了再换下一个。
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue='basic'>
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
-            <TabsTrigger value='basic'>基本</TabsTrigger>
-            <TabsTrigger value='targets'>上游目标</TabsTrigger>
+            <TabsTrigger value='basic'>
+              基本
+              {basicMissing ? <RequiredDot /> : null}
+            </TabsTrigger>
+            <TabsTrigger value='targets'>
+              上游目标
+              {targetsMissing ? <RequiredDot /> : null}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value='basic' className='grid gap-4'>
@@ -239,16 +251,25 @@ export function ModelDialog({
                 id='model-id'
                 value={draft.id}
                 disabled={Boolean(model)}
+                aria-invalid={basicMissing || undefined}
                 onChange={(event) => patch({ id: event.target.value })}
                 placeholder='比如 qoder-max'
               />
+              {basicMissing ? (
+                <p className='text-xs text-destructive'>
+                  对外 id 是必填的：客户端只认这个 id。
+                </p>
+              ) : null}
             </div>
             <div className='grid gap-2'>
               <Label htmlFor='model-name'>显示名</Label>
               <Input
                 id='model-name'
                 value={draft.displayName}
-                onChange={(event) => patch({ displayName: event.target.value })}
+                onChange={(event) =>
+                  patch({ displayName: event.target.value })
+                }
+                placeholder='留空就跟对外 id 一样'
               />
             </div>
             <div className='grid gap-2'>
@@ -384,6 +405,11 @@ export function ModelDialog({
           </TabsContent>
 
           <TabsContent value='targets' className='grid gap-3'>
+            {targetsMissing ? (
+              <p className='text-xs text-destructive'>
+                至少要有一个填全的目标：上游组和上游模型 id 都要填。
+              </p>
+            ) : null}
             {draft.targets.map((target, index) => (
               <div
                 key={index}
@@ -396,20 +422,24 @@ export function ModelDialog({
                     list='upstream-groups'
                     value={target.groupName}
                     onChange={(event) =>
-                      patchTarget(index, { groupName: event.target.value })
+                      patchTarget(index, {
+                        groupName: event.target.value,
+                        // 换了组，上一个组的模型 id 就不再作数。
+                        upstreamModel: '',
+                      })
                     }
                     placeholder='qoder'
                   />
                 </div>
                 <div className='grid gap-2'>
                   <Label htmlFor={`target-model-${index}`}>上游模型 id</Label>
-                  <Input
+                  <ModelPicker
                     id={`target-model-${index}`}
+                    groupName={target.groupName}
                     value={target.upstreamModel}
-                    onChange={(event) =>
-                      patchTarget(index, { upstreamModel: event.target.value })
+                    onChange={(value) =>
+                      patchTarget(index, { upstreamModel: value })
                     }
-                    placeholder='claude-sonnet-4'
                   />
                 </div>
                 <div className='grid gap-2'>
@@ -422,17 +452,9 @@ export function ModelDialog({
                       patchTarget(index, { weight: event.target.value })
                     }
                   />
-                </div>
-                <div className='grid gap-2'>
-                  <Label htmlFor={`target-position-${index}`}>顺序</Label>
-                  <Input
-                    id={`target-position-${index}`}
-                    inputMode='numeric'
-                    value={target.position}
-                    onChange={(event) =>
-                      patchTarget(index, { position: event.target.value })
-                    }
-                  />
+                  <p className='text-xs text-muted-foreground'>
+                    权重大的先试，失败了才试小的。
+                  </p>
                 </div>
                 {!targetFilled(target) ? (
                   <p className='text-xs text-destructive sm:col-span-2'>
@@ -501,6 +523,20 @@ export function ModelDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * 分组标题上的小红点：那个分组里有必填项没填。
+ */
+function RequiredDot() {
+  return (
+    <span
+      aria-hidden='true'
+      className={cn(
+        'ms-1.5 inline-block size-1.5 rounded-full bg-destructive align-middle'
+      )}
+    />
   )
 }
 

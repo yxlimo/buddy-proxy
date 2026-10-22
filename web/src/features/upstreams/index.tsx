@@ -1,3 +1,4 @@
+import { useIsFetching } from '@tanstack/react-query'
 import { TriangleAlert } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
@@ -17,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useSetUpstreamEnabled, useUpstreams } from '@/features/upstreams/api'
+import { useSetUpstreamEnabled, useUpstreams, upstreamKeys } from '@/features/upstreams/api'
 import { formatCount } from '@/lib/format'
 
 const REGION_LABELS: Record<string, string> = {
@@ -33,6 +34,9 @@ export function UpstreamsPage() {
   // busy —— 两个上游一起点的时候，后一个的 finally 会把前一个的 busy
   // 清掉。
   const busyId = setEnabled.isPending ? setEnabled.variables?.upstreamId : null
+  // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它
+  // 变，免得先弹回旧值再跳到新值。
+  const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
 
   if (upstreams.isPending) {
     return <LoadingState />
@@ -44,6 +48,7 @@ export function UpstreamsPage() {
   }
 
   const list = upstreams.data.upstreams
+  const anyPending = list.some((upstream) => upstream.pending)
 
   return (
     <PageShell
@@ -107,9 +112,16 @@ export function UpstreamsPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge
-                        status={upstream.enabled ? 'enabled' : 'disabled'}
-                      />
+                      <div className='grid gap-1'>
+                        <StatusBadge
+                          status={upstream.enabled ? 'enabled' : 'disabled'}
+                        />
+                        {upstream.pending ? (
+                          <span className='text-xs text-muted-foreground'>
+                            已保存，重启后生效
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {upstream.credential ? (
@@ -142,7 +154,7 @@ export function UpstreamsPage() {
                     <TableCell className='text-right'>
                       <Switch
                         checked={upstream.enabled}
-                        disabled={busyId === upstream.id}
+                        disabled={busyId === upstream.id || refreshing}
                         onCheckedChange={(checked) =>
                           setEnabled.mutate({
                             upstreamId: upstream.id,
@@ -159,6 +171,12 @@ export function UpstreamsPage() {
           )}
         </CardContent>
       </Card>
+
+      {anyPending ? (
+        <p className='text-xs text-muted-foreground'>
+          有改动还没重启网关：上面显示的是重启之后才会生效的值。
+        </p>
+      ) : null}
     </PageShell>
   )
 }

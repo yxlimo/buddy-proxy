@@ -49,7 +49,7 @@ export const sidebarData: SidebarData = {
           icon: CircleDollarSign,
         },
         {
-          title: '公布的模型',
+          title: '主路由模型',
           url: '/models',
           icon: Layers,
         },

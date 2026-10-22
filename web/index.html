@@ -7,6 +7,19 @@
     <meta name="referrer" content="no-referrer" />
     <title>Buddy Proxy 管理面板</title>
     <meta name="description" content="网关的管理面板：上游、凭据、余额、用量、公布的模型。" />
+    <script>
+      // 主题：先把 class 摆好，页面不会闪一下白。跟 components/theme-provider.tsx
+      // 是同一套逻辑（这里跑在 React 之前）。
+      try {
+        var t = localStorage.getItem('buddy.admin.theme') || 'system'
+        var dark =
+          t === 'dark' ||
+          (t === 'system' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches)
+        if (dark) document.documentElement.classList.add('dark')
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

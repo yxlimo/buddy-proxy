@@ -25,7 +25,7 @@ export function usePublishedModels() {
 }
 
 /**
- * 新建或者改一个公布的模型。model.id 为空表示新建。
+ * 新建或者改一个主路由模型。model.id 为空表示新建。
  *
  * 服务端用 ok:false 表达「模型至少要有一个上游」这类失败，这里翻成异常，
  * 页面拿到的是 reject，不会把失败当成功报出去。
@@ -55,7 +55,7 @@ export function useSavePublishedModel() {
   })
 }
 
-/** 删掉一个公布的模型。 */
+/** 删掉一个主路由模型。 */
 export function useDeletePublishedModel() {
   const client = useAdminClient()
   const queryClient = useQueryClient()

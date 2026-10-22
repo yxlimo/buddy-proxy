@@ -12,6 +12,8 @@ import { listConfig } from "../store.ts";
 /** 一个配置项在面板里的样子。 */
 export interface ConfigItemView {
   key: string;
+  /** 给人看的短名字：「Qoder 中国区」。 */
+  label: string;
   value: string;
   /** database / environment / default */
   source: string;
@@ -92,6 +94,82 @@ const DESCRIPTIONS: Record<string, string> = {
   BENEFITS_DISABLED: "把签到整个关掉",
 };
 
+/**
+ * 每个设置的短名字。
+ *
+ * 面板上给的是这个，不是 env 的键名 —— 键名是给机器看的，给人的是
+ * 「Qoder 中国区」这种。
+ */
+const LABELS: Record<string, string> = {
+  ADMIN_CORS_ORIGINS: "允许的跨域来源",
+  // MiniMax
+  MINIMAX_CODE: "MiniMax Code 上游",
+  MINIMAX_REGION: "MiniMax 区域",
+  MINIMAX_API_BASE: "MiniMax 接口地址",
+  MINIMAX_AUTH_MODE: "MiniMax 凭据来源",
+  MINIMAX_OAUTH_ORIGIN: "MiniMax 授权服务地址",
+  MINIMAX_CLIENT_ID: "MiniMax 客户端 ID",
+  MINIMAX_AUDIENCE: "MiniMax 授权受众",
+  MINIMAX_SCOPES: "MiniMax 授权范围",
+  MINIMAX_USER_AGENT: "MiniMax 请求标识",
+  MINIMAX_ANTHROPIC_VERSION: "MiniMax Anthropic 版本",
+  MINIMAX_ATTRIBUTION_HEADERS: "MiniMax 归属标记头",
+  MINIMAX_AUTH_CACHE_MS: "MiniMax 凭据缓存时长",
+  MINIMAX_AUTH_WARN_MS: "MiniMax 凭据预警窗口",
+  MINIMAX_REFRESH_BUFFER_MS: "MiniMax 提前刷新时长",
+  MINIMAX_WATCH_MS: "MiniMax 凭据巡检间隔",
+  MINIMAX_PING_MS: "MiniMax 保活间隔",
+  MINIMAX_BASE_URL: "MiniMax 上游地址",
+  // Qoder
+  QODER_GLOBAL: "Qoder 全球区",
+  QODER_CN: "Qoder 中国区",
+  QODER_GLOBAL_OPENAPI_BASE: "Qoder 全球区 OpenAPI 主机",
+  QODER_CN_OPENAPI_BASE: "Qoder 中国区 OpenAPI 主机",
+  QODER_GLOBAL_INFER_BASE: "Qoder 全球区推理主机",
+  QODER_CN_INFER_BASE: "Qoder 中国区推理主机",
+  QODER_GLOBAL_LEGACY_BASE: "Qoder 全球区老协议主机",
+  QODER_LOG_ROUTE: "记录命中的路由",
+  QODER_ACCOUNT_NAME: "Qoder 登录账号名",
+  QODER_USER_TYPE: "Qoder 账号类型",
+  QODER_USER_AGENT: "Qoder 请求标识",
+  QODER_EFFORT_TIERS: "Qoder 思考档位对应",
+  QODER_MAX_ATTEMPTS: "Qoder 重试次数",
+  QODER_LEGACY_MAX_ATTEMPTS: "Qoder 老协议重试次数",
+  QODER_LEGACY_ATTEMPTS: "Qoder 老协议重试次数",
+  QODER_LEGACY_RETRY_MS: "Qoder 老协议重试间隔",
+  QODER_AUTH_CACHE_MS: "Qoder 凭据缓存时长",
+  QODER_AUTH_WARN_MS: "Qoder 凭据预警窗口",
+  QODER_REFRESH_BUFFER_MS: "Qoder 提前刷新时长",
+  QODER_POLL_INTERVAL_MS: "Qoder 授权轮询间隔",
+  QODER_POLL_TIMEOUT_MS: "Qoder 授权轮询超时",
+  // WorkBuddy
+  WORKBUDDY_CN: "WorkBuddy 中国区",
+  WORKBUDDY_CN_BASE: "WorkBuddy 接口地址",
+  WORKBUDDY_CN_ORIGIN: "WorkBuddy 控制台地址",
+  WORKBUDDY_CHAT_BASE: "WorkBuddy 聊天接口地址",
+  WORKBUDDY_VERSION: "WorkBuddy 桌面端版本",
+  WORKBUDDY_CLI_VERSION: "WorkBuddy 命令行版本",
+  WORKBUDDY_AUTH_PLATFORM: "WorkBuddy 授权平台标记",
+  WORKBUDDY_CATALOG_TTL_MS: "WorkBuddy 目录缓存时长",
+  WORKBUDDY_AUTH_CACHE_MS: "WorkBuddy 凭据缓存时长",
+  WORKBUDDY_AUTH_WARN_MS: "WorkBuddy 凭据预警窗口",
+  WORKBUDDY_REFRESH_BUFFER_MS: "WorkBuddy 提前刷新时长",
+  WORKBUDDY_LOGIN_POLL_MS: "WorkBuddy 登录轮询间隔",
+  WORKBUDDY_LOGIN_TIMEOUT_MS: "WorkBuddy 登录超时",
+  // TokenRhythm
+  TOKENRHYTHM: "TokenRhythm 上游",
+  TOKENRHYTHM_API_BASE: "TokenRhythm 平台地址",
+  TOKENRHYTHM_INFER_BASE: "TokenRhythm 推理地址",
+  TOKENRHYTHM_MAX_ATTEMPTS: "TokenRhythm 重试次数",
+  // 网关自己
+  ROUTER_PORT: "网关端口",
+  ROUTER_HOST: "网关监听地址",
+  HEALTH_CACHE_MS: "健康检查缓存时长",
+  REQUIRE_API_KEY: "前门要 API key",
+  BENEFITS_INTERVAL_MS: "签到间隔",
+  BENEFITS_DISABLED: "关掉每日签到",
+};
+
 /** 值的结尾像密钥的，就不给人看。 */
 const SECRET_SUFFIXES = ["_KEY", "_PASSWORD", "_SECRET", "_TOKEN"];
 
@@ -102,6 +180,18 @@ const NOT_SECRET = new Set(["REQUIRE_API_KEY"]);
 function isSecret(key: string): boolean {
   if (NOT_SECRET.has(key)) return false;
   return SECRET_SUFFIXES.some((suffix) => key.endsWith(suffix));
+}
+
+/**
+ * 一个设置的短名字。
+ *
+ * 表里有就用表里的；没有就拿说明的第一句 —— 键名不给人看。
+ */
+function labelOf(key: string, description: string): string {
+  const label = LABELS[key];
+  if (label) return label;
+  const first = description.split(/[。；\n]/)[0]?.trim();
+  return first || "未命名的设置";
 }
 
 /**
@@ -121,13 +211,15 @@ export function configItems(): ConfigItemView[] {
     // 敏感项只写不读：值不回给面板，掩码长得像值，容易被当成真值存回去。
     // 「有没有值」单独用 hasValue 说。
     const hasValue = override !== undefined ? override.length > 0 : raw.length > 0;
+    const description = DESCRIPTIONS[setting.key] ?? "";
     return {
       key: setting.key,
+      label: labelOf(setting.key, description),
       value: secret ? "" : raw,
       source,
       fallback: String(setting.fallback),
       group: setting.group,
-      description: DESCRIPTIONS[setting.key] ?? "",
+      description,
       secret,
       hasValue,
     };

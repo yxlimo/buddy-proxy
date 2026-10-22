@@ -12,6 +12,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { tokenPlanView } from "../lib/admin/upstreams.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = "/tmp/opencode/test-admin-check";
@@ -413,6 +414,23 @@ check("上游有区域", qoderUpstream?.region === "global", JSON.stringify(qode
 const cnUpstream = list(withUrls.body?.upstreams).find((u: any) => u.id === "qoder-cn");
 check("中国区的区域是 cn", cnUpstream?.region === "cn", JSON.stringify(cnUpstream?.region));
 
+// 开关：enabled 是将要生效的值，pending 是改过还没重启。
+// 用全球区那个：上面那节只改过中国区。
+const beforeSwitch = list(withUrls.body?.upstreams).find((u: any) => u.id === "qoder");
+check("改之前没有待重启", beforeSwitch?.pending === false, JSON.stringify(beforeSwitch));
+const setSwitch = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true }, token);
+check("开关改得掉", setSwitch.body?.ok === true, JSON.stringify(setSwitch.body));
+const afterSwitch = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
+  (u: any) => u.id === "qoder",
+);
+check("改完 enabled 就是改后的值", afterSwitch?.enabled === true, JSON.stringify(afterSwitch));
+check("改完 pending 是真", afterSwitch?.pending === true, JSON.stringify(afterSwitch));
+// 其他上游没动，不该被标成待重启。
+const otherUpstream = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
+  (u: any) => u.id === "minimax",
+);
+check("没动的上游没有待重启", otherUpstream?.pending === false, JSON.stringify(otherUpstream));
+
 const balanceWithIds = await call("GetBalance", {}, token);
 check(
   "余额带着上游与账号",
@@ -421,6 +439,13 @@ check(
   ),
   JSON.stringify(balanceWithIds.body?.balances),
 );
+check(
+  "套餐额度只有 MiniMax 有",
+  list(balanceWithIds.body?.balances).every(
+    (b: any) => b.tokenPlan === undefined || b.upstreamId === "minimax",
+  ),
+  JSON.stringify(balanceWithIds.body?.balances?.map((b: any) => [b.upstreamId, b.tokenPlan !== undefined])),
+);
 
 const accountsWithBalance = await call("ListAccounts", {}, token);
 check(
@@ -428,6 +453,45 @@ check(
   list(accountsWithBalance.body?.accounts).every((a: any) => a.balance === undefined || a.balance.accountId === a.id),
   JSON.stringify(accountsWithBalance.body?.accounts?.slice(0, 2)),
 );
+
+console.log("");
+console.log("配置项的名字");
+
+const configItems = list((await call("ListConfig", {}, token)).body?.items);
+check("配置项都有名字", configItems.every((i: any) => typeof i.label === "string" && i.label.length > 0));
+check("名字不是键名", configItems.every((i: any) => i.label !== i.key));
+check(
+  "名字是人话，不是 env 键名",
+  configItems.every((i: any) => !/^[A-Z][A-Z0-9_]+$/.test(i.label)),
+  JSON.stringify(configItems.filter((i: any) => /^[A-Z][A-Z0-9_]+$/.test(i.label)).map((i: any) => i.key)),
+);
+check(
+  "开关的项有名字",
+  configItems.find((i: any) => i.key === "QODER_CN")?.label === "Qoder 中国区",
+  JSON.stringify(configItems.find((i: any) => i.key === "QODER_CN")),
+);
+
+console.log("");
+console.log("套餐额度的换算");
+
+// 平台给的是 ISO 字符串与百分比，面板要的是毫秒与整数。
+const plan = tokenPlanView({
+  windows: [
+    {
+      model: "general",
+      intervalPercent: 62.4,
+      weeklyPercent: 88,
+      intervalEndsAt: "2026-10-22T12:00:00.000Z",
+      weeklyEndsAt: "2026-10-29T12:00:00.000Z",
+    },
+  ],
+});
+check("套餐窗口换算出来了", plan?.windows?.length === 1, JSON.stringify(plan));
+check("窗口的名字是平台给的那个", plan?.windows?.[0]?.label === "general", JSON.stringify(plan?.windows?.[0]));
+check("百分比取整", plan?.windows?.[0]?.intervalPercent === 62, JSON.stringify(plan?.windows?.[0]));
+check("到期时间换成毫秒", plan?.windows?.[0]?.intervalEndsAt === Date.parse("2026-10-22T12:00:00.000Z"));
+check("没有套餐就是没有", tokenPlanView({ windows: [] }) === undefined);
+check("没有套餐也是没有", tokenPlanView(null) === undefined);
 
 console.log("");
 console.log("用量的游标");

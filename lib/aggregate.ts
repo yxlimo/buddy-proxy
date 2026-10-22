@@ -33,9 +33,18 @@ export interface AggregateTarget {
   group: AggregateGroup;
   /** The model id that upstream knows. */
   upstreamModel: string;
-  /** How much of the traffic this target takes, relative to the others. */
+  /**
+   * How much of the traffic this target takes, relative to the others.
+   *
+   * It also decides the order: the bigger the weight, the earlier the target
+   * is tried (the fallback goes from the heaviest to the lightest).
+   */
   weight: number;
-  /** The order the targets are tried in when one of them fails. */
+  /**
+   * The order the targets were listed in.
+   *
+   * Kept for the database's column, but the order comes from the weight now.
+   */
   position: number;
   enabled: boolean;
 }
@@ -143,7 +152,7 @@ export function listAggregateModels(): AggregateModel[] {
   const targets = db
     .prepare(
       "SELECT model_id, group_name, upstream_model, weight, position, enabled " +
-        "FROM aggregate_target ORDER BY model_id, position, upstream_model",
+        "FROM aggregate_target ORDER BY model_id, weight DESC, upstream_model",
     )
     .all() as any[];
 

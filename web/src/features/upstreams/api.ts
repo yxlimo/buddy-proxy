@@ -4,7 +4,6 @@ import { toast } from 'sonner'
 import {
   ListUpstreamsRequestSchema,
   SetUpstreamEnabledRequestSchema,
-  type ListUpstreamsResponse,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { systemKeys } from '@/features/overview/api'
@@ -23,9 +22,11 @@ export function useUpstreams() {
 }
 
 /**
- * 开/关一个上游。改了要重启网关才生效，所以回包里带 pending_restart。
+ * 开/关一个上游。
  *
- * 服务端用 ok:false 表达「不认识这个上游」，这里翻成异常，界面按失败处理。
+ * 改了要重启网关才生效：契约里 Upstream.enabled 是「将要生效的值」，
+ * Upstream.pending 是「改过、还没重启」。所以面板不自己存一份开关状态，
+ * 一切以服务端的答复为准。
  */
 export function useSetUpstreamEnabled() {
   const client = useAdminClient()
@@ -41,39 +42,11 @@ export function useSetUpstreamEnabled() {
       assertOk(result, '没改成')
       return result
     },
-    // 先把开关拨过去，等服务端回来再改回来 —— 点下去要立刻有反应。
-    onMutate: async (input) => {
-      await queryClient.cancelQueries({ queryKey: upstreamKeys.all })
-      const previous = queryClient.getQueryData<ListUpstreamsResponse>(
-        upstreamKeys.all
-      )
-      queryClient.setQueryData<ListUpstreamsResponse>(
-        upstreamKeys.all,
-        (old) =>
-          old
-            ? {
-                ...old,
-                upstreams: old.upstreams.map((upstream) =>
-                  upstream.id === input.upstreamId
-                    ? { ...upstream, enabled: input.enabled }
-                    : upstream
-                ),
-              }
-            : old
-      )
-      return { previous }
-    },
-    onError: (error, _input, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(upstreamKeys.all, context.previous)
-      }
+    onError: (error) => {
       toast.error(describeError(error))
     },
-    onSuccess: (result, input) => {
-      toast.success(
-        result.message ||
-          (input.enabled ? '已打开，重启后生效' : '已关掉，重启后生效')
-      )
+    onSuccess: (result) => {
+      toast.success(result.message || '已保存，重启后生效')
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })

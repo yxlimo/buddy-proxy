@@ -442,6 +442,116 @@ message TailLogResponse {
   repeated string lines = 1;
 }
 
+// ── 登录授权 ───────────────────────────────────────────────────────────────
+
+// 一次登录会话。面板靠它画对话框、显示倒计时。
+message LoginSession {
+  // 本地的一次登录 id。
+  string login_id = 1;
+  string upstream_id = 2;
+  // 账号的槽位。空 = 这个上游的默认账号。
+  string account_id = 3;
+  // pending / approved / failed / expired / cancelled
+  string status = 4;
+  // 面板按它决定画什么：device / browser / password / code / token。
+  string method = 5;
+  // 用户要点的那个地址。
+  string authorization_url = 6;
+  // 设备流的大字码。MiniMax 有；Qoder、WorkBuddy 没有。
+  string user_code = 7;
+  // 过期时刻。Unix 毫秒。
+  int64 expires_at = 8;
+  // 给人看的一句话。
+  string message = 9;
+  // 登录成功后这条凭据的状态摘要。
+  CredentialStatus credential = 10;
+  // 账号密码型上游的账号名。
+  string username = 11;
+}
+
+message BeginLoginRequest {
+  // minimax / qoder / qoder-cn / workbuddy-cn / tokenrhythm / sensenova / intern-ai
+  string upstream_id = 1;
+  string account_id = 2;
+  // intern-ai：登哪个子站。discovery / chat。空 = 两个都要。
+  string site = 3;
+}
+
+message BeginLoginResponse {
+  LoginSession session = 1;
+  bool ok = 2;
+  string message = 3;
+}
+
+message GetLoginStatusRequest {
+  string login_id = 1;
+}
+
+message GetLoginStatusResponse {
+  LoginSession session = 1;
+  bool ok = 2;
+  string message = 3;
+}
+
+message CancelLoginRequest {
+  string login_id = 1;
+}
+
+message CancelLoginResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message LoginWithPasswordRequest {
+  string upstream_id = 1;
+  string account_id = 2;
+  string username = 3;
+  // 密码。只在这一次请求里出现，不回显、不进日志。
+  string password = 4;
+  // intern-ai：人机校验的三个值（浏览器里过一次阿里云验证码后拿到）。
+  string captcha_verify_param = 5;
+  string captcha_scene_id = 6;
+  string captcha_prefix = 7;
+  // 记住密码吗？true = 存进 secrets。
+  bool remember = 8;
+}
+
+message LoginWithPasswordResponse {
+  bool ok = 1;
+  string message = 2;
+  Account account = 3;
+  Credential credential = 4;
+}
+
+message ExchangeLoginCodeRequest {
+  string upstream_id = 1;
+  string account_id = 2;
+  // 浏览器里拿到的 code。
+  string code = 3;
+  // intern-ai：code 是给哪个子站签的。
+  string site = 4;
+}
+
+message ExchangeLoginCodeResponse {
+  bool ok = 1;
+  string message = 2;
+  Credential credential = 3;
+}
+
+message ImportLoginTokenRequest {
+  string upstream_id = 1;
+  string account_id = 2;
+  // intern-ai 的 uaa-token。
+  string token = 3;
+  string site = 4;
+}
+
+message ImportLoginTokenResponse {
+  bool ok = 1;
+  string message = 2;
+  Credential credential = 3;
+}
+
 // ── 服务 ──────────────────────────────────────────────────────────────────
 
 service AdminService {
@@ -473,4 +583,11 @@ service AdminService {
 
   rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
   rpc TailLog(TailLogRequest) returns (TailLogResponse);
+
+  rpc BeginLogin(BeginLoginRequest) returns (BeginLoginResponse);
+  rpc GetLoginStatus(GetLoginStatusRequest) returns (GetLoginStatusResponse);
+  rpc CancelLogin(CancelLoginRequest) returns (CancelLoginResponse);
+  rpc LoginWithPassword(LoginWithPasswordRequest) returns (LoginWithPasswordResponse);
+  rpc ExchangeLoginCode(ExchangeLoginCodeRequest) returns (ExchangeLoginCodeResponse);
+  rpc ImportLoginToken(ImportLoginTokenRequest) returns (ImportLoginTokenResponse);
 }

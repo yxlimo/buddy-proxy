@@ -112,7 +112,6 @@ export function tokenRhythmCatalogModels(): CatalogModel[] {
 export interface AggregateTargetSpec {
   group: UpstreamGroup;
   upstreamModel: string;
-  position: number;
   enabled: boolean;
 }
 
@@ -161,7 +160,6 @@ export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateMo
       targets.push({
         group: target.group,
         upstreamModel: target.upstreamModel,
-        position: target.position,
         enabled: true,
       });
       found.push(upstream);

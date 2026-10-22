@@ -45,8 +45,8 @@ export interface PublishedModelView {
 export interface PublishedTargetView {
   groupName: string;
   upstreamModel: string;
+  /** 权重。越大越优先。 */
   weight: number;
-  position: number;
   enabled: boolean;
   requests: number;
   failed: number;
@@ -80,7 +80,6 @@ export function publishedModels(): PublishedModelView[] {
         groupName: target.group,
         upstreamModel: target.upstreamModel,
         weight: target.weight,
-        position: target.position,
         enabled: target.enabled,
         requests: row?.requests ?? 0,
         failed: row?.failed ?? 0,
@@ -104,8 +103,8 @@ export interface PublishedModelInput {
   targets: {
     groupName: string;
     upstreamModel: string;
+    /** 权重。越大越优先。 */
     weight: number;
-    position: number;
     enabled: boolean;
   }[];
 }
@@ -120,6 +119,10 @@ export interface PublishedModelInput {
  * 两个数字的 0 也当「没给」：0 不是真的上下文长度与输出上限，写进去会让
  * 模型目录拿它当承诺。布尔不一样：false 是真的「不支持」，要存进去。
  *
+ * 目标的顺序是**权重从大到小**：先试权重大的，失败才试小的。权重一样时按
+ * 上游模型名排 —— 面板要控制顺序，就给不同的权重。数据库里那列 position
+ * 留着，但不再用它排序（写进去的是权重顺序里的序号）。
+ *
  * 目标的请求数与失败数是网关自己数的，保存时会被覆盖，客户端传什么都不算。
  */
 export function savePublishedModel(input: PublishedModelInput): { ok: boolean; id: string; message: string } {
@@ -131,11 +134,13 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
   }
   if (!input.targets?.length) return { ok: false, id, message: "模型至少要有一个上游" };
   const strategy: AggregateStrategy = input.strategy === "fallback" ? "fallback" : "single";
-  const targets: AggregateTarget[] = input.targets.map((target, index) => ({
+  // 权重从大到小。权重一样时排序是稳定的，面板给的先后留着。
+  const sorted = [...input.targets].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
+  const targets: AggregateTarget[] = sorted.map((target, index) => ({
     group: target.groupName as AggregateTarget["group"],
     upstreamModel: String(target.upstreamModel ?? "").trim(),
     weight: target.weight ?? 1,
-    position: target.position ?? index,
+    position: index,
     enabled: target.enabled !== false,
   }));
   if (targets.some((t) => !t.upstreamModel)) {

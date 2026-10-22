@@ -45,6 +45,8 @@ import {
   SetUpstreamEnabledResponseSchema,
   TailLogResponseSchema,
   TestCredentialResponseSchema,
+  TokenPlanSchema,
+  TokenPlanWindowSchema,
   UpstreamSchema,
   UsageBucketSchema,
   UsageEventSchema,
@@ -53,7 +55,6 @@ import {
 import { adminTokenSet } from "./token.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
-  UPSTREAM_FLAGS,
   UPSTREAM_FLAG_KEYS,
   UPSTREAM_IDS,
   UPSTREAM_LABELS,
@@ -63,8 +64,10 @@ import {
   upstreamCredential,
   upstreamModelCount,
   upstreamRegion,
+  upstreamStates,
   type BalanceView,
   type UpstreamId,
+  type UpstreamState,
 } from "./upstreams.ts";
 import { listAccounts, listCredentials, refreshCredential, testCredential } from "./accounts.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
@@ -104,6 +107,20 @@ function balanceMessage(balance: BalanceView) {
     ),
     nextExpiryAt: BigInt(balance.nextExpiryAt),
     expiringCny: balance.expiringCny,
+    // 套餐额度：只有 MiniMax 有别的上游不带这个。
+    tokenPlan: balance.tokenPlan
+      ? create(TokenPlanSchema, {
+          windows: balance.tokenPlan.windows.map((window) =>
+            create(TokenPlanWindowSchema, {
+              label: window.label,
+              intervalPercent: window.intervalPercent,
+              weeklyPercent: window.weeklyPercent,
+              intervalEndsAt: BigInt(window.intervalEndsAt),
+              weeklyEndsAt: BigInt(window.weeklyEndsAt),
+            }),
+          ),
+        })
+      : undefined,
   });
 }
 
@@ -118,18 +135,22 @@ function mergeBalances(balances: BalanceView[]): BalanceView | null {
     lots: balances.flatMap((b) => b.lots),
     nextExpiryAt: balances.reduce((max, b) => Math.max(max, b.nextExpiryAt), 0),
     expiringCny: balances.reduce((sum, b) => sum + b.expiringCny, 0),
+    tokenPlan: balances.find((b) => b.tokenPlan)?.tokenPlan,
   };
 }
 
 /** 一个上游在面板上的样子。 */
-async function upstreamMessage(id: UpstreamId) {
+async function upstreamMessage(id: UpstreamId, state: UpstreamState) {
   const credential = upstreamCredential(id);
   const balances = await upstreamBalances(id);
   const balance = mergeBalances(balances);
   return create(UpstreamSchema, {
     id,
     label: UPSTREAM_LABELS[id],
-    enabled: UPSTREAM_FLAGS[id],
+    // 将要生效的值：面板改了但还没重启时，这里已经是改后的值。
+    enabled: state.enabled,
+    // 改过、还没重启。
+    pending: state.pending,
     modelCount: upstreamModelCount(id),
     credential: create(CredentialStatusSchema, {
       kind: credential.kind,
@@ -160,8 +181,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async getSystemStatus() {
     // 先看一眼快照：旧了就起一个后台刷新，面板这次拿旧答案、下次拿新的。
     healthSnapshot();
+    const states = upstreamStates();
     const upstreams = [];
-    for (const id of UPSTREAM_IDS) upstreams.push(await upstreamMessage(id));
+    for (const id of UPSTREAM_IDS) upstreams.push(await upstreamMessage(id, states[id]));
     return create(GetSystemStatusResponseSchema, {
       version: serviceVersion(),
       upstreams,
@@ -188,8 +210,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   /* ---------------- 上游 ---------------- */
 
   async listUpstreams() {
+    const states = upstreamStates();
     const upstreams = [];
-    for (const id of UPSTREAM_IDS) upstreams.push(await upstreamMessage(id));
+    for (const id of UPSTREAM_IDS) upstreams.push(await upstreamMessage(id, states[id]));
     return create(ListUpstreamsResponseSchema, { upstreams });
   },
 
@@ -219,6 +242,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       items: configItems().map((item) =>
         create(ConfigItemSchema, {
           key: item.key,
+          // 给人看的名字：「Qoder 中国区」。不是 env 的键名。
+          label: item.label,
           value: item.value,
           source: item.source,
           fallback: item.fallback,
@@ -444,7 +469,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
               groupName: target.groupName,
               upstreamModel: target.upstreamModel,
               weight: target.weight,
-              position: target.position,
               enabled: target.enabled,
               requests: BigInt(target.requests),
               failed: BigInt(target.failed),
@@ -475,7 +499,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         groupName: target.groupName,
         upstreamModel: target.upstreamModel,
         weight: target.weight,
-        position: target.position,
         enabled: target.enabled,
       })),
     });

@@ -109,7 +109,7 @@ describe('面板', () => {
     expect(screen.getByRole('link', { name: '余额' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '用量' })).toBeInTheDocument()
     expect(
-      screen.getByRole('link', { name: '公布的模型' })
+      screen.getByRole('link', { name: '主路由模型' })
     ).toBeInTheDocument()
 
     // 版本和模型数都从假网关上来了
