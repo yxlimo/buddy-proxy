@@ -209,9 +209,23 @@ function authHeaders(base: WorkBuddyEndpoints): Record<string, string> {
  * Run the browser login: ask for a state, print the URL, and poll until the
  * user has approved.
  */
-export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySession> {
-  const base = ENDPOINTS[region];
+/** 登录的第一步的结果：给用户一个链接。 */
+export interface WorkBuddyLoginStart {
+  /** 服务端这边的 state。半凭据，不进日志。 */
+  state: string;
+  /** 用户要点的那个地址。 */
+  authUrl: string;
+  /** 过期时刻。 */
+  expiresAtMs: number;
+}
 
+/**
+ * 登录的第一步：建一个 state，给用户一个链接。
+ *
+ * 浏览器只管登录，state 在服务端 —— 批准之后服务端拿它换 token。
+ */
+export async function startLogin(region: WorkBuddyRegion = "cn"): Promise<WorkBuddyLoginStart> {
+  const base = ENDPOINTS[region];
   const start = await requestJson(`${base.base}${AUTH_STATE_PATH}?platform=${AUTH_PLATFORM}`, {
     method: "POST",
     headers: authHeaders(base),
@@ -226,14 +240,25 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
       502,
     );
   }
+  return {
+    state: String(state),
+    authUrl: String(authUrl),
+    expiresAtMs: Date.now() + LOGIN_TIMEOUT_MS,
+  };
+}
 
-  console.log("");
-  console.log(`  region: ${region}  base: ${base.base}`);
-  console.log(`  open in a browser: ${authUrl}`);
-  console.log(`  (waiting for approval, up to ${Math.round(LOGIN_TIMEOUT_MS / 60000)} min)`);
-  console.log("");
-
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+/**
+ * 登录的第二步：轮询 state，等用户在浏览器里批准。
+ *
+ * 拿到的是一份会话（没有存库 —— 存不存由调用的人决定）。
+ */
+export async function pollLogin(
+  region: WorkBuddyRegion = "cn",
+  state: string,
+  deadlineMs?: number,
+): Promise<WorkBuddySession> {
+  const base = ENDPOINTS[region];
+  const deadline = deadlineMs ?? Date.now() + LOGIN_TIMEOUT_MS;
   let token = "";
   let refreshToken = "";
   let domain = base.base.replace(/^https?:\/\//, "");
@@ -279,7 +304,7 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
   }
 
   const now = Date.now();
-  const session: WorkBuddySession = {
+  return {
     accessToken: token,
     refreshToken,
     uid,
@@ -292,9 +317,26 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
     loginAtMs: now,
     refreshedAtMs: now,
   };
+}
+
+/**
+ * 登录：建 state → 用户在浏览器里登录 → 轮询 → 存会话。
+ *
+ * 面板上要用的是上面那两半（startLogin / pollLogin），这里是一体的。
+ */
+export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySession> {
+  const start = await startLogin(region);
+
+  console.log("");
+  console.log(`  region: ${region}  base: ${ENDPOINTS[region].base}`);
+  console.log(`  open in a browser: ${start.authUrl}`);
+  console.log(`  (waiting for approval, up to ${Math.round(LOGIN_TIMEOUT_MS / 60000)} min)`);
+  console.log("");
+
+  const session = await pollLogin(region, start.state, start.expiresAtMs);
   saveSession(session);
   console.log(
-    `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - now / 1000)}s`,
+    `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`,
   );
   console.log(`  saved to the database (${sessionId(region)})`);
   authLog(

@@ -17,17 +17,22 @@ import {
   AccountSchema,
   AdminService,
   BalanceSummarySchema,
+  BeginLoginResponseSchema,
   BenefitStatusSchema,
+  CancelLoginResponseSchema,
   CatalogModelSchema,
   ConfigItemSchema,
   CredentialSchema,
   CredentialStatusSchema,
   CreditLotSchema,
   DeletePublishedModelResponseSchema,
+  ExchangeLoginCodeResponseSchema,
   GetBalanceResponseSchema,
   GetBenefitStatusResponseSchema,
+  GetLoginStatusResponseSchema,
   GetSystemStatusResponseSchema,
   GetUsageSummaryResponseSchema,
+  ImportLoginTokenResponseSchema,
   ListAccountsResponseSchema,
   ListConfigResponseSchema,
   ListCredentialsResponseSchema,
@@ -35,6 +40,8 @@ import {
   ListPublishedModelsResponseSchema,
   ListUpstreamsResponseSchema,
   ListUsageEventsResponseSchema,
+  LoginSessionSchema,
+  LoginWithPasswordResponseSchema,
   PublishedModelSchema,
   PublishedTargetSchema,
   RefreshCredentialResponseSchema,
@@ -70,6 +77,15 @@ import {
   type UpstreamState,
 } from "./upstreams.ts";
 import { listAccounts, listCredentials, refreshCredential, testCredential } from "./accounts.ts";
+import {
+  beginLogin,
+  cancelLogin,
+  exchangeLoginCode,
+  getLoginStatus,
+  importLoginToken,
+  loginWithPassword,
+  type StoredLogin,
+} from "./login.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
 import { usageEvents, usageSummary } from "./usage.ts";
 import { tailLog } from "./log.ts";
@@ -172,6 +188,87 @@ async function upstreamMessage(id: UpstreamId, state: UpstreamState) {
 function benefitUpstreamId(name: string): string {
   if (name === "qoder-global") return "qoder";
   return name;
+}
+
+/* ---------------- 登录授权的形状 ---------------- */
+
+/** 一次登录会话，面板看的形状。 */
+function loginSessionMessage(session: StoredLogin) {
+  return create(LoginSessionSchema, {
+    loginId: session.loginId,
+    upstreamId: session.upstreamId,
+    accountId: session.accountId,
+    status: session.status,
+    method: session.method,
+    authorizationUrl: session.authorizationUrl,
+    userCode: session.userCode,
+    expiresAt: BigInt(session.expiresAt),
+    message: session.message,
+    credential: session.credentialId ? credentialStatusMessage(session.credentialId) : undefined,
+    username: session.username,
+  });
+}
+
+/** 一条凭据的状态摘要。 */
+function credentialStatusMessage(credentialId: string) {
+  const row = listCredentials().find((c) => c.id === credentialId);
+  if (!row) return undefined;
+  return create(CredentialStatusSchema, {
+    kind: row.kind,
+    status: row.status,
+    fingerprint: row.fingerprint,
+    expiresAt: BigInt(row.expiresAt),
+    remainingSec: BigInt(Math.max(0, Math.round((row.expiresAt - Date.now()) / 1000))),
+    warning: row.expiresAt > 0 && row.expiresAt - Date.now() < 7 * 24 * 3600 * 1000,
+    detail: row.label,
+    generation: row.generation,
+  });
+}
+
+/** 一个账号，面板看的形状。 */
+function accountMessage(accountId: string) {
+  if (!accountId) return undefined;
+  const row = listAccounts().find((a) => a.id === accountId);
+  if (!row) return undefined;
+  return create(AccountSchema, {
+    id: row.id,
+    upstreamId: row.upstreamId,
+    label: row.label,
+    status: row.status,
+    credentialCount: row.credentialCount,
+    detail: row.detail,
+  });
+}
+
+/** 一条凭据，面板看的形状。 */
+function credentialMessage(credentialId: string) {
+  if (!credentialId) return undefined;
+  const row = listCredentials().find((c) => c.id === credentialId);
+  if (!row) return undefined;
+  return create(CredentialSchema, {
+    id: row.id,
+    accountId: row.accountId,
+    upstreamId: row.upstreamId,
+    kind: row.kind,
+    label: row.label,
+    masked: row.masked,
+    fingerprint: row.fingerprint,
+    status: row.status,
+    generation: row.generation,
+    expiresAt: BigInt(row.expiresAt),
+    lastOkAt: BigInt(row.lastOkAt),
+    lastError: row.lastError,
+    updatedAt: BigInt(row.updatedAt),
+  });
+}
+
+/** 登录的错误怎么变成面板上的话。 */
+function loginErrorText(e: unknown): string {
+  const err = e as { hint?: string; message?: string };
+  const hint = err?.hint ?? "";
+  const code = err?.message ?? "";
+  if (hint && code && !hint.includes(code)) return `${hint}（${code}）`;
+  return hint || code || "登录没成功。";
 }
 
 /** 管理接口的实现。 */
@@ -582,5 +679,97 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async tailLog(request) {
     const lines = tailLog(Number(request.lines ?? 0), String(request.filter ?? ""));
     return create(TailLogResponseSchema, { lines });
+  },
+
+  /* ---------------- 登录授权 ---------------- */
+
+  async beginLogin(request) {
+    const upstreamId = String(request.upstreamId ?? "");
+    try {
+      const session = await beginLogin(upstreamId, String(request.accountId ?? ""), String(request.site ?? ""));
+      return create(BeginLoginResponseSchema, {
+        session: loginSessionMessage(session),
+        ok: true,
+        message: session.message,
+      });
+    } catch (e) {
+      return create(BeginLoginResponseSchema, { ok: false, message: loginErrorText(e) });
+    }
+  },
+
+  async getLoginStatus(request) {
+    const session = getLoginStatus(String(request.loginId ?? ""));
+    if (!session) {
+      return create(GetLoginStatusResponseSchema, { ok: false, message: "没有这次登录。" });
+    }
+    return create(GetLoginStatusResponseSchema, {
+      session: loginSessionMessage(session),
+      ok: true,
+      message: session.message,
+    });
+  },
+
+  async cancelLogin(request) {
+    const result = cancelLogin(String(request.loginId ?? ""));
+    return create(CancelLoginResponseSchema, { ok: result.ok, message: result.message });
+  },
+
+  async loginWithPassword(request) {
+    try {
+      const result = await loginWithPassword({
+        upstreamId: String(request.upstreamId ?? ""),
+        accountId: String(request.accountId ?? ""),
+        username: String(request.username ?? ""),
+        password: String(request.password ?? ""),
+        captchaVerifyParam: String(request.captchaVerifyParam ?? ""),
+        captchaSceneId: String(request.captchaSceneId ?? ""),
+        captchaPrefix: String(request.captchaPrefix ?? ""),
+        remember: request.remember === true,
+      });
+      return create(LoginWithPasswordResponseSchema, {
+        ok: result.ok,
+        message: result.message,
+        account: accountMessage(result.accountId),
+        credential: credentialMessage(result.credentialId),
+      });
+    } catch (e) {
+      return create(LoginWithPasswordResponseSchema, { ok: false, message: loginErrorText(e) });
+    }
+  },
+
+  async exchangeLoginCode(request) {
+    try {
+      const result = await exchangeLoginCode({
+        upstreamId: String(request.upstreamId ?? ""),
+        accountId: String(request.accountId ?? ""),
+        code: String(request.code ?? ""),
+        site: String(request.site ?? ""),
+      });
+      return create(ExchangeLoginCodeResponseSchema, {
+        ok: result.ok,
+        message: result.message,
+        credential: credentialMessage(result.credentialId),
+      });
+    } catch (e) {
+      return create(ExchangeLoginCodeResponseSchema, { ok: false, message: loginErrorText(e) });
+    }
+  },
+
+  async importLoginToken(request) {
+    try {
+      const result = await importLoginToken({
+        upstreamId: String(request.upstreamId ?? ""),
+        accountId: String(request.accountId ?? ""),
+        token: String(request.token ?? ""),
+        site: String(request.site ?? ""),
+      });
+      return create(ImportLoginTokenResponseSchema, {
+        ok: result.ok,
+        message: result.message,
+        credential: credentialMessage(result.credentialId),
+      });
+    } catch (e) {
+      return create(ImportLoginTokenResponseSchema, { ok: false, message: loginErrorText(e) });
+    }
   },
 };

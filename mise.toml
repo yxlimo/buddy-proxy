@@ -36,6 +36,10 @@ run = "bash test/aggregate.sh"
 description = "Run the tests for the panel's API (Connect)"
 run = "node --experimental-strip-types test/admin-check.ts"
 
+[tasks."test:admin:login"]
+description = "Run the tests for the panel's login flows (a fake upstream, no real login)"
+run = "node --experimental-strip-types test/admin-login-check.ts"
+
 [tasks."test:intern-ai"]
 description = "Run the tests for the intern-ai module (no network)"
 run = "node --experimental-strip-types test/intern-ai-check.ts"

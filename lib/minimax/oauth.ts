@@ -109,7 +109,7 @@ export function hasSession(): boolean {
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
-function saveSession(session: Session): void {
+export function saveSession(session: Session): void {
   writeSession(sessionId(), session);
 }
 

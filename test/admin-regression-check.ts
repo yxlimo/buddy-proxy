@@ -47,6 +47,48 @@ const base = `http://127.0.0.1:${routerPort}`;
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
+// The sessions the requests need go into the test's own database. The mock
+// upstream does not look at the credential, but the router does: without a
+// session there is nothing to send.
+//
+// The store reads the data directory from the environment when it is imported,
+// so the environment has to point there first — otherwise this would write into
+// the machine's own database.
+process.env.BUDDY_DATA_DIR = DATA_DIR;
+const { setSecret } = await import("../lib/store.ts");
+{
+  const now = Date.now();
+  setSecret("session:qoder:global", "session", {
+    schemaVersion: 1,
+    region: "global",
+    clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
+    accessToken: "dt-test-token",
+    refreshToken: "drt-test-token",
+    userId: "test-user",
+    expiresAtMs: now + 365 * 24 * 3600 * 1000,
+    refreshExpiresAtMs: now + 365 * 24 * 3600 * 1000,
+    machineId: "test-machine",
+    machineToken: "test-machine-token",
+    machineType: "test",
+    generation: 1,
+    loginAtMs: now,
+    refreshedAtMs: now,
+  });
+  setSecret("session:workbuddy:cn", "session", {
+    accessToken: "wb-test-token",
+    refreshToken: "wb-test-refresh",
+    uid: "test-user",
+    nickname: "tester",
+    domain: "127.0.0.1",
+    region: "cn",
+    generation: 1,
+    expiresAtMs: now + 365 * 24 * 3600 * 1000,
+    refreshExpiresAtMs: now + 365 * 24 * 3600 * 1000,
+    loginAtMs: now,
+    refreshedAtMs: now,
+  });
+}
+
 const mock = spawn(process.execPath, ["--experimental-strip-types", "test/mock-server.ts", String(mockPort)], {
   cwd: ROOT,
   stdio: ["ignore", "pipe", "pipe"],

@@ -211,7 +211,7 @@ check(
   list(config.body?.items).some((i: any) => i.key === "QODER_CN" && i.description.length > 0),
 );
 
-const setConfig = await call("SetConfig", { key: "HEALTH_CACHE_MS", value: "123456" }, token);
+const setConfig = await call("SetConfig", { key: "ADMIN_CORS_ORIGINS", value: "123456" }, token);
 check("配置改得掉", setConfig.body?.ok === true, JSON.stringify(setConfig.body));
 check("改完要重启才生效", setConfig.body?.pendingRestart === true);
 

@@ -281,15 +281,17 @@ async function raw(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 
 console.log("");
-console.log("契约：二十个方法");
+console.log("契约：二十六个方法");
 
 // 每个方法配一个像样的请求。
+// 登录那六个：挑不会碰到网络的上游（密码流与回填流），不真的登录。
 const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "GetSystemStatus", request: {} },
   { method: "ListUpstreams", request: {} },
   { method: "SetUpstreamEnabled", request: { upstreamId: "qoder-cn", enabled: false } },
   { method: "ListConfig", request: {} },
-  { method: "SetConfig", request: { key: "HEALTH_CACHE_MS", value: "300000" } },
+  // 用一个后面不会改的键：后面要验「改之前没有待重启」。
+  { method: "SetConfig", request: { key: "REQUIRE_API_KEY", value: "false" } },
   { method: "ListAccounts", request: {} },
   { method: "ListCredentials", request: { accountId: "" } },
   { method: "TestCredential", request: { credentialId: "nope:nope" } },
@@ -304,9 +306,16 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "RunBenefitNow", request: {} },
   { method: "ListModels", request: { upstreamId: "" } },
   { method: "TailLog", request: { lines: 5, filter: "" } },
+  // 登录：密码流与回填流不碰网络，也不会真的登录。
+  { method: "BeginLogin", request: { upstreamId: "sensenova" } },
+  { method: "GetLoginStatus", request: { loginId: "no-such-login" } },
+  { method: "CancelLogin", request: { loginId: "no-such-login" } },
+  { method: "LoginWithPassword", request: { upstreamId: "qoder", username: "x", password: "y" } },
+  { method: "ExchangeLoginCode", request: { upstreamId: "intern-ai", code: "" } },
+  { method: "ImportLoginToken", request: { upstreamId: "intern-ai", token: "" } },
 ];
 
-check("契约里有二十个方法", contract.methods.size === 20, String(contract.methods.size));
+check("契约里有二十六个方法", contract.methods.size === 26, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",
@@ -456,7 +465,7 @@ check(
 // GetSystemStatus：改设置之前 pendingRestart 是假，改过之后是真。
 const before = await call("GetSystemStatus");
 check("改之前没有待重启", before.body?.pendingRestart === false, JSON.stringify(before.body?.pendingRestart));
-const setConfig = await call("SetConfig", { key: "HEALTH_CACHE_MS", value: "123456" });
+const setConfig = await call("SetConfig", { key: "ADMIN_CORS_ORIGINS", value: "123456" });
 check("配置改得掉", setConfig.body?.ok === true, JSON.stringify(setConfig.body));
 check("改完要重启", setConfig.body?.pendingRestart === true);
 const after = await call("GetSystemStatus");
@@ -467,8 +476,8 @@ check("改了上游要重启", setUpstream.body?.pendingRestart === true);
 const listConfigAfter = await call("ListConfig");
 check(
   "改了之后配置项的来源是 database",
-  listConfigAfter.body?.items?.some((i: any) => i.key === "HEALTH_CACHE_MS" && i.source === "database"),
-  JSON.stringify(listConfigAfter.body?.items?.find((i: any) => i.key === "HEALTH_CACHE_MS")),
+  listConfigAfter.body?.items?.some((i: any) => i.key === "ADMIN_CORS_ORIGINS" && i.source === "database"),
+  JSON.stringify(listConfigAfter.body?.items?.find((i: any) => i.key === "ADMIN_CORS_ORIGINS")),
 );
 
 // 上游的开关：enabled 是将要生效的值，pending 是改过还没重启。

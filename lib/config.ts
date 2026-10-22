@@ -63,6 +63,9 @@ export function groupOf(key: string): string {
   if (key.startsWith("QODER_")) return "qoder";
   if (key.startsWith("WORKBUDDY_")) return "workbuddy";
   if (key.startsWith("TOKENRHYTHM_") || key.startsWith("TOKEN_RHYTHM_")) return "tokenrhythm";
+  if (key === "TOKENRHYTHM") return "tokenrhythm";
+  if (key.startsWith("SENSENOVA_")) return "sensenova";
+  if (key.startsWith("INTERN_AI_")) return "intern-ai";
   if (key.startsWith("ROUTER_") || key.startsWith("HEALTH_") || key.startsWith("REQUIRE_")) return "gateway";
   if (key.startsWith("BENEFITS_")) return "benefits";
   return "general";

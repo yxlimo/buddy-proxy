@@ -235,6 +235,19 @@ export function setCached(id: string, data: unknown): void {
     .run(id, JSON.stringify(data), Date.now());
 }
 
+/** The cached rows whose id starts with the prefix. */
+export function listCached(prefix = ""): { id: string; at: number }[] {
+  const rows = store()
+    .prepare("SELECT id, at FROM cache WHERE id LIKE ? ORDER BY at")
+    .all(`${prefix}%`) as { id?: string; at?: number }[];
+  return rows.map((row) => ({ id: String(row.id ?? ""), at: Number(row.at ?? 0) }));
+}
+
+/** Forget a cached value. */
+export function deleteCached(id: string): void {
+  store().prepare("DELETE FROM cache WHERE id = ?").run(id);
+}
+
 /* ------------------------------------------------------------------ *
  * The lock
  * ------------------------------------------------------------------ */

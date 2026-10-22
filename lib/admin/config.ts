@@ -176,6 +176,27 @@ const SECRET_SUFFIXES = ["_KEY", "_PASSWORD", "_SECRET", "_TOKEN"];
 /** 这些键不是密钥，是开关或者数字。名字撞上了后缀而已。 */
 const NOT_SECRET = new Set(["REQUIRE_API_KEY"]);
 
+/**
+ * 面板上能改的设置。
+ *
+ * 大部分设置是服务内部的事：上游的地址、轮询与预警的窗口、模拟客户端用的
+ * 请求标识。这些改了也没用（env 覆盖了照样按代码走），而且露出来只会让人
+ * 改出坏状态 —— 所以不公布。
+ *
+ * 面板只看到这 handful 个：各个上游的开关，和网关自己的两三个。
+ */
+const USER_FACING = new Set([
+  // 上游的开关
+  "MINIMAX_CODE",
+  "QODER_GLOBAL",
+  "QODER_CN",
+  "WORKBUDDY_CN",
+  "TOKENRHYTHM",
+  // 网关自己
+  "REQUIRE_API_KEY",
+  "ADMIN_CORS_ORIGINS",
+]);
+
 /** 这个设置是不是敏感值。 */
 function isSecret(key: string): boolean {
   if (NOT_SECRET.has(key)) return false;
@@ -202,7 +223,9 @@ function labelOf(key: string, description: string): string {
  */
 export function configItems(): ConfigItemView[] {
   const overrides = new Map(listConfig().map((row) => [row.key, row.value]));
-  return configSnapshot().map((setting) => {
+  return configSnapshot()
+    .filter((setting) => USER_FACING.has(setting.key))
+    .map((setting) => {
     const override = overrides.get(setting.key);
     const atStart = configStartup(setting.key);
     const raw = override ?? atStart?.raw ?? String(setting.fallback);
@@ -223,12 +246,20 @@ export function configItems(): ConfigItemView[] {
       secret,
       hasValue,
     };
-  });
+    });
 }
 
 /** 面板能改的键：进程问过的那些。 */
+/**
+ * 面板能改的键。
+ *
+ * 只有 USER_FACING 里那些。服务内部的设置不公布，也不许面板改 —— 改���
+ * 也没用（env 覆盖了照样按代码走），改了只会改出坏状态。
+ *
+ * 运维要改内部的设置，走 config-cli.ts（那是给这台机器的人用的 ✓）。
+ */
 export function knownConfigKeys(): Set<string> {
-  return new Set(configSnapshot().map((s) => s.key));
+  return new Set([...USER_FACING].filter((key) => configSnapshot().some((s) => s.key === key)));
 }
 
 /**

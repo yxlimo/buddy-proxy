@@ -136,12 +136,20 @@ export class TokenRhythmError extends Error {
   }
 }
 
-/** Log in with the account and password, and keep the session. */
-export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSession> {
+/**
+ * 用一组账号密码登录一个租户，把会话拿回来（不存）。
+ *
+ * 环境变量里的那几份租户走 login()，面板上临时输的走这里。
+ */
+async function requestLogin(
+  index: number,
+  account: string,
+  password: string,
+): Promise<TokenRhythmSession> {
   const r = await fetch(`${TOKENRHYTHM_API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ account: tenant.account, password: tenant.password }),
+    body: JSON.stringify({ account, password }),
   });
   const text = await r.text();
   if (!r.ok) {
@@ -158,8 +166,8 @@ export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSessi
   } catch {
     /* the cookies are what matter */
   }
-  const session: TokenRhythmSession = {
-    index: tenant.index,
+  return {
+    index,
     cookie,
     // The cookie's value ends at the first ";" — the rest of the Set-Cookie
     // line is attributes ("Max-Age=…"), and splitting on "=" alone would keep
@@ -170,7 +178,38 @@ export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSessi
     obtainedAtMs: Date.now(),
     expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
   };
+}
+
+/** Log in with the account and password, and keep the session. */
+export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSession> {
+  const session = await requestLogin(tenant.index, tenant.account, tenant.password);
   saveSession(session);
+  return session;
+}
+
+/**
+ * 用面板给的账号密码登录一个租户。
+ *
+ * 这个文件里的 login() 只认环境变量里的那几份租户；面板上输的是另一组账号
+ * 密码，所以这里单独走一遍：登录、存会话、记下账号。
+ *
+ * 「记住密码」：记住了就把密码也存进 secrets（.env 不在了也能自动登录），
+ * 没记住就只记账号 —— 密码不进数据库。
+ */
+export async function loginWithCredentials(
+  index: number,
+  account: string,
+  password: string,
+  remember = true,
+): Promise<TokenRhythmSession> {
+  const session = await requestLogin(index, account, password);
+  saveSession(session);
+  const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(tenantId(index));
+  setSecret(tenantId(index), "account", {
+    account,
+    password: remember ? password : "",
+    apiKey: stored?.apiKey ?? null,
+  });
   return session;
 }
 

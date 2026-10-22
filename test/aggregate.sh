@@ -36,6 +36,13 @@ check() {
 rm -rf "$BUDDY_DATA_DIR"
 mkdir -p "$BUDDY_DATA_DIR"
 
+# The sessions of the two upstreams the requests need go into the test's own
+# database. The mock upstream does not look at the credential, but the router
+# does: without a session there is nothing to send. (They used to come from the
+# machine's own files, which is why this test needed a machine that had been
+# logged in.)
+node --experimental-strip-types test/aggregate-setup.ts seed
+
 node --experimental-strip-types test/mock-server.ts "$MOCK_PORT" > /tmp/opencode/aggregate-mock.log 2>&1 &
 MOCK_PID=$!
 bash test/run-router.sh "$ROUTER_PORT" "http://127.0.0.1:$MOCK_PORT" > /tmp/opencode/aggregate-router.log 2>&1 &
