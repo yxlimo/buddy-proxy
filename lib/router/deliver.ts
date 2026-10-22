@@ -28,6 +28,10 @@ const rid = (prefix: string) => prefix + crypto.randomBytes(12).toString("hex");
  */
 function takeOver(ctx: Koa.Context): void {
   ctx.respond = false;
+  // Koa starts every request at 404 and only replaces that when it writes the
+  // response itself. A stream writes its own, so nothing would ever say 200
+  // and the client would see a 404 with a perfectly good body.
+  ctx.status = 200;
 }
 
 /** The headers of a streaming answer. */

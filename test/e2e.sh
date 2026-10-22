@@ -36,6 +36,17 @@ report() {
   fi
 }
 
+# The class of a status code: 2xx, 4xx, 5xx and whatever else it was.
+status_class() {
+  case "${1:-000}" in
+    2??) echo "2xx" ;;
+    3??) echo "3xx" ;;
+    4??) echo "4xx" ;;
+    5??) echo "5xx" ;;
+    *) echo "${1:-none}" ;;
+  esac
+}
+
 # The model lists, in both dialects and per upstream.
 for group in "" qoder qoder-cn workbuddy-cn minimax; do
   path="${group:+$group/}v1/models"
@@ -59,6 +70,9 @@ print("ok" if data and not bad else "bad: " + ", ".join(map(str, bad[:3])))
 done
 
 # One request per upstream and dialect.
+BODY_FILE="$(mktemp)"
+trap 'rm -f "$BODY_FILE"' EXIT
+
 for spec in "qoder:glm-5.3" "qoder-cn:glm-5.3" "workbuddy-cn:hy3" "minimax:MiniMax-M3.1-Flash" "tokenrhythm:deepseek-v4.1-flash-1017"; do
   group="${spec%%:*}"
   model="${spec##*:}"
@@ -67,10 +81,11 @@ for spec in "qoder:glm-5.3" "qoder-cn:glm-5.3" "workbuddy-cn:hy3" "minimax:MiniM
     if [ "$dialect" = "openai" ]; then path="v1/chat/completions"; else path="v1/messages"; fi
     body="{\"model\":\"$model\",\"max_tokens\":32,\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"say ok\"}]}"
 
-    out=$(curl -s --noproxy '*' -m $TIMEOUT -X POST "$BASE/$group/$path" \
+    status=$(curl -s --noproxy '*' -m $TIMEOUT -X POST "$BASE/$group/$path" \
       -H 'content-type: application/json' -H 'x-api-key: public' \
-      -H 'anthropic-version: 2023-06-01' -d "$body")
-    got=$(printf '%s' "$out" | DIALECT="$dialect" python3 -c '
+      -H 'anthropic-version: 2023-06-01' -d "$body" \
+      -o "$BODY_FILE" -w '%{http_code}')
+    got=$(cat "$BODY_FILE" | DIALECT="$dialect" python3 -c '
 import json, os, sys
 dialect = os.environ["DIALECT"]
 try:
@@ -99,15 +114,17 @@ else:
 print("ok" if has_content and u.get(key, 0) > 0 and not leaked else (leaked or "bad"))
 ' 2>/dev/null)
     report "$group/$model $dialect non-stream" "ok" "$got"
+    # The status line matters as much as the body: a good body under a wrong
+    # status is a failure that a body-only check misses.
+    report "$group/$model $dialect non-stream status" "2xx" "$(status_class "$status")"
 
     body="${body/\"stream\":false/\"stream\":true}"
-    out=$(curl -s --noproxy '*' -m $TIMEOUT -N -X POST "$BASE/$group/$path" \
+    status=$(curl -s --noproxy '*' -m $TIMEOUT -N -X POST "$BASE/$group/$path" \
       -H 'content-type: application/json' -H 'x-api-key: public' \
-      -H 'anthropic-version: 2023-06-01' -d "$body")
-    # A response that never ends is a failure too: the client would wait for a
-    # connection that never closes.
-    code=$?
-    got=$(printf '%s' "$out" | DIALECT="$dialect" python3 -c '
+      -H 'anthropic-version: 2023-06-01' -d "$body" \
+      -o "$BODY_FILE" -w '%{http_code}')
+    curl_code=$?
+    got=$(cat "$BODY_FILE" | DIALECT="$dialect" python3 -c '
 import json, os, sys
 dialect = os.environ["DIALECT"]
 frames = [l[6:].strip() for l in sys.stdin if l.startswith("data: ")]
@@ -131,11 +148,14 @@ elif usage and usage.get(key, 0) > 0:
 else:
     print("bad")
 ' 2>/dev/null)
-    if [ "$code" -ne 0 ]; then
-      report "$group/$model $dialect stream" "ok" "curl exited $code"
+    # A response that never ends is a failure too: the client would wait for a
+    # connection that never closes.
+    if [ "$curl_code" -ne 0 ]; then
+      report "$group/$model $dialect stream" "ok" "curl exited $curl_code"
       continue
     fi
     report "$group/$model $dialect stream" "ok" "$got"
+    report "$group/$model $dialect stream status" "2xx" "$(status_class "$status")"
   done
 done
 
