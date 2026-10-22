@@ -1,9 +1,12 @@
 # 生成 TypeScript 客户端。生成物进版本库：容器里没有构建步骤，前端构建
 # 用的是仓库里已有的那一份。
+#
+# 放在 lib/gen/ 而不是 web/ 里：后端也要用它（Connect 的服务描述在生成物
+# 里），放一处两边共用，不要各拷一份。
 version: v2
 plugins:
   - remote: buf.build/bufbuild/es:v2.2.3
-    out: web/src/gen
+    out: lib/gen
     opt:
       - target=ts
       - import_extension=none

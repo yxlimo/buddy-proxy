@@ -1,3 +1,4 @@
+# 工具版本统一在这里。运行时只用 mise 装的这一份。
 [tools]
 node = "lts"
 pnpm = "latest"
@@ -5,6 +6,76 @@ pnpm = "latest"
 # normal build never needs it — only a change to the contract does.
 buf = "1.74.0"
 
+# ── 后端 ──────────────────────────────────────────────────────────────────
+
 [tasks.serve]
 description = "Run the router (every upstream, OpenAI/Anthropic compatible)"
 run = "node router-proxy.ts"
+
+[tasks.typecheck]
+description = "Type-check the router"
+run = "tsc --noEmit"
+
+[tasks.test]
+description = "Run the offline tests (the mock upstream, no tokens spent)"
+run = "bash test/smoke.sh"
+
+[tasks."test:aggregate"]
+description = "Run the tests for the published models"
+run = "bash test/aggregate.sh"
+
+[tasks.proto]
+description = "Regenerate the TypeScript client from the contract"
+run = "buf generate"
+
+[tasks."proto:lint"]
+description = "Check the contract"
+run = "buf lint"
+
+[tasks."proto:breaking"]
+description = "Fail if the contract changed in a way that breaks the clients"
+run = "buf breaking --against '.git#branch=main'"
+
+# ── 面板前端 ──────────────────────────────────────────────────────────────
+
+[tasks."web:install"]
+description = "Install the panel's dependencies"
+run = "cd web && pnpm install"
+
+[tasks."web:dev"]
+description = "Run the panel in development mode"
+run = "cd web && pnpm dev"
+
+[tasks."web:build"]
+description = "Build the panel into web/dist"
+run = "cd web && pnpm build"
+
+[tasks."web:typecheck"]
+description = "Type-check the panel"
+run = "cd web && pnpm typecheck"
+
+[tasks."web:test"]
+description = "Run the panel's tests"
+run = "cd web && pnpm test"
+
+# ── 发布 ──────────────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build the panel and the image"
+depends = ["web.build", "image.build"]
+
+[tasks."image:build"]
+description = "Build the image that carries the router and the panel"
+run = "podman build --format docker -t localhost/buddy-proxy:latest ."
+
+[tasks.deploy]
+description = "Build the image, ship it to the NAS and reload the service"
+run = "bash tools/deploy-nas.sh"
+
+[tasks."deploy:nobuild"]
+description = "Ship the current image to the NAS as it is"
+run = "bash tools/deploy-nas.sh --no-build"
+
+[tasks.logs]
+description = "Show the service's log on the NAS"
+run = "ssh nas 'cd /vol1/1000/services/buddy-proxy && docker compose logs -f --tail 100'"
