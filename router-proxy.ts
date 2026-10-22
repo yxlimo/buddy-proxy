@@ -70,9 +70,14 @@ import {
 } from "./lib/router/catalog.ts";
 import {
   aggregateModels,
+  deleteAggregateModel,
+  getAggregateModel,
+  listAggregateModels,
   listAggregateUsage,
   recordAggregateUsage,
   reloadAggregate,
+  saveAggregateModel,
+  type AggregateModelInput,
 } from "./lib/aggregate.ts";
 import { type BenefitUpstream } from "./lib/benefits.ts";
 import { fetchWorkBuddyCredits } from "./lib/workbuddy/credits.ts";
@@ -563,6 +568,61 @@ router.post("/admin/reload", (ctx) => {
 /** What the traffic table holds, for the panel. */
 router.get("/admin/usage", (ctx) => {
   ctx.body = { data: listAggregateUsage() };
+});
+
+/** The published models, for the panel. */
+router.get("/admin/models", (ctx) => {
+  ctx.body = { data: listAggregateModels() };
+});
+
+/**
+ * Save a published model.
+ *
+ * The panel sends the whole model — its name, its metadata and the upstreams
+ * behind it — and the gateway stores it. Nothing changes for the clients until
+ * the panel asks for the configuration to be read again, so a panel that
+ * edits several models can save them all and reload once.
+ */
+router.post("/admin/models", parseBody, (ctx) => {
+  const input = (ctx.request.body ?? {}) as Partial<AggregateModelInput>;
+  const id = String(input.id ?? "").trim();
+  if (!id) {
+    ctx.status = 400;
+    ctx.body = { error: { type: "invalid_request_error", message: "the model needs an id" } };
+    return;
+  }
+  if (!Array.isArray(input.targets) || input.targets.length === 0) {
+    ctx.status = 400;
+    ctx.body = { error: { type: "invalid_request_error", message: "the model needs at least one target" } };
+    return;
+  }
+  const model = saveAggregateModel({
+    ...input,
+    id,
+    displayName: String(input.displayName ?? id),
+    targets: input.targets.map((t, index) => ({
+      group: t.group,
+      upstreamModel: t.upstreamModel,
+      weight: t.weight ?? 1,
+      position: t.position ?? index,
+      enabled: t.enabled !== false,
+    })),
+  });
+  console.log(`[MODEL] saved ${model.id} with ${model.targets.length} targets`);
+  ctx.body = { saved: true, model };
+});
+
+/** Forget a published model. */
+router.delete("/admin/models/:id", (ctx) => {
+  const id = String(ctx.params.id ?? "");
+  if (!getAggregateModel(id)) {
+    ctx.status = 404;
+    ctx.body = { error: { type: "invalid_request_error", message: `unknown model "${id}"` } };
+    return;
+  }
+  deleteAggregateModel(id);
+  console.log(`[MODEL] deleted ${id}`);
+  ctx.body = { deleted: true, id };
 });
 
 async function handle(

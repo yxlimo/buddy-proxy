@@ -105,6 +105,32 @@ second=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin)["da
 [ "$second" -ge 1 ] && check "the success is counted against the second target" 1 || check "the success is counted against the second target" 0
 
 echo ""
+echo "the panel"
+
+saved=$(curl -fsS -X POST "$BASE/admin/models" -H 'content-type: application/json' \
+  -d '{"id":"from-panel","displayName":"From the panel","strategy":"single","targets":[{"group":"qoder","upstreamModel":"glm-5.3"}]}' \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("saved"))')
+[ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
+
+listed=$(curl -fsS "$BASE/admin/models" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
+[ "$listed" -ge 1 ] && check "the panel can read the models back" 1 || check "the panel can read the models back" 0
+
+# The save does not change anything until the panel asks for it.
+before=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completions" \
+  -H 'content-type: application/json' \
+  -d '{"model":"from-panel","messages":[{"role":"user","content":"hi"}]}')
+[ "$before" = "404" ] && check "a saved model waits for the reload" 1 || check "a saved model waits for the reload" 0
+
+curl -fsS -X POST "$BASE/admin/reload" > /dev/null
+after=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completions" \
+  -H 'content-type: application/json' \
+  -d '{"model":"from-panel","messages":[{"role":"user","content":"hi"}]}')
+[ "$after" = "200" ] && check "the reload makes the saved model live" 1 || check "the reload makes the saved model live" 0
+
+deleted=$(curl -fsS -X DELETE "$BASE/admin/models/from-panel" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deleted"))')
+[ "$deleted" = "True" ] && check "the panel can delete a model" 1 || check "the panel can delete a model" 0
+
+echo ""
 echo "the traffic"
 
 tokens=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(sum(r.get("completionTokens") or 0 for r in d))')

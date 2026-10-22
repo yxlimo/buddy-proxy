@@ -227,7 +227,14 @@ The root route's inference is OpenAI only.
 | `GET`  | `/v1/models` | the published models |
 | `POST` | `/v1/chat/completions` | a published model, with the fallback |
 | `POST` | `/admin/reload` | read the settings and the published models again |
+| `GET`  | `/admin/models` | the published models, for the panel |
+| `POST` | `/admin/models` | save a published model |
+| `DELETE` | `/admin/models/:id` | forget a published model |
 | `GET`  | `/admin/usage` | where the traffic went |
+
+A save does not change anything for the clients: the panel saves what it
+changed and then asks for the configuration to be read again, so several
+changes can be made and applied together.
 
 The settings and the published models are read once and then kept, so the
 panel can change them without a restart — but nothing is picked up until
