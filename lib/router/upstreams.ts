@@ -57,6 +57,8 @@ export interface UpstreamContext {
   logRoute: boolean;
   /** The output limit of a WorkBuddy model, as its own catalogue says. */
   workbuddyMaxOutput(model: string): number;
+  /** Told what the upstream charged for the answer, if anyone is keeping score. */
+  onUsage?: (usage: any) => void;
 }
 
 /**
@@ -105,11 +107,11 @@ export async function toWorkBuddy(
         502,
       );
     }
-    deliverJson(out, dialect, "openai", json, model);
+    deliverJson(out, dialect, "openai", json, model, ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIStream(out, response.body!, dialect, model);
+  await deliverOpenAIStream(out, response.body!, dialect, model, undefined, ctx.onUsage);
 }
 
 /**
@@ -175,11 +177,11 @@ export async function toQoder(
 
   if (!stream) {
     const json = await upstream.json();
-    deliverJson(out, dialect, "openai", json, upstreamModel(route));
+    deliverJson(out, dialect, "openai", json, route.label ?? upstreamModel(route), ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIStream(out, upstream.body!, dialect, upstreamModel(route));
+  await deliverOpenAIStream(out, upstream.body!, dialect, route.label ?? upstreamModel(route), undefined, ctx.onUsage);
 }
 
 /**
@@ -222,11 +224,11 @@ export async function toQoderLegacy(
     // The legacy protocol has no non-streaming answer, so the chunks are
     // collected and reassembled into one completion.
     const completion = await collectOpenAIChunks(chunks, model.id);
-    deliverJson(out, dialect, "openai", completion, model.id);
+    deliverJson(out, dialect, "openai", completion, model.id, ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIChunks(out, chunks, dialect, model.id);
+  await deliverOpenAIChunks(out, chunks, dialect, model.id, ctx.onUsage);
 }
 
 export function legacyError(error: { code?: string; message?: string; status?: number }): AuthError {
@@ -397,11 +399,11 @@ export async function toMinimax(
 
   if (!stream) {
     const json = await r.json();
-    deliverJson(out, dialect, "anthropic", json, upstreamModel(route));
+    deliverJson(out, dialect, "anthropic", json, route.label ?? upstreamModel(route), ctx.onUsage);
     return;
   }
 
-  await deliverAnthropicStream(out, r.body!, dialect, upstreamModel(route), PING_MS);
+  await deliverAnthropicStream(out, r.body!, dialect, route.label ?? upstreamModel(route), PING_MS, ctx.onUsage);
 }
 
 
@@ -460,13 +462,13 @@ export async function toTokenRhythm(
     const json = await response.json();
     const reason = json?.choices?.[0]?.finish_reason;
     if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-    deliverJson(out, dialect, "openai", json, model);
+    deliverJson(out, dialect, "openai", json, model, ctx.onUsage);
     return;
   }
 
   await deliverOpenAIStream(out, response.body!, dialect, model, (reason) => {
     if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-  });
+  }, ctx.onUsage);
 }
 
 /**

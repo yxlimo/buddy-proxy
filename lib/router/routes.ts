@@ -18,6 +18,13 @@ export interface Route {
   model: string;
   /** Which Qoder region to talk to. Unset for MiniMax. */
   region?: "cn" | "global";
+  /**
+   * The name to report back to the client.
+   *
+   * The aggregate route publishes models under names of its own, so the answer
+   * has to carry the name the client asked for rather than the upstream's.
+   */
+  label?: string;
 }
 
 /** What the router is serving, and what it knows about. */

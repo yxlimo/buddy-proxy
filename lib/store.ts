@@ -61,6 +61,9 @@ export function store(): DatabaseSync {
   db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
+  // The aggregate catalog's targets hang off its models, and the database has
+  // to know that to clean up after a model is deleted.
+  db.exec("PRAGMA foreign_keys = ON");
   db.exec(
     `CREATE TABLE IF NOT EXISTS secrets (
       id         TEXT PRIMARY KEY,

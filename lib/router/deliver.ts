@@ -110,6 +110,7 @@ export function deliverJson(
   from: UpstreamDialect,
   json: any,
   model: string,
+  onUsage?: (usage: any) => void,
 ): void {
   if (from === "openai" && json?.error) throw upstreamError(json.error);
   const payload =
@@ -118,6 +119,7 @@ export function deliverJson(
       : from === "openai"
         ? openaiToAnthropicResponse(json, model)
         : anthropicToOpenAIResponse(json, model);
+  onUsage?.(payload?.usage);
   ctx.body = payload;
 }
 
@@ -132,10 +134,12 @@ export function deliverJson(
 async function* watchFinish(
   chunks: AsyncIterable<Record<string, any>>,
   onFinish?: (reason: string) => void,
+  onUsage?: (usage: any) => void,
 ): AsyncGenerator<Record<string, any>> {
   for await (const chunk of chunks) {
     const reason = chunk?.choices?.[0]?.finish_reason;
     if (reason && onFinish) onFinish(String(reason));
+    if (chunk?.usage && onUsage) onUsage(chunk.usage);
     yield chunk;
   }
 }
@@ -154,17 +158,18 @@ export async function deliverOpenAIStream(
   dialect: Dialect,
   model: string,
   onFinish?: (reason: string) => void,
+  onUsage?: (usage: any) => void,
 ): Promise<void> {
   const upstream = await peekStream(body);
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
   sseHead(ctx);
   if (dialect === "openai") {
-    await pipeOpenAIChunks(upstream, ctx, onFinish);
+    await pipeOpenAIChunks(upstream, ctx, onFinish, onUsage);
     return;
   }
   try {
-    for await (const chunk of openaiStreamToAnthropic(watchFinish(readOpenAIChunks(upstream), onFinish), model)) {
+    for await (const chunk of openaiStreamToAnthropic(watchFinish(readOpenAIChunks(upstream), onFinish, onUsage), model)) {
       if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
@@ -181,6 +186,7 @@ export async function deliverAnthropicStream(
   dialect: Dialect,
   model: string,
   pingMs = 0,
+  onUsage?: (usage: any) => void,
 ): Promise<void> {
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
@@ -190,7 +196,7 @@ export async function deliverAnthropicStream(
     return;
   }
   try {
-    for await (const chunk of anthropicStreamToOpenAI(body, model)) {
+    for await (const chunk of anthropicStreamToOpenAI(body, model, onUsage)) {
       if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
@@ -205,6 +211,7 @@ export async function deliverOpenAIChunks(
   chunks: AsyncIterable<any>,
   dialect: Dialect,
   model: string,
+  onUsage?: (usage: any) => void,
 ): Promise<void> {
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
@@ -212,6 +219,7 @@ export async function deliverOpenAIChunks(
   if (dialect === "openai") {
     try {
       for await (const chunk of chunks) {
+        if (chunk?.usage && onUsage) onUsage(chunk.usage);
         if (!writeSafe(ctx, sseData(chunk))) break;
       }
       writeSafe(ctx, SSE_DONE);
@@ -240,9 +248,10 @@ async function pipeOpenAIChunks(
   body: ReadableStream<Uint8Array>,
   ctx: Koa.Context,
   onFinish?: (reason: string) => void,
+  onUsage?: (usage: any) => void,
 ): Promise<void> {
   try {
-    for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish)) {
+    for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish, onUsage)) {
       if (!writeSafe(ctx, sseData(chunk))) break;
     }
     writeSafe(ctx, SSE_DONE);

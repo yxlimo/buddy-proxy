@@ -121,6 +121,7 @@ lib/tokenrhythm/        TokenRhythm: the accounts, the wallet, the relay call
   wallet.ts             what the accounts have left, and which one to use
   models.ts             the model catalog
   transport.ts          the relay call
+lib/aggregate.ts        the published models: the catalog, the targets, the traffic
 lib/benefits.ts         the daily credits of the China accounts
 lib/session.ts          the session: read it, write it, lock it, refresh it
 lib/store.ts            the database: the credentials, the locks, the cache
@@ -142,6 +143,7 @@ always sees the same answers:
 
 ```bash
 test/smoke.sh       # the whole matrix against the recorded fixtures
+test/aggregate.sh   # the published models and the fallback behind them
 ```
 
 The matrix covers every upstream in both dialects, streaming and not, plus the
@@ -191,6 +193,47 @@ curl http://localhost:6450/v1/messages \
   -H "x-api-key: <key>" -H "Content-Type: application/json" \
   -d '{"model":"qoder/auto","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'
 ```
+
+## The published models (the root route)
+
+The root route publishes one list of models, and the database decides what is
+on it. With nothing in the database it publishes every upstream's models under
+their prefixed name (`qoder/glm-5.3`) — the list it always showed. Once the
+database holds a model, the database is the catalog: the panel decides which
+models exist, what they are called, and which upstream serves them.
+
+A published model has one or more targets:
+
+| | |
+|---|---|
+| `single` | everything goes to the first target |
+| `fallback` | the first target that answers wins; the ones before it failed |
+
+The fallback is what keeps a model alive when an upstream runs out of credit:
+the model is still in the catalog (a catalogue knows nothing about credits),
+the request fails on the first target, and the second one answers.
+
+The metadata of a published model comes from its targets, and where the
+targets disagree the smallest value wins — the model can only promise what
+every one of them can do. The panel can override any of it.
+
+The root route's inference is OpenAI only; the Anthropic path keeps taking the
+upstream in the model name.
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| `GET`  | `/v1/models` | the published models |
+| `POST` | `/v1/chat/completions` | a published model, with the fallback |
+| `POST` | `/admin/reload` | read the settings and the published models again |
+| `GET`  | `/admin/usage` | where the traffic went |
+
+The settings and the published models are read once and then kept, so the
+panel can change them without a restart — but nothing is picked up until
+someone asks for it, so the panel calls `/admin/reload` when it wants the
+change to take effect now.
+
+The traffic table counts every request against the target that served it, and
+against the ones that failed, with the tokens each one cost.
 
 ## Reference material
 

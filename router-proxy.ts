@@ -17,7 +17,7 @@
 //   Anthropic → Qoder  converted to Anthropic on the way in
 //   Anthropic → MiniMax passes through
 
-import { configString, configFlag, configNumber, logConfig } from "./lib/config.ts";
+import { configString, configFlag, configNumber, logConfig, reloadConfig } from "./lib/config.ts";
 import Koa from "koa";
 import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
@@ -57,13 +57,23 @@ import {
 } from "./lib/router/routes.ts";
 import {
   anthropicCatalog,
+  aggregateAnthropicCatalog,
+  aggregateCatalog,
+  aggregateOpenAICatalog,
   groupCatalog,
   openaiCatalog,
   qoderCatalogModels,
   workbuddyCatalogModels,
   minimaxCatalogModels,
+  type AggregateEntry,
   type CatalogGroup,
 } from "./lib/router/catalog.ts";
+import {
+  aggregateModels,
+  listAggregateUsage,
+  recordAggregateUsage,
+  reloadAggregate,
+} from "./lib/aggregate.ts";
 import { type BenefitUpstream } from "./lib/benefits.ts";
 import { fetchWorkBuddyCredits } from "./lib/workbuddy/credits.ts";
 import { BenefitsRunner } from "./lib/router/benefits.ts";
@@ -395,6 +405,92 @@ function routingContext(): RoutingContext {
 }
 
 /**
+ * The models the root route publishes.
+ *
+ * With nothing configured in the database this is every upstream's models under
+ * their prefixed name — the list the root route always showed. Once the
+ * database holds a model, the database is the catalog.
+ */
+function aggregateEntries(): AggregateEntry[] {
+  return aggregateCatalog(catalogGroups(), aggregateModels());
+}
+
+/** The published model a client asked for, if it is one of ours. */
+function findAggregate(id: string): AggregateEntry | undefined {
+  if (!id) return undefined;
+  return aggregateEntries().find((e) => e.id === id);
+}
+
+/**
+ * Send the request to the upstream behind a published model.
+ *
+ * With more than one target the first one that answers wins; the ones before
+ * it failed, and every attempt is counted so the panel can show where the
+ * traffic went and what it cost.
+ */
+async function handleAggregate(
+  ctx: Koa.Context,
+  entry: AggregateEntry,
+  body: Record<string, any>,
+  dialect: Dialect,
+): Promise<void> {
+  const stream = body.stream === true;
+  const rctx = routingContext();
+  let lastError: unknown = null;
+
+  for (const target of entry.targets) {
+    let route: Route;
+    try {
+      route = routeInGroup(target.group, target.upstreamModel, rctx);
+    } catch (e) {
+      lastError = e;
+      recordAggregateUsage({
+        modelId: entry.id,
+        group: target.group,
+        upstreamModel: target.upstreamModel,
+        ok: false,
+      });
+      continue;
+    }
+    // The client asked for the published name; the answer says the same, even
+    // though the upstream knows the model by another one.
+    route.label = entry.id;
+
+    let usage: any = null;
+    const uctx = upstreamContext();
+    uctx.onUsage = (u) => {
+      usage = u;
+    };
+    try {
+      await callUpstream(uctx, body, route, dialect, stream, ctx);
+      recordAggregateUsage({
+        modelId: entry.id,
+        group: target.group,
+        upstreamModel: target.upstreamModel,
+        ok: true,
+        promptTokens: usage?.prompt_tokens ?? usage?.input_tokens,
+        completionTokens: usage?.completion_tokens ?? usage?.output_tokens,
+      });
+      return;
+    } catch (e) {
+      lastError = e;
+      recordAggregateUsage({
+        modelId: entry.id,
+        group: target.group,
+        upstreamModel: target.upstreamModel,
+        ok: false,
+      });
+      // Once the answer has started there is nothing to fall back to.
+      if (ctx.res.headersSent) break;
+    }
+  }
+  sendError(
+    ctx,
+    lastError ?? new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502),
+  );
+}
+
+/**
  * The same endpoints, once per upstream.
  *
  * The plain `/v1/...` form takes the upstream in the model name
@@ -419,13 +515,35 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
     if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
     const groups = catalogGroups();
     if (group) ctx.body = groupCatalog(group, groups, dialect === "openai");
-    else if (dialect === "openai") ctx.body = openaiCatalog(groups);
-    else ctx.body = anthropicCatalog(groups);
+    else {
+      // The root route publishes one list: the aggregate.
+      const entries = aggregateEntries();
+      ctx.body = dialect === "openai" ? aggregateOpenAICatalog(entries) : aggregateAnthropicCatalog(entries);
+    }
   });
 }
 
 app.use(router.routes());
 app.use(router.allowedMethods());
+
+/**
+ * Read the configuration again.
+ *
+ * The settings and the published models are read once and then kept, so the
+ * panel can change them without a restart. The panel calls this when it wants
+ * the change to take effect now.
+ */
+router.post("/admin/reload", (ctx) => {
+  const settings = reloadConfig();
+  const models = reloadAggregate();
+  console.log(`[RELOAD] ${settings} settings, ${models} published models`);
+  ctx.body = { reloaded: true, settings, models };
+});
+
+/** What the traffic table holds, for the panel. */
+router.get("/admin/usage", (ctx) => {
+  ctx.body = { data: listAggregateUsage() };
+});
 
 async function handle(
   ctx: Koa.Context,
@@ -433,6 +551,18 @@ async function handle(
   group?: UpstreamGroup,
 ): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, any>;
+
+  // The root route serves the published models. With nothing configured in the
+  // database those are the prefixed ones, so this is the old behaviour; once
+  // the panel holds a model, the panel decides what the root route publishes.
+  if (!group) {
+    const entry = findAggregate(String(body.model ?? "").trim());
+    if (entry) {
+      await handleAggregate(ctx, entry, body, dialect);
+      return;
+    }
+  }
+
   let route: Route;
   try {
     const rctx = routingContext();
@@ -444,18 +574,29 @@ async function handle(
 
   const stream = body.stream === true;
   try {
-    const uctx = upstreamContext();
-    if (route.upstream === "qoder") {
-      await toQoder(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "workbuddy") {
-      await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "tokenrhythm") {
-      await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
-    } else {
-      await toMinimax(uctx, body, route, dialect, stream, ctx);
-    }
+    await callUpstream(upstreamContext(), body, route, dialect, stream, ctx);
   } catch (e) {
     sendError(ctx, e);
+  }
+}
+
+/** Hand the request to the upstream the route points at. */
+async function callUpstream(
+  uctx: UpstreamContext,
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  ctx: Koa.Context,
+): Promise<void> {
+  if (route.upstream === "qoder") {
+    await toQoder(uctx, body, route, dialect, stream, ctx);
+  } else if (route.upstream === "workbuddy") {
+    await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
+  } else if (route.upstream === "tokenrhythm") {
+    await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
+  } else {
+    await toMinimax(uctx, body, route, dialect, stream, ctx);
   }
 }
 

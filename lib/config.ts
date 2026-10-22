@@ -151,6 +151,34 @@ export function configClear(key: string): void {
   }
 }
 
+/**
+ * Read the settings again.
+ *
+ * The service does not poll the database; a change waits until someone asks
+ * for it to be picked up. This is that ask: the panel calls it after writing,
+ * and the next request sees the new value.
+ */
+export function reloadConfig(): number {
+  answers.clear();
+  let count = 0;
+  for (const setting of settings.values()) {
+    // Ask again through the same path, so the source is recorded the same way.
+    switch (setting.type) {
+      case "boolean":
+        configFlag(setting.key, Boolean(setting.fallback));
+        break;
+      case "number":
+        configNumber(setting.key, Number(setting.fallback));
+        break;
+      default:
+        configString(setting.key, String(setting.fallback));
+        break;
+    }
+    count++;
+  }
+  return count;
+}
+
 /* ------------------------------------------------------------------ *
  * Looking at it
  * ------------------------------------------------------------------ */

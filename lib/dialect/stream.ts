@@ -18,6 +18,7 @@ type Json = Record<string, any>;
 export async function* openaiStreamToAnthropic(
   chunks: AsyncIterable<Json>,
   model: string,
+  onUsage?: (usage: Json) => void,
 ): AsyncGenerator<string> {
   const messageId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   let started = false;
@@ -168,6 +169,12 @@ export async function* openaiStreamToAnthropic(
       ...(reasoningTokens ? { output_tokens_details: { thinking_tokens: reasoningTokens } } : {}),
     },
   });
+  onUsage?.({
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    ...(cachedTokens ? { cache_read_input_tokens: cachedTokens } : {}),
+    ...(reasoningTokens ? { output_tokens_details: { thinking_tokens: reasoningTokens } } : {}),
+  });
   yield sseEvent("message_stop", { type: "message_stop" });
 }
 
@@ -175,6 +182,7 @@ export async function* openaiStreamToAnthropic(
 export async function* anthropicStreamToOpenAI(
   body: ReadableStream<Uint8Array>,
   model: string,
+  onUsage?: (usage: Json) => void,
 ): AsyncGenerator<string> {
   const completionId = `chatcmpl-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const created = Math.floor(Date.now() / 1000);
@@ -283,13 +291,17 @@ export async function* anthropicStreamToOpenAI(
     }
     if (evt.type === "message_stop") {
       if (!finished) yield chunk({}, "stop");
-      yield chunk({}, null, openaiUsage(inputTokens, outputTokens, cachedTokens));
+      const usage = openaiUsage(inputTokens, outputTokens, cachedTokens);
+      onUsage?.(usage);
+      yield chunk({}, null, usage);
       yield SSE_DONE;
       return;
     }
   }
   if (!finished) yield chunk({}, "stop");
-  yield chunk({}, null, openaiUsage(inputTokens, outputTokens, cachedTokens));
+  const usage = openaiUsage(inputTokens, outputTokens, cachedTokens);
+  onUsage?.(usage);
+  yield chunk({}, null, usage);
   yield SSE_DONE;
 }
 
