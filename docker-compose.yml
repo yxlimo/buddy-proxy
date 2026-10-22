@@ -24,13 +24,10 @@ services:
       TOKENRHYTHM: "true"
       # Anthropic and OpenAI dialects, routed per model name.
       ROUTER_PORT: "6450"
-      # The MiniMax session lives with the others.
-      MINIMAX_DATA_DIR: /data
-      QODER_DATA_DIR: /data
-      # The WorkBuddy session lives next to the Qoder one.
-      WORKBUDDY_DATA_DIR: /data
-      # The TokenRhythm sessions live in the same place.
-      TOKENRHYTHM_DATA_DIR: /data
+      # Everything the service keeps lives in this one directory: the database
+      # with the credentials and the settings, the credential log, the salt the
+      # device fingerprint is derived from. It has to survive a rebuild.
+      BUDDY_DATA_DIR: /data
       # The image healthcheck reads the port from here.
       HEALTH_PORT: "6450"
       # The daily check-in of the China accounts. It runs on its own, so this is

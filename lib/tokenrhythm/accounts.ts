@@ -20,7 +20,8 @@ import { configString } from "../config.ts";
 import { readEnvValue } from "../env.ts";
 import fs from "node:fs";
 import path from "node:path";
-import { dataDirFor, readSession, writeSession } from "../session.ts";
+import { legacyPaths, readSession, writeSession } from "../session.ts";
+import { dataDir as sharedDataDir } from "../paths.ts";
 import { getSecret, setSecret } from "../store.ts";
 
 export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
@@ -96,7 +97,7 @@ export interface TokenRhythmSession {
 }
 
 export function dataDir(): string {
-  return dataDirFor("TOKENRHYTHM_DATA_DIR", ".tokenrhythm-proxy");
+  return sharedDataDir();
 }
 
 /** Where the session lives in the database. */
@@ -105,8 +106,8 @@ export function sessionId(index: number): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(index: number): string {
-  return path.join(dataDir(), `tokenrhythm-session.${index}.json`);
+export function legacySessionPath(index: number): string[] {
+  return legacyPaths(`tokenrhythm-session.${index}.json`);
 }
 
 export function loadSession(index: number): TokenRhythmSession | null {
@@ -156,7 +157,10 @@ export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSessi
   const session: TokenRhythmSession = {
     index: tenant.index,
     cookie,
-    csrf: (jar.find((c) => c.startsWith("tr_csrf=")) ?? "").split("=")[1] ?? "",
+    // The cookie's value ends at the first ";" — the rest of the Set-Cookie
+    // line is attributes ("Max-Age=…"), and splitting on "=" alone would keep
+    // them in the value.
+    csrf: cookieValue(jar, "tr_csrf"),
     userId: String(body?.data?.user?.id ?? ""),
     name: String(body?.data?.user?.name ?? ""),
     obtainedAtMs: Date.now(),
@@ -164,6 +168,34 @@ export async function login(tenant: TokenRhythmTenant): Promise<TokenRhythmSessi
   };
   saveSession(session);
   return session;
+}
+
+/** The value of one cookie in a Set-Cookie list. */
+export function cookieValue(jar: string[], name: string): string {
+  const hit = jar.find((c) => c.startsWith(`${name}=`));
+  if (!hit) return "";
+  return hit.split(";")[0].split("=").slice(1).join("=");
+}
+
+/**
+ * The headers a write request needs.
+ *
+ * The platform checks three things on a POST: the session cookie, a CSRF
+ * token sent twice — once as the `tr_csrf` cookie, once as the
+ * `X-CSRF-Token` header — and the browser's fetch metadata. The last one
+ * is why a plain `fetch` from a script is refused: the header says the
+ * request came from the page itself, and a cross-site page cannot fake it.
+ * The browser sets `Sec-Fetch-Site`; a script has to say it itself.
+ */
+export function writeHeaders(session: TokenRhythmSession): Record<string, string> {
+  return {
+    Accept: "application/json",
+    "content-type": "application/json",
+    Cookie: session.cookie,
+    "X-CSRF-Token": session.csrf,
+    "Sec-Fetch-Site": "same-origin",
+    Origin: TOKENRHYTHM_API_BASE,
+  };
 }
 
 /** The session for a tenant: the stored one, or a fresh login. */

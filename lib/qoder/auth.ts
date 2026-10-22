@@ -23,7 +23,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { dataDir as sharedDataDir } from "../paths.ts";
 
 export type QoderRegion = "cn" | "global";
 
@@ -95,7 +96,7 @@ export interface QoderSession {
 }
 
 export function dataDir(): string {
-  return dataDirFor("QODER_DATA_DIR", ".qoder-proxy");
+  return sharedDataDir();
 }
 
 /** Where the session lives in the database. */
@@ -104,10 +105,8 @@ export function sessionId(region: QoderRegion = REGION): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(region: QoderRegion = REGION): string {
-  const explicit = readEnvValue("QODER_CREDENTIAL_FILE") || "";
-  if (explicit) return explicit;
-  return path.join(dataDir(), `qoder-session.${region}.json`);
+export function legacySessionPath(region: QoderRegion = REGION): string[] {
+  return legacyPaths(`qoder-session.${region}.json`);
 }
 
 export function loginHint(region: QoderRegion = REGION): string {

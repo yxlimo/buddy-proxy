@@ -21,7 +21,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
-import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { dataDir as sharedDataDir } from "../paths.ts";
 
 export type WorkBuddyRegion = "cn";
 
@@ -76,7 +77,7 @@ export interface WorkBuddySession {
 }
 
 export function dataDir(): string {
-  return dataDirFor("WORKBUDDY_DATA_DIR", ".workbuddy-proxy");
+  return sharedDataDir();
 }
 
 /** Where the session lives in the database. */
@@ -85,10 +86,8 @@ export function sessionId(region: WorkBuddyRegion = "cn"): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(region: WorkBuddyRegion = "cn"): string {
-  const explicit = readEnvValue("WORKBUDDY_CREDENTIAL_FILE") || "";
-  if (explicit) return explicit;
-  return path.join(dataDir(), `workbuddy-session.${region}.json`);
+export function legacySessionPath(region: WorkBuddyRegion = "cn"): string[] {
+  return legacyPaths(`workbuddy-session.${region}.json`);
 }
 
 function loginHint(region: WorkBuddyRegion = "cn"): string {

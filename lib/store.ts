@@ -19,10 +19,9 @@
 // Node 24 ships SQLite, so there is no native module to compile.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { readEnvString } from "./env.ts";
+import { dbPath } from "./paths.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -36,13 +35,7 @@ export interface SecretRow {
 
 let db: DatabaseSync | null = null;
 
-/** Where the database file lives. */
-export function dbPath(): string {
-  const explicit = readEnvString("BUDDY_DB_PATH", "");
-  if (explicit) return explicit;
-  if (fs.existsSync("/data")) return "/data/buddy.db";
-  return path.join(os.homedir(), ".buddy-proxy", "buddy.db");
-}
+export { dbPath };
 
 /**
  * The open database.

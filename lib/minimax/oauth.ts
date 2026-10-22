@@ -27,7 +27,8 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { dataDir as sharedDataDir } from "../paths.ts";
 import { deleteSecret } from "../store.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
@@ -79,7 +80,7 @@ interface Grant {
 }
 
 export function dataDir(): string {
-  return dataDirFor("MINIMAX_DATA_DIR", ".minimax-proxy");
+  return sharedDataDir();
 }
 
 /** Where the session lives in the database. */
@@ -88,10 +89,8 @@ export function sessionId(): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(): string {
-  const explicit = readEnvValue("MINIMAX_CREDENTIAL_FILE") || "";
-  if (explicit) return explicit;
-  return path.join(dataDir(), "minimax-session.json");
+export function legacySessionPath(): string[] {
+  return legacyPaths("minimax-session.json");
 }
 
 function loginHint(): string {

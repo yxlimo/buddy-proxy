@@ -84,6 +84,7 @@ router-proxy.ts        the entry point: the switches, the routes, the startup
 config-cli.ts          look at the settings, and change them
 lib/config.ts          the settings, and where they come from
 lib/store.ts           the database: the credentials, the settings, the cache
+lib/paths.ts           the one directory everything lives in
 lib/router/            the router's inside
   routes.ts            where a request goes: the model name and the path
   catalog.ts           the model lists, in both dialects
@@ -401,8 +402,6 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_BASE_URL` | `https://agent.minimax.cn/mavis/api/v1/llm/v1` | gateway base URL |
 | `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
 | `MINIMAX_AUTH_MODE` | `oauth` | `oauth` (proxy's own session) or `file` (read-only app store) |
-| `MINIMAX_DATA_DIR` | `~/.minimax-proxy` | where the oauth session lived as a file (`/data` in Docker) |
-| `MINIMAX_CREDENTIAL_FILE` | — | explicit session file path, overrides `MINIMAX_DATA_DIR` |
 | `MINIMAX_CODE` | `false` | switch this reverse proxy on; a disabled one serves nothing and looks for no credential |
 | `MINIMAX_LOG_BODY` | `false` | log the thinking / effort fields of every request |
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
@@ -417,9 +416,11 @@ Every secret the gateway holds is in one SQLite file: the sessions of the four
 clients, the keys the clients authenticate with, the relay station's accounts
 and the salt the device fingerprint is derived from.
 
+One directory holds all of it — the database, the credential log and the salt:
+
 | Variable | Default | What |
 |----------|---------|------|
-| `BUDDY_DB_PATH` | `/data/buddy.db` | the database file (`~/.buddy-proxy/buddy.db` outside Docker) |
+| `BUDDY_DATA_DIR` | `/data` (`~/.buddy-proxy` outside Docker) | the directory: `buddy.db`, `auth.log`, `identity.salt` |
 
 ```bash
 # what is in there
@@ -641,7 +642,6 @@ used from, a disabled app, a lapsed login).
 | `MINIMAX_CODE` | `false` | switch the MiniMax Code upstream on |
 | `QODER_GLOBAL` | `false` | switch the Qoder global region on |
 | `QODER_CN` | `false` | switch the Qoder China region on |
-| `QODER_DATA_DIR` | `~/.qoder-proxy` | where the session file lives (`/data` in Docker) |
 | `QODER_AUTH_CACHE_MS` | `5000` | how long a read of the session is reused |
 | `QODER_AUTH_WARN_MS` | `604800000` | warning window before expiry (a Qoder token lasts ~30 days) |
 | `QODER_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
@@ -705,7 +705,6 @@ rejected with code 11133, so it is left out.
 | `WORKBUDDY_CN` | `false` | switch the WorkBuddy China upstream on |
 | `WORKBUDDY_CN_BASE` | `https://www.workbuddy.cn` | the host that serves the account |
 | `WORKBUDDY_CN_ORIGIN` | `https://www.codebuddy.cn` | Origin / Referer on the auth calls |
-| `WORKBUDDY_DATA_DIR` | `~/.workbuddy-proxy` | where the session file lives (`/data` in Docker) |
 | `WORKBUDDY_CATALOG_TTL_MS` | `1800000` | how long the upstream's catalogue is trusted |
 | `WORKBUDDY_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
 | `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |
@@ -806,7 +805,6 @@ One model for now: `deepseek-v4.1-flash-1017`, a million tokens of context and
 | `TOKEN_RHYTHM_<n>_ACCOUNT` | — | the account of the nth tenant |
 | `TOKEN_RHYTHM_<n>_PASSWORD` | — | its password |
 | `TOKEN_RHYTHM_<n>_API_KEY` | — | the key its inference uses |
-| `TOKENRHYTHM_DATA_DIR` | `~/.tokenrhythm-proxy` | where the sessions live (`/data` in Docker) |
 | `TOKENRHYTHM_API_BASE` | `https://tokenrhythm.studio` | the platform |
 | `TOKENRHYTHM_INFER_BASE` | `{api}/v1` | where the models are called |
 

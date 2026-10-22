@@ -12,10 +12,9 @@
 // database.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { AuthError, type Credential } from "./credential.ts";
-import { readEnvString } from "./env.ts";
+import { dataDir, legacyDirs } from "./paths.ts";
 import { LockUnavailableError, getSecret, setSecret, withLock } from "./store.ts";
 
 /** The fields every session file has. */
@@ -27,13 +26,14 @@ export interface SessionTokens {
 }
 
 /**
- * Where the sessions live: the environment override, else the mounted volume,
- * else the home directory.
+ * Where a session file used to live, and where it may still be.
+ *
+ * The first entry is the current directory; the rest are the ones an older
+ * version used, so a machine that has not been moved yet still finds its
+ * session and does not have to log in again.
  */
-export function dataDirFor(envVar: string, fallback: string): string {
-  const explicit = readEnvString(envVar, "");
-  if (explicit) return explicit;
-  return fs.existsSync("/data") ? "/data" : path.join(os.homedir(), fallback);
+export function legacyPaths(name: string): string[] {
+  return [path.join(dataDir(), name), ...legacyDirs().map((d) => path.join(d, name))];
 }
 
 /** The default check: a session with both tokens in it. */
@@ -51,15 +51,19 @@ export function hasTokens(raw: any): boolean {
 export function readSession<T>(
   id: string,
   valid: (raw: any) => boolean = hasTokens,
-  legacyFile?: string,
+  legacyFile?: string | string[],
 ): T | null {
   const fromDb = getSecret<T>(id);
   if (fromDb) return valid(fromDb) ? fromDb : null;
   if (!legacyFile) return null;
-  const raw = readLegacyFile<T>(legacyFile, valid);
-  if (!raw) return null;
-  setSecret(id, "session", raw);
-  return raw;
+  const files = Array.isArray(legacyFile) ? legacyFile : [legacyFile];
+  for (const file of files) {
+    const raw = readLegacyFile<T>(file, valid);
+    if (!raw) continue;
+    setSecret(id, "session", raw);
+    return raw;
+  }
+  return null;
 }
 
 /** Read the session from the file it used to live in. */
