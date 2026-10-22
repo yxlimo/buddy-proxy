@@ -462,17 +462,17 @@ check(
   JSON.stringify(oneBalance.body?.balances?.map((b: any) => b.upstreamId)),
 );
 
-// GetSystemStatus：改设置之前 pendingRestart 是假，改过之后是真。
+// GetSystemStatus：面板能改的设置是热的，改完就生效，没有待重启的东西。
 const before = await call("GetSystemStatus");
 check("改之前没有待重启", before.body?.pendingRestart === false, JSON.stringify(before.body?.pendingRestart));
 const setConfig = await call("SetConfig", { key: "ADMIN_CORS_ORIGINS", value: "123456" });
 check("配置改得掉", setConfig.body?.ok === true, JSON.stringify(setConfig.body));
-check("改完要重启", setConfig.body?.pendingRestart === true);
+check("改完立刻生效", setConfig.body?.pendingRestart === false, JSON.stringify(setConfig.body));
 const after = await call("GetSystemStatus");
-check("改之后有待重启", after.body?.pendingRestart === true, JSON.stringify(after.body?.pendingRestart));
+check("改之后也没有待重启", after.body?.pendingRestart === false, JSON.stringify(after.body?.pendingRestart));
 const setUpstream = await call("SetUpstreamEnabled", { upstreamId: "qoder-cn", enabled: true });
 check("上游开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
-check("改了上游要重启", setUpstream.body?.pendingRestart === true);
+check("改了上游立刻生效", setUpstream.body?.pendingRestart === false, JSON.stringify(setUpstream.body));
 const listConfigAfter = await call("ListConfig");
 check(
   "改了之后配置项的来源是 database",
@@ -486,7 +486,8 @@ check("上游开关改得掉", switched.body?.ok === true, JSON.stringify(switch
 const afterSwitch = await call("ListUpstreams");
 const switchedUpstream = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "qoder");
 check("改完 enabled 是改后的值", switchedUpstream?.enabled === true, JSON.stringify(switchedUpstream));
-check("改完 pending 是真", switchedUpstream?.pending === true, JSON.stringify(switchedUpstream));
+// 开关是热的：改完就生效，没有「待重启」。
+check("改完 pending 是假", switchedUpstream?.pending === false, JSON.stringify(switchedUpstream));
 const untouched = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "minimax");
 check("没动的上游 pending 是假", untouched?.pending === false, JSON.stringify(untouched));
 

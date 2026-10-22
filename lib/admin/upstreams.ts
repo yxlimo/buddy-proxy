@@ -4,11 +4,17 @@
 // 凭据是什么状态、账号上还剩多少。这个模块是唯一知道怎么去问的地方，
 // 两边共用，免得各问各的、答得不一样。
 //
-// 开关在启动时读一次（跟 lib/config.ts 的规矩一样）：改了要重启才生效，
-// 所以面板改开关之后看到的是「待重启」，不是立刻变。
+// 开关是热的：面板改了，配置重新读一遍，下一个请求就是新的 —— 不用重启。
+// 所以这里没有「待重启」那一套。
 
-import { configFlag, configNumber, configOverrides, configString } from "../config.ts";
-import { parseBool } from "../env.ts";
+import {
+  configFlag,
+  configNumber,
+  configOverride,
+  configString,
+  markHotSetting,
+  reloadConfig,
+} from "../config.ts";
 import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
 import { credentialStatus, readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
@@ -34,15 +40,6 @@ import {
 /** 上游的 id。跟聚合路由里的分组名一致。 */
 export type UpstreamId = "minimax" | "qoder" | "qoder-cn" | "workbuddy-cn" | "tokenrhythm";
 
-/** 上游的开关。启动时读一次，改了要重启。 */
-export const UPSTREAM_FLAGS: Record<UpstreamId, boolean> = {
-  minimax: configFlag("MINIMAX_CODE", false),
-  qoder: configFlag("QODER_GLOBAL", false),
-  "qoder-cn": configFlag("QODER_CN", false),
-  "workbuddy-cn": configFlag("WORKBUDDY_CN", false),
-  tokenrhythm: configFlag("TOKENRHYTHM", false),
-};
-
 /** 上游的开关对应的配置键。 */
 export const UPSTREAM_FLAG_KEYS: Record<UpstreamId, string> = {
   minimax: "MINIMAX_CODE",
@@ -51,6 +48,20 @@ export const UPSTREAM_FLAG_KEYS: Record<UpstreamId, string> = {
   "workbuddy-cn": "WORKBUDDY_CN",
   tokenrhythm: "TOKENRHYTHM",
 };
+
+// The switches are read on every request, so the panel can change one and the
+// next request sees it — no restart.
+for (const key of Object.values(UPSTREAM_FLAG_KEYS)) markHotSetting(key);
+
+/**
+ * 这个上游开着吗？问的是现在在生效的值。
+ *
+ * 面板改开关之后写进数据库，配置重新读一遍，下一个请求就是新的了 —— 所以这里
+ * 不需要「待重启」那一套。
+ */
+export function upstreamEnabled(id: UpstreamId): boolean {
+  return configFlag(UPSTREAM_FLAG_KEYS[id], false);
+}
 
 /** 上游的名字，给人看的。 */
 export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
@@ -73,24 +84,31 @@ export interface UpstreamState {
 }
 
 /**
+ * 打开或关掉一个上游。
+ *
+ * 开关是热的：写进数据库之后重新读一遍，下一个请求就是新的 —— 不用重启。
+ */
+export function setUpstreamEnabled(id: UpstreamId, enabled: boolean): { ok: boolean; message: string } {
+  const key = UPSTREAM_FLAG_KEYS[id];
+  if (!key) return { ok: false, message: `不认识的上游：${id}` };
+  configOverride(key, enabled ? "true" : "false");
+  reloadConfig();
+  return { ok: true, message: `${UPSTREAM_LABELS[id]} ${enabled ? "开着" : "关了"}，已经生效` };
+}
+
+/**
  * 每个上游的开关状态。
  *
- * 开关有两个来源：进程启动时读的那份（真的在生效的那份），以及数据库里的
- * 覆盖值（面板改的，还没重启）。所以：
+ * 开关是热的：面板改了，配置重读一遍，下一个请求就是新的。所以
  *
- *   enabled  数据库里有就用数据库的，没有就用启动时的 —— 也就是「将要生效」
- *   pending  两个不一样就是要重启
- *
- * 数据库只读一次：五个上游查五遍没有意义。
+ *   enabled  现在在生效的值
+ *   pending  永远是假 —— 没有「改了还没生效」这回事
  */
 export function upstreamStates(): Record<UpstreamId, UpstreamState> {
-  const overrides = new Map(configOverrides().map((row) => [row.key, row.value]));
   const out = {} as Record<UpstreamId, UpstreamState>;
   for (const id of UPSTREAM_IDS) {
-    const raw = overrides.get(UPSTREAM_FLAG_KEYS[id]);
-    const parsed = raw === undefined ? null : parseBool(raw);
-    const enabled = parsed ?? UPSTREAM_FLAGS[id];
-    out[id] = { enabled, pending: enabled !== UPSTREAM_FLAGS[id] };
+    const enabled = upstreamEnabled(id);
+    out[id] = { enabled, pending: false };
   }
   return out;
 }
@@ -145,11 +163,15 @@ export function upstreamRegion(id: UpstreamId): string {
  * ------------------------------------------------------------------ */
 
 /** MiniMax 公布的模型。上游关着就一个也不公布。 */
-export const MINIMAX_VISIBLE: MiniMaxModel[] = UPSTREAM_FLAGS.minimax ? MINIMAX_MODELS : [];
+export function minimaxVisible(): MiniMaxModel[] {
+  return upstreamEnabled("minimax") ? MINIMAX_MODELS : [];
+}
 
 /** Qoder 全球区与中国区各自能服务的模型。 */
-export const QODER_GLOBAL: QoderModel[] = UPSTREAM_FLAGS.qoder ? qoderModelsForRegion("global") : [];
-export const QODER_CN: QoderModel[] = UPSTREAM_FLAGS["qoder-cn"] ? qoderModelsForRegion("cn") : [];
+export function qoderVisible(region: QoderRegion): QoderModel[] {
+  const id: UpstreamId = region === "cn" ? "qoder-cn" : "qoder";
+  return upstreamEnabled(id) ? qoderModelsForRegion(region) : [];
+}
 
 /**
  * 两个区的全部模型，开没开都算。
@@ -165,8 +187,11 @@ export const QODER_CN_ALL: QoderModel[] = qoderModelsForRegion("cn");
  *
  * 上游自己发布的目录才是准的（它不发客户端版本就换模型），快照只是兜底。
  * 目录放在这里，是因为 /health、面板和路由都要看同一份。
+ *
+ * 快照一直都在：上游关着的时候不公布它，开着的时候立刻就有模型可公布 ——
+ * 不用等上游那份目录下来。
  */
-let workbuddyModels: WorkBuddyModel[] = UPSTREAM_FLAGS["workbuddy-cn"] ? workBuddyFallbackModels() : [];
+let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
 
 /** WorkBuddy 现在的模型目录。 */
 export function workbuddyCatalog(): WorkBuddyModel[] {
@@ -186,8 +211,8 @@ export function workbuddyModelIds(): Set<string> {
 /** 现在开着的 Qoder 区域。 */
 export function qoderRegions(): QoderRegion[] {
   return [
-    ...(UPSTREAM_FLAGS.qoder ? (["global"] as QoderRegion[]) : []),
-    ...(UPSTREAM_FLAGS["qoder-cn"] ? (["cn"] as QoderRegion[]) : []),
+    ...(upstreamEnabled("qoder") ? (["global"] as QoderRegion[]) : []),
+    ...(upstreamEnabled("qoder-cn") ? (["cn"] as QoderRegion[]) : []),
   ];
 }
 
@@ -199,11 +224,16 @@ export function qoderRegions(): QoderRegion[] {
  */
 export function catalogGroups(): CatalogGroup[] {
   const groups: CatalogGroup[] = [];
-  if (QODER_GLOBAL.length) groups.push({ group: "qoder", models: qoderCatalogModels(QODER_GLOBAL) });
-  if (QODER_CN.length) groups.push({ group: "qoder-cn", models: qoderCatalogModels(QODER_CN) });
-  if (workbuddyModels.length) groups.push({ group: "workbuddy-cn", models: workbuddyCatalogModels(workbuddyModels) });
-  if (MINIMAX_VISIBLE.length) groups.push({ group: "minimax", models: minimaxCatalogModels(MINIMAX_VISIBLE) });
-  if (UPSTREAM_FLAGS.tokenrhythm) groups.push({ group: "tokenrhythm", models: tokenRhythmCatalogModels() });
+  const qoderGlobal = qoderVisible("global");
+  const qoderCn = qoderVisible("cn");
+  if (qoderGlobal.length) groups.push({ group: "qoder", models: qoderCatalogModels(qoderGlobal) });
+  if (qoderCn.length) groups.push({ group: "qoder-cn", models: qoderCatalogModels(qoderCn) });
+  if (upstreamEnabled("workbuddy-cn") && workbuddyModels.length) {
+    groups.push({ group: "workbuddy-cn", models: workbuddyCatalogModels(workbuddyModels) });
+  }
+  const minimax = minimaxVisible();
+  if (minimax.length) groups.push({ group: "minimax", models: minimaxCatalogModels(minimax) });
+  if (upstreamEnabled("tokenrhythm")) groups.push({ group: "tokenrhythm", models: tokenRhythmCatalogModels() });
   return groups;
 }
 
@@ -211,15 +241,15 @@ export function catalogGroups(): CatalogGroup[] {
 export function upstreamModelCount(id: UpstreamId): number {
   switch (id) {
     case "minimax":
-      return MINIMAX_VISIBLE.length;
+      return minimaxVisible().length;
     case "qoder":
-      return QODER_GLOBAL.length;
+      return qoderVisible("global").length;
     case "qoder-cn":
-      return QODER_CN.length;
+      return qoderVisible("cn").length;
     case "workbuddy-cn":
-      return workbuddyModels.length;
+      return upstreamEnabled("workbuddy-cn") ? workbuddyModels.length : 0;
     case "tokenrhythm":
-      return UPSTREAM_FLAGS.tokenrhythm ? tokenRhythmCatalogModels().length : 0;
+      return upstreamEnabled("tokenrhythm") ? tokenRhythmCatalogModels().length : 0;
   }
 }
 

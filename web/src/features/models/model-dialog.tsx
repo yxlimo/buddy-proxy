@@ -157,7 +157,12 @@ export function fromDraft(draft: ModelDraft): PublishedModel {
           ...create(PublishedTargetSchema),
           groupName: target.groupName.trim(),
           upstreamModel: target.upstreamModel.trim(),
-          weight: Number(target.weight) || 1,
+          // single 策略不看权重：只走权重最大的那一个（权重一样就按顺序）。
+          // 草稿里残留的权重不带进请求，统一发 1。
+          weight:
+            draft.strategy === 'fallback'
+              ? Number(target.weight) || 1
+              : 1,
           enabled: target.enabled,
           // requests / failed 是网关的计数，只读：保存时会被覆盖。
           requests: 0n,
@@ -227,8 +232,8 @@ export function ModelDialog({
             {model ? '改主路由模型' : '新建一个主路由模型'}
           </DialogTitle>
           <DialogDescription>
-            对外公布一个 id，背后挂几个上游模型。single 是走权重最大的那个，
-            fallback 是它挂了再换下一个。
+            对外公布一个 id，背后挂几个上游模型。single 是只走一个目标，
+            fallback 是它挂了再换下一个（按权重从大到小）。
           </DialogDescription>
         </DialogHeader>
 
@@ -442,20 +447,24 @@ export function ModelDialog({
                     }
                   />
                 </div>
-                <div className='grid gap-2'>
-                  <Label htmlFor={`target-weight-${index}`}>权重</Label>
-                  <Input
-                    id={`target-weight-${index}`}
-                    inputMode='numeric'
-                    value={target.weight}
-                    onChange={(event) =>
-                      patchTarget(index, { weight: event.target.value })
-                    }
-                  />
-                  <p className='text-xs text-muted-foreground'>
-                    权重大的先试，失败了才试小的。
-                  </p>
-                </div>
+                {/* 权重只有 fallback 用得上：single 只走一个目标，权重没意义，
+                    整块藏掉（不是禁用）。 */}
+                {draft.strategy === 'fallback' ? (
+                  <div className='grid gap-2'>
+                    <Label htmlFor={`target-weight-${index}`}>权重</Label>
+                    <Input
+                      id={`target-weight-${index}`}
+                      inputMode='numeric'
+                      value={target.weight}
+                      onChange={(event) =>
+                        patchTarget(index, { weight: event.target.value })
+                      }
+                    />
+                    <p className='text-xs text-muted-foreground'>
+                      权重大的先试，失败了才试小的。
+                    </p>
+                  </div>
+                ) : null}
                 {!targetFilled(target) ? (
                   <p className='text-xs text-destructive sm:col-span-2'>
                     这一行还没填全：上游组和上游模型 id 都要填。

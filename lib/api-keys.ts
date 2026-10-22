@@ -10,13 +10,21 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configFlag } from "./config.ts";
+import { configFlag, markHotSetting } from "./config.ts";
 import { readEnvValue } from "./env.ts";
 import { getSecret, setSecret } from "./store.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export const REQUIRE_API_KEY = configFlag("REQUIRE_API_KEY", false);
+// The front door is checked on every request, so the switch is hot: the panel
+// turns it on and the next request meets the locked door.
+markHotSetting("REQUIRE_API_KEY");
+
+/** Does the front door need a key? The value in use right now. */
+export function requireApiKey(): boolean {
+  return configFlag("REQUIRE_API_KEY", false);
+}
+
 // The file the keys used to live in. It is only read once, when the database
 // has no keys yet, so it stays a path the deployment decides.
 export const KEYS_FILE = readEnvValue("KEYS_FILE") || path.join(HERE, "..", "api-keys.json");
@@ -62,7 +70,7 @@ export function extractToken(headers: Record<string, unknown>): string {
 export function authenticate(headers: Record<string, unknown>, keys: KeyStore): string | null {
   const tok = extractToken(headers);
   // Public mode (default): accept anything, even a blank token.
-  if (!REQUIRE_API_KEY) return "public";
+  if (!requireApiKey()) return "public";
   for (const [name, key] of Object.entries(keys)) if (tok === key) return name;
   return null;
 }

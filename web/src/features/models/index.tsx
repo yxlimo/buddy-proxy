@@ -95,6 +95,9 @@ export function PublishedModelsPage() {
   }
 
   const list = models.data.models
+  // 根路由现在真的公布了几个：模型在库里不等于公布了（上游全关着、
+  // 目标模型上游没了，就没人能接）。
+  const publishedCount = list.filter((model) => model.published).length
 
   return (
     <PageShell
@@ -111,6 +114,9 @@ export function PublishedModelsPage() {
         <CardHeader>
           <CardTitle className='text-base'>主路由模型</CardTitle>
           <CardDescription>
+            <span>
+              根路由现在公布 {publishedCount} 个（共 {list.length} 个）。
+            </span>{' '}
             目标分到了多少请求，是网关跑出来的统计。
           </CardDescription>
         </CardHeader>
@@ -148,9 +154,16 @@ export function PublishedModelsPage() {
                         <span className='font-mono text-xs font-medium'>
                           {model.id}
                         </span>
-                        {!model.enabled ? (
-                          <Badge variant='secondary'>已停用</Badge>
-                        ) : null}
+                        <div className='flex flex-wrap gap-1'>
+                          {!model.enabled ? (
+                            <Badge variant='secondary'>已停用</Badge>
+                          ) : null}
+                          {/* 库里有不等于根路由公布了：上游关着、或者目标
+                              模型的上游没了，都没人能接。 */}
+                          {model.published ? null : (
+                            <Badge variant='outline'>未公布</Badge>
+                          )}
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell>{model.displayName || '—'}</TableCell>

@@ -481,8 +481,8 @@ section("上游关掉的时候");
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
 const stillThere = await fetch(`${base}/v1/models`).then((r) => r.json());
 check(
-  "改了开关但还没重启，目录还是那样（跑着的进程用的还是旧值）",
-  (stillThere.data ?? []).some((m: any) => m.id === "e2e-main" || m.id === "e2e-fallback"),
+  "改了开关就生效，目录里没有那些模型了（不用重启）",
+  !(stillThere.data ?? []).some((m: any) => m.id === "e2e-main" || m.id === "e2e-fallback"),
   JSON.stringify((stillThere.data ?? []).map((m: any) => m.id)),
 );
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
@@ -506,8 +506,8 @@ check(
 );
 const status = await admin("GetSystemStatus");
 check(
-  "面板却说公布了几个模型",
-  Number(status.publishedModelCount) > 0,
+  "面板也说一个模型也没公布（跟根路由一致）",
+  Number(status.publishedModelCount) === 0,
   `publishedModelCount=${status.publishedModelCount}`,
 );
 const offChat = await chat("e2e-fallback");

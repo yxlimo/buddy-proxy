@@ -5,7 +5,6 @@ import {
   CircleDollarSign,
   Clock,
   Layers,
-  TriangleAlert,
 } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
@@ -14,7 +13,6 @@ import {
   LoadingState,
 } from '@/components/async-state'
 import { StatusBadge } from '@/components/status-badge'
-import { Badge } from '@/components/ui/badge'
 import {
   Card,
   CardContent,
@@ -51,14 +49,6 @@ export function OverviewPage() {
     <PageShell
       title='总览'
       description='网关现在的状态：各上游、余额、还有一点用量摘要。'
-      actions={
-        data.pendingRestart ? (
-          <Badge variant='destructive' className='gap-1'>
-            <TriangleAlert className='size-3' />
-            配置改了还没重启
-          </Badge>
-        ) : null
-      }
     >
 
       <div className='grid gap-4 lg:grid-cols-4'>
@@ -137,7 +127,7 @@ export function OverviewPage() {
               上游
             </CardTitle>
             <CardDescription>
-              改开关要重启网关才生效。
+              开关改完立刻生效。
             </CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>

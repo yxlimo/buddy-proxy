@@ -66,6 +66,7 @@ import {
   UPSTREAM_IDS,
   UPSTREAM_LABELS,
   healthSnapshot,
+  setUpstreamEnabled,
   upstreamBalances,
   upstreamBaseUrl,
   upstreamCredential,
@@ -90,8 +91,6 @@ import { catalogModels, deletePublishedModel, publishedModels, savePublishedMode
 import { usageEvents, usageSummary } from "./usage.ts";
 import { tailLog } from "./log.ts";
 import { benefitUpstreams, benefits } from "./benefits.ts";
-import { listAggregateModels } from "../aggregate.ts";
-import { configOverride } from "../config.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -286,7 +285,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       upstreams,
       pendingRestart: pendingRestart(),
       uptimeSec: BigInt(Math.round(process.uptime())),
-      publishedModelCount: listAggregateModels().length,
+      publishedModelCount: publishedModels().filter((m) => m.published).length,
       adminTokenSet: adminTokenSet(),
     });
   },
@@ -314,21 +313,13 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   },
 
   async setUpstreamEnabled(request) {
-    const id = String(request.upstreamId ?? "");
-    const key = UPSTREAM_FLAG_KEYS[id as UpstreamId];
-    if (!key) {
-      return create(SetUpstreamEnabledResponseSchema, {
-        ok: false,
-        pendingRestart: pendingRestart(),
-        message: `不认识的上游：${id}`,
-      });
-    }
-    configOverride(key, request.enabled ? "true" : "false");
-    console.log(`[ADMIN] ${key} 改成 ${request.enabled ? "true" : "false"}（重启后生效）`);
+    const id = String(request.upstreamId ?? "") as UpstreamId;
+    const result = setUpstreamEnabled(id, request.enabled === true);
+    console.log(`[ADMIN] ${UPSTREAM_FLAG_KEYS[id] ?? id} 改成 ${request.enabled ? "true" : "false"}（立刻生效）`);
     return create(SetUpstreamEnabledResponseSchema, {
-      ok: true,
+      ok: result.ok,
       pendingRestart: pendingRestart(),
-      message: `${UPSTREAM_LABELS[id as UpstreamId]} ${request.enabled ? "开着" : "关了"}，重启后生效`,
+      message: result.message,
     });
   },
 
@@ -371,7 +362,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     return create(SetConfigResponseSchema, {
       ok: result.ok,
       pendingRestart: pendingRestart(),
-      message: result.ok ? `${result.message}，重启后生效` : result.message,
+      message: result.ok ? `${result.message}，已经生效` : result.message,
     });
   },
 
@@ -553,6 +544,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           id: model.id,
           displayName: model.displayName,
           enabled: model.enabled,
+          // 根路由现在真的公布它吗？判据跟根路由一样。
+          published: model.published,
           strategy: model.strategy,
           // 继承的字段就是没有（契约里 optional）：客户端原样存回去还是继承。
           contextWindow: model.contextWindow,

@@ -14,8 +14,8 @@ import { renderWithClient } from '@/test/render'
 /**
  * 上游的开关。
  *
- * 契约里 Upstream.enabled 是「将要生效的值」，Upstream.pending 是「改过、
- * 还没重启」。面板不自己存一份开关状态，一切以服务端的答复为准。
+ * 开关是热的：面板改完立刻生效，不用重启。所以界面上不再提「重启后生效」，
+ * 也不看 Upstream.pending（那永远是假）。
  */
 describe('上游的开关', () => {
   it('开关按服务端的 enabled 显示', async () => {
@@ -50,7 +50,29 @@ describe('上游的开关', () => {
     expect(qoder).not.toBeChecked()
   })
 
-  it('pending 为真的时候说清楚「重启后生效」', async () => {
+  it('界面上不再提「重启后生效」', async () => {
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [
+            create(UpstreamSchema, {
+              id: 'minimax',
+              label: 'MiniMax Code',
+              enabled: true,
+              pending: false,
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByRole('switch', { name: 'MiniMax Code 的开关' })
+    expect(screen.queryByText(/重启后生效/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/重启网关/)).not.toBeInTheDocument()
+  })
+
+  it('就算 pending 是真的，也不提重启（那字段永远是假）', async () => {
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
@@ -68,7 +90,7 @@ describe('上游的开关', () => {
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByRole('switch', { name: 'MiniMax Code 的开关' })
-    expect(screen.getAllByText('已保存，重启后生效').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/重启后生效/)).not.toBeInTheDocument()
   })
 
   it('拨开关之后重新取列表，状态以服务端的答复为准', async () => {
@@ -83,7 +105,7 @@ describe('上游的开关', () => {
               id: 'minimax',
               label: 'MiniMax Code',
               enabled,
-              pending: enabled,
+              pending: false,
             }),
           ],
         }),
@@ -91,8 +113,8 @@ describe('上游的开关', () => {
         enabled = input.enabled ?? false
         return create(SetUpstreamEnabledResponseSchema, {
           ok: true,
-          pendingRestart: true,
-          message: '改了，重启后生效',
+          pendingRestart: false,
+          message: '已保存，已经生效',
         })
       },
     })
@@ -112,6 +134,7 @@ describe('上游的开关', () => {
         screen.getByRole('switch', { name: 'MiniMax Code 的开关' })
       ).toBeChecked()
     })
-    expect(screen.getAllByText('已保存，重启后生效').length).toBeGreaterThan(0)
+    // 不用重启。
+    expect(screen.queryByText(/重启后生效/)).not.toBeInTheDocument()
   })
 })

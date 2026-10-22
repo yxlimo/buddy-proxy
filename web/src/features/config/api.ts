@@ -49,7 +49,7 @@ export function useSetConfig() {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '已保存，重启后生效')
+      toast.success(result.message || '已保存，已经生效')
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: configKeys.all })

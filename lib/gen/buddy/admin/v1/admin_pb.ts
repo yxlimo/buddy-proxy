@@ -39,14 +39,14 @@ export type Upstream = Message<"buddy.admin.v1.Upstream"> & {
   label: string;
 
   /**
-   * 将要生效的值：面板改了但还没重启时，这里已经是改后的值。
+   * 现在在生效的值。开关是热的：面板改完立刻生效，不用重启。
    *
    * @generated from field: bool enabled = 3;
    */
   enabled: boolean;
 
   /**
-   * 改过、还没重启。
+   * 改过、还没生效。开关是热的，所以现在是假。
    *
    * @generated from field: bool pending = 4;
    */
@@ -356,7 +356,8 @@ export type GetSystemStatusResponse = Message<"buddy.admin.v1.GetSystemStatusRes
   upstreams: Upstream[];
 
   /**
-   * 配置改了但还没重启生效时为真。
+   * 有改了还没生效的东西时为真。面板能改的那些是热的，改完就生效；
+   * 服务内部的设置（在某个常量里）改了要重启。
    *
    * @generated from field: bool pending_restart = 3;
    */
@@ -486,7 +487,7 @@ export type SetUpstreamEnabledResponse = Message<"buddy.admin.v1.SetUpstreamEnab
   ok: boolean;
 
   /**
-   * 改了要重启才生效。
+   * 有改了还没生效的东西时为真。开关是热的，所以通常是假。
    *
    * @generated from field: bool pending_restart = 2;
    */
@@ -598,6 +599,8 @@ export type ListConfigResponse = Message<"buddy.admin.v1.ListConfigResponse"> & 
   items: ConfigItem[];
 
   /**
+   * 有改了还没生效的东西时为真。面板能改的那几个是热的。
+   *
    * @generated from field: bool pending_restart = 2;
    */
   pendingRestart: boolean;
@@ -649,6 +652,8 @@ export type SetConfigResponse = Message<"buddy.admin.v1.SetConfigResponse"> & {
   ok: boolean;
 
   /**
+   * 有改了还没生效的东西时为真。面板能改的那几个是热的，改完就生效。
+   *
    * @generated from field: bool pending_restart = 2;
    */
   pendingRestart: boolean;

@@ -1,4 +1,4 @@
-// test/config-restart-check.ts — 配置改了要存下来、读得回来、重启之后才生效。
+// test/config-restart-check.ts — 配置改完立刻生效，不用重启。
 //
 //   node --experimental-strip-types test/config-restart-check.ts
 //
@@ -6,9 +6,13 @@
 //
 //   1. 改的值进了数据库；
 //   2. 读回来是新值，来源是「数据库覆盖」；
-//   3. 还没重启之前，跑着的进程用的还是旧值；
-//   4. 重启（RestartSystem 或者自己起一个进程）之后，新值生效；
-//   5. 不认识的键、服务内部的键，SetConfig 都要拒绝。
+//   3. **不用重启**，跑着的进程立刻用新值（上游的模型、前门的钥匙）；
+//   4. 改了没有待重启的东西（面板能改的那几个是热的）；
+//   5. 重启之后新值还在（值存在数据库里，与热不热无关）；
+//   6. 不认识的键、服务内部的键，SetConfig 都要拒绝。
+//
+// 这个文件原来叫 config-restart-check —— 那时改配置要重启才生效。现在改完
+// 就生效，所以它检查的是热加载；重启那部分也还在里面：改的值要经得起重启。
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -23,7 +27,6 @@ const DATA_DIR = "/tmp/opencode/test-config-restart";
 const KEYS_FILE = path.join(DATA_DIR, "api-keys.json");
 const SERVICE = "/buddy.admin.v1.AdminService";
 const CLIENT_KEY = "oc-test-key-1234567890";
-const SECRET_KEY = "oc-test-secret-0987654321";
 
 let pass = 0;
 let fail = 0;
@@ -171,6 +174,14 @@ async function health(): Promise<any> {
   return fetch(`${base}/health`).then((r) => r.json());
 }
 
+/** 根路由公布的模型。 */
+async function publishedOnRoot(): Promise<string[]> {
+  const res = await fetch(`${base}/v1/models`);
+  if (res.status === 404) return [];
+  const body = await res.json().catch(() => ({}));
+  return (body?.data ?? []).map((m: any) => String(m.id));
+}
+
 /** 数据库里的配置表。 */
 function configRows(): { key: string; value: string }[] {
   const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"), { readOnly: true });
@@ -211,15 +222,23 @@ check(
   JSON.stringify(keys),
 );
 
+const healthBefore = await health();
+check("Qoder 现在是关着的", healthBefore.enabled?.qoderGlobal === false, JSON.stringify(healthBefore.enabled));
+check(
+  "关着的上游不公布模型",
+  (await publishedOnRoot()).length === 0,
+  JSON.stringify(await publishedOnRoot()),
+);
+
 /* ------------------------------------------------------------------ *
- * 二、改一个上游开关
+ * 二、改一个上游开关：不用重启
  * ------------------------------------------------------------------ */
 
 section("改一个上游开关");
 
 const switched = await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
 check("面板能把上游打开", switched.ok === true, JSON.stringify(switched));
-check("改完 pendingRestart 变真", switched.pendingRestart === true, JSON.stringify(switched));
+check("改完没有待重启的东西", switched.pendingRestart === false, JSON.stringify(switched));
 
 const rows = configRows();
 const qoderRow = rows.find((r) => r.key === "QODER_GLOBAL");
@@ -233,17 +252,74 @@ check("来源是数据库覆盖", qoderItem?.source === "database", JSON.stringi
 const upstreams = await admin("ListUpstreams");
 const qoderUpstream = (upstreams.upstreams ?? []).find((u: any) => u.id === "qoder");
 check("上游列表里的值也是新的", qoderUpstream?.enabled === true, JSON.stringify(qoderUpstream));
-check("上游列表标着待重启", qoderUpstream?.pending === true, JSON.stringify(qoderUpstream));
+check("上游列表没有待重启", qoderUpstream?.pending === false, JSON.stringify(qoderUpstream));
 
-const stillOff = await health();
+// 关键：跑着的进程立刻用新值。
+const healthAfter = await health();
 check(
-  "跑着的进程还没换（改了要重启才生效）",
-  stillOff.enabled?.qoderGlobal === false,
-  JSON.stringify(stillOff.enabled),
+  "不用重启，/health 里的上游已经开着了",
+  healthAfter.enabled?.qoderGlobal === true,
+  JSON.stringify(healthAfter.enabled),
+);
+
+const qoderModels = await fetch(`${base}/qoder/v1/models`)
+  .then((r) => r.json())
+  .catch(() => ({}));
+check(
+  "不用重启，Qoder 的模型目录已经出来了",
+  Array.isArray(qoderModels?.data) && qoderModels.data.length > 0,
+  JSON.stringify(qoderModels).slice(0, 200),
+);
+
+const statusAfter = await admin("GetSystemStatus");
+check("pendingRestart 还是假", statusAfter.pendingRestart === false, JSON.stringify(statusAfter.pendingRestart));
+
+/* ------------------------------------------------------------------ *
+ * 三、公布的模型：上游开着才公布
+ * ------------------------------------------------------------------ */
+
+section("公布的模型");
+
+const saved = await admin("SavePublishedModel", {
+  model: {
+    id: "hot",
+    displayName: "Hot",
+    strategy: "single",
+    enabled: true,
+    targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, enabled: true }],
+  },
+});
+check("面板能保存一个模型", saved.ok === true, JSON.stringify(saved));
+
+const rootModels = await publishedOnRoot();
+check("根路由公布了它", rootModels.includes("hot"), JSON.stringify(rootModels));
+
+const listedModels = await admin("ListPublishedModels");
+const hot = (listedModels.models ?? []).find((m: any) => m.id === "hot");
+check("面板说它已经公布了", hot?.published === true, JSON.stringify(hot));
+
+// 把上游关掉：模型还在库里，但没人能接了。
+await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
+const rootAfterOff = await publishedOnRoot();
+check("上游一关，根路由就不公布了", !rootAfterOff.includes("hot"), JSON.stringify(rootAfterOff));
+const listedAfterOff = await admin("ListPublishedModels");
+const hotAfterOff = (listedAfterOff.models ?? []).find((m: any) => m.id === "hot");
+check("面板说它没有公布了", hotAfterOff?.published === false, JSON.stringify(hotAfterOff));
+check("模型还在库里", hotAfterOff?.id === "hot", JSON.stringify(hotAfterOff));
+
+// 再打开：立刻又公布了。
+await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+const rootAfterOn = await publishedOnRoot();
+check("上游再开，根路由又公布了", rootAfterOn.includes("hot"), JSON.stringify(rootAfterOn));
+const listedAfterOn = await admin("ListPublishedModels");
+check(
+  "面板也说它又公布了",
+  (listedAfterOn.models ?? []).find((m: any) => m.id === "hot")?.published === true,
+  JSON.stringify(listedAfterOn.models),
 );
 
 /* ------------------------------------------------------------------ *
- * 三、重启
+ * 四、重启：新值还在
  * ------------------------------------------------------------------ */
 
 section("重启");
@@ -266,23 +342,28 @@ check("网关又起来了", await waitHealthy());
 
 const afterRestart = await health();
 check(
-  "重启之后新值生效了（上游从 off 变 on）",
+  "重启之后新值还在（上游还是开着）",
   afterRestart.enabled?.qoderGlobal === true,
   JSON.stringify(afterRestart.enabled),
 );
+check(
+  "重启之后根路由还公布那个模型",
+  (await publishedOnRoot()).includes("hot"),
+  JSON.stringify(await publishedOnRoot()),
+);
 
-const statusAfter = await admin("GetSystemStatus");
+const statusAfterRestart = await admin("GetSystemStatus");
 check(
   "重启之后 pendingRestart 又是假",
-  statusAfter.pendingRestart === false,
-  JSON.stringify(statusAfter.pendingRestart),
+  statusAfterRestart.pendingRestart === false,
+  JSON.stringify(statusAfterRestart.pendingRestart),
 );
 
 /* ------------------------------------------------------------------ *
- * 四、改一个普通的配置项，再重启一次（自己起进程的那种重启）
+ * 五、改一个别的配置项
  * ------------------------------------------------------------------ */
 
-section("改一个配置项，再重启");
+section("改一个配置项");
 
 const origins = await admin("SetConfig", { key: "ADMIN_CORS_ORIGINS", value: "http://panel.example.test" });
 check("面板能改 ADMIN_CORS_ORIGINS", origins.ok === true, JSON.stringify(origins));
@@ -294,7 +375,38 @@ check(
 const originsRead = (await admin("ListConfig")).items?.find((i: any) => i.key === "ADMIN_CORS_ORIGINS");
 check("读回来是新值", originsRead?.value === "http://panel.example.test", JSON.stringify(originsRead));
 
-// 自己重启：杀掉进程，再起一个。
+// 热加载：不用重启，跨域头立刻就有了。
+const cors = await fetch(`${base}${SERVICE}/ListConfig`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    authorization: `Bearer ${token}`,
+    origin: "http://panel.example.test",
+  },
+  body: "{}",
+});
+check(
+  "不用重启，允许的来源已经有跨域头了",
+  cors.headers.get("access-control-allow-origin") === "http://panel.example.test",
+  String(cors.headers.get("access-control-allow-origin")),
+);
+
+const corsOther = await fetch(`${base}${SERVICE}/ListConfig`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    authorization: `Bearer ${token}`,
+    origin: "http://evil.example.test",
+  },
+  body: "{}",
+});
+check(
+  "不在白名单里的来源没有跨域头",
+  !corsOther.headers.get("access-control-allow-origin"),
+  String(corsOther.headers.get("access-control-allow-origin")),
+);
+
+// 重启之后还是那个值。
 router?.kill("SIGTERM");
 await new Promise((r) => setTimeout(r, 500));
 startRouter();
@@ -311,7 +423,7 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
- * 五、拒绝
+ * 六、拒绝
  * ------------------------------------------------------------------ */
 
 section("拒绝");
@@ -343,36 +455,22 @@ for (const key of [
 }
 
 /* ------------------------------------------------------------------ *
- * 六、开关 REQUIRE_API_KEY：改了要重启才生效
+ * 七、前门的开关：不用重启
  * ------------------------------------------------------------------ */
 
 section("前门的开关");
 
 const requireKey = await admin("SetConfig", { key: "REQUIRE_API_KEY", value: "true" });
 check("面板能改 REQUIRE_API_KEY", requireKey.ok === true, JSON.stringify(requireKey));
+check("改完没有待重启的东西", requireKey.pendingRestart === false, JSON.stringify(requireKey));
 
+// 不用重启，下一个请求就要钥匙了。
 const noKey = await fetch(`${base}/v1/chat/completions`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ model: "x", messages: [{ role: "user", content: "hi" }] }),
 });
-check(
-  "还没重启的时候前门还是开着",
-  noKey.status !== 401,
-  `HTTP ${noKey.status}`,
-);
-
-router?.kill("SIGTERM");
-await new Promise((r) => setTimeout(r, 500));
-startRouter();
-check("网关又起来了", await waitHealthy());
-
-const noKeyAfter = await fetch(`${base}/v1/chat/completions`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ model: "x", messages: [{ role: "user", content: "hi" }] }),
-});
-check("重启之后前门要钥匙了", noKeyAfter.status === 401, `HTTP ${noKeyAfter.status}`);
+check("不用重启，前门已经要钥匙了", noKey.status === 401, `HTTP ${noKey.status}`);
 
 const withKey = await fetch(`${base}/v1/chat/completions`, {
   method: "POST",
@@ -381,13 +479,9 @@ const withKey = await fetch(`${base}/v1/chat/completions`, {
 });
 check("带钥匙就过（只是模型不存在，不是 401）", withKey.status !== 401, `HTTP ${withKey.status}`);
 
-// 收尾：把前门关回去。
+// 收尾：把前门关回去，把 Qoder 也关回去。
 await admin("SetConfig", { key: "REQUIRE_API_KEY", value: "false" });
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
-router?.kill("SIGTERM");
-await new Promise((r) => setTimeout(r, 500));
-startRouter();
-await waitHealthy();
 const finalHealth = await health();
 check("收尾之后前门又开着", finalHealth.auth === "public", JSON.stringify(finalHealth.auth));
 check("收尾之后上游又关着", finalHealth.enabled?.qoderGlobal === false, JSON.stringify(finalHealth.enabled));
@@ -400,14 +494,6 @@ section("结果");
 console.log(`pass=${pass} fail=${fail}`);
 if (problems.length) {
   console.log("");
-  console.log("查出来的问题：");
-  for (const p of problems) console.log(`  - ${p}`);
+  for (const problem of problems) console.log(`  - ${problem}`);
 }
-const logins = routerLog.split("\n").filter((l) => l.includes("[AUTH]") || l.includes("device"));
-if (logins.length) {
-  console.log("");
-  console.log("（登录相关的日志：应该只有「会话还在」这一类）");
-  console.log(logins.slice(0, 8).join("\n"));
-}
-cleanup();
-process.exit(fail === 0 ? 0 : 1);
+process.exit(fail ? 1 : 0);

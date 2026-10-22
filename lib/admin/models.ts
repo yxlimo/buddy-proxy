@@ -5,6 +5,7 @@
 // 同一个模型时，面板给的是两者里较小的那个上下文。
 
 import {
+  aggregateModels,
   deleteAggregateModel,
   getAggregateModel,
   listAggregateModels,
@@ -14,16 +15,29 @@ import {
   type AggregateStrategy,
   type AggregateTarget,
 } from "../aggregate.ts";
-import { MINIMAX_VISIBLE, QODER_CN, QODER_GLOBAL, workbuddyCatalog, type UpstreamId } from "./upstreams.ts";
+import {
+  catalogGroups,
+  minimaxVisible,
+  qoderVisible,
+  workbuddyCatalog,
+  type UpstreamId,
+} from "./upstreams.ts";
 import { qoderLabel, QODER_EFFORTS } from "../qoder/models.ts";
 import { workbuddyLabel } from "../workbuddy/models.ts";
-import { tokenRhythmCatalogModels } from "../router/catalog.ts";
+import { aggregateCatalog, tokenRhythmCatalogModels } from "../router/catalog.ts";
 
 /** 一个公布出来的模型。 */
 export interface PublishedModelView {
   id: string;
   displayName: string;
   enabled: boolean;
+  /**
+   * 根路由现在真的公布它吗？
+   *
+   * 判据跟根路由一样：模型开着，而且至少有一个目标还在某个上游的目录里。
+   * 上游全关着的时候，模型在库里但没人能接 —— 面板上要看得见这件事。
+   */
+  published: boolean;
   strategy: string;
   /**
    * 元数据可以不给：不给就是「继承目标的值」。
@@ -58,13 +72,19 @@ export interface PublishedTargetView {
  * 元数据是**库里存的那个**，不是合出来的：存的是空（继承）就是没有，客户端
  * 原样存回去还是继承。合出来的值由目录那边算（lib/router/catalog.ts），
  * 面板要显示的话可以用 ListModels 与目标自己算。
+ *
+ * `published` 用的是目录那边的判据：根路由拿 aggregateCatalog() 算出来的那
+ * 份就是根路由公布的清单，面板说「公布了」就是说它在那份清单里。两边不能
+ * 各算一套 —— 上游一关，模型立刻就不公布了。
  */
 export function publishedModels(): PublishedModelView[] {
   const usage = listAggregateUsage();
+  const live = new Set(aggregateCatalog(catalogGroups(), aggregateModels()).map((entry) => entry.id));
   return listAggregateModels().map((model) => ({
     id: model.id,
     displayName: model.displayName,
     enabled: model.enabled,
+    published: live.has(model.id),
     strategy: model.strategy,
     contextWindow: model.contextWindow ?? undefined,
     maxOutputTokens: model.maxOutputTokens ?? undefined,
@@ -208,7 +228,7 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
   const want = (id: UpstreamId) => !upstreamId || upstreamId === id;
 
   if (want("qoder")) {
-    for (const m of QODER_GLOBAL) {
+    for (const m of qoderVisible("global")) {
       out.push({
         id: m.id,
         displayName: qoderLabel(m),
@@ -222,7 +242,7 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
     }
   }
   if (want("qoder-cn")) {
-    for (const m of QODER_CN) {
+    for (const m of qoderVisible("cn")) {
       out.push({
         id: m.id,
         displayName: qoderLabel(m),
@@ -250,7 +270,7 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
     }
   }
   if (want("minimax")) {
-    for (const m of MINIMAX_VISIBLE) {
+    for (const m of minimaxVisible()) {
       out.push({
         id: m.id,
         displayName: m.display_name,

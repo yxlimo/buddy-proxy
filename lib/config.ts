@@ -11,6 +11,11 @@
 // in the database therefore takes effect on the next restart, not halfway
 // through a request.
 //
+// The exceptions are the settings that are read on every request — the
+// upstream switches, the gateway's own few. Those are marked hot, and
+// reloadConfig() picks the new value up: the panel changes one and the next
+// request sees it, with no restart.
+//
 // The environment still wins for the things it is supposed to win for: the
 // credentials (a rotated key in .env must not be shadowed by a stale copy in
 // the database) and the paths that decide where the database itself is. Those
@@ -50,8 +55,30 @@ const answers = new Map<string, { raw: string; source: ConfigSource }>();
  * The panel writes to the database, but the process keeps using the value it
  * read at startup. The two differ means "changed, but not applied yet" — the
  * panel has to say so.
+ *
+ * The hot settings are the exception: they are read on every request, so
+ * reloadConfig() moves their value here too — what is here is what is in use.
  */
 const startup = new Map<string, { raw: string; source: ConfigSource }>();
+
+/**
+ * The settings that take effect at once.
+ *
+ * A setting that is read on every request — the upstream switches, the
+ * gateway's own few — is hot: the panel changes it, the config is reloaded,
+ * and the next request sees the new value. The rest are read once, at
+ * startup, into a constant: changing them needs a restart.
+ *
+ * The caller says which is which: the module that reads a setting on every
+ * request marks it hot, and then there is no "changed but not applied yet" for
+ * it.
+ */
+const hot = new Set<string>();
+
+/** Say that a setting is read on every request: it takes effect at once. */
+export function markHotSetting(key: string): void {
+  hot.add(key);
+}
 
 /**
  * Which panel a setting belongs to.
@@ -170,6 +197,11 @@ export function configClear(key: string): void {
  * The service does not poll the database; a change waits until someone asks
  * for it to be picked up. This is that ask: the panel calls it after writing,
  * and the next request sees the new value.
+ *
+ * The hot settings are in use from here on: the value the process started with
+ * becomes the value it is using, so the panel has nothing to wait for. The
+ * rest keep their startup value — they are in a constant somewhere, and only a
+ * restart can change that.
  */
 export function reloadConfig(): number {
   answers.clear();
@@ -188,6 +220,13 @@ export function reloadConfig(): number {
         break;
     }
     count++;
+  }
+  // The hot settings are read on every request, so the value they had when
+  // the process started is the value in use now.
+  for (const setting of settings.values()) {
+    if (!hot.has(setting.key)) continue;
+    const current = answers.get(setting.key);
+    if (current) startup.set(setting.key, current);
   }
   return count;
 }
@@ -213,8 +252,9 @@ export function configStartup(key: string): { raw: string; source: ConfigSource 
 /**
  * True when the database holds a value the running process has not picked up.
  *
- * The panel writes an override, the process reads its settings at startup, so
- * a changed override is waiting for a restart.
+ * The panel writes an override and the config is reloaded, so the settings it
+ * can change are in use right away. The ones it cannot change are in a
+ * constant somewhere: those wait for a restart.
  */
 export function configPendingRestart(): boolean {
   for (const row of listConfig()) {

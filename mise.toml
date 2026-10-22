@@ -40,6 +40,10 @@ run = "node --experimental-strip-types test/admin-check.ts"
 description = "Run the tests for the panel's login flows (a fake upstream, no real login)"
 run = "node --experimental-strip-types test/admin-login-check.ts"
 
+[tasks."test:config"]
+description = "Check that the settings the panel can change take effect at once (no restart)"
+run = "node --experimental-strip-types test/config-restart-check.ts"
+
 [tasks."test:intern-ai"]
 description = "Run the tests for the intern-ai module (no network)"
 run = "node --experimental-strip-types test/intern-ai-check.ts"

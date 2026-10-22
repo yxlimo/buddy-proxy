@@ -124,7 +124,8 @@ describe('模型编辑弹窗', () => {
     expect(screen.getByLabelText('上游模型 id')).toBeInTheDocument()
   })
 
-  it('只有权重，没有顺序，权重有解释', async () => {
+  it('single 策略下没有权重输入框，fallback 才有', async () => {
+    const user = userEvent.setup()
     renderWithClient({
       client: catalogClient(),
       children: (
@@ -132,10 +133,35 @@ describe('模型编辑弹窗', () => {
       ),
     })
 
-    await userEvent.setup().click(screen.getByRole('tab', { name: /上游目标/ }))
+    // 默认是 single：权重没意义，整块不画。
+    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    expect(screen.queryByLabelText('权重')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('权重大的先试，失败了才试小的。')
+    ).not.toBeInTheDocument()
 
+    // 策略在「基本」那一页：切成 fallback。
+    await user.click(screen.getByRole('tab', { name: /^基本/ }))
+    await user.click(screen.getByRole('combobox', { name: '策略' }))
+    await user.click(await screen.findByRole('option', { name: /fallback/ }))
+
+    // 再回到「上游目标」，权重就出来了。
+    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
     expect(screen.getByLabelText('权重')).toBeInTheDocument()
-    expect(screen.queryByLabelText('顺序')).not.toBeInTheDocument()
     expect(screen.getByText('权重大的先试，失败了才试小的。')).toBeInTheDocument()
+  })
+
+  it('没有「顺序」那个输入框', async () => {
+    const user = userEvent.setup()
+    renderWithClient({
+      client: catalogClient(),
+      children: (
+        <ModelDialog open onOpenChange={() => {}} onSubmit={() => {}} />
+      ),
+    })
+
+    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+
+    expect(screen.queryByLabelText('顺序')).not.toBeInTheDocument()
   })
 })

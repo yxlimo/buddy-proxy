@@ -213,14 +213,15 @@ check(
 
 const setConfig = await call("SetConfig", { key: "ADMIN_CORS_ORIGINS", value: "123456" }, token);
 check("配置改得掉", setConfig.body?.ok === true, JSON.stringify(setConfig.body));
-check("改完要重启才生效", setConfig.body?.pendingRestart === true);
+// 面板能改的设置是热的：改完就生效，没有待重启的东西。
+check("改完立刻生效", setConfig.body?.pendingRestart === false, JSON.stringify(setConfig.body));
 
 const setUnknown = await call("SetConfig", { key: "NOT_A_SETTING", value: "1" }, token);
 check("不认识的配置项不收", setUnknown.body?.ok !== true);
 
 const setUpstream = await call("SetUpstreamEnabled", { upstreamId: "qoder-cn", enabled: true }, token);
 check("上游开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
-check("改了上游要重启才生效", setUpstream.body?.pendingRestart === true);
+check("改了上游立刻生效", setUpstream.body?.pendingRestart === false, JSON.stringify(setUpstream.body));
 
 const setBadUpstream = await call("SetUpstreamEnabled", { upstreamId: "nope", enabled: true }, token);
 check("不认识的上游不收", setBadUpstream.body?.ok !== true);
@@ -424,7 +425,8 @@ const afterSwitch = list((await call("ListUpstreams", {}, token)).body?.upstream
   (u: any) => u.id === "qoder",
 );
 check("改完 enabled 就是改后的值", afterSwitch?.enabled === true, JSON.stringify(afterSwitch));
-check("改完 pending 是真", afterSwitch?.pending === true, JSON.stringify(afterSwitch));
+// 开关是热的：改完就生效，没有「待重启」。
+check("改完没有待重启", afterSwitch?.pending === false, JSON.stringify(afterSwitch));
 // 其他上游没动，不该被标成待重启。
 const otherUpstream = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
   (u: any) => u.id === "minimax",

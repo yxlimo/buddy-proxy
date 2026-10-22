@@ -24,9 +24,8 @@ export function useUpstreams() {
 /**
  * 开/关一个上游。
  *
- * 改了要重启网关才生效：契约里 Upstream.enabled 是「将要生效的值」，
- * Upstream.pending 是「改过、还没重启」。所以面板不自己存一份开关状态，
- * 一切以服务端的答复为准。
+ * 开关是热的：面板改完立刻生效，不用重启。所以这里不存本地状态，
+ * 一切以服务端的答复为准（Upstream.enabled 就是现在的值）。
  */
 export function useSetUpstreamEnabled() {
   const client = useAdminClient()
@@ -46,7 +45,7 @@ export function useSetUpstreamEnabled() {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '已保存，重启后生效')
+      toast.success(result.message || '已保存，已经生效')
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })

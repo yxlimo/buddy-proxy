@@ -1,5 +1,4 @@
 import { useIsFetching } from '@tanstack/react-query'
-import { TriangleAlert } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
@@ -7,7 +6,6 @@ import {
   LoadingState,
 } from '@/components/async-state'
 import { StatusBadge } from '@/components/status-badge'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -48,18 +46,11 @@ export function UpstreamsPage() {
   }
 
   const list = upstreams.data.upstreams
-  const anyPending = list.some((upstream) => upstream.pending)
 
   return (
     <PageShell
       title='上游'
-      description='每个上游就是一个模拟的桌面客户端（MiniMax Code、Qoder、WorkBuddy、TokenRhythm）。'
-      actions={
-        <Badge variant='outline' className='gap-1'>
-          <TriangleAlert className='size-3' />
-          改了开关要重启网关才生效
-        </Badge>
-      }
+      description='每个上游就是一个模拟的桌面客户端（MiniMax Code、Qoder、WorkBuddy、TokenRhythm）。开关改完立刻生效。'
     >
 
       <Card>
@@ -112,16 +103,9 @@ export function UpstreamsPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className='grid gap-1'>
-                        <StatusBadge
-                          status={upstream.enabled ? 'enabled' : 'disabled'}
-                        />
-                        {upstream.pending ? (
-                          <span className='text-xs text-muted-foreground'>
-                            已保存，重启后生效
-                          </span>
-                        ) : null}
-                      </div>
+                      <StatusBadge
+                        status={upstream.enabled ? 'enabled' : 'disabled'}
+                      />
                     </TableCell>
                     <TableCell>
                       {upstream.credential ? (
@@ -171,12 +155,6 @@ export function UpstreamsPage() {
           )}
         </CardContent>
       </Card>
-
-      {anyPending ? (
-        <p className='text-xs text-muted-foreground'>
-          有改动还没重启网关：上面显示的是重启之后才会生效的值。
-        </p>
-      ) : null}
     </PageShell>
   )
 }

@@ -6,7 +6,7 @@
 // 令牌在头里，不在消息里：Authorization: Bearer <token>。/health 不要令牌。
 
 import fs from "node:fs";
-import { configString } from "../config.ts";
+import { configString, markHotSetting } from "../config.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -68,12 +68,19 @@ function unauthorized(ctx: Koa.Context): void {
   ctx.body = { code: "unauthenticated", message: "面板令牌不对。" };
 }
 
-/** 允许跨域访问管理接口的来源。空表示不发跨域头。 */
-const CORS_ORIGINS = configString("ADMIN_CORS_ORIGINS", "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+/**
+ * 允许跨域访问管理接口的来源。空表示不发跨域头。
+ *
+ * 面板改了它就重新读一遍 —— 跨域头每个请求都要算，所以这个设置是热的。
+ */
+markHotSetting("ADMIN_CORS_ORIGINS");
 
+function corsOrigins(): string[] {
+  return configString("ADMIN_CORS_ORIGINS", "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
 /**
  * 浏览器的跨域头。
  *
@@ -85,9 +92,10 @@ const CORS_ORIGINS = configString("ADMIN_CORS_ORIGINS", "")
  * 都能拿着令牌来调管理接口。
  */
 function cors(ctx: Koa.Context): void {
-  if (!CORS_ORIGINS.length) return;
+  const origins = corsOrigins();
+  if (!origins.length) return;
   const origin = String(ctx.headers.origin ?? "");
-  if (!origin || !CORS_ORIGINS.includes(origin)) return;
+  if (!origin || !origins.includes(origin)) return;
   ctx.set("Access-Control-Allow-Origin", origin);
   ctx.set("Access-Control-Allow-Headers", "authorization, content-type, connect-protocol-version, connect-timeout-ms");
   ctx.set("Access-Control-Expose-Headers", "connect-content-encoding");

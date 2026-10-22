@@ -34,6 +34,17 @@ if (typeof Element.prototype.scrollIntoView !== 'function') {
   Element.prototype.scrollIntoView = () => {}
 }
 
+// jsdom 没有 pointer capture 的那几个，Radix 的下拉框要用。
+if (typeof Element.prototype.hasPointerCapture !== 'function') {
+  Element.prototype.hasPointerCapture = () => false
+}
+if (typeof Element.prototype.setPointerCapture !== 'function') {
+  Element.prototype.setPointerCapture = () => {}
+}
+if (typeof Element.prototype.releasePointerCapture !== 'function') {
+  Element.prototype.releasePointerCapture = () => {}
+}
+
 afterEach(() => {
   cleanup()
 })

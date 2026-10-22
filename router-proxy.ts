@@ -21,7 +21,7 @@ import { configString, configFlag, configNumber, logConfig } from "./lib/config.
 import Koa from "koa";
 import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
-import { authenticate, loadKeys, REQUIRE_API_KEY } from "./lib/api-keys.ts";
+import { authenticate, loadKeys, requireApiKey } from "./lib/api-keys.ts";
 import { deleteSecret, listSecrets } from "./lib/store.ts";
 import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder/transport.ts";
@@ -31,7 +31,7 @@ import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
 import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
-import { qoderStatus, type QoderRegion } from "./lib/qoder/auth.ts";
+import { qoderStatus } from "./lib/qoder/auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
 import { ensureMinimaxSession, ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
@@ -63,38 +63,28 @@ import { CONNECT_PREFIX, connectMiddleware, hasWebDist, staticMiddleware, webDis
 import { BENEFITS_INTERVAL_MS, benefitUpstreams, benefits } from "./lib/admin/benefits.ts";
 import {
   HEALTH_CACHE_MS,
-  MINIMAX_VISIBLE,
-  QODER_CN,
   QODER_CN_ALL,
-  QODER_GLOBAL,
   QODER_GLOBAL_ALL,
-  UPSTREAM_FLAGS,
   catalogGroups,
   healthRefreshing,
   healthSnapshot,
+  minimaxVisible,
   qoderRegions,
+  qoderVisible,
   refreshHealthSnapshot,
   setWorkbuddyCatalog,
+  upstreamEnabled,
   workbuddyCatalog,
   workbuddyModelIds,
 } from "./lib/admin/upstreams.ts";
 
 const PORT = configNumber("ROUTER_PORT", 6450);
 const HOST = configString("ROUTER_HOST", "0.0.0.0");
-// Which upstreams this router serves. Each flag turns on one reverse proxy; an
-// upstream that is off is not looked at at all — no credential read, no login,
-// no models advertised, and a request for one is refused with a clear message.
-const ENABLED_MINIMAX = UPSTREAM_FLAGS.minimax;
 // How often the MiniMax credential is looked at, so a warning reaches the log
 // even when nothing is being asked for.
 const MINIMAX_WATCH_MS = configNumber("MINIMAX_WATCH_MS", 5 * 60 * 1000);
-const ENABLED_QODER_GLOBAL = UPSTREAM_FLAGS.qoder;
-const ENABLED_QODER_CN = UPSTREAM_FLAGS["qoder-cn"];
-const ENABLED_WORKBUDDY_CN = UPSTREAM_FLAGS["workbuddy-cn"];
-const ENABLED_TOKENRHYTHM = UPSTREAM_FLAGS.tokenrhythm;
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 
-const QODER_REGIONS: QoderRegion[] = qoderRegions();
 const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
 // The legacy endpoint queues models and reports 429 while a request waits. The
 // CLI retries these, so the proxy does too — with the same shape.
@@ -109,11 +99,20 @@ const WORKBUDDY_CATALOG_TTL_MS = configNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 6
 type Dialect = "anthropic" | "openai";
 
 const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
-const QODER_VISIBLE = [...QODER_GLOBAL, ...QODER_CN];
-const QODER_MODEL_IDS = new Set(QODER_VISIBLE.map((m) => m.id));
-const QODER_HIDDEN_IDS = new Set(QODER_MODELS.filter((m) => !QODER_MODEL_IDS.has(m.id)).map((m) => m.id));
+// The models a region can serve, whether the region is on or not.
 const GLOBAL_QODER_IDS = new Set(QODER_GLOBAL_ALL.map((m) => m.id));
 const CN_QODER_IDS = new Set(QODER_CN_ALL.map((m) => m.id));
+/**
+ * The models that are not published right now.
+ *
+ * The switches are hot, so this is computed per request: a region that is
+ * turned off has its models hidden, and the answer says "that region is off"
+ * rather than "no such model".
+ */
+function qoderHiddenIds(): Set<string> {
+  const visible = new Set([...qoderVisible("global"), ...qoderVisible("cn")].map((m) => m.id));
+  return new Set(QODER_MODELS.filter((m) => !visible.has(m.id)).map((m) => m.id));
+}
 // WorkBuddy's models are addressed by prefix only: several of them (glm-5.3,
 // kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
 // would be ambiguous. The list starts as the bundled snapshot and is replaced
@@ -124,7 +123,7 @@ let workbuddyCatalogAt = 0;
 
 /** The upstream catalogue, refreshed at most every half hour. */
 async function refreshWorkBuddyCatalog(force = false): Promise<void> {
-  if (!ENABLED_WORKBUDDY_CN) return;
+  if (!upstreamEnabled("workbuddy-cn")) return;
   const age = Date.now() - workbuddyCatalogAt;
   if (!force && workbuddyCatalogAt && age < WORKBUDDY_CATALOG_TTL_MS) return;
   try {
@@ -188,9 +187,9 @@ const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
 router.get("/health", async (ctx) => {
   const snapshot = healthSnapshot();
   const regions: Record<string, unknown> = {};
-  for (const region of QODER_REGIONS) {
+  for (const region of qoderRegions()) {
     regions[region] = {
-      models: region === "cn" ? QODER_CN.length : QODER_GLOBAL.length,
+      models: qoderVisible(region).length,
       credential: qoderStatus(region),
       account: snapshot.data?.qoder?.[region]?.account ?? null,
       credits: snapshot.data?.qoder?.[region]?.credits ?? null,
@@ -200,17 +199,17 @@ router.get("/health", async (ctx) => {
     status: "ok",
     dialects: ["anthropic", "openai"],
     enabled: {
-      minimax: ENABLED_MINIMAX,
-      qoderGlobal: ENABLED_QODER_GLOBAL,
-      qoderCn: ENABLED_QODER_CN,
-      workbuddyCn: ENABLED_WORKBUDDY_CN,
-      tokenrhythm: ENABLED_TOKENRHYTHM,
+      minimax: upstreamEnabled("minimax"),
+      qoderGlobal: upstreamEnabled("qoder"),
+      qoderCn: upstreamEnabled("qoder-cn"),
+      workbuddyCn: upstreamEnabled("workbuddy-cn"),
+      tokenrhythm: upstreamEnabled("tokenrhythm"),
     },
     upstreams: {
-      minimax: ENABLED_MINIMAX
+      minimax: upstreamEnabled("minimax")
         ? {
             base: MINIMAX_UPSTREAM,
-            models: MINIMAX_VISIBLE.length,
+            models: minimaxVisible().length,
             // Which credential is in use and how much of it is left.
             credential: credentialStatus(),
             // What the account has left: the money on the platform account, and
@@ -220,7 +219,7 @@ router.get("/health", async (ctx) => {
           }
         : { enabled: false },
       qoder: { regions },
-      workbuddy: ENABLED_WORKBUDDY_CN
+      workbuddy: upstreamEnabled("workbuddy-cn")
         ? {
             region: "cn",
             models: workbuddyCatalog().length,
@@ -228,7 +227,7 @@ router.get("/health", async (ctx) => {
             credits: snapshot.data?.workbuddy?.credits ?? null,
           }
         : { enabled: false },
-      tokenrhythm: ENABLED_TOKENRHYTHM
+      tokenrhythm: upstreamEnabled("tokenrhythm")
         ? {
             models: TOKENRHYTHM_MODELS.length,
             tenants: snapshot.data?.tokenrhythm?.tenants ?? null,
@@ -242,7 +241,7 @@ router.get("/health", async (ctx) => {
       refreshing: healthRefreshing(),
       maxAgeMs: HEALTH_CACHE_MS,
     },
-    auth: REQUIRE_API_KEY ? "api-key" : "public",
+    auth: requireApiKey() ? "api-key" : "public",
     benefits: {
       enabled: benefitUpstreams().length > 0,
       intervalMs: BENEFITS_INTERVAL_MS,
@@ -261,7 +260,7 @@ router.get("/health", async (ctx) => {
 /** What the adapters need to know about the router they run in. */
 function upstreamContext(): UpstreamContext {
   return {
-    qoderRegions: QODER_REGIONS,
+    qoderRegions: qoderRegions(),
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
@@ -276,16 +275,16 @@ function upstreamContext(): UpstreamContext {
 function routingContext(): RoutingContext {
   return {
     enabled: {
-      minimax: ENABLED_MINIMAX,
-      qoderGlobal: ENABLED_QODER_GLOBAL,
-      qoderCn: ENABLED_QODER_CN,
-      workbuddyCn: ENABLED_WORKBUDDY_CN,
-      tokenrhythm: ENABLED_TOKENRHYTHM,
+      minimax: upstreamEnabled("minimax"),
+      qoderGlobal: upstreamEnabled("qoder"),
+      qoderCn: upstreamEnabled("qoder-cn"),
+      workbuddyCn: upstreamEnabled("workbuddy-cn"),
+      tokenrhythm: upstreamEnabled("tokenrhythm"),
     },
     ids: {
       qoderGlobal: GLOBAL_QODER_IDS,
       qoderCn: CN_QODER_IDS,
-      qoderHidden: QODER_HIDDEN_IDS,
+      qoderHidden: qoderHiddenIds(),
       minimax: MINIMAX_MODEL_IDS,
       workbuddy: workbuddyModelIds(),
       tokenrhythm: TOKENRHYTHM_MODEL_IDS,
@@ -415,7 +414,7 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
     const dialect = String(ctx.query.dialect ?? "").toLowerCase();
     // The upstream's catalogue is the source of truth; fetch it in the background
     // so this answer is never blocked by it.
-    if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
+    if (upstreamEnabled("workbuddy-cn")) void refreshWorkBuddyCatalog();
     const groups = catalogGroups();
     if (group) {
       ctx.body = groupCatalog(group, groups, dialect === "openai");
@@ -572,19 +571,19 @@ app.listen(PORT, HOST, () => {
   console.log("");
   console.log(`  upstreams:`);
   console.log(
-    `    qoder    global=${ENABLED_QODER_GLOBAL ? `${QODER_GLOBAL.length} models` : "off"}` +
-      `  cn=${ENABLED_QODER_CN ? `${QODER_CN.length} models` : "off"}`,
+    `    qoder    global=${upstreamEnabled("qoder") ? `${qoderVisible("global").length} models` : "off"}` +
+      `  cn=${upstreamEnabled("qoder-cn") ? `${qoderVisible("cn").length} models` : "off"}`,
   );
   console.log(
-    `    minimax  ${ENABLED_MINIMAX ? `${MINIMAX_UPSTREAM}  models=${MINIMAX_VISIBLE.length}` : "off"}`,
+    `    minimax  ${upstreamEnabled("minimax") ? `${MINIMAX_UPSTREAM}  models=${minimaxVisible().length}` : "off"}`,
   );
   console.log(
-    `    workbuddy cn=${ENABLED_WORKBUDDY_CN ? `${workbuddyCatalog().length} models` : "off"}`,
+    `    workbuddy cn=${upstreamEnabled("workbuddy-cn") ? `${workbuddyCatalog().length} models` : "off"}`,
   );
   console.log(
-    `    tokenrhythm ${ENABLED_TOKENRHYTHM ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
+    `    tokenrhythm ${upstreamEnabled("tokenrhythm") ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
   );
-  console.log(`  auth: ${REQUIRE_API_KEY ? "api key required" : "public"}`);
+  console.log(`  auth: ${requireApiKey() ? "api key required" : "public"}`);
   console.log("");
 
   // Where the settings came from: the database first, then the environment,
@@ -596,7 +595,7 @@ app.listen(PORT, HOST, () => {
   // The server owns the credentials. An enabled region with no session runs the
   // device flow here, in the background: the URL goes to the log and the operator
   // approves it. A region that is off is never looked at.
-  if (ENABLED_MINIMAX) {
+  if (upstreamEnabled("minimax")) {
     void ensureMinimaxSession()
       .then(async (outcome) => {
         const c = await readCredential();
@@ -646,7 +645,7 @@ app.listen(PORT, HOST, () => {
     ).unref();
   }
 
-  for (const region of QODER_REGIONS) {
+  for (const region of qoderRegions()) {
     void ensureQoderSession(region)
       .then((outcome) => {
         const s = qoderStatus(region);
@@ -661,7 +660,7 @@ app.listen(PORT, HOST, () => {
       .catch((e) => console.warn(`  [AUTH] qoder ${region} login failed: ${(e as Error).message}`));
   }
 
-  if (ENABLED_WORKBUDDY_CN) {
+  if (upstreamEnabled("workbuddy-cn")) {
     void ensureWorkBuddySession()
       .then(async (outcome) => {
         const s = workbuddyStatus("cn");
@@ -679,7 +678,7 @@ app.listen(PORT, HOST, () => {
       .catch((e) => console.warn(`  [AUTH] workbuddy cn login failed: ${(e as Error).message}`));
   }
 
-  if (ENABLED_TOKENRHYTHM) {
+  if (upstreamEnabled("tokenrhythm")) {
     void tokenRhythmStatuses()
       .then((tenants) => {
         for (const tenant of tenants) {

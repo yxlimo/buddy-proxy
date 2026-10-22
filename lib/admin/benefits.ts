@@ -6,7 +6,7 @@
 import { configFlag, configString } from "../config.ts";
 import { BenefitsRunner } from "../router/benefits.ts";
 import type { BenefitUpstream } from "../benefits.ts";
-import { UPSTREAM_FLAGS } from "./upstreams.ts";
+import { upstreamEnabled } from "./upstreams.ts";
 
 /**
  * 多久跑一次签到。
@@ -20,9 +20,9 @@ export const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", 
 export function benefitUpstreams(): BenefitUpstream[] {
   if (configFlag("BENEFITS_DISABLED", false)) return [];
   const out: BenefitUpstream[] = [];
-  if (UPSTREAM_FLAGS["workbuddy-cn"]) out.push("workbuddy-cn");
-  if (UPSTREAM_FLAGS["qoder-cn"]) out.push("qoder-cn");
-  if (UPSTREAM_FLAGS.qoder) out.push("qoder-global");
+  if (upstreamEnabled("workbuddy-cn")) out.push("workbuddy-cn");
+  if (upstreamEnabled("qoder-cn")) out.push("qoder-cn");
+  if (upstreamEnabled("qoder")) out.push("qoder-global");
   return out;
 }
 

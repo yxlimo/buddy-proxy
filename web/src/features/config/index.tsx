@@ -202,11 +202,6 @@ export function ConfigPage() {
     <PageShell
       title='配置'
       description='每一项现在生效的值，以及这个值是从哪来的：数据库覆盖、环境变量，还是默认值。'
-      actions={
-        config.data?.pendingRestart ? (
-          <Badge variant='destructive'>配置改了，重启后生效</Badge>
-        ) : null
-      }
     >
 
       {groups.length === 0 ? (
@@ -234,7 +229,7 @@ export function ConfigPage() {
                 <CardHeader>
                   <CardTitle className='text-base'>{group.label}</CardTitle>
                   <CardDescription>
-                    改动会写进数据库，标上「待重启」，重启网关之后才生效。
+                    改动会写进数据库，改完立刻生效。
                   </CardDescription>
                 </CardHeader>
                 <CardContent className='px-0'>
@@ -374,7 +369,7 @@ export function ConfigPage() {
             <p className='text-xs text-muted-foreground'>
               {editing?.secret
                 ? '这一项的值读不出来（只写不读）。留空表示不改；要改就填新值。'
-                : '存进数据库，重启网关之后生效。'}
+                : '存进数据库，改完立刻生效。'}
             </p>
           </div>
           <DialogFooter>

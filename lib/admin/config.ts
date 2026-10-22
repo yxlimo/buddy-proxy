@@ -4,9 +4,17 @@
 // 面板看到的是这三个来源合成之后的样子，并且要标出每个值是从哪来的 ——
 // 不然改了 env 也不知道到底谁说了算。
 //
-// 改了不热生效：数据库里的值要重启才被进程读走。所以写完只标「待重启」。
+// 面板能改的那几个是热的：写进数据库之后重新读一遍，下一个请求就是新的值。
+// 服务自己内部的设置（config-cli.ts 改的那些）在某个常量里，改了要重启。
 
-import { configClear, configOverride, configPendingRestart, configSnapshot, configStartup } from "../config.ts";
+import {
+  configClear,
+  configOverride,
+  configPendingRestart,
+  configSnapshot,
+  configStartup,
+  reloadConfig,
+} from "../config.ts";
 import { listConfig } from "../store.ts";
 
 /** 一个配置项在面板里的样子。 */
@@ -273,13 +281,21 @@ export function setConfigValue(key: string, value: string, clear = false): { ok:
   }
   if (clear) {
     configClear(key);
+    reloadConfig();
     return { ok: true, message: `清掉了 ${key} 的覆盖值` };
   }
   configOverride(key, value);
+  // 改完就重新读一遍：面板能改的那些是热的，下一个请求就是新的值。
+  reloadConfig();
   return { ok: true, message: `写了 ${key}` };
 }
 
-/** 是不是有改了还没重启的东西。 */
+/**
+ * 是不是有改了还没重启的东西。
+ *
+ * 面板能改的设置是热的：改完就生效，所以它们不算。服务自己内部的设置
+ * （config-cli.ts 改的那些）在某个常量里，要重启。
+ */
 export function pendingRestart(): boolean {
   return configPendingRestart();
 }
