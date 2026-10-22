@@ -162,10 +162,8 @@ async function upstreamMessage(id: UpstreamId, state: UpstreamState) {
   return create(UpstreamSchema, {
     id,
     label: UPSTREAM_LABELS[id],
-    // 将要生效的值：面板改了但还没重启时，这里已经是改后的值。
+    // 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。
     enabled: state.enabled,
-    // 改过、还没重启。
-    pending: state.pending,
     modelCount: upstreamModelCount(id),
     credential: create(CredentialStatusSchema, {
       kind: credential.kind,

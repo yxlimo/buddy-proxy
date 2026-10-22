@@ -165,6 +165,16 @@ bash test/run-router.sh 6689 ""   # a router with the real upstreams
 bash test/e2e.sh http://127.0.0.1:6689
 ```
 
+## The panel
+
+The panel is at `/admin` on the same port as the API. It needs the token in
+the data directory (`/data/admin-token`, created on the first start and
+printed in the log that one time).
+
+It is meant for the network it runs on. To reach it from outside, put it
+behind HTTPS or reach the host over Tailscale — the panel holds the
+credentials, so it should not travel in the clear.
+
 ## Endpoints
 
 | Method | Path | Format |

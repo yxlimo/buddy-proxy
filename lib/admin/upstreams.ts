@@ -77,10 +77,8 @@ export const UPSTREAM_IDS: UpstreamId[] = ["minimax", "qoder", "qoder-cn", "work
 
 /** 一个上游的开关状态。 */
 export interface UpstreamState {
-  /** 将要生效的值：面板改了但还没重启时，这里已经是改后的值。 */
+  /** 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。 */
   enabled: boolean;
-  /** 改过、还没重启。 */
-  pending: boolean;
 }
 
 /**
@@ -99,16 +97,13 @@ export function setUpstreamEnabled(id: UpstreamId, enabled: boolean): { ok: bool
 /**
  * 每个上游的开关状态。
  *
- * 开关是热的：面板改了，配置重读一遍，下一个请求就是新的。所以
- *
- *   enabled  现在在生效的值
- *   pending  永远是假 —— 没有「改了还没生效」这回事
+ * 开关是热的：面板改了，配置重读一遍，下一个请求就是新的。所以这里只有
+ * 「现在在生效的值」—— 没有「改了还没生效」这回事。
  */
 export function upstreamStates(): Record<UpstreamId, UpstreamState> {
   const out = {} as Record<UpstreamId, UpstreamState>;
   for (const id of UPSTREAM_IDS) {
-    const enabled = upstreamEnabled(id);
-    out[id] = { enabled, pending: false };
+    out[id] = { enabled: upstreamEnabled(id) };
   }
   return out;
 }

@@ -15,7 +15,7 @@ import { renderWithClient } from '@/test/render'
  * 上游的开关。
  *
  * 开关是热的：面板改完立刻生效，不用重启。所以界面上不再提「重启后生效」，
- * 也不看 Upstream.pending（那永远是假）。
+ * 也不看任何「待生效」的标志 —— 开关是热的，改完就生效。
  */
 describe('上游的开关', () => {
   it('开关按服务端的 enabled 显示', async () => {
@@ -27,13 +27,11 @@ describe('上游的开关', () => {
               id: 'minimax',
               label: 'MiniMax Code',
               enabled: true,
-              pending: false,
             }),
             create(UpstreamSchema, {
               id: 'qoder-cn',
               label: 'Qoder 中国区',
               enabled: false,
-              pending: false,
             }),
           ],
         }),
@@ -59,7 +57,6 @@ describe('上游的开关', () => {
               id: 'minimax',
               label: 'MiniMax Code',
               enabled: true,
-              pending: false,
             }),
           ],
         }),
@@ -105,7 +102,6 @@ describe('上游的开关', () => {
               id: 'minimax',
               label: 'MiniMax Code',
               enabled,
-              pending: false,
             }),
           ],
         }),
