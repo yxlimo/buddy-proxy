@@ -62,12 +62,14 @@ const AUTH_PLATFORM = configString("WORKBUDDY_AUTH_PLATFORM", "workbuddy");
 /**
  * The version the identity headers claim to be.
  *
- * The official client reports the product version, not the version of the
- * bundle that happens to be installed: `cli/product.json` and the install
- * manifest both say 5.8.3, and the user agent is built from that.
+ * The identity is the command line client's, so the version is the client's
+ * own — the version of the `@tencent-ai/codebuddy-code` package, not the
+ * version of the desktop app that ships it. A request the official client
+ * made carried `CLI/2.161.0 WorkBuddy/2.161.0` and `X-IDE-Version: 2.161.0`.
  */
+const CLI_VERSION = configString("WORKBUDDY_CLI_VERSION", "2.161.0");
+/** The version of the desktop app, for the calls that carry it. */
 const DESKTOP_VERSION_CN = configString("WORKBUDDY_VERSION", "5.8.3");
-const CLI_VERSION = DESKTOP_VERSION_CN;
 
 const REFRESH_BUFFER_MS = configNumber("WORKBUDDY_REFRESH_BUFFER_MS", 24 * 3600 * 1000);
 const WARN_MS = configNumber("WORKBUDDY_AUTH_WARN_MS", 7 * 24 * 3600 * 1000);
@@ -475,13 +477,20 @@ export function accountHeaders(
   if (opts.chat) {
     // The model request is not the account's own API: the official client
     // sends neither the device id nor the domain there — the device id belongs
-    // to the sandbox SDK, and the domain to the auth calls.
+    // to the sandbox SDK.
     delete headers["X-Device-Id"];
-    delete headers["X-Domain"];
   }
   return headers;
 }
 
+/**
+ * The identity the official CLI sends with a chat request.
+ *
+ * Everything here was taken from a request the official client actually made
+ * (the Linux 5.6.2 and the Windows 5.8.3 builds send the same shape, only the
+ * version differs). The headers that the client does not send are not sent
+ * here either.
+ */
 export function chatHeaders(
   session: WorkBuddySession,
   opts: { conversationId?: string; turnRequestId?: string } = {},
@@ -504,11 +513,25 @@ export function chatHeaders(
     "X-IDE-Version": CLI_VERSION,
     "X-Product": "SaaS",
     "User-Agent": `CLI/${CLI_VERSION} WorkBuddy/${CLI_VERSION}`,
+    "X-Requested-With": "XMLHttpRequest",
+    "X-CodeBuddy-Request": "1",
     "X-Conversation-ID": conversationId,
     "X-Conversation-Request-ID": turnRequestId,
+    // The root request id is the same id as the conversation's request id.
+    "X-Root-Request-ID": turnRequestId,
     "X-Conversation-Message-ID": messageId,
     "X-Request-ID": messageId,
-    "X-Private-Data": "false",
+    // The account asked not to be sent to the Yuanbao channel.
+    "X-Private-Data": "true",
+    // The OpenAI Node SDK fingerprint the official CLI carries — these seven,
+    // and no others.
+    "x-stainless-lang": "js",
+    "x-stainless-package-version": "6.25.0",
+    "x-stainless-os": process.platform === "darwin" ? "MacOS" : "Linux",
+    "x-stainless-arch": process.arch === "x64" ? "x64" : process.arch,
+    "x-stainless-runtime": "node",
+    "x-stainless-runtime-version": `v${process.versions.node}`,
+    "x-stainless-retry-count": "0",
     // The trace family.
     "X-Trace-ID": trace,
     traceparent: `00-${trace}-${span}-01`,

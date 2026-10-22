@@ -728,6 +728,14 @@ Two things are not what they look like:
   the last good one when the server cannot be reached. The bundled snapshot is
   only the fallback.
 
+The identity around the request is the official client's, taken from a request
+the client actually made: the product version in the user agent (the command
+line client's own version, not the desktop app's), the account headers, the
+agent and IDE headers, the seven `x-stainless-*` headers the OpenAI Node SDK
+adds, the trace family, and the identifiers in the shape the client uses (a
+uuid v7, dashed for the conversation and plain for the requests). The headers
+the client does not send are not sent here either.
+
 The request is built the way the official client builds it, not by passing the
 caller's parameters through:
 
@@ -735,6 +743,9 @@ caller's parameters through:
 - a model that cannot call tools is sent no tools;
 - the temperature and the top_p are the model's own, unless the caller chose
   them;
+- a model that thinks is also asked for a summary of its thinking and for a
+  verbose answer (`reasoning_summary: "auto"` and `verbosity: "high"`), which
+  is what the client sends and what the product gateway keeps;
 - the conversation keeps one id for all its turns, so the upstream sees the
   turns as one conversation instead of a new one each time.
 
@@ -744,9 +755,9 @@ family, and the identifiers in the shape the client checks (a lowercase
 UUIDv7). The headers the official client does not send are not sent here
 either.
 
-`docs/workbuddy/DIVERGENCES.md` (local, not in the repository) lists every
-difference between this and the official client that the review found, with
-the evidence for it.
+`docs/workbuddy/DIVERGENCES.md` and `docs/workbuddy/FINDINGS-LINUX.md` (local,
+not in the repository) list every difference between this and the official
+client that the review found, with the evidence for it.
 
 ### Login
 
@@ -776,7 +787,8 @@ rejected with code 11133, so it is left out.
 |----------|---------|------|
 | `WORKBUDDY_CN` | `false` | switch the WorkBuddy China upstream on |
 | `WORKBUDDY_CN_BASE` | `https://www.workbuddy.cn` | the host that serves the account |
-| `WORKBUDDY_VERSION` | `5.8.3` | the version the identity headers claim |
+| `WORKBUDDY_CLI_VERSION` | `2.161.0` | the version the identity headers claim (the CLI's own) |
+| `WORKBUDDY_VERSION` | `5.8.3` | the version of the desktop app |
 | `WORKBUDDY_AUTH_PLATFORM` | `workbuddy` | the platform the login asks about |
 | `WORKBUDDY_CATALOG_TTL_MS` | `1800000` | how long the upstream's catalogue is trusted |
 | `WORKBUDDY_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |

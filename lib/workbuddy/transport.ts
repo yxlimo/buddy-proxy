@@ -68,6 +68,18 @@ export function buildChatBody(
     delete out.effort;
     if (level) out.reasoning_effort = level;
 
+    // A model that thinks is also asked for a summary of its thinking and for
+    // a verbose answer. The official client sends these two only for a model
+    // that reasons — a request for a model that does not has neither, and the
+    // compatibility rules of the product gateway keep them as they are.
+    if (model.reasoning) {
+      if (out.reasoning_summary === undefined) out.reasoning_summary = "auto";
+      if (out.verbosity === undefined) out.verbosity = "high";
+    } else {
+      delete out.reasoning_summary;
+      delete out.verbosity;
+    }
+
     // A model that cannot call tools is sent no tools.
     if (!model.tools) {
       delete out.tools;

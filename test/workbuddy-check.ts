@@ -7,6 +7,7 @@
 
 import { buildChatBody, conversationIdFor } from "../lib/workbuddy/transport.ts";
 import { clampEffort } from "../lib/workbuddy/models.ts";
+import { chatHeaders } from "../lib/workbuddy/auth.ts";
 import { uuidv7Hex } from "../lib/ids.ts";
 
 let pass = 0;
@@ -86,6 +87,53 @@ check("the id is the same for the same conversation", first === grown);
 check("a different conversation gets a different id", first !== conversationIdFor([{ role: "user", content: "other" }]));
 check("the id looks like a uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(first), first);
 check("a client that brings its own id keeps it", conversationIdFor(messages, "client-id") === "client-id");
+
+console.log("");
+console.log("the thinking summary");
+
+check("a model that thinks is asked for a summary", defaults.reasoning_summary === "auto", String(defaults.reasoning_summary));
+check("a model that thinks is asked for a verbose answer", defaults.verbosity === "high", String(defaults.verbosity));
+
+const noThinking = buildChatBody({ model: "plain", messages: [{ role: "user", content: "hi" }] }, {
+  ...model,
+  id: "plain",
+  reasoning: false,
+});
+check("a model that does not think is asked for no summary", !("reasoning_summary" in noThinking));
+check("a model that does not think is asked for no verbosity", !("verbosity" in noThinking));
+
+console.log("");
+console.log("the identity");
+
+// The headers a request the official client actually made carried.
+const session = {
+  uid: "9efe1321-da5f-47e8-8077-455cec3c7009",
+  domain: "www.workbuddy.cn",
+  accessToken: "token",
+  refreshToken: "refresh",
+} as any;
+const headers = chatHeaders(session);
+
+check("the user agent names the client", /^CLI\/\d+\.\d+\.\d+ WorkBuddy\/\d+\.\d+\.\d+$/.test(headers["User-Agent"]), headers["User-Agent"]);
+check(
+  "the version header carries the client's own version",
+  headers["X-IDE-Version"] === headers["User-Agent"]?.split(" ")[0]?.split("/")[1],
+  `${headers["X-IDE-Version"]} vs ${headers["User-Agent"]}`,
+);
+check("the domain is sent", headers["X-Domain"] === "www.workbuddy.cn", headers["X-Domain"]);
+check("the account is named", headers["X-User-Id"] === session.uid);
+check("the private data flag is set", headers["X-Private-Data"] === "true", headers["X-Private-Data"]);
+check("the request says what it is", headers["X-Requested-With"] === "XMLHttpRequest", headers["X-Requested-With"]);
+check("the CodeBuddy request flag is sent", headers["X-CodeBuddy-Request"] === "1", headers["X-CodeBuddy-Request"]);
+check(
+  "the root request id is the conversation's request id",
+  headers["X-Root-Request-ID"] === headers["X-Conversation-Request-ID"],
+  `${headers["X-Root-Request-ID"]} vs ${headers["X-Conversation-Request-ID"]}`,
+);
+check("the runtime header is not sent", !("X-Agent-Runtime" in headers));
+
+const stainless = Object.keys(headers).filter((k) => k.startsWith("x-stainless-"));
+check("the SDK fingerprint is exactly the seven the client sends", stainless.length === 7, stainless.join(","));
 
 console.log("");
 console.log("the identifiers");
