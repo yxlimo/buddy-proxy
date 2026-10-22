@@ -197,10 +197,13 @@ curl http://localhost:6450/v1/messages \
 ## The published models (the root route)
 
 The root route publishes one list of models, and the database decides what is
-on it. With nothing in the database it publishes every upstream's models under
-their prefixed name (`qoder/glm-5.3`) — the list it always showed. Once the
-database holds a model, the database is the catalog: the panel decides which
-models exist, what they are called, and which upstream serves them.
+on it: the panel decides which models exist, what they are called, and which
+upstream serves them. With nothing in the database the root route has nothing
+to publish and answers 404.
+
+The upstream's own paths (`/qoder/v1`, `/qoder-cn/v1`, `/workbuddy-cn/v1`,
+`/minimax/v1`, `/tokenrhythm/v1`) are unaffected: a client pointed at one
+upstream keeps the real model names there.
 
 A published model has one or more targets:
 
@@ -217,8 +220,7 @@ The metadata of a published model comes from its targets, and where the
 targets disagree the smallest value wins — the model can only promise what
 every one of them can do. The panel can override any of it.
 
-The root route's inference is OpenAI only; the Anthropic path keeps taking the
-upstream in the model name.
+The root route's inference is OpenAI only.
 
 | Method | Path | What it does |
 |--------|------|--------------|

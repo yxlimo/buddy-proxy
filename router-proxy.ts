@@ -502,7 +502,16 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
   const base = group ? `/${group}` : "";
 
   router.post(`${base}/v1/messages`, requireKey, parseBody, async (ctx) => {
-    await handle(ctx, "anthropic", group || undefined);
+    if (!group) {
+      // The published models are served in the OpenAI dialect only.
+      ctx.status = 404;
+      ctx.body = {
+        error: { type: "invalid_request_error", message: "the root route speaks the OpenAI dialect only" },
+        hint: `用 OpenAI 方言：POST /v1/chat/completions，或者用某个上游自己的路径：${UPSTREAM_GROUPS.map((g) => `/${g}/v1/messages`).join("、")}`,
+      };
+      return;
+    }
+    await handle(ctx, "anthropic", group);
   });
 
   router.post(`${base}/v1/chat/completions`, requireKey, parseBody, async (ctx) => {
@@ -515,12 +524,22 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
     // so this answer is never blocked by it.
     if (ENABLED_WORKBUDDY_CN) void refreshWorkBuddyCatalog();
     const groups = catalogGroups();
-    if (group) ctx.body = groupCatalog(group, groups, dialect === "openai");
-    else {
-      // The root route publishes one list: the aggregate.
-      const entries = aggregateEntries();
-      ctx.body = dialect === "openai" ? aggregateOpenAICatalog(entries) : aggregateAnthropicCatalog(entries);
+    if (group) {
+      ctx.body = groupCatalog(group, groups, dialect === "openai");
+      return;
     }
+    // The root route publishes one list: the models the database says it
+    // publishes. With nothing in the database there is no list to give.
+    const entries = aggregateEntries();
+    if (!entries.length) {
+      ctx.status = 404;
+      ctx.body = {
+        error: { type: "invalid_request_error", message: "no published models" },
+        hint: "根路由还没有发布任何模型。在面板里配置并保存后，POST /admin/reload 生效。",
+      };
+      return;
+    }
+    ctx.body = dialect === "openai" ? aggregateOpenAICatalog(entries) : aggregateAnthropicCatalog(entries);
   });
 }
 
@@ -553,21 +572,27 @@ async function handle(
 ): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, any>;
 
-  // The root route serves the published models. With nothing configured in the
-  // database those are the prefixed ones, so this is the old behaviour; once
-  // the panel holds a model, the panel decides what the root route publishes.
+  // The root route serves the published models and nothing else: the database
+  // decides which models exist and which upstream serves them.
   if (!group) {
-    const entry = findAggregate(String(body.model ?? "").trim());
-    if (entry) {
-      await handleAggregate(ctx, entry, body, dialect);
+    const wanted = String(body.model ?? "").trim();
+    const entry = findAggregate(wanted);
+    if (!entry) {
+      ctx.status = 404;
+      ctx.body = {
+        error: { type: "invalid_request_error", message: `unknown model "${wanted}"` },
+        hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后，POST /admin/reload 生效。",
+      };
       return;
     }
+    await handleAggregate(ctx, entry, body, dialect);
+    return;
   }
 
   let route: Route;
   try {
     const rctx = routingContext();
-    route = group ? routeInGroup(group, String(body.model ?? "").trim(), rctx) : resolveRoute(body.model, rctx);
+    route = routeInGroup(group!, String(body.model ?? "").trim(), rctx);
   } catch (e) {
     sendError(ctx, e);
     return;

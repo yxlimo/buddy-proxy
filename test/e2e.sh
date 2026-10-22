@@ -47,8 +47,9 @@ status_class() {
   esac
 }
 
-# The model lists, in both dialects and per upstream.
-for group in "" qoder qoder-cn workbuddy-cn minimax; do
+# The model lists, per upstream. The root route publishes what the panel
+# configured, so it is not part of this list.
+for group in qoder qoder-cn workbuddy-cn minimax; do
   path="${group:+$group/}v1/models"
   n=$(curl -s --noproxy '*' -m 20 "$BASE/$path" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))' 2>/dev/null)
   if [ "${n:-0}" -gt 0 ]; then printf '  ok   %-44s %s models\n' "models $path" "$n"; pass=$((pass + 1)); else printf '  FAIL %-44s no models\n' "models $path"; fail=$((fail + 1)); fi

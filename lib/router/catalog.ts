@@ -140,37 +140,16 @@ function findModel(groups: CatalogGroup[], group: UpstreamGroup, id: string): Ca
 /**
  * The models the root route publishes.
  *
- * With nothing configured, every upstream's models are published under their
- * prefixed name — the same list the root route always showed. Once the
- * database holds a model, the database is the catalog: the panel decides which
- * models exist, what they are called, and which upstream serves them.
+ * The database is the catalog: the panel decides which models exist, what they
+ * are called, and which upstream serves them. With nothing in the database
+ * there is nothing to publish.
  *
- * The metadata of a configured model comes from its targets, and where the
+ * The metadata of a published model comes from its targets, and where the
  * targets disagree the smallest value wins — the model can only promise what
  * every one of them can do.
  */
 export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateModel[]): AggregateEntry[] {
   const live = configured.filter((m) => m.enabled);
-  if (live.length === 0) {
-    const entries: AggregateEntry[] = [];
-    for (const { group, models } of groups) {
-      for (const m of models) {
-        entries.push({
-          id: `${GROUP_PREFIX[group]}${m.id}`,
-          displayName: m.displayName,
-          reasoning: m.reasoning,
-          toolCall: m.toolCall,
-          contextWindow: m.contextWindow,
-          maxOutputTokens: m.maxOutputTokens,
-          effortOptions: m.effortOptions,
-          strategy: "single",
-          targets: [{ group, upstreamModel: m.id, position: 0, enabled: true }],
-        });
-      }
-    }
-    return entries;
-  }
-
   const entries: AggregateEntry[] = [];
   for (const model of live) {
     const targets: AggregateTargetSpec[] = [];

@@ -54,15 +54,21 @@ BASE="http://127.0.0.1:$ROUTER_PORT"
 echo ""
 echo "the aggregate catalog"
 
-# With nothing configured the root route publishes everything, as before.
-count=$(curl -fsS "$BASE/v1/models" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
-[ "$count" -gt 10 ] && check "the empty database publishes every model" 1 || check "the empty database publishes every model" 0
+# With nothing configured the root route has nothing to publish.
+code=$(curl -s -o /tmp/opencode/aggregate-empty.json -w '%{http_code}' "$BASE/v1/models")
+[ "$code" = "404" ] && check "the empty database publishes nothing" 1 || check "the empty database publishes nothing" 0
 
-# A prefixed model still works, the way it always did.
-code=$(curl -s -o /tmp/opencode/aggregate-auto.json -w '%{http_code}' \
+# And a model that is not published is not served.
+code=$(curl -s -o /tmp/opencode/aggregate-unknown.json -w '%{http_code}' \
   -X POST "$BASE/v1/chat/completions" -H 'content-type: application/json' \
   -d '{"model":"qoder/glm-5.3","messages":[{"role":"user","content":"hi"}]}')
-[ "$code" = "200" ] && check "a prefixed model answers" 1 || check "a prefixed model answers" 0
+[ "$code" = "404" ] && check "an unpublished model is refused" 1 || check "an unpublished model is refused" 0
+
+# The upstream's own path still works, the way it always did.
+code=$(curl -s -o /tmp/opencode/aggregate-auto.json -w '%{http_code}' \
+  -X POST "$BASE/qoder/v1/chat/completions" -H 'content-type: application/json' \
+  -d '{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}')
+[ "$code" = "200" ] && check "an upstream's own path still answers" 1 || check "an upstream's own path still answers" 0
 
 echo ""
 echo "a model from the database"
