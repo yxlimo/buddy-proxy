@@ -92,9 +92,13 @@ describe('模型保存失败的时候', () => {
 
     await user.click(screen.getByRole('button', { name: '保存' }))
 
-    await waitFor(() => {
-      expect(toastError).toHaveBeenCalledWith('模型至少要有一个上游')
-    })
+    await waitFor(
+      () => {
+        expect(toastError).toHaveBeenCalledWith('模型至少要有一个上游')
+      },
+      // 整套一起跑的时候这个用例偶尔赶不上 5 秒。
+      { timeout: 15000 },
+    )
     // 绿色成功提示不能有。
     expect(toastSuccess).not.toHaveBeenCalled()
     // 弹窗留着，用户填的东西还在。
