@@ -20,9 +20,9 @@ import { qoderChatCompletion, LimitError } from "../qoder/transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../qoder/legacy.ts";
 import { workbuddyChat, aggregateStream } from "../workbuddy/transport.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
-import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/accounts.ts";
+import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
-import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax/gateway.ts";
+import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax/transport.ts";
 import type { QoderRegion } from "../qoder/auth.ts";
 import {
   deliverAnthropicStream,

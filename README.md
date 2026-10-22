@@ -64,19 +64,29 @@ lib/qoder/              Qoder: the session, the models, the two protocols
   models.ts             the model catalog, in both dialects
   transport.ts          the gateway, in the current protocol
   legacy.ts             the gateway, in the legacy COSY protocol
+  credits.ts            the quota, and whether the account is usable
+  benefits.ts           the daily campaign
 lib/workbuddy/          WorkBuddy: the session, the models, the transport
   auth.ts               the browser login, the session, the refresh
   models.ts             the catalogue, curated the way the client shows it
   transport.ts          the chat endpoint
+  api.ts                the account's own API
+  credits.ts            what the account has left
+  benefits.ts           the check-in, the growth centre
 lib/minimax/            MiniMax: the session, the models, the gateway call
   auth.ts               picks the credential source
   oauth.ts              the proxy's own session: the device flow, the refresh
   file-store.ts         read-only view of the desktop app's store
   models.ts             the model catalog
-  gateway.ts            the call to the MiniMax Code gateway
+  transport.ts          the call to the MiniMax Code gateway
   credits.ts            what the accounts have left
-lib/tokenrhythm/        TokenRhythm: the accounts, the models, the relay call
+lib/tokenrhythm/        TokenRhythm: the accounts, the wallet, the relay call
+  accounts.ts           the tenants, the session, the login
+  wallet.ts             what the accounts have left, and which one to use
+  models.ts             the model catalog
+  transport.ts          the relay call
 lib/benefits.ts         the daily credits of the China accounts
+lib/session.ts          the session file: read it, write it, lock it, refresh it
 lib/device-identity.ts  the fingerprint of an account
 ```
 

@@ -21,12 +21,19 @@
 // to audience `agent-backend`. Only this grant works.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
+import {
+  dataDirFor,
+  ensureCredential as ensureCredentialShared,
+  readSession,
+  toCredential as credentialFromSession,
+  writeSession,
+  type CredentialCache,
+} from "../session.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
 export const OAUTH_ORIGINS: Record<string, string> = {
@@ -44,7 +51,6 @@ const WARN_MS = readEnvNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 // Refresh when this much life is left. The real client uses 5 min; a 1-hour token
 // means the proxy refreshes roughly once an hour.
 const REFRESH_BUFFER_MS = readEnvNumber("MINIMAX_REFRESH_BUFFER_MS", 5 * 60 * 1000);
-const LOCK_STALE_MS = readEnvNumber("MINIMAX_LOCK_STALE_MS", 30000);
 
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -78,9 +84,7 @@ interface Grant {
 }
 
 export function dataDir(): string {
-  const explicit = readEnvString("MINIMAX_DATA_DIR", "");
-  if (explicit) return explicit;
-  return fs.existsSync("/data") ? "/data" : path.join(os.homedir(), ".minimax-proxy");
+  return dataDirFor("MINIMAX_DATA_DIR", ".minimax-proxy");
 }
 
 export function sessionPath(): string {
@@ -97,13 +101,7 @@ function loginHint(): string {
 
 /** Read our own session file without throwing. */
 function loadSession(): Session | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(sessionPath(), "utf8"));
-    if (!raw || typeof raw !== "object" || !raw.accessToken || !raw.refreshToken) return null;
-    return raw as Session;
-  } catch {
-    return null;
-  }
+  return readSession<Session>(sessionPath());
 }
 
 export function hasSession(): boolean {
@@ -112,61 +110,13 @@ export function hasSession(): boolean {
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 function saveSession(session: Session): void {
-  const file = sessionPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(session, null, 2) + "\n", { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writeSession(sessionPath(), session);
 }
 
 /**
  * Single-writer lock around a refresh. Two containers sharing the same volume would
  * otherwise rotate the refresh token twice and one of them would be logged out.
  */
-async function withSessionLock(fn: () => Promise<Session>): Promise<Session> {
-  const lock = `${sessionPath()}.lock`;
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  let acquired = false;
-  for (let i = 0; i < 3 && !acquired; i++) {
-    try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-      acquired = true;
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") throw e;
-      let age = 0;
-      try {
-        age = Date.now() - fs.statSync(lock).mtimeMs;
-      } catch {
-        break;
-      }
-      if (age > LOCK_STALE_MS) {
-        try {
-          fs.unlinkSync(lock);
-        } catch {
-          /* someone else won the race */
-        }
-        continue;
-      }
-      // Another writer is mid-refresh: wait for its result instead of racing it.
-      await new Promise((r) => setTimeout(r, Math.min(LOCK_STALE_MS - age, 2000)));
-    }
-  }
-  if (!acquired) {
-    const existing = loadSession();
-    if (existing) return existing; // the other writer already landed its result
-    throw new AuthError("could not acquire the credential lock", `另一个进程正在刷新凭据，稍后重试。`, 503);
-  }
-  try {
-    return await fn();
-  } finally {
-    try {
-      fs.unlinkSync(lock);
-    } catch {
-      /* already gone */
-    }
-  }
-}
 
 async function postForm(endpoint: string, values: Record<string, string>) {
   const r = await fetch(endpoint, {
@@ -244,24 +194,19 @@ function sessionFromGrant(grant: Grant, previous?: Session | null): Session {
   };
 }
 
-let cache: { at: number; cred: Credential } | null = null;
+let cache: CredentialCache | null = null;
 
 function toCredential(session: Session): Credential {
-  const remainingMs = session.expiresAtMs - Date.now();
-  return {
-    accessToken: session.accessToken,
-    generation: session.generation,
-    expiresAtMs: session.expiresAtMs,
-    remainingMs,
+  return credentialFromSession(session, {
+    source: sessionPath(),
+    owner: "oauth",
+    warnMs: WARN_MS,
     status: "authenticated",
     clientId: session.clientId,
     audience: session.audience,
     scopes: session.scopes,
     region: session.region,
-    source: sessionPath(),
-    owner: "oauth",
-    warning: remainingMs < WARN_MS,
-  };
+  });
 }
 
 /**
@@ -318,18 +263,24 @@ export async function refreshSession(force = false): Promise<Session> {
  * was rejected, get a new one" and refreshes unconditionally.
  */
 export async function ensureCredential(force = false): Promise<Credential> {
-  if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.cred;
-  const session = await withSessionLock(() => refreshSession(force));
-  const cred = toCredential(session);
-  if (cred.remainingMs <= 0) {
-    throw new AuthError(
-      `access token expired (generation ${cred.generation})`,
-      `token 已过期且刷新没成功。删掉 ${sessionPath()} 后重启服务即可重新登录。`,
-      503,
-    );
-  }
-  cache = { at: Date.now(), cred };
-  return cred;
+  return ensureCredentialShared({
+    cache,
+    setCache: (next) => {
+      cache = next;
+    },
+    cacheMs: CACHE_MS,
+    force,
+    lockFile: sessionPath(),
+    load: loadSession,
+    refresh: refreshSession,
+    toCredential,
+    expired: (session) =>
+      new AuthError(
+        `access token expired (generation ${session.generation})`,
+        `token 已过期且刷新没成功。删掉 ${sessionPath()} 后重启服务即可重新登录。`,
+        503,
+      ),
+  });
 }
 
 export interface DeviceAuthorization {

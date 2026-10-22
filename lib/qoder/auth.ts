@@ -16,14 +16,20 @@
 // The client id differs between prod and the daily/test environments, not between
 // regions — both use the prod one.
 
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
+import {
+  dataDirFor,
+  ensureCredential as ensureCredentialShared,
+  readSession,
+  toCredential as credentialFromSession,
+  writeSession,
+  type CredentialCache,
+} from "../session.ts";
 
 export type QoderRegion = "cn" | "global";
 
@@ -57,7 +63,7 @@ export const ENDPOINTS: Record<QoderRegion, QoderEndpoints> = {
   },
 };
 
-const REGION: QoderRegion = "global";
+export const REGION: QoderRegion = "global";
 export const REGION_NAME = REGION;
 export const ENDPOINT = ENDPOINTS[REGION];
 
@@ -67,10 +73,9 @@ const CACHE_MS = readEnvNumber("QODER_AUTH_CACHE_MS", 5000);
 // year, which is why the refresh path is barely ever taken.
 const WARN_MS = readEnvNumber("QODER_AUTH_WARN_MS", 7 * 24 * 60 * 60 * 1000);
 const REFRESH_BUFFER_MS = readEnvNumber("QODER_REFRESH_BUFFER_MS", 24 * 60 * 60 * 1000);
-const LOCK_STALE_MS = readEnvNumber("QODER_LOCK_STALE_MS", 30000);
 const POLL_INTERVAL_MS = readEnvNumber("QODER_POLL_INTERVAL_MS", 1000);
 const POLL_TIMEOUT_MS = readEnvNumber("QODER_POLL_TIMEOUT_MS", 5 * 60 * 1000);
-const USER_AGENT = readEnvString("QODER_USER_AGENT", "qoder/1.1.74");
+export const USER_AGENT = readEnvString("QODER_USER_AGENT", "qoder/1.1.74");
 
 export const QODER_WARN_MS = WARN_MS;
 export const QODER_REFRESH_BUFFER_MS = REFRESH_BUFFER_MS;
@@ -96,9 +101,7 @@ export interface QoderSession {
 }
 
 export function dataDir(): string {
-  const explicit = readEnvString("QODER_DATA_DIR", "");
-  if (explicit) return explicit;
-  return fs.existsSync("/data") ? "/data" : path.join(os.homedir(), ".qoder-proxy");
+  return dataDirFor("QODER_DATA_DIR", ".qoder-proxy");
 }
 
 export function sessionPath(region: QoderRegion = REGION): string {
@@ -107,7 +110,7 @@ export function sessionPath(region: QoderRegion = REGION): string {
   return path.join(dataDir(), `qoder-session.${region}.json`);
 }
 
-function loginHint(region: QoderRegion = REGION): string {
+export function loginHint(region: QoderRegion = REGION): string {
   return (
     `还没有登录 Qoder（${region} 区域）。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
     `删掉这个文件再重启，服务会重新登录（会打印一个授权链接）。` +
@@ -127,13 +130,7 @@ export function newMachineIdentity(): { machineId: string; machineToken: string;
 }
 
 export function loadSession(region: QoderRegion = REGION): QoderSession | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(sessionPath(region), "utf8"));
-    if (!raw || typeof raw !== "object" || !raw.accessToken || !raw.refreshToken) return null;
-    return raw as QoderSession;
-  } catch {
-    return null;
-  }
+  return readSession<QoderSession>(sessionPath(region));
 }
 
 export function hasSession(region: QoderRegion = REGION): boolean {
@@ -155,60 +152,9 @@ export function deviceIdentity(region: QoderRegion = REGION): DeviceIdentity | n
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 export function saveSession(session: QoderSession): void {
-  const file = sessionPath(session.region);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(session, null, 2) + "\n", { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writeSession(sessionPath(session.region), session);
 }
 
-/**
- * Single-writer lock around a refresh. The refresh token rotates, so two processes
- * refreshing at once would leave one of them logged out.
- */
-async function withSessionLock<T>(region: QoderRegion, fn: () => Promise<T>): Promise<T> {
-  const lock = `${sessionPath(region)}.lock`;
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  let acquired = false;
-  for (let i = 0; i < 3 && !acquired; i++) {
-    try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-      acquired = true;
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") throw e;
-      let age = 0;
-      try {
-        age = Date.now() - fs.statSync(lock).mtimeMs;
-      } catch {
-        break;
-      }
-      if (age > LOCK_STALE_MS) {
-        try {
-          fs.unlinkSync(lock);
-        } catch {
-          /* someone else won the race */
-        }
-        continue;
-      }
-      await new Promise((r) => setTimeout(r, Math.min(LOCK_STALE_MS - age, 2000)));
-    }
-  }
-  if (!acquired) {
-    const existing = loadSession(region);
-    if (existing) return existing as unknown as T;
-    throw new AuthError("could not acquire the credential lock", "另一个进程正在刷新凭据，稍后重试。", 503);
-  }
-  try {
-    return await fn();
-  } finally {
-    try {
-      fs.unlinkSync(lock);
-    } catch {
-      /* already gone */
-    }
-  }
-}
 
 function machineFields(session: QoderSession): Record<string, string> {
   // The derived fingerprint, not the one that was stored at login time: the
@@ -325,40 +271,40 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
   return next;
 }
 
-let cache: { at: number; cred: Credential; region: QoderRegion } | null = null;
+let cache: CredentialCache | null = null;
 
 function toCredential(session: QoderSession): Credential {
-  const remainingMs = session.expiresAtMs - Date.now();
-  return {
-    accessToken: session.accessToken,
-    generation: session.generation,
-    expiresAtMs: session.expiresAtMs,
-    remainingMs,
-    status: remainingMs > 0 ? "authenticated" : "expired",
-    clientId: session.clientId,
-    audience: "qoder",
-    scopes: [],
-    region: session.region,
+  return credentialFromSession(session, {
     source: sessionPath(session.region),
     owner: "oauth",
-    warning: remainingMs < WARN_MS,
-  };
+    warnMs: WARN_MS,
+    clientId: session.clientId,
+    audience: "qoder",
+    region: session.region,
+  });
 }
 
 /** Credential for the proxy. `force` means the token we sent was rejected. */
 export async function ensureCredential(force = false, region: QoderRegion = REGION): Promise<Credential> {
-  if (!force && cache && cache.region === region && Date.now() - cache.at < CACHE_MS) return cache.cred;
-  const session = await withSessionLock(region, () => refreshSession(force, region));
-  const cred = toCredential(session);
-  if (cred.remainingMs <= 0) {
-    throw new AuthError(
-      `access token expired (generation ${cred.generation})`,
-      `Qoder token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
-      503,
-    );
-  }
-  cache = { at: Date.now(), cred, region };
-  return cred;
+  return ensureCredentialShared({
+    cache,
+    setCache: (next) => {
+      cache = next;
+    },
+    key: region,
+    cacheMs: CACHE_MS,
+    force,
+    lockFile: sessionPath(region),
+    load: () => loadSession(region),
+    refresh: (f) => refreshSession(f, region),
+    toCredential,
+    expired: (session) =>
+      new AuthError(
+        `access token expired (generation ${session.generation})`,
+        `Qoder token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+        503,
+      ),
+  });
 }
 
 export interface DeviceAuthorization {
@@ -497,139 +443,3 @@ export function qoderStatus(region: QoderRegion = REGION): Record<string, unknow
  * login lapsed (`LoginExpire`). Those all surface at inference time as an opaque
  * failure, so the proxy asks the server instead of guessing from a 403 later.
  */
-export interface QoderAccountHealth {
-  region: QoderRegion;
-  authorized: boolean;
-  /** PASS / WAIT / NoIpPermission / AppDisable / LoginExpire, as the server reports it. */
-  whitelistStatus?: string;
-  userId?: string;
-  userType?: string;
-  /** True when the account is fine to use. */
-  usable: boolean;
-  /** Why not, in a sentence. */
-  reason?: string;
-  hint?: string;
-}
-
-/** What the account has left, in credits. */
-export interface QoderCredits {
-  region: QoderRegion;
-  /** The plan's own credits. */
-  plan: { total: number; used: number; remaining: number };
-  /** Credits bought on top of the plan. */
-  addOn: { total: number; used: number; remaining: number };
-  /** Whether the plan's credits are used up. */
-  quotaExceeded: boolean;
-  /** When the plan's credits reset. */
-  resetsAt: string | null;
-}
-
-/**
- * Ask the account how many credits it has left.
- *
- * GET /api/v2/quota/usage on the openapi host, with the same token the status
- * check uses. The answer holds two pots: the plan's own credits and the ones
- * bought on top of it.
- */
-export async function fetchQoderCredits(region: QoderRegion = REGION): Promise<QoderCredits | null> {
-  const session = loadSession(region);
-  if (!session) return null;
-  try {
-    const cred = await ensureCredential(false, region);
-    const r = await fetch(`${ENDPOINTS[region].openapi}/api/v2/quota/usage`, {
-      headers: {
-        Authorization: `Bearer ${cred.accessToken}`,
-        Accept: "application/json",
-        "User-Agent": USER_AGENT,
-        ...(session.machineToken ? { "Cosy-MachineToken": session.machineToken } : {}),
-        ...(session.machineType ? { "Cosy-Machine-Type": session.machineType } : {}),
-      },
-    });
-    if (!r.ok) return null;
-    const body = await r.json().catch(() => undefined);
-    const pot = (p: any) => ({
-      total: Number(p?.total ?? 0),
-      used: Number(p?.used ?? 0),
-      remaining: Number(p?.remaining ?? 0),
-    });
-    return {
-      region,
-      plan: pot(body?.userQuota),
-      addOn: pot(body?.addOnQuota),
-      quotaExceeded: body?.isQuotaExceeded === true,
-      resetsAt: typeof body?.expiresAt === "number" ? new Date(body.expiresAt).toISOString() : null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function checkAccountHealth(region: QoderRegion = REGION): Promise<QoderAccountHealth> {
-  const session = loadSession(region);
-  if (!session) {
-    return { region, authorized: false, usable: false, reason: "no session", hint: loginHint(region) };
-  }
-  const cred = await ensureCredential(false, region);
-  const r = await fetch(`${ENDPOINTS[region].openapi}/api/v3/user/status`, {
-    headers: {
-      Authorization: `Bearer ${cred.accessToken}`,
-      Accept: "application/json",
-      "User-Agent": USER_AGENT,
-      ...(session.machineToken ? { "Cosy-MachineToken": session.machineToken } : {}),
-      ...(session.machineType ? { "Cosy-Machine-Type": session.machineType } : {}),
-    },
-  });
-  if (!r.ok) {
-    const body = await r.json().catch(() => undefined);
-    const code = body?.errorCode ?? body?.code ?? `HTTP ${r.status}`;
-    return {
-      region,
-      authorized: false,
-      usable: false,
-      reason: `status check failed (${code})`,
-      hint: `Qoder 账号状态查询失败（${code}）。`,
-    };
-  }
-  const body = await r.json().catch(() => undefined);
-  const userId = typeof body?.id === "string" ? body.id : undefined;
-  const whitelistStatus = typeof body?.whitelistStatus === "string" ? body.whitelistStatus : undefined;
-  const userType = typeof body?.userType === "string" ? body.userType : undefined;
-
-  if (!userId) {
-    return {
-      region,
-      authorized: false,
-      usable: false,
-      reason: "login expired",
-      hint: `登录已失效，删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
-    };
-  }
-  if (whitelistStatus === "NoIpPermission") {
-    return {
-      region,
-      authorized: false,
-      usable: false,
-      whitelistStatus,
-      userId,
-      userType,
-      reason: "the account may not be used from this IP",
-      hint: "Qoder 拒绝了当前出口 IP（NoIpPermission）。换一个出口再试。",
-    };
-  }
-  if (whitelistStatus === "AppDisable") {
-    return { region, authorized: false, usable: false, whitelistStatus, userId, userType, reason: "the app is disabled for this account" };
-  }
-  if (whitelistStatus === "LoginExpire") {
-    return {
-      region,
-      authorized: false,
-      usable: false,
-      whitelistStatus,
-      userId,
-      userType,
-      reason: "login expired",
-      hint: `登录已过期，删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
-    };
-  }
-  return { region, authorized: true, usable: true, whitelistStatus, userId, userType };
-}

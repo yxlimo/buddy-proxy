@@ -14,13 +14,20 @@
 // www.workbuddy.cn, the older gateway was copilot.tencent.com, and the
 // account's own domain decides which one answers for it.
 
-import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
+import {
+  dataDirFor,
+  ensureCredential as ensureCredentialShared,
+  readSession,
+  toCredential as credentialFromSession,
+  writeSession,
+  type CredentialCache,
+} from "../session.ts";
 
 export type WorkBuddyRegion = "cn";
 
@@ -75,9 +82,7 @@ export interface WorkBuddySession {
 }
 
 export function dataDir(): string {
-  const explicit = readEnvString("WORKBUDDY_DATA_DIR", "");
-  if (explicit) return explicit;
-  return fs.existsSync("/data") ? "/data" : path.join(process.env.HOME ?? "/tmp", ".workbuddy-proxy");
+  return dataDirFor("WORKBUDDY_DATA_DIR", ".workbuddy-proxy");
 }
 
 export function sessionPath(region: WorkBuddyRegion = "cn"): string {
@@ -95,13 +100,7 @@ function loginHint(region: WorkBuddyRegion = "cn"): string {
 }
 
 export function loadSession(region: WorkBuddyRegion = "cn"): WorkBuddySession | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(sessionPath(region), "utf8"));
-    if (!raw || typeof raw !== "object" || !raw.accessToken || !raw.refreshToken) return null;
-    return raw as WorkBuddySession;
-  } catch {
-    return null;
-  }
+  return readSession<WorkBuddySession>(sessionPath(region));
 }
 
 export function hasSession(region: WorkBuddyRegion = "cn"): boolean {
@@ -110,11 +109,7 @@ export function hasSession(region: WorkBuddyRegion = "cn"): boolean {
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 export function saveSession(session: WorkBuddySession): void {
-  const file = sessionPath(session.region);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(session, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writeSession(sessionPath(session.region), session);
 }
 
 /** The `sub` claim of a JWT, without verifying the signature. */
@@ -357,24 +352,17 @@ export async function refreshSession(
   return next;
 }
 
-let cache: { at: number; cred: Credential; region: WorkBuddyRegion } | null = null;
+let cache: CredentialCache | null = null;
 
 function toCredential(session: WorkBuddySession): Credential {
-  const remainingMs = session.expiresAtMs - Date.now();
-  return {
-    accessToken: session.accessToken,
-    generation: session.generation,
-    expiresAtMs: session.expiresAtMs,
-    remainingMs,
-    status: remainingMs > 0 ? "authenticated" : "expired",
-    clientId: "workbuddy-cli",
-    audience: "workbuddy",
-    scopes: [],
-    region: session.region,
+  return credentialFromSession(session, {
     source: sessionPath(session.region),
     owner: "oauth",
-    warning: remainingMs < WARN_MS,
-  };
+    warnMs: WARN_MS,
+    clientId: "workbuddy-cli",
+    audience: "workbuddy",
+    region: session.region,
+  });
 }
 
 /** Credential for the proxy. `force` means the token we sent was rejected. */
@@ -382,18 +370,25 @@ export async function ensureCredential(
   force = false,
   region: WorkBuddyRegion = "cn",
 ): Promise<Credential> {
-  if (!force && cache && cache.region === region && Date.now() - cache.at < CACHE_MS) return cache.cred;
-  const session = await refreshSession(force, region);
-  const cred = toCredential(session);
-  if (cred.remainingMs <= 0) {
-    throw new AuthError(
-      `access token expired (generation ${cred.generation})`,
-      `WorkBuddy token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
-      503,
-    );
-  }
-  cache = { at: Date.now(), cred, region };
-  return cred;
+  return ensureCredentialShared({
+    cache,
+    setCache: (next) => {
+      cache = next;
+    },
+    key: region,
+    cacheMs: CACHE_MS,
+    force,
+    lockFile: sessionPath(region),
+    load: () => loadSession(region),
+    refresh: (f) => refreshSession(f, region),
+    toCredential,
+    expired: (session) =>
+      new AuthError(
+        `access token expired (generation ${session.generation})`,
+        `WorkBuddy token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+        503,
+      ),
+  });
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */

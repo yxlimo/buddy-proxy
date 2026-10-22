@@ -1,4 +1,4 @@
-// lib/minimax/gateway.ts — the call to the MiniMax Code gateway.
+// lib/minimax/transport.ts — the call to the MiniMax Code gateway.
 //
 // What makes the gateway treat a request as a MiniMax Code client is the
 // OAuth grant itself — client_id `mcode-public`, audience `agent-backend`,

@@ -26,11 +26,12 @@ import { QODER_MODELS, qoderModelsForRegion } from "./lib/qoder/models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax/models.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "./lib/minimax/credits.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
-import { MINIMAX_UPSTREAM } from "./lib/minimax/gateway.ts";
+import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { tokenRhythmCatalogModels } from "./lib/router/catalog.ts";
 import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
-import { tokenRhythmStatuses } from "./lib/tokenrhythm/accounts.ts";
-import { qoderStatus, checkAccountHealth, fetchQoderCredits, type QoderAccountHealth, type QoderRegion } from "./lib/qoder/auth.ts";
+import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
+import { qoderStatus, type QoderRegion } from "./lib/qoder/auth.ts";
+import { checkAccountHealth, fetchQoderCredits, type QoderAccountHealth } from "./lib/qoder/credits.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
 import { workBuddyFallbackModels, type WorkBuddyModel } from "./lib/workbuddy/models.ts";
@@ -59,7 +60,8 @@ import {
   minimaxCatalogModels,
   type CatalogGroup,
 } from "./lib/router/catalog.ts";
-import { fetchWorkBuddyCredits, type BenefitUpstream } from "./lib/benefits.ts";
+import { type BenefitUpstream } from "./lib/benefits.ts";
+import { fetchWorkBuddyCredits } from "./lib/workbuddy/credits.ts";
 import { BenefitsRunner } from "./lib/router/benefits.ts";
 
 const PORT = readEnvNumber("ROUTER_PORT", 6450);

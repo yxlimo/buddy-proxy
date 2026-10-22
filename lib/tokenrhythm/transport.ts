@@ -9,7 +9,6 @@
 
 import { AuthError } from "../credential.ts";
 import { TOKENRHYTHM_INFER_BASE, tokenRhythmTenant, type TokenRhythmTenant } from "./accounts.ts";
-import { TOKENRHYTHM_MODELS } from "./models.ts";
 
 /**
  * Put the thinking back into the assistant messages.
