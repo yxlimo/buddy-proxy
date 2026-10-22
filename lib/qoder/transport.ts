@@ -1,4 +1,4 @@
-// lib/qoder-transport.ts — talking to the Qoder gateway.
+// lib/qoder/transport.ts — talking to the Qoder gateway.
 //
 // The new protocol speaks the OpenAI chat dialect natively: the body is a plain
 // chat/completions request and the response is a plain SSE stream of
@@ -11,8 +11,8 @@
 // headers.
 
 import { randomUUID } from "node:crypto";
-import { ensureCredential, ENDPOINTS, deviceIdentity, type QoderRegion } from "./qoder-auth.ts";
-import { AuthError } from "./credential.ts";
+import { ensureCredential, ENDPOINTS, deviceIdentity, type QoderRegion } from "./auth.ts";
+import { AuthError } from "../credential.ts";
 
 const USER_AGENT = "qoder/1.1.74";
 

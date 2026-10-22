@@ -1,4 +1,4 @@
-// lib/workbuddy-auth.ts — the proxy's own WorkBuddy session (China region).
+// lib/workbuddy/auth.ts — the proxy's own WorkBuddy session (China region).
 //
 // WorkBuddy signs in through a browser. The client asks the server for a
 // state, sends the user to a login page, and then polls for the token; the
@@ -17,10 +17,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
-import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError, authLog, tokenFingerprint } from "./credential.ts";
-import type { Credential } from "./credential.ts";
-import { deriveDeviceIdentity, deviceSalt } from "./device-identity.ts";
+import { readEnvNumber, readEnvString } from "../env.ts";
+import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
+import type { Credential } from "../credential.ts";
+import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
 
 export type WorkBuddyRegion = "cn";
 

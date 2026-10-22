@@ -1,4 +1,4 @@
-// lib/qoder-auth.ts — the proxy's own Qoder session.
+// lib/qoder/auth.ts — the proxy's own Qoder session.
 //
 // Qoder's CLI authenticates with a PKCE device flow, but not the shape the OAuth
 // device flow normally has: there is no "device code" endpoint. The client generates
@@ -20,10 +20,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError, authLog, tokenFingerprint } from "./credential.ts";
-import type { Credential } from "./credential.ts";
-import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "./device-identity.ts";
+import { readEnvNumber, readEnvString } from "../env.ts";
+import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
+import type { Credential } from "../credential.ts";
+import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
 
 export type QoderRegion = "cn" | "global";
 

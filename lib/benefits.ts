@@ -24,8 +24,8 @@ import {
   ENDPOINTS,
   type QoderRegion,
   type QoderSession,
-} from "./qoder-auth.ts";
-import { accountHeaders, loadSession as loadWorkBuddySession, type WorkBuddySession } from "./workbuddy-auth.ts";
+} from "./qoder/auth.ts";
+import { accountHeaders, loadSession as loadWorkBuddySession, type WorkBuddySession } from "./workbuddy/auth.ts";
 import { readEnvString } from "./env.ts";
 
 /** The host the account's own API is on. */

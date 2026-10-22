@@ -1,4 +1,4 @@
-// lib/qoder-legacy.ts — Qoder's legacy (COSY) protocol.
+// lib/qoder/legacy.ts — Qoder's legacy (COSY) protocol.
 //
 // The new protocol (api2-v2.qoder.sh) is an OpenAI endpoint and easy to talk to,
 // but it only accepts eight model keys. The legacy protocol (api3.qoder.sh) is
@@ -28,9 +28,9 @@
 // OpenAI chat completion chunk. Errors arrive as their own frames.
 
 import crypto from "node:crypto";
-import { AuthError } from "./credential.ts";
-import { ensureCredential, loadSession, deviceIdentity, ENDPOINTS, type QoderRegion } from "./qoder-auth.ts";
-import { readEnvString } from "./env.ts";
+import { AuthError } from "../credential.ts";
+import { ensureCredential, loadSession, deviceIdentity, ENDPOINTS, type QoderRegion } from "./auth.ts";
+import { readEnvString } from "../env.ts";
 
 /** Qoder's server public key. Fixed; the protocol has never rotated it. */
 const SERVER_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----

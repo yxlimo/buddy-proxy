@@ -1,4 +1,4 @@
-// lib/qoder-models.ts — the Qoder model catalog, in both dialects.
+// lib/qoder/models.ts — the Qoder model catalog, in both dialects.
 //
 // The gateway takes model *keys*, not display names, and there are two key
 // vocabularies, one per protocol:
@@ -31,7 +31,7 @@
 // Which models are free depends on the account and the current promotion; the
 // `billable`/`credits` fields in the usage are the authority, not the name.
 
-import { readEnvString } from "./env.ts";
+import { readEnvString } from "../env.ts";
 
 export type QoderProtocol = "new" | "legacy";
 

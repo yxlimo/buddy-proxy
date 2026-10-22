@@ -59,12 +59,25 @@ lib/dialect/           the conversion between the two dialects
   request.ts           the request
   stream.ts            the streaming answer
   response.ts          the whole answer
-lib/qoder-*.ts         Qoder: the session, the models, the two protocols
-lib/workbuddy-*.ts     WorkBuddy: the session, the models, the transport
-lib/minimax-*.ts       MiniMax: the session, the models, the gateway call
-lib/tokenrhythm/       TokenRhythm: the accounts, the models, the relay call
-lib/benefits.ts        the daily credits of the China accounts
-lib/device-identity.ts the fingerprint of an account
+lib/qoder/              Qoder: the session, the models, the two protocols
+  auth.ts               the device flow, the session, the refresh
+  models.ts             the model catalog, in both dialects
+  transport.ts          the gateway, in the current protocol
+  legacy.ts             the gateway, in the legacy COSY protocol
+lib/workbuddy/          WorkBuddy: the session, the models, the transport
+  auth.ts               the browser login, the session, the refresh
+  models.ts             the catalogue, curated the way the client shows it
+  transport.ts          the chat endpoint
+lib/minimax/            MiniMax: the session, the models, the gateway call
+  auth.ts               picks the credential source
+  oauth.ts              the proxy's own session: the device flow, the refresh
+  file-store.ts         read-only view of the desktop app's store
+  models.ts             the model catalog
+  gateway.ts            the call to the MiniMax Code gateway
+  credits.ts            what the accounts have left
+lib/tokenrhythm/        TokenRhythm: the accounts, the models, the relay call
+lib/benefits.ts         the daily credits of the China accounts
+lib/device-identity.ts  the fingerprint of an account
 ```
 
 The code runs through Node's type stripping, so there is no build step — and
@@ -214,7 +227,7 @@ MiniMax Code credential.
 
 ### Credential
 
-Two sources, picked by `MINIMAX_AUTH_MODE` (`lib/minimax-auth.ts` dispatches):
+Two sources, picked by `MINIMAX_AUTH_MODE` (`lib/minimax/auth.ts` dispatches):
 
 **`oauth`** (default, required in Docker) — the proxy owns its own session:
 
@@ -253,7 +266,7 @@ background watch logs the state every 5 minutes even without traffic.
 ### Models
 
 The gateway has no `/models` route (`direct_route_not_configured`), so
-`GET /v1/models` is served from a local catalog (`lib/minimax-models.ts`):
+`GET /v1/models` is served from a local catalog (`lib/minimax/models.ts`):
 
 | id | context | max output | notes |
 |----|---------|------------|-------|
@@ -441,7 +454,7 @@ advertises is the six entries above. The version-pinned models — `qmodel_lates
 (DeepSeek-Flash), `cmodel` (Cantus), `smodel` (Sonus) — are legacy-only, and on
 a global account that path does not answer: 403 (queued), "All backends
 failed", and once the day's free count is used up, 110 "Billing daily count
-exceeded". They stay in `lib/qoder-models.ts` for the CN region, which does run
+exceeded". They stay in `lib/qoder/models.ts` for the CN region, which does run
 the legacy protocol, but the global catalog leaves them out and a request for
 one is refused with a clear message instead of being sent to an upstream that
 will not answer.
@@ -488,7 +501,7 @@ the wire format depends on it.
 The tool round trip needs one extra thing on the legacy protocol: the request
 has to carry the assistant's tool calls and the tool's answer inside
 `response_meta`, or the model cannot tell that it already made the call and
-calls the tool again — forever. `lib/qoder-legacy.ts` puts them there in the
+calls the tool again — forever. `lib/qoder/legacy.ts` puts them there in the
 OpenAI shape the upstream itself uses (`{id, type, function:{name, arguments}}`).
 
 
@@ -568,7 +581,7 @@ WorkBuddy is Tencent's coding assistant. This speaks to the China account
 The upstream speaks the OpenAI chat-completions dialect, so a request body goes
 out almost unchanged. What it checks is the identity around it: the account,
 the conversation, and a trace, in the shape the official CLI sends. The proxy
-reproduces that shape (`lib/workbuddy-auth.ts`).
+reproduces that shape (`lib/workbuddy/auth.ts`).
 
 Two things are not what they look like:
 

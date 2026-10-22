@@ -9,9 +9,9 @@
 // the prefixed form (`/qoder-cn/v1/models`) with one upstream, and the model
 // ids are the real ones there — the path already says where the model lives.
 
-import { QODER_EFFORTS, qoderLabel, type QoderModel } from "../qoder-models.ts";
-import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy-models.ts";
-import type { MiniMaxModel } from "../minimax-models.ts";
+import { QODER_EFFORTS, qoderLabel, type QoderModel } from "../qoder/models.ts";
+import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy/models.ts";
+import type { MiniMaxModel } from "../minimax/models.ts";
 import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
 
 export type UpstreamGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax" | "tokenrhythm";

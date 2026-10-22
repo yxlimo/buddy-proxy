@@ -15,15 +15,15 @@ import {
   resolveModelRoute,
   QODER_CLIENT_MAX_TOKENS,
   type QoderModel,
-} from "../qoder-models.ts";
-import { qoderChatCompletion, LimitError } from "../qoder-transport.ts";
-import { legacyChatCompletion, readLegacyFrames } from "../qoder-legacy.ts";
-import { workbuddyChat, aggregateStream } from "../workbuddy-transport.ts";
-import { MINIMAX_MODELS } from "../minimax-models.ts";
+} from "../qoder/models.ts";
+import { qoderChatCompletion, LimitError } from "../qoder/transport.ts";
+import { legacyChatCompletion, readLegacyFrames } from "../qoder/legacy.ts";
+import { workbuddyChat, aggregateStream } from "../workbuddy/transport.ts";
+import { MINIMAX_MODELS } from "../minimax/models.ts";
 import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/accounts.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
-import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax-gateway.ts";
-import type { QoderRegion } from "../qoder-auth.ts";
+import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax/gateway.ts";
+import type { QoderRegion } from "../qoder/auth.ts";
 import {
   deliverAnthropicStream,
   deliverJson,
@@ -64,7 +64,7 @@ export interface UpstreamContext {
  *
  * The upstream speaks the OpenAI dialect natively, so the request goes out
  * almost unchanged; what the upstream checks is the identity around it, which
- * lib/workbuddy-auth.ts builds.
+ * lib/workbuddy/auth.ts builds.
  *
  * The upstream always answers with a stream, even for a client that asked for
  * none, so a non-streaming request is folded back into one object here.

@@ -1,10 +1,10 @@
-// lib/workbuddy-transport.ts — talking to the WorkBuddy chat endpoint.
+// lib/workbuddy/transport.ts — talking to the WorkBuddy chat endpoint.
 //
 // WorkBuddy speaks the OpenAI chat-completions dialect natively, so a request
 // body goes out almost unchanged. What is not native is the identity around it:
 // the upstream checks that the request looks like it came from the official
 // client, which is a set of headers describing the account, the conversation
-// and a trace (lib/workbuddy-auth.ts builds them).
+// and a trace (lib/workbuddy/auth.ts builds them).
 //
 // Two behaviours worth knowing:
 //
@@ -14,10 +14,10 @@
 //   * A failure can arrive as HTTP 200 with an error object in the body. The
 //     gateway has to look, or the client sees an empty answer.
 
-import { AuthError } from "./credential.ts";
-import { chatBase, chatHeaders, refreshSession, CONFIG_PATH, type WorkBuddyRegion, type WorkBuddySession } from "./workbuddy-auth.ts";
-import { curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./workbuddy-models.ts";
-import { readOpenAIChunks, SSE_DONE } from "./sse-stream.ts";
+import { AuthError } from "../credential.ts";
+import { chatBase, chatHeaders, refreshSession, CONFIG_PATH, type WorkBuddyRegion, type WorkBuddySession } from "./auth.ts";
+import { curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./models.ts";
+import { readOpenAIChunks, SSE_DONE } from "../sse-stream.ts";
 
 export const CHAT_PATH = "/v2/chat/completions";
 

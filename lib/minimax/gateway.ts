@@ -1,4 +1,4 @@
-// lib/minimax-gateway.ts — the call to the MiniMax Code gateway.
+// lib/minimax/gateway.ts — the call to the MiniMax Code gateway.
 //
 // What makes the gateway treat a request as a MiniMax Code client is the
 // OAuth grant itself — client_id `mcode-public`, audience `agent-backend`,
@@ -13,8 +13,8 @@
 // it is, and the answer comes back the same way.
 
 import crypto from "node:crypto";
-import { readEnvFlag, readEnvNumber, readEnvString } from "./env.ts";
-import { AUTH_MODE, AuthError, readCredential } from "./minimax-auth.ts";
+import { readEnvFlag, readEnvNumber, readEnvString } from "../env.ts";
+import { AUTH_MODE, AuthError, readCredential } from "./auth.ts";
 
 export const REGION = readEnvString("MINIMAX_REGION", "cn");
 const UA = readEnvString("MINIMAX_USER_AGENT", "MiniMaxCode");

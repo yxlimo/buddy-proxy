@@ -12,9 +12,9 @@
 //
 // Re-logging in means removing the session file; the next start picks it up.
 
-import { hasSession as hasMinimaxSession, login as minimaxLogin } from "./minimax-oauth.ts";
-import { hasSession as hasQoderSession, login as qoderLogin, type QoderRegion } from "./qoder-auth.ts";
-import { hasSession as hasWorkBuddySession, login as workBuddyLogin } from "./workbuddy-auth.ts";
+import { hasSession as hasMinimaxSession, login as minimaxLogin } from "./minimax/oauth.ts";
+import { hasSession as hasQoderSession, login as qoderLogin, type QoderRegion } from "./qoder/auth.ts";
+import { hasSession as hasWorkBuddySession, login as workBuddyLogin } from "./workbuddy/auth.ts";
 
 /** What happened: a session was already there, or one was made. */
 export type LoginOutcome = "present" | "logged-in";

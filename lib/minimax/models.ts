@@ -1,4 +1,4 @@
-// lib/minimax-models.ts — the MiniMax Code model catalog, in Anthropic
+// lib/minimax/models.ts — the MiniMax Code model catalog, in Anthropic
 // GET /v1/models shape.
 //
 // The LLM gateway has no /models route (`direct_route_not_configured`), so the

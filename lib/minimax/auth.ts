@@ -1,4 +1,4 @@
-// lib/minimax-auth.ts — which credential source the proxy uses. Both produce the same
+// lib/minimax/auth.ts — which credential source the proxy uses. Both produce the same
 // Credential (lib/credential.ts), so nothing above this layer cares which one is active.
 //
 //   MINIMAX_AUTH_MODE=oauth   (default) the proxy's own session: it logs in once and
@@ -12,11 +12,11 @@
 // because the desktop app tracks a `generation` and would see a session change; the
 // oauth source is the sole writer of its own file, so refreshing is unambiguous.
 
-import { readEnvString } from "./env.ts";
-import { AuthError } from "./credential.ts";
-import type { Credential } from "./credential.ts";
-import * as fileStore from "./minimax-file-store.ts";
-import * as oauth from "./minimax-oauth.ts";
+import { readEnvString } from "../env.ts";
+import { AuthError } from "../credential.ts";
+import type { Credential } from "../credential.ts";
+import * as fileStore from "./file-store.ts";
+import * as oauth from "./oauth.ts";
 
 export type AuthMode = "oauth" | "file";
 

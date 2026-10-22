@@ -7,7 +7,7 @@
 //
 //   node --experimental-strip-types test/capture-legacy.ts [model-key]
 
-import { legacyChatCompletion } from "../lib/qoder-legacy.ts";
+import { legacyChatCompletion } from "../lib/qoder/legacy.ts";
 import { fixtureName, writeFixture } from "./fixture-name.ts";
 
 const modelKey = process.argv[2] ?? "gmodel";

@@ -1,4 +1,4 @@
-// lib/workbuddy-models.ts — the China-region WorkBuddy catalogue.
+// lib/workbuddy/models.ts — the China-region WorkBuddy catalogue.
 //
 // WorkBuddy's own desktop client publishes the catalogue at GET /v3/config
 // (`agents[].models` holds the ids, a `models[]` array holds the metadata).

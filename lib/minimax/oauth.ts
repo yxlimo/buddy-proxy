@@ -1,4 +1,4 @@
-// lib/minimax-oauth.ts — the proxy's own MiniMax Code session, for running in a
+// lib/minimax/oauth.ts — the proxy's own MiniMax Code session, for running in a
 // container where the desktop app's store is not readable.
 //
 // The proxy logs in with the same OAuth client the real MiniMax Code client uses
@@ -24,9 +24,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "./credential.ts";
-import type { Credential } from "./credential.ts";
+import { readEnvNumber, readEnvString } from "../env.ts";
+import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
+import type { Credential } from "../credential.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
 export const OAUTH_ORIGINS: Record<string, string> = {

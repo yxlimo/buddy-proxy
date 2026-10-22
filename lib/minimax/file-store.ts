@@ -1,6 +1,6 @@
-// lib/minimax-file-store.ts — read-only view of the MiniMax Code desktop app's OAuth
+// lib/minimax/file-store.ts — read-only view of the MiniMax Code desktop app's OAuth
 // store. This is the source that works when the proxy runs on the same machine as
-// the desktop app; it is useless inside a container, which is why lib/minimax-oauth.ts
+// the desktop app; it is useless inside a container, which is why lib/minimax/oauth.ts
 // exists.
 //
 // The desktop app owns this store: it refreshes the token under `auth.lock` and bumps
@@ -24,9 +24,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readEnvNumber, readEnvString } from "./env.ts";
-import { AuthError, DEFAULT_CLIENT_ID, DEFAULT_REGION } from "./credential.ts";
-import type { Credential } from "./credential.ts";
+import { readEnvNumber, readEnvString } from "../env.ts";
+import { AuthError, DEFAULT_CLIENT_ID, DEFAULT_REGION } from "../credential.ts";
+import type { Credential } from "../credential.ts";
 
 export interface StoredCredential {
   schemaVersion: number;

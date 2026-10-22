@@ -1,4 +1,4 @@
-// lib/minimax-credits.ts — what the MiniMax accounts have left.
+// lib/minimax/credits.ts — what the MiniMax accounts have left.
 //
 // Two different things are asked about here, and they need different
 // credentials:
@@ -11,7 +11,7 @@
 // money on the platform account — the cash, the vouchers and the credits, with
 // the credits being the ones that were given rather than paid for.
 
-import { readEnvString } from "./env.ts";
+import { readEnvString } from "../env.ts";
 
 /** The platform hosts. The key decides which one answers. */
 export const MINIMAX_API_HOSTS = {

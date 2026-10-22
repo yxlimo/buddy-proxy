@@ -3,9 +3,9 @@
 // own OAuth session can both build on it without importing each other.
 //
 // Two sources, one shape:
-//   lib/minimax-file-store.ts  reads the desktop app's store (never writes)
-//   lib/minimax-oauth.ts       owns its own session (logs in, refreshes)
-// lib/minimax-auth.ts picks between them.
+//   lib/minimax/file-store.ts  reads the desktop app's store (never writes)
+//   lib/minimax/oauth.ts       owns its own session (logs in, refreshes)
+// lib/minimax/auth.ts picks between them.
 
 import fs from "node:fs";
 import path from "node:path";
