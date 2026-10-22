@@ -115,8 +115,8 @@ const fakeJwt = (payload: any) =>
   `${Buffer.from(JSON.stringify({ typ: "JWT", alg: "HS512" })).toString("base64url")}.${Buffer.from(
     JSON.stringify(payload),
   ).toString("base64url")}.sig`;
-const jwt = fakeJwt({ jti: "254600882", exp: 1793867171 });
-check("从 token 里读出账号 id", ssoUidFromToken(jwt) === "254600882", ssoUidFromToken(jwt));
+const jwt = fakeJwt({ jti: "100000001", exp: 1793867171 });
+check("从 token 里读出账号 id", ssoUidFromToken(jwt) === "100000001", ssoUidFromToken(jwt));
 check("到期时刻是毫秒", tokenExpiryMs(jwt) === 1793867171000, String(tokenExpiryMs(jwt)));
 check("不是 token 的时候不炸", ssoUidFromToken("not-a-jwt") === "");
 check("坏 token 的到期时刻是 0", tokenExpiryMs("not-a-jwt") === 0);
@@ -128,9 +128,9 @@ const jar = ["uaa-token=abc; Path=/; HttpOnly; Secure", "acw_tc=def; Path=/; Htt
 check("cookie 头是分号隔开的", cookieHeader(jar) === "uaa-token=abc; acw_tc=def", cookieHeader(jar));
 check("属性不混进值里", !cookieHeader(jar).includes("HttpOnly"));
 
-const authHeaders = consoleAuthHeaders("tok", { sites: [], ssoUid: "254600882" } as any);
+const authHeaders = consoleAuthHeaders("tok", { sites: [], ssoUid: "100000001" } as any);
 check("控制台要带 Bearer", authHeaders.Authorization === "Bearer tok");
-check("控制台还要带 cookie", authHeaders.Cookie === "uaa-token=tok; ssouid=254600882", authHeaders.Cookie);
+check("控制台还要带 cookie", authHeaders.Cookie === "uaa-token=tok; ssouid=100000001", authHeaders.Cookie);
 check("没有会话就只带 Bearer", Object.keys(consoleAuthHeaders("tok")).length === 1);
 
 console.log("");
@@ -247,7 +247,7 @@ check("一页流水读到了", page.items.length === 1 && page.total === 10);
 check("没有 items 不炸", parseTransactionPage({}).items.length === 0);
 
 const usage = parseUsageSummary({
-  sso_uid: "254600882",
+  sso_uid: "100000001",
   model: "all",
   start_date: "2026-10-01",
   end_date: "2026-10-22",

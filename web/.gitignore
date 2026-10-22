@@ -2,6 +2,9 @@
 node_modules/
 dist/
 
+# 契约的生成物：构建前从 lib/gen/ 搬过来（scripts/copy-gen.mjs）
+.gen/
+
 # TanStack Router 的缓存
 .tanstack/
 

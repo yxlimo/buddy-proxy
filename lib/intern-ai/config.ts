@@ -48,7 +48,7 @@ export const INTERN_AI_DISCOVERY_API_BASE = configString(
   "https://discovery-api.intern-ai.org.cn/v1",
 ).replace(/\/+$/, "");
 
-/** Discovery 子站个人中心（授权码换 token 走这台机器）。 */
+/** Discovery 子站个人中心（「个人中心」页面的前端）。 */
 export const INTERN_AI_DISCOVERY_USERCENTER_BASE = configString(
   "INTERN_AI_DISCOVERY_USERCENTER_BASE",
   "https://discovery-usercenter.intern-ai.org.cn",

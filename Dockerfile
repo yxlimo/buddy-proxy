@@ -12,18 +12,14 @@ WORKDIR /build
 
 RUN corepack enable
 
-# 根目录的依赖也要装：契约的生成物在 lib/gen/ 里，它 import 的
-# @bufbuild/protobuf 是从根目录的 node_modules 里找的（按文件所在目录往上找），
-# 只装 web/ 的依赖会找不到。
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-
 # 面板自己的依赖。
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
 RUN cd web && pnpm install --frozen-lockfile
 
 COPY web/ ./web/
-# 契约的生成物在仓库的 lib/gen/ 里，面板从这里导入，不要拷一份进 web/。
+# 契约的生成物在仓库的 lib/gen/ 里。面板构建前把它搬进 web/.gen/（web/scripts/
+# copy-gen.mjs），这样它的依赖从 web/node_modules 里找，容器里就不用再装一遍
+# 根目录的依赖。来源仍然只有 lib/gen/ 一处。
 COPY lib/gen/ ./lib/gen/
 
 RUN cd web && pnpm build

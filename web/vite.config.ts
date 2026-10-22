@@ -29,8 +29,9 @@ export default defineConfig(({ mode }) => {
     ],
     resolve: {
       alias: {
-        // 契约的生成物在 lib/gen/ 里，前后端共用一份，不要拷进 web/。
-        '@/gen': fileURLToPath(new URL('../lib/gen', import.meta.url)),
+        // 契约的生成物。构建前从 lib/gen/ 搬进 .gen/（见 scripts/copy-gen.mjs），
+        // 前后端共用一份来源，不要在 web/ 里维护第二份。
+        '@/gen': fileURLToPath(new URL('./.gen', import.meta.url)),
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
       // lib/gen/ 在 web/ 外面，依赖要从 web/node_modules 里取。

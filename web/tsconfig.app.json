@@ -18,10 +18,8 @@
     /* Alias */
     "paths": {
       "@/*": ["./src/*"],
-      "@/gen/*": ["../lib/gen/*"],
-      /* lib/gen/ 在 web/ 外面，依赖要从 web/node_modules 里取。 */
-      "@bufbuild/protobuf": ["./node_modules/@bufbuild/protobuf"],
-      "@bufbuild/protobuf/*": ["./node_modules/@bufbuild/protobuf/*"]
+      /* 契约的生成物。构建前从 lib/gen/ 搬进 .gen/（见 scripts/copy-gen.mjs）。 */
+      "@/gen/*": ["./.gen/*"]
     },
 
     /* Linting */

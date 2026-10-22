@@ -4,12 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "pnpm run routes:gen && tsc -b && vite build",
+    "gen:sync": "node scripts/copy-gen.mjs",
+    "dev": "pnpm run gen:sync && vite",
+    "build": "pnpm run gen:sync && pnpm run routes:gen && tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "pnpm run routes:gen && tsc -b --force",
+    "typecheck": "pnpm run gen:sync && pnpm run routes:gen && tsc -b --force",
     "routes:gen": "tsr generate",
-    "test": "pnpm run routes:gen && vitest run",
+    "test": "pnpm run gen:sync && pnpm run routes:gen && vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

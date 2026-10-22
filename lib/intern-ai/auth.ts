@@ -37,8 +37,8 @@ import crypto from "node:crypto";
 import {
   INTERN_AI_CHAT_BASE,
   INTERN_AI_CHAT_CLIENT_ID,
+  INTERN_AI_DISCOVERY_BASE,
   INTERN_AI_DISCOVERY_CLIENT_ID,
-  INTERN_AI_DISCOVERY_USERCENTER_BASE,
   INTERN_AI_SSO_API_BASE,
   INTERN_AI_SSO_BASE,
   INTERN_AI_TOKEN_COOKIE,
@@ -291,6 +291,9 @@ export async function ssoLogin(
  *
  * 这一步在 SSO 的 /oauth 页面上做：页面上有 `uaa-token` cookie 就调这个接口，
  * 拿到 code，然后跳回应用并把 code 拼在地址后面。这里直接把中间那步抄过来。
+ *
+ * 回答是 {code: "uaa::code::…", subCallback: "<跳回去的地址>"}。
+ * subCallback 是 SSO 算好的回跳地址（拿它拼 code 就是浏览器那条路）。
  */
 export async function ssoAuthorizationCode(cookie: string, clientId: string): Promise<string> {
   const r = await fetch(`${INTERN_AI_SSO_API_BASE}/api/v1/internal/auth`, {
@@ -319,7 +322,7 @@ export async function ssoAuthorizationCode(cookie: string, clientId: string): Pr
  *
  * 两个子站的换法路径不一样，形状一样（body 只有 code）：
  *
- *   Discovery  POST {usercenter}/api/v1/users/auth
+ *   Discovery  POST {discovery}/api/user-center/v1/users/auth
  *   Chat       POST {chat}/puyu/users/auth
  *
  * 换出来的 token 就是控制台接口要的那个 Bearer token。
@@ -357,10 +360,13 @@ function siteTargets(): Array<{
 }> {
   return [
     {
+      // Discovery：换 token 的接口挂在 discovery 这台机器上，路径是
+      // /api/user-center/v1/users/auth。个人中心那台机器上的 /api/v1/users/auth
+      // 是错的路（回 -10007）。
       name: "discovery",
       clientId: INTERN_AI_DISCOVERY_CLIENT_ID,
-      appBase: INTERN_AI_DISCOVERY_USERCENTER_BASE,
-      authPath: "/api/v1/users/auth",
+      appBase: INTERN_AI_DISCOVERY_BASE,
+      authPath: "/api/user-center/v1/users/auth",
     },
     {
       name: "chat",

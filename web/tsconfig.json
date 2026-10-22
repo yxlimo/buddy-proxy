@@ -7,7 +7,7 @@
   "compilerOptions": {
     "paths": {
       "@/*": ["./src/*"],
-      "@/gen/*": ["../lib/gen/*"]
+      "@/gen/*": ["./.gen/*"]
     }
   }
 }

@@ -28,6 +28,10 @@ run = "bash test/aggregate.sh"
 description = "Run the tests for the panel's API (Connect)"
 run = "node --experimental-strip-types test/admin-check.ts"
 
+[tasks."test:intern-ai"]
+description = "Run the tests for the intern-ai module (no network)"
+run = "node --experimental-strip-types test/intern-ai-check.ts"
+
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract"
 run = "buf generate"
