@@ -12,6 +12,28 @@ package buddy.admin.v1;
 
 // ── 公共形状 ──────────────────────────────────────────────────────────────
 
+// 上游现在能不能接请求。
+//
+// 面板要的是这个，不是「开着没有」加上「登录了没有」自己拼 ——
+// 后端知道的事情比面板多：额度用尽、正在登录、凭据快过期。
+enum UpstreamState {
+  UPSTREAM_STATE_UNSPECIFIED = 0;
+  // 可以接。
+  UPSTREAM_STATE_READY = 1;
+  // 开关关着。
+  UPSTREAM_STATE_DISABLED = 2;
+  // 没登录。
+  UPSTREAM_STATE_NO_CREDENTIAL = 3;
+  // 登录过期了。
+  UPSTREAM_STATE_CREDENTIAL_EXPIRED = 4;
+  // 登录被拒了。
+  UPSTREAM_STATE_CREDENTIAL_REJECTED = 5;
+  // 上游的额度用完了。
+  UPSTREAM_STATE_OUT_OF_CREDITS = 6;
+  // 正在登录。
+  UPSTREAM_STATE_LOGGING_IN = 7;
+}
+
 // 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
 message Upstream {
   string id = 1;
@@ -19,6 +41,8 @@ message Upstream {
   string label = 2;
   // 现在在生效的值。开关是热的：面板改完立刻生效，不用重启。
   bool enabled = 3;
+  // 这个上游现在能不能接请求。面板照这个判断能不能选它。
+  UpstreamState state = 10;
   // 这个上游现在公布了几个模型。
   int32 model_count = 5;
   // 凭据的状态摘要。
@@ -33,10 +57,26 @@ message Upstream {
 
 // 凭据的状态。
 // 时间戳一律 Unix 毫秒。只有名字里带 _sec 的才是秒。
+// 凭据的状态。
+enum CredentialState {
+  CREDENTIAL_STATE_UNSPECIFIED = 0;
+  // 有凭据，没过期。
+  CREDENTIAL_STATE_AUTHENTICATED = 1;
+  // 没有凭据。
+  CREDENTIAL_STATE_MISSING = 2;
+  // 有凭据，但过期了。
+  CREDENTIAL_STATE_EXPIRED = 3;
+  // 拿到的凭据上游不认。
+  CREDENTIAL_STATE_ERROR = 4;
+  // 账号密码型上游：账号在，密码没存。
+  CREDENTIAL_STATE_USABLE = 5;
+  // 有凭据，但还没过期 —— 账号密码型上游的常态。
+  CREDENTIAL_STATE_ANONYMOUS = 6;
+}
+
 message CredentialStatus {
   string kind = 1;
-  // authenticated / missing / expired / error
-  string status = 2;
+  CredentialState status = 2;
   // 只留前几位，不给全文。
   string fingerprint = 3;
   // Unix 毫秒。
@@ -330,6 +370,23 @@ message ListUsageEventsResponse {
 
 // ── 公布的模型（聚合路由） ────────────────────────────────────────────────
 
+// 模型在库里，根路由却不公布它的原因。
+enum UnpublishedReason {
+  UNPUBLISHED_REASON_UNSPECIFIED = 0;
+  // 模型自己被停用了。
+  UNPUBLISHED_REASON_DISABLED = 1;
+  // 目标的上游关着。
+  UNPUBLISHED_REASON_UPSTREAM_DISABLED = 2;
+  // 目标的上游没登录。
+  UNPUBLISHED_REASON_NO_CREDENTIAL = 3;
+  // 目标的上游不列这个模型了。
+  UNPUBLISHED_REASON_MODEL_GONE = 4;
+  // 目标自己被停用了。
+  UNPUBLISHED_REASON_TARGET_DISABLED = 5;
+  // 一个能用的目标都没有。
+  UNPUBLISHED_REASON_NO_TARGET = 6;
+}
+
 // 一个公布出来的模型：对外的 id 背后有哪几个上游模型。
 message PublishedModel {
   string id = 1;
@@ -337,6 +394,8 @@ message PublishedModel {
   bool enabled = 3;
   // 根路由现在真的公布它吗？上游全关着的时候，模型在库里但没人能接。
   bool published = 4;
+  // 没公布的原因。公布了就是 UNSPECIFIED。
+  UnpublishedReason unpublished_reason = 13;
   // single / fallback
   string strategy = 5;
   // 不给表示继承目标的值。给了就用这个值。
