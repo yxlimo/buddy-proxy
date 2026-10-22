@@ -19,8 +19,6 @@ message Upstream {
   string label = 2;
   // 现在在生效的值。开关是热的：面板改完立刻生效，不用重启。
   bool enabled = 3;
-  // 改过、还没生效。开关是热的，所以现在是假。
-  bool pending = 4;
   // 这个上游现在公布了几个模型。
   int32 model_count = 5;
   // 凭据的状态摘要。

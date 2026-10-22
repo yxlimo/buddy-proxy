@@ -415,23 +415,18 @@ check("上游有区域", qoderUpstream?.region === "global", JSON.stringify(qode
 const cnUpstream = list(withUrls.body?.upstreams).find((u: any) => u.id === "qoder-cn");
 check("中国区的区域是 cn", cnUpstream?.region === "cn", JSON.stringify(cnUpstream?.region));
 
-// 开关：enabled 是将要生效的值，pending 是改过还没重启。
+// 开关：enabled 是现在在生效的值。开关是热的，改完就生效。
 // 用全球区那个：上面那节只改过中国区。
 const beforeSwitch = list(withUrls.body?.upstreams).find((u: any) => u.id === "qoder");
-check("改之前没有待重启", beforeSwitch?.pending === false, JSON.stringify(beforeSwitch));
+check("改之前是关着的", beforeSwitch?.enabled === false, JSON.stringify(beforeSwitch));
 const setSwitch = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true }, token);
 check("开关改得掉", setSwitch.body?.ok === true, JSON.stringify(setSwitch.body));
 const afterSwitch = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
   (u: any) => u.id === "qoder",
 );
 check("改完 enabled 就是改后的值", afterSwitch?.enabled === true, JSON.stringify(afterSwitch));
-// 开关是热的：改完就生效，没有「待重启」。
-check("改完没有待重启", afterSwitch?.pending === false, JSON.stringify(afterSwitch));
-// 其他上游没动，不该被标成待重启。
-const otherUpstream = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
-  (u: any) => u.id === "minimax",
-);
-check("没动的上游没有待重启", otherUpstream?.pending === false, JSON.stringify(otherUpstream));
+// 没有「待生效」这回事：答复里根本没有这个字段。
+check("答复里没有待生效的标志", !("pending" in (afterSwitch ?? {})), JSON.stringify(afterSwitch));
 
 const balanceWithIds = await call("GetBalance", {}, token);
 check(

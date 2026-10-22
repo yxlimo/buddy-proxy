@@ -480,16 +480,14 @@ check(
   JSON.stringify(listConfigAfter.body?.items?.find((i: any) => i.key === "ADMIN_CORS_ORIGINS")),
 );
 
-// 上游的开关：enabled 是将要生效的值，pending 是改过还没重启。
+// 上游的开关：enabled 是现在在生效的值。开关是热的，改完就生效。
 const switched = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
 check("上游开关改得掉", switched.body?.ok === true, JSON.stringify(switched.body));
 const afterSwitch = await call("ListUpstreams");
 const switchedUpstream = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "qoder");
 check("改完 enabled 是改后的值", switchedUpstream?.enabled === true, JSON.stringify(switchedUpstream));
-// 开关是热的：改完就生效，没有「待重启」。
-check("改完 pending 是假", switchedUpstream?.pending === false, JSON.stringify(switchedUpstream));
-const untouched = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "minimax");
-check("没动的上游 pending 是假", untouched?.pending === false, JSON.stringify(untouched));
+// 答复里没有「待生效」这个字段了。
+check("上游没有待生效的字段", !("pending" in (switchedUpstream ?? {})), JSON.stringify(switchedUpstream));
 
 // 配置项：每项都有给人看的名字，名字不是 env 的键名。
 check("配置项都有名字", items.every((i: any) => typeof i.label === "string" && i.label.length > 0));

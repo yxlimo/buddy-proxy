@@ -252,7 +252,7 @@ check("来源是数据库覆盖", qoderItem?.source === "database", JSON.stringi
 const upstreams = await admin("ListUpstreams");
 const qoderUpstream = (upstreams.upstreams ?? []).find((u: any) => u.id === "qoder");
 check("上游列表里的值也是新的", qoderUpstream?.enabled === true, JSON.stringify(qoderUpstream));
-check("上游列表没有待重启", qoderUpstream?.pending === false, JSON.stringify(qoderUpstream));
+check("上游列表里没有待生效的标志", !("pending" in (qoderUpstream ?? {})), JSON.stringify(qoderUpstream));
 
 // 关键：跑着的进程立刻用新值。
 const healthAfter = await health();

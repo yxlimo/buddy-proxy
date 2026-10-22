@@ -78,7 +78,6 @@ describe('上游的开关', () => {
               id: 'minimax',
               label: 'MiniMax Code',
               enabled: true,
-              pending: true,
             }),
           ],
         }),
