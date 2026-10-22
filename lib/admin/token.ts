@@ -79,8 +79,9 @@ export function adminTokenSet(): boolean {
  * 比对用定长的比较，免得令牌被一个字节一个字节地试出来。
  */
 export function checkAdminToken(headers: Record<string, unknown>): boolean {
-  const raw = String((headers as any).authorization ?? "");
-  const token = raw.startsWith("Bearer ") ? raw.slice(7).trim() : raw.trim();
+  const raw = String((headers as any).authorization ?? "").trim();
+  // 标准写法是 "Bearer <令牌>"，中间有空格。有人写成 "Bearer<令牌>" 也认。
+  const token = /^Bearer\s*/i.test(raw) ? raw.replace(/^Bearer\s*/i, "").trim() : raw;
   if (!token) return false;
   const expected = adminToken();
   const given = Buffer.from(token, "utf8");

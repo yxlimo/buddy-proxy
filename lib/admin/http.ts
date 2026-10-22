@@ -177,7 +177,12 @@ export function staticMiddleware(root: string): Koa.Middleware {
     const urlPath = ctx.path;
     let rel: string;
     let spa = false;
-    if (urlPath === "/admin" || urlPath.startsWith("/admin/")) {
+    if (urlPath === "/admin") {
+      // /admin 和 /admin/ 是两个地址。重定向到一个，别让相对路径错位。
+      ctx.redirect("/admin/");
+      return;
+    }
+    if (urlPath.startsWith("/admin/")) {
       rel = urlPath.slice("/admin".length);
       spa = true;
     } else if (urlPath.startsWith("/assets/")) {
@@ -213,6 +218,13 @@ export function staticMiddleware(root: string): Koa.Middleware {
     if (!stat?.isFile()) {
       // 深链接：GET 才回 index.html，其余的是找不到。
       if (!spa || (ctx.method !== "GET" && ctx.method !== "HEAD")) {
+        ctx.status = 404;
+        ctx.body = { error: "not found" };
+        return;
+      }
+      // 带后缀的路径是资源，不是路由。资源没了就是没了，回 404 —— 把 HTML
+      // 当成脚本发出去，浏览器只报 MIME 错，比 404 更难定位。
+      if (path.extname(rel)) {
         ctx.status = 404;
         ctx.body = { error: "not found" };
         return;

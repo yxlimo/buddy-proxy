@@ -95,8 +95,12 @@ const DESCRIPTIONS: Record<string, string> = {
 /** 值的结尾像密钥的，就不给人看。 */
 const SECRET_SUFFIXES = ["_KEY", "_PASSWORD", "_SECRET", "_TOKEN"];
 
+/** 这些键不是密钥，是开关或者数字。名字撞上了后缀而已。 */
+const NOT_SECRET = new Set(["REQUIRE_API_KEY"]);
+
 /** 这个设置是不是敏感值。 */
 function isSecret(key: string): boolean {
+  if (NOT_SECRET.has(key)) return false;
   return SECRET_SUFFIXES.some((suffix) => key.endsWith(suffix));
 }
 

@@ -20,6 +20,14 @@ run = "tsc --noEmit"
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
 
+[tasks."test:admin:contract"]
+description = "Check the panel's API against the contract, field by field"
+run = "node --experimental-strip-types test/admin-contract-check.ts"
+
+[tasks."test:admin:regression"]
+description = "Check that the proxy's own endpoints still behave"
+run = "node --experimental-strip-types test/admin-regression-check.ts"
+
 [tasks."test:aggregate"]
 description = "Run the tests for the published models"
 run = "bash test/aggregate.sh"
@@ -42,7 +50,20 @@ run = "buf lint"
 
 [tasks."proto:breaking"]
 description = "Fail if the contract changed in a way that breaks the clients"
-run = "buf breaking --against '.git#branch=main'"
+run = """
+# 基线是远端的那一份：契约的改动要先推上去，别人拉下来才知道有没有坏。
+log=$(mktemp)
+if buf breaking --against '.git#branch=buddy/main' 2>"$log"; then
+  echo "契约没有破坏性改动。"
+elif grep -q 'no .proto files' "$log"; then
+  echo "远端还没有契约，没有基线可比。先把契约推上去。"
+else
+  cat "$log"
+  rm -f "$log"
+  exit 1
+fi
+rm -f "$log"
+"""
 
 # ── 面板前端 ──────────────────────────────────────────────────────────────
 
