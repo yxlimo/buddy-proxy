@@ -4,14 +4,35 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   CatalogModelSchema,
+  CredentialStatusSchema,
   ListModelsResponseSchema,
+  ListUpstreamsResponseSchema,
+  UpstreamSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { ModelDialog } from '@/features/models/model-dialog'
 import { mockAdminClient } from '@/test/mock-transport'
 import { renderWithClient } from '@/test/render'
 
+/** 一个开着的、已登录的上游。 */
+function usableUpstream(id: string, label: string) {
+  return create(UpstreamSchema, {
+    id,
+    label,
+    enabled: true,
+    modelCount: 2,
+    credential: create(CredentialStatusSchema, {
+      status: 'authenticated',
+      kind: 'session',
+    }),
+  })
+}
+
 function catalogClient() {
   return mockAdminClient({
+    ListUpstreams: () =>
+      create(ListUpstreamsResponseSchema, {
+        upstreams: [usableUpstream('qoder', 'Qoder 全球区')],
+      }),
     ListModels: () =>
       create(ListModelsResponseSchema, {
         models: [
@@ -28,6 +49,16 @@ function catalogClient() {
         ],
       }),
   })
+}
+
+/** 在下拉里选一个上游组。 */
+async function pickGroup(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+  const trigger = await screen.findByRole('combobox', { name: '上游组' })
+  await waitFor(() => {
+    expect(trigger).toBeEnabled()
+  })
+  await user.click(trigger)
+  await user.click(await screen.findByRole('option', { name }))
 }
 
 describe('模型编辑弹窗', () => {
@@ -86,7 +117,7 @@ describe('模型编辑弹窗', () => {
     // 还没选组：没有目录，输入框手填。
     expect(screen.getByText(/先选上游组/)).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('上游组'), 'qoder')
+    await pickGroup(user, /Qoder 全球区/)
 
     // 目录拉回来之后变成下拉。
     const picker = await screen.findByRole('combobox', {
@@ -99,9 +130,13 @@ describe('模型编辑弹窗', () => {
     expect(within(listbox).getByText('claude-opus-4')).toBeInTheDocument()
   })
 
-  it('目录拉不到的时候退回手填', async () => {
+  it('目录拉不到的时候退回手填，并且说清楚为什么', async () => {
     const user = userEvent.setup()
     const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [usableUpstream('minimax', 'MiniMax Code')],
+        }),
       ListModels: () => create(ListModelsResponseSchema, { models: [] }),
     })
 
@@ -113,11 +148,11 @@ describe('模型编辑弹窗', () => {
     })
 
     await user.click(screen.getByRole('tab', { name: /上游目标/ }))
-    await user.type(screen.getByLabelText('上游组'), 'minimax')
+    await pickGroup(user, /MiniMax Code/)
 
     await waitFor(() => {
       expect(
-        screen.getByText('这个组没有模型目录，手填一个上游模型 id。')
+        screen.getByText('这个上游没有目录，手填模型 id。')
       ).toBeInTheDocument()
     })
     // 手填的输入框在。

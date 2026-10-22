@@ -52,7 +52,7 @@ export function ModelPicker({
   const known = models.some((model) => model.id === value)
 
   if (manual || (!loading && !hasCatalog)) {
-    // 手填模式。
+    // 手填模式。退回手填要说清楚为什么，不要静悄悄地退化。
     return (
       <div className='grid gap-1'>
         <Input
@@ -67,9 +67,29 @@ export function ModelPicker({
           </p>
         ) : loading ? (
           <p className='text-xs text-muted-foreground'>正在取模型目录…</p>
+        ) : catalog.isError ? (
+          <p className='text-xs text-destructive'>
+            取模型目录失败，手填一个上游模型 id。
+          </p>
+        ) : hasCatalog ? (
+          // 目录是有的，是用户自己选了手填：给他一条回去的路。
+          <div className='flex items-center gap-1'>
+            <p className='text-xs text-muted-foreground'>
+              这个上游有模型目录（{models.length} 个）。
+            </p>
+            <Button
+              type='button'
+              variant='link'
+              size='sm'
+              className='h-auto p-0 text-xs'
+              onClick={() => setManual(false)}
+            >
+              回到下拉
+            </Button>
+          </div>
         ) : (
           <p className='text-xs text-muted-foreground'>
-            这个组没有模型目录，手填一个上游模型 id。
+            这个上游没有目录，手填模型 id。
           </p>
         )}
       </div>

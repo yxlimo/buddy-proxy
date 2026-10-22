@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
+  CredentialStatusSchema,
   ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
+  ListUpstreamsResponseSchema,
   PublishedModelSchema,
   SavePublishedModelResponseSchema,
+  UpstreamSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { PublishedModelsPage } from '@/features/models/index'
 import { ModelDialog, fromDraft, toDraft } from '@/features/models/model-dialog'
@@ -26,6 +29,38 @@ vi.mock('sonner', () => ({
   Toaster: () => null,
 }))
 
+/**
+ * 一个开着的、已登录的上游：组下拉里才有得选。
+ */
+function upstreamHandlers() {
+  return {
+    ListUpstreams: () =>
+      create(ListUpstreamsResponseSchema, {
+        upstreams: [
+          create(UpstreamSchema, {
+            id: 'qoder',
+            label: 'Qoder 全球区',
+            enabled: true,
+            credential: create(CredentialStatusSchema, {
+              status: 'authenticated',
+            }),
+          }),
+        ],
+      }),
+    ListModels: () => create(ListModelsResponseSchema, { models: [] }),
+  }
+}
+
+/** 在组下拉里选一个上游组。 */
+async function pickGroup(user: ReturnType<typeof userEvent.setup>) {
+  const trigger = await screen.findByRole('combobox', { name: '上游组' })
+  await waitFor(() => {
+    expect(trigger).toBeEnabled()
+  })
+  await user.click(trigger)
+  await user.click(await screen.findByRole('option', { name: /Qoder 全球区/ }))
+}
+
 describe('模型保存失败的时候', () => {
   it('报的是失败，不是成功，弹窗也不关', async () => {
     const user = userEvent.setup()
@@ -33,6 +68,7 @@ describe('模型保存失败的时候', () => {
     toastSuccess.mockClear()
 
     const client = mockAdminClient({
+      ...upstreamHandlers(),
       ListPublishedModels: () =>
         create(ListPublishedModelsResponseSchema, { models: [] }),
       SavePublishedModel: () =>
@@ -48,7 +84,7 @@ describe('模型保存失败的时候', () => {
     await user.type(screen.getByLabelText('对外 id'), 'buddy-max')
 
     await user.click(screen.getByRole('tab', { name: '上游目标' }))
-    await user.type(screen.getByLabelText('上游组'), 'qoder')
+    await pickGroup(user)
     await user.type(screen.getByLabelText('上游模型 id'), 'claude-sonnet-4')
 
     await user.click(screen.getByRole('button', { name: '保存' }))
@@ -60,17 +96,14 @@ describe('模型保存失败的时候', () => {
     expect(toastSuccess).not.toHaveBeenCalled()
     // 弹窗留着，用户填的东西还在。
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByLabelText('上游组')).toHaveValue('qoder')
     expect(screen.getByLabelText('上游模型 id')).toHaveValue('claude-sonnet-4')
   })
 
   it('目标没填全的时候保存按钮是灰的', async () => {
     const user = userEvent.setup()
 
-    // 弹窗里的模型下拉要查目录，得有客户端。
-    const client = mockAdminClient({
-      ListModels: () => create(ListModelsResponseSchema, { models: [] }),
-    })
+    // 弹窗里的模型下拉要查目录，组下拉要查上游，都得有客户端。
+    const client = mockAdminClient(upstreamHandlers())
 
     renderWithClient({
       client,
@@ -92,7 +125,7 @@ describe('模型保存失败的时候', () => {
     expect(save).toBeDisabled()
 
     await user.click(screen.getByRole('tab', { name: '上游目标' }))
-    await user.type(screen.getByLabelText('上游组'), 'qoder')
+    await pickGroup(user)
     expect(save).toBeDisabled()
 
     await user.type(screen.getByLabelText('上游模型 id'), 'claude-sonnet-4')

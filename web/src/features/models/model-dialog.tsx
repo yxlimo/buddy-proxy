@@ -28,15 +28,8 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ModelPicker } from '@/features/models/model-picker'
+import { GroupPicker } from '@/features/models/group-picker'
 import { cn } from '@/lib/utils'
-
-const GROUPS = [
-  'qoder',
-  'qoder-cn',
-  'workbuddy-cn',
-  'minimax',
-  'tokenrhythm',
-]
 
 /**
  * 三个取值：继承上游的、自己指定开、自己指定关。
@@ -422,18 +415,16 @@ export function ModelDialog({
               >
                 <div className='grid gap-2'>
                   <Label htmlFor={`target-group-${index}`}>上游组</Label>
-                  <Input
+                  <GroupPicker
                     id={`target-group-${index}`}
-                    list='upstream-groups'
                     value={target.groupName}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       patchTarget(index, {
-                        groupName: event.target.value,
+                        groupName: value,
                         // 换了组，上一个组的模型 id 就不再作数。
                         upstreamModel: '',
                       })
                     }
-                    placeholder='qoder'
                   />
                 </div>
                 <div className='grid gap-2'>
@@ -497,11 +488,6 @@ export function ModelDialog({
                 </div>
               </div>
             ))}
-            <datalist id='upstream-groups'>
-              {GROUPS.map((group) => (
-                <option key={group} value={group} />
-              ))}
-            </datalist>
             <Button
               variant='outline'
               size='sm'

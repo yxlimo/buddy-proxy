@@ -1,6 +1,10 @@
 import { useState } from 'react'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
-import type { PublishedModel } from '@/gen/buddy/admin/v1/admin_pb'
+import { create } from '@bufbuild/protobuf'
+import { Pause, Pencil, Plus, Rocket, Trash2 } from 'lucide-react'
+import {
+  PublishedModelSchema,
+  type PublishedModel,
+} from '@/gen/buddy/admin/v1/admin_pb'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
@@ -38,7 +42,7 @@ import {
   useSavePublishedModel,
 } from '@/features/models/api'
 import { ModelDialog } from '@/features/models/model-dialog'
-import { formatCount, formatDateTime } from '@/lib/format'
+import { formatCount, formatDate } from '@/lib/format'
 
 export function PublishedModelsPage() {
   const models = usePublishedModels()
@@ -48,6 +52,7 @@ export function PublishedModelsPage() {
   const [editing, setEditing] = useState<PublishedModel | undefined>(undefined)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState<PublishedModel | undefined>(undefined)
+  const [disabling, setDisabling] = useState<PublishedModel | undefined>(undefined)
   const [busy, setBusy] = useState(false)
 
   const openCreate = () => {
@@ -82,6 +87,24 @@ export function PublishedModelsPage() {
       setDeleting(undefined)
     } catch {
       // 失败：对话框留着。
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * 发布或者停用。
+   *
+   * 就是把这个模型原样再存一遍，只改 enabled —— 别的字段一个都不动。
+   */
+  const setEnabled = async (model: PublishedModel, enabled: boolean) => {
+    setBusy(true)
+    try {
+      await save.mutateAsync(
+        create(PublishedModelSchema, { ...model, enabled })
+      )
+    } catch {
+      // 失败：api 层已经报过了。
     } finally {
       setBusy(false)
     }
@@ -159,9 +182,15 @@ export function PublishedModelsPage() {
                             <Badge variant='secondary'>已停用</Badge>
                           ) : null}
                           {/* 库里有不等于根路由公布了：上游关着、或者目标
-                              模型的上游没了，都没人能接。 */}
+                              模型的上游没了，都没人能接。点「发布」也不会
+                              改变这个 —— 那是上游的事。 */}
                           {model.published ? null : (
-                            <Badge variant='outline'>未公布</Badge>
+                            <Badge
+                              variant='outline'
+                              title='根路由现在没有它：上游关着、或者还没登录。发布这个模型也改不了这个，得先把上游打开。'
+                            >
+                              未公布
+                            </Badge>
                           )}
                         </div>
                       </div>
@@ -192,7 +221,7 @@ export function PublishedModelsPage() {
                               key={`${target.groupName}-${target.upstreamModel}`}
                               className='grid gap-0.5'
                             >
-                              <span className='font-mono text-xs'>
+                              <span className='max-w-[200px] font-mono text-xs break-all'>
                                 {target.groupName} → {target.upstreamModel}
                               </span>
                               <span className='text-xs text-muted-foreground'>
@@ -216,25 +245,48 @@ export function PublishedModelsPage() {
                       )}
                     </TableCell>
                     <TableCell className='text-right text-xs text-muted-foreground'>
-                      {formatDateTime(model.updatedAt)}
+                      {formatDate(model.updatedAt)}
                     </TableCell>
                     <TableCell className='text-right'>
                       <div className='flex justify-end gap-2'>
+                        {model.enabled ? (
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            disabled={busy}
+                            onClick={() => setDisabling(model)}
+                          >
+                            <Pause />
+                            停用
+                          </Button>
+                        ) : (
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            disabled={busy}
+                            onClick={() => void setEnabled(model, true)}
+                          >
+                            <Rocket />
+                            发布
+                          </Button>
+                        )}
                         <Button
                           variant='outline'
-                          size='sm'
+                          size='icon'
+                          title='改'
+                          aria-label='改'
                           onClick={() => openEdit(model)}
                         >
                           <Pencil />
-                          改
                         </Button>
                         <Button
                           variant='ghost'
-                          size='sm'
+                          size='icon'
+                          title='删'
+                          aria-label='删'
                           onClick={() => setDeleting(model)}
                         >
                           <Trash2 />
-                          删
                         </Button>
                       </div>
                     </TableCell>
@@ -253,6 +305,43 @@ export function PublishedModelsPage() {
         onOpenChange={setDialogOpen}
         onSubmit={(model) => void submit(model)}
       />
+
+      <Dialog
+        open={disabling !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setDisabling(undefined)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>停用这个模型？</DialogTitle>
+            <DialogDescription>
+              <span className='font-mono'>{disabling?.id}</span>{' '}
+              停用之后根路由就不公布它了，客户端会看不到这个模型。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant='outline'
+              onClick={() => setDisabling(undefined)}
+              disabled={busy}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                const model = disabling
+                if (!model) return
+                setDisabling(undefined)
+                void setEnabled(model, false)
+              }}
+              disabled={busy}
+            >
+              停用
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={deleting !== undefined}
