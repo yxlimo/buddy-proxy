@@ -86,7 +86,8 @@ lib/tokenrhythm/        TokenRhythm: the accounts, the wallet, the relay call
   models.ts             the model catalog
   transport.ts          the relay call
 lib/benefits.ts         the daily credits of the China accounts
-lib/session.ts          the session file: read it, write it, lock it, refresh it
+lib/session.ts          the session: read it, write it, lock it, refresh it
+lib/store.ts            the database: the credentials, the locks, the cache
 lib/device-identity.ts  the fingerprint of an account
 ```
 
@@ -365,7 +366,7 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_BASE_URL` | `https://agent.minimax.cn/mavis/api/v1/llm/v1` | gateway base URL |
 | `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
 | `MINIMAX_AUTH_MODE` | `oauth` | `oauth` (proxy's own session) or `file` (read-only app store) |
-| `MINIMAX_DATA_DIR` | `~/.minimax-proxy` | where the oauth session file lives (`/data` in Docker) |
+| `MINIMAX_DATA_DIR` | `~/.minimax-proxy` | where the oauth session lived as a file (`/data` in Docker) |
 | `MINIMAX_CREDENTIAL_FILE` | — | explicit session file path, overrides `MINIMAX_DATA_DIR` |
 | `MINIMAX_CODE` | `false` | switch this reverse proxy on; a disabled one serves nothing and looks for no credential |
 | `MINIMAX_LOG_BODY` | `false` | log the thinking / effort fields of every request |
@@ -374,6 +375,38 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_LOCK_STALE_MS` | `30000` | a lock older than this is taken over |
 | `MINIMAX_API_BASE` | `https://api.minimax.cn` | the platform the balance is read from |
 | `MINIMAX_TOKEN_PLAN_KEY` | — | the token plan's key (`sk-cp-…`); the plan's usage is reported when it is set |
+
+### Credentials
+
+Every secret the gateway holds is in one SQLite file: the sessions of the four
+clients, the keys the clients authenticate with, the relay station's accounts
+and the salt the device fingerprint is derived from.
+
+| Variable | Default | What |
+|----------|---------|------|
+| `BUDDY_DB_PATH` | `/data/buddy.db` | the database file (`~/.buddy-proxy/buddy.db` outside Docker) |
+
+```bash
+# what is in there
+node router-proxy.ts --clear            # lists the credentials
+# forget one, so that the next start logs in again
+node router-proxy.ts --clear session:qoder:cn
+```
+
+The file is 0600 and lives in the data volume. The refresh tokens rotate on
+every refresh, so only one holder of a session can refresh it — the database
+holds a lock for that, the same way the lock file used to.
+
+### Health
+
+`/health` does not ask the upstreams. The live part — the account standing,
+the credits, the balances — is fetched in the background and kept in the
+database; the endpoint answers with the last known state and says how old it
+is.
+
+| Variable | Default | What |
+|----------|---------|------|
+| `HEALTH_CACHE_MS` | `300000` | how long the live part stays good |
 
 ## Router (`router-proxy.ts`, port 6450)
 

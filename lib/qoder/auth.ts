@@ -22,14 +22,7 @@ import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import {
-  dataDirFor,
-  ensureCredential as ensureCredentialShared,
-  readSession,
-  toCredential as credentialFromSession,
-  writeSession,
-  type CredentialCache,
-} from "../session.ts";
+import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 
 export type QoderRegion = "cn" | "global";
 
@@ -104,7 +97,13 @@ export function dataDir(): string {
   return dataDirFor("QODER_DATA_DIR", ".qoder-proxy");
 }
 
-export function sessionPath(region: QoderRegion = REGION): string {
+/** Where the session lives in the database. */
+export function sessionId(region: QoderRegion = REGION): string {
+  return `session:qoder:${region}`;
+}
+
+/** Where the session used to live, while the migration is under way. */
+export function legacySessionPath(region: QoderRegion = REGION): string {
   const explicit = readEnvString("QODER_CREDENTIAL_FILE", "");
   if (explicit) return explicit;
   return path.join(dataDir(), `qoder-session.${region}.json`);
@@ -113,8 +112,8 @@ export function sessionPath(region: QoderRegion = REGION): string {
 export function loginHint(region: QoderRegion = REGION): string {
   return (
     `还没有登录 Qoder（${region} 区域）。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
-    `删掉这个文件再重启，服务会重新登录（会打印一个授权链接）。` +
-    `凭据写在 ${sessionPath(region)}，之后自动刷新。`
+    `${clearHint(sessionId(region))}（会打印一个授权链接）。` +
+    `凭据之后自动刷新。`
   );
 }
 
@@ -130,7 +129,7 @@ export function newMachineIdentity(): { machineId: string; machineToken: string;
 }
 
 export function loadSession(region: QoderRegion = REGION): QoderSession | null {
-  return readSession<QoderSession>(sessionPath(region));
+  return readSession<QoderSession>(sessionId(region), hasTokens, legacySessionPath(region));
 }
 
 export function hasSession(region: QoderRegion = REGION): boolean {
@@ -152,7 +151,7 @@ export function deviceIdentity(region: QoderRegion = REGION): DeviceIdentity | n
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 export function saveSession(session: QoderSession): void {
-  writeSession(sessionPath(session.region), session);
+  writeSession(sessionId(session.region), session);
 }
 
 
@@ -251,7 +250,7 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
         `refresh rejected (${code})`,
         `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
           `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
-          `把当前那份复制过去，或者删掉 ${sessionPath(region)} 再重启，服务会重新登录。`,
+          `把当前那份复制过去，或者${clearHint(sessionId(region))}。`,
         503,
       );
     }
@@ -275,7 +274,7 @@ let cache: CredentialCache | null = null;
 
 function toCredential(session: QoderSession): Credential {
   return credentialFromSession(session, {
-    source: sessionPath(session.region),
+    source: sessionId(session.region),
     owner: "oauth",
     warnMs: WARN_MS,
     clientId: session.clientId,
@@ -294,14 +293,14 @@ export async function ensureCredential(force = false, region: QoderRegion = REGI
     key: region,
     cacheMs: CACHE_MS,
     force,
-    lockFile: sessionPath(region),
+    lockId: sessionId(region),
     load: () => loadSession(region),
     refresh: (f) => refreshSession(f, region),
     toCredential,
     expired: (session) =>
       new AuthError(
         `access token expired (generation ${session.generation})`,
-        `Qoder token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+        `Qoder token 已过期且刷新没成功。${clearHint(sessionId(region))}。`,
         503,
       ),
   });
@@ -401,7 +400,7 @@ export async function login(region: QoderRegion = REGION): Promise<QoderSession>
   const session = await pollDeviceToken(auth, region);
   saveSession(session);
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
-  console.log(`  saved to ${sessionPath(region)} (0600)`);
+  console.log(`  saved to the database (${sessionId(region)})`);
   authLog(
     dataDir(),
     `qoder ${region} login ok`,
@@ -416,11 +415,11 @@ export async function login(region: QoderRegion = REGION): Promise<QoderSession>
 /** Shape for /health — never throws, reports what is wrong instead. */
 export function qoderStatus(region: QoderRegion = REGION): Record<string, unknown> {
   const session = loadSession(region);
-  if (!session) return { region, source: sessionPath(region), status: "anonymous", error: "no session", hint: loginHint(region) };
+  if (!session) return { region, source: sessionId(region), status: "anonymous", error: "no session", hint: loginHint(region) };
   const remainingMs = session.expiresAtMs - Date.now();
   return {
     region,
-    source: sessionPath(region),
+    source: sessionId(region),
     status: remainingMs > 0 ? "authenticated" : "expired",
     clientId: session.clientId,
     userId: session.userId,

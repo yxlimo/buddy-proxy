@@ -5,15 +5,14 @@
 // the date the next batch expires — the platform moves that date on its own as
 // a batch is used up, and the account switches by itself.
 
-import fs from "node:fs";
-
+import { deleteSecret } from "../store.ts";
 import {
   TOKENRHYTHM_API_BASE,
   TokenRhythmError,
   loadSession,
   login,
   sessionFor,
-  sessionPath,
+  sessionId,
   tokenRhythmTenant,
   tokenRhythmTenants,
   type TokenRhythmSession,
@@ -83,7 +82,7 @@ async function apiGet<T>(path: string, session: TokenRhythmSession): Promise<T> 
   if (r.status === 401 || r.status === 403) {
     // The session is gone: drop it, so the next call logs in again.
     try {
-      fs.rmSync(sessionPath(session.index), { force: true });
+      deleteSecret(sessionId(session.index));
     } catch {
       /* nothing to clean up */
     }

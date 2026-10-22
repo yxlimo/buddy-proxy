@@ -26,14 +26,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import {
-  dataDirFor,
-  ensureCredential as ensureCredentialShared,
-  readSession,
-  toCredential as credentialFromSession,
-  writeSession,
-  type CredentialCache,
-} from "../session.ts";
+import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { deleteSecret } from "../store.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
 export const OAUTH_ORIGINS: Record<string, string> = {
@@ -87,7 +81,13 @@ export function dataDir(): string {
   return dataDirFor("MINIMAX_DATA_DIR", ".minimax-proxy");
 }
 
-export function sessionPath(): string {
+/** Where the session lives in the database. */
+export function sessionId(): string {
+  return "session:minimax";
+}
+
+/** Where the session used to live, while the migration is under way. */
+export function legacySessionPath(): string {
   const explicit = readEnvString("MINIMAX_CREDENTIAL_FILE", "");
   if (explicit) return explicit;
   return path.join(dataDir(), "minimax-session.json");
@@ -95,13 +95,13 @@ export function sessionPath(): string {
 
 function loginHint(): string {
   return `还没有登录。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
-    `删掉这个文件再重启，服务会重新登录（会打印一个授权链接）。` +
-    `凭据写在 ${sessionPath()}，之后每小时自动刷新。`;
+    `${clearHint(sessionId())}（会打印一个授权链接）。` +
+    `凭据之后每小时自动刷新。`;
 }
 
 /** Read our own session file without throwing. */
 function loadSession(): Session | null {
-  return readSession<Session>(sessionPath());
+  return readSession<Session>(sessionId(), hasTokens, legacySessionPath());
 }
 
 export function hasSession(): boolean {
@@ -110,7 +110,7 @@ export function hasSession(): boolean {
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 function saveSession(session: Session): void {
-  writeSession(sessionPath(), session);
+  writeSession(sessionId(), session);
 }
 
 /**
@@ -198,7 +198,7 @@ let cache: CredentialCache | null = null;
 
 function toCredential(session: Session): Credential {
   return credentialFromSession(session, {
-    source: sessionPath(),
+    source: sessionId(),
     owner: "oauth",
     warnMs: WARN_MS,
     status: "authenticated",
@@ -237,7 +237,7 @@ export async function refreshSession(force = false): Promise<Session> {
         `refresh rejected (${code})`,
         `这个会话的 refresh token 被拒绝了（${code}）。刷新时 token 会轮换，所以一份 session ` +
           `同一时间只能有一个持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，` +
-          `那边刷新过之后这份就失效了。把当前那份复制过去，或者删掉 ${sessionPath()} ` +
+          `那边刷新过之后这份就失效了。把当前那份复制过去，或者${clearHint(sessionId())} ` +
           `再重启，服务会重新登录。`,
         503,
       );
@@ -270,14 +270,14 @@ export async function ensureCredential(force = false): Promise<Credential> {
     },
     cacheMs: CACHE_MS,
     force,
-    lockFile: sessionPath(),
+    lockId: sessionId(),
     load: loadSession,
     refresh: refreshSession,
     toCredential,
     expired: (session) =>
       new AuthError(
         `access token expired (generation ${session.generation})`,
-        `token 已过期且刷新没成功。删掉 ${sessionPath()} 后重启服务即可重新登录。`,
+        `token 已过期且刷新没成功。${clearHint(sessionId())}。`,
         503,
       ),
   });
@@ -385,7 +385,7 @@ export async function login(): Promise<Session> {
   const session = await pollDeviceToken(auth);
   saveSession(session);
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
-  console.log(`  saved to ${sessionPath()} (0600)`);
+  console.log(`  saved to the database (${sessionId()})`);
   console.log("  later refreshes are automatic — nothing else to do.");
   authLog(
     dataDir(),
@@ -407,7 +407,7 @@ export async function revoke(): Promise<void> {
   });
   if (!r.ok) throw new AuthError(`revoke failed (${r.error ?? `HTTP ${r.status}`})`, "撤销失败。", 502);
   try {
-    fs.unlinkSync(sessionPath());
+    deleteSecret(sessionId());
   } catch {
     /* already gone */
   }
@@ -417,10 +417,10 @@ export async function revoke(): Promise<void> {
 /** Shape for /health — never throws, reports what is wrong instead. */
 export function oauthStatus(): Record<string, unknown> {
   const session = loadSession();
-  if (!session) return { source: sessionPath(), status: "anonymous", error: "no session", hint: loginHint() };
+  if (!session) return { source: sessionId(), status: "anonymous", error: "no session", hint: loginHint() };
   const remainingMs = session.expiresAtMs - Date.now();
   return {
-    source: sessionPath(),
+    source: sessionId(),
     status: remainingMs > 0 ? "authenticated" : "expired",
     clientId: session.clientId,
     audience: session.audience,

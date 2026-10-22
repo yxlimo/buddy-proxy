@@ -20,14 +20,7 @@ import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
-import {
-  dataDirFor,
-  ensureCredential as ensureCredentialShared,
-  readSession,
-  toCredential as credentialFromSession,
-  writeSession,
-  type CredentialCache,
-} from "../session.ts";
+import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 
 export type WorkBuddyRegion = "cn";
 
@@ -85,7 +78,13 @@ export function dataDir(): string {
   return dataDirFor("WORKBUDDY_DATA_DIR", ".workbuddy-proxy");
 }
 
-export function sessionPath(region: WorkBuddyRegion = "cn"): string {
+/** Where the session lives in the database. */
+export function sessionId(region: WorkBuddyRegion = "cn"): string {
+  return `session:workbuddy:${region}`;
+}
+
+/** Where the session used to live, while the migration is under way. */
+export function legacySessionPath(region: WorkBuddyRegion = "cn"): string {
   const explicit = readEnvString("WORKBUDDY_CREDENTIAL_FILE", "");
   if (explicit) return explicit;
   return path.join(dataDir(), `workbuddy-session.${region}.json`);
@@ -94,13 +93,13 @@ export function sessionPath(region: WorkBuddyRegion = "cn"): string {
 function loginHint(region: WorkBuddyRegion = "cn"): string {
   return (
     `还没有登录 WorkBuddy（${region} 区域）。服务启动时会自己发起登录（把授权链接点一下就行），` +
-    `也可以删掉 ${sessionPath(region)} 后重启服务。` +
+    `也可以${clearHint(sessionId(region))}。` +
     `凭据之后自动刷新。`
   );
 }
 
 export function loadSession(region: WorkBuddyRegion = "cn"): WorkBuddySession | null {
-  return readSession<WorkBuddySession>(sessionPath(region));
+  return readSession<WorkBuddySession>(sessionId(region), hasTokens, legacySessionPath(region));
 }
 
 export function hasSession(region: WorkBuddyRegion = "cn"): boolean {
@@ -109,7 +108,7 @@ export function hasSession(region: WorkBuddyRegion = "cn"): boolean {
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 export function saveSession(session: WorkBuddySession): void {
-  writeSession(sessionPath(session.region), session);
+  writeSession(sessionId(session.region), session);
 }
 
 /** The `sub` claim of a JWT, without verifying the signature. */
@@ -271,7 +270,7 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
   console.log(
     `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - now / 1000)}s`,
   );
-  console.log(`  saved to ${sessionPath(region)} (0600)`);
+  console.log(`  saved to the database (${sessionId(region)})`);
   authLog(
     dataDir(),
     `workbuddy ${region} login ok`,
@@ -314,7 +313,7 @@ export async function refreshSession(
         `refresh rejected (${code})`,
         `WorkBuddy 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
           `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
-          `把当前那份复制过去，或者删掉 ${sessionPath(region)} 后重启，服务会重新登录。`,
+          `把当前那份复制过去，或者${clearHint(sessionId(region))}。`,
         503,
       );
     }
@@ -356,7 +355,7 @@ let cache: CredentialCache | null = null;
 
 function toCredential(session: WorkBuddySession): Credential {
   return credentialFromSession(session, {
-    source: sessionPath(session.region),
+    source: sessionId(session.region),
     owner: "oauth",
     warnMs: WARN_MS,
     clientId: "workbuddy-cli",
@@ -378,14 +377,14 @@ export async function ensureCredential(
     key: region,
     cacheMs: CACHE_MS,
     force,
-    lockFile: sessionPath(region),
+    lockId: sessionId(region),
     load: () => loadSession(region),
     refresh: (f) => refreshSession(f, region),
     toCredential,
     expired: (session) =>
       new AuthError(
         `access token expired (generation ${session.generation})`,
-        `WorkBuddy token 已过期且刷新没成功。删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+        `WorkBuddy token 已过期且刷新没成功。${clearHint(sessionId(region))}。`,
         503,
       ),
   });
@@ -395,12 +394,12 @@ export async function ensureCredential(
 export function workbuddyStatus(region: WorkBuddyRegion = "cn"): Record<string, unknown> {
   const session = loadSession(region);
   if (!session) {
-    return { region, source: sessionPath(region), status: "anonymous", error: "no session", hint: loginHint(region) };
+    return { region, source: sessionId(region), status: "anonymous", error: "no session", hint: loginHint(region) };
   }
   const remainingMs = session.expiresAtMs - Date.now();
   return {
     region,
-    source: sessionPath(region),
+    source: sessionId(region),
     status: remainingMs > 0 ? "authenticated" : "expired",
     uid: session.uid,
     nickname: session.nickname,

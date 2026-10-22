@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readEnvFlag, readEnvString } from "./env.ts";
+import { getSecret, setSecret } from "./store.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,28 +20,31 @@ export const KEYS_FILE = readEnvString("KEYS_FILE", path.join(HERE, "..", "api-k
 
 export type KeyStore = Record<string, string>;
 
-/** Load api-keys.json, generating one when it is missing or empty. */
+/** Where the client keys are kept. */
+const KEYS_ID = "keys:clients";
+
+/** Load the client keys, generating one set when there are none. */
 export function loadKeys(prefix = "oc-"): KeyStore {
   let keys: KeyStore = {};
-  try {
-    keys = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
-  } catch {
-    keys = {};
+  const stored = getSecret<{ keys: KeyStore }>(KEYS_ID);
+  if (stored?.keys && typeof stored.keys === "object") {
+    keys = stored.keys;
+  } else {
+    // The file the keys used to live in.
+    try {
+      const fromFile = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
+      if (fromFile && typeof fromFile === "object") keys = fromFile;
+    } catch {
+      keys = {};
+    }
   }
   if (Object.keys(keys).length === 0) {
     keys = {
       admin: prefix + crypto.randomBytes(20).toString("hex"),
       "user-default": prefix + crypto.randomBytes(20).toString("hex"),
     };
-    try {
-      fs.writeFileSync(KEYS_FILE, JSON.stringify(keys, null, 2));
-      console.log("[INIT] Generated new API keys →", KEYS_FILE);
-    } catch {
-      // The container image runs as a non-root user with a read-only app directory,
-      // so the keys can only live in memory. Point KEYS_FILE at a writable volume
-      // (e.g. /data/api-keys.json) to make them survive restarts.
-      console.warn(`[INIT] Generated API keys for this run only (cannot write ${KEYS_FILE}); they change on restart`);
-    }
+    setSecret(KEYS_ID, "key", { keys });
+    console.log("[INIT] Generated new API keys → the database");
   }
   return keys;
 }

@@ -22,6 +22,7 @@ import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
 import { authenticate, loadKeys, REQUIRE_API_KEY } from "./lib/api-keys.ts";
 import { readEnvFlag, readEnvNumber, readEnvString } from "./lib/env.ts";
+import { deleteSecret, listSecrets, peekCached, setCached } from "./lib/store.ts";
 import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder/transport.ts";
 import { QODER_MODELS, qoderModelsForRegion } from "./lib/qoder/models.ts";
@@ -161,6 +162,23 @@ async function refreshWorkBuddyCatalog(force = false): Promise<void> {
   }
 }
 
+// `node router-proxy.ts --clear <id>` forgets one credential, so that the next
+// start logs in again. It runs before anything else, so it touches nothing but
+// the database.
+const clearAt = process.argv.indexOf("--clear");
+if (clearAt >= 0) {
+  const id = process.argv[clearAt + 1] ?? "";
+  if (!id) {
+    console.error("usage: node router-proxy.ts --clear <credential-id>");
+    console.error("the credentials in the database:");
+    for (const row of listSecrets()) console.error(`  ${row.id}  (${row.kind})`);
+    process.exit(1);
+  }
+  deleteSecret(id);
+  console.log(`cleared ${id}`);
+  process.exit(0);
+}
+
 const keys = loadKeys();
 const app = new Koa();
 const router = new Router();
@@ -187,11 +205,28 @@ const requireKey: Koa.Middleware = async (ctx, next) => {
 };
 const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
 
-router.get("/health", async (ctx) => {
-  // The account's own standing is checked live: a valid token still means nothing
-  // if the account is not allowed to make requests from here. A region that is
-  // not enabled is not looked at at all.
-  const regions: Record<string, unknown> = {};
+/**
+ * The parts of /health that ask the upstreams.
+ *
+ * They are the slow part — a dozen calls to five different platforms — so they
+ * are kept in the database and refreshed in the background. What the endpoint
+ * answers with is the last known state, which is what a health check wants
+ * anyway.
+ */
+interface HealthSnapshot {
+  qoder: Record<string, { account: unknown; credits: unknown }>;
+  minimax: { balance: unknown; tokenPlan: unknown };
+  workbuddy: { credits: unknown };
+  tokenrhythm: { tenants: unknown };
+}
+
+const HEALTH_CACHE_ID = "health:upstreams";
+const HEALTH_CACHE_MS = readEnvNumber("HEALTH_CACHE_MS", 300_000);
+let healthRefresh: Promise<void> | null = null;
+
+/** Ask the upstreams how they are, and remember the answer. */
+async function refreshHealthSnapshot(): Promise<void> {
+  const qoder: HealthSnapshot["qoder"] = {};
   for (const region of QODER_REGIONS) {
     let account: QoderAccountHealth | Record<string, unknown>;
     try {
@@ -199,11 +234,41 @@ router.get("/health", async (ctx) => {
     } catch (e) {
       account = { region, usable: false, reason: (e as Error)?.message };
     }
+    qoder[region] = { account, credits: await fetchQoderCredits(region) };
+  }
+  const snapshot: HealthSnapshot = {
+    qoder,
+    minimax: { balance: await miniMaxBalance(), tokenPlan: await miniMaxTokenPlan() },
+    workbuddy: { credits: await fetchWorkBuddyCredits() },
+    tokenrhythm: { tenants: await tokenRhythmStatuses() },
+  };
+  setCached(HEALTH_CACHE_ID, snapshot);
+}
+
+/** The snapshot, and a refresh started if it is due. */
+function healthSnapshot(): { data: HealthSnapshot | null; at: number; stale: boolean } {
+  const cached = peekCached<HealthSnapshot>(HEALTH_CACHE_ID);
+  const at = cached?.at ?? 0;
+  const stale = !cached || Date.now() - at > HEALTH_CACHE_MS;
+  if (stale && !healthRefresh) {
+    healthRefresh = refreshHealthSnapshot()
+      .catch((e) => console.warn(`[HEALTH] refresh failed: ${(e as Error)?.message}`))
+      .finally(() => {
+        healthRefresh = null;
+      });
+  }
+  return { data: cached?.data ?? null, at, stale };
+}
+
+router.get("/health", async (ctx) => {
+  const snapshot = healthSnapshot();
+  const regions: Record<string, unknown> = {};
+  for (const region of QODER_REGIONS) {
     regions[region] = {
       models: region === "cn" ? QODER_CN.length : QODER_GLOBAL.length,
       credential: qoderStatus(region),
-      account,
-      credits: await fetchQoderCredits(region),
+      account: snapshot.data?.qoder?.[region]?.account ?? null,
+      credits: snapshot.data?.qoder?.[region]?.credits ?? null,
     };
   }
   ctx.body = {
@@ -221,12 +286,12 @@ router.get("/health", async (ctx) => {
         ? {
             base: MINIMAX_UPSTREAM,
             models: MINIMAX_VISIBLE.length,
-            // What the MiniMax account has left: the money on the platform
-            // account, and the plan's own windows.
-            balance: await miniMaxBalance(),
-            tokenPlan: await miniMaxTokenPlan(),
             // Which credential is in use and how much of it is left.
             credential: credentialStatus(),
+            // What the account has left: the money on the platform account, and
+            // the plan's own windows.
+            balance: snapshot.data?.minimax?.balance ?? null,
+            tokenPlan: snapshot.data?.minimax?.tokenPlan ?? null,
           }
         : { enabled: false },
       qoder: { regions },
@@ -235,15 +300,22 @@ router.get("/health", async (ctx) => {
             region: "cn",
             models: WORKBUDDY_CN.length,
             credential: workbuddyStatus("cn"),
-            credits: await fetchWorkBuddyCredits(),
+            credits: snapshot.data?.workbuddy?.credits ?? null,
           }
         : { enabled: false },
       tokenrhythm: ENABLED_TOKENRHYTHM
         ? {
             models: TOKENRHYTHM_MODELS.length,
-            tenants: await tokenRhythmStatuses(),
+            tenants: snapshot.data?.tokenrhythm?.tenants ?? null,
           }
         : { enabled: false },
+    },
+    // The live part of the answer is cached; this says how old it is.
+    snapshot: {
+      at: snapshot.at ? new Date(snapshot.at).toISOString() : null,
+      stale: snapshot.stale,
+      refreshing: healthRefresh !== null,
+      maxAgeMs: HEALTH_CACHE_MS,
     },
     auth: REQUIRE_API_KEY ? "api-key" : "public",
     benefits: {
@@ -462,6 +534,15 @@ app.listen(PORT, HOST, () => {
         console.warn(`  [AUTH] minimax: ${err.message}`);
         console.warn(`         ${err.hint}`);
       });
+
+    // The live part of /health is asked for in the background, on a timer of
+    // its own, so the endpoint has something to answer with even when nobody
+    // looks at it.
+    setInterval(() => {
+      void refreshHealthSnapshot().catch((e) =>
+        console.warn(`[HEALTH] refresh failed: ${(e as Error)?.message}`),
+      );
+    }, HEALTH_CACHE_MS);
 
     // A periodic watch, so a credential that is about to expire reaches the log
     // even when nothing is being asked for.

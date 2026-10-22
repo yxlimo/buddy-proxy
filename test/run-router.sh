@@ -24,6 +24,8 @@ export ROUTER_PORT="$PORT"
 # mock never looks at it. A dummy session keeps the test away from the real
 # one and stops the device flow from starting.
 export MINIMAX_DATA_DIR="${MINIMAX_DATA_DIR:-/tmp/opencode/test-minimax}"
+# The credentials live in the database; the test gets its own.
+export BUDDY_DB_PATH="${BUDDY_DB_PATH:-/tmp/opencode/test-buddy.db}"
 mkdir -p "$MINIMAX_DATA_DIR"
 if [ ! -f "$MINIMAX_DATA_DIR/minimax-session.json" ]; then
   node -e '

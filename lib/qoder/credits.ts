@@ -3,7 +3,8 @@
 // The plan's own credits, the ones bought on top of it, and the account's
 // standing (the server says PASS, WAIT, or why it may not be used).
 
-import { ENDPOINTS, REGION, USER_AGENT, ensureCredential, loadSession, loginHint, sessionPath, type QoderRegion } from "./auth.ts";
+import { ENDPOINTS, REGION, USER_AGENT, ensureCredential, loadSession, loginHint, sessionId, type QoderRegion } from "./auth.ts";
+import { clearHint } from "../session.ts";
 
 export interface QoderAccountHealth {
   region: QoderRegion;
@@ -109,7 +110,7 @@ export async function checkAccountHealth(region: QoderRegion = REGION): Promise<
       authorized: false,
       usable: false,
       reason: "login expired",
-      hint: `登录已失效，删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+      hint: `登录已失效，${clearHint(sessionId(region))}。`,
     };
   }
   if (whitelistStatus === "NoIpPermission") {
@@ -136,7 +137,7 @@ export async function checkAccountHealth(region: QoderRegion = REGION): Promise<
       userId,
       userType,
       reason: "login expired",
-      hint: `登录已过期，删掉 ${sessionPath(region)} 后重启服务即可重新登录。`,
+      hint: `登录已过期，${clearHint(sessionId(region))}。`,
     };
   }
   return { region, authorized: true, usable: true, whitelistStatus, userId, userType };

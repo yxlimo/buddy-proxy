@@ -20,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readEnvValue, readEnvString } from "../env.ts";
 import { dataDirFor, readSession, writeSession } from "../session.ts";
+import { getSecret, setSecret } from "../store.ts";
 
 export const TOKENRHYTHM_API_BASE = readEnvString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
 export const TOKENRHYTHM_INFER_BASE = readEnvString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
@@ -37,17 +38,38 @@ export interface TokenRhythmTenant {
 /** How many tenants the environment may hold. */
 const MAX_TENANTS = 32;
 
-/** The tenants the environment names, in order. */
+/**
+ * The tenants, in order.
+ *
+ * The account and the password are what log in; the key is what the inference
+ * uses. All three live in the database now — the environment is only where
+ * they are read from the first time, before they are moved in.
+ */
 export function tokenRhythmTenants(): TokenRhythmTenant[] {
   const out: TokenRhythmTenant[] = [];
   for (let index = 1; index <= MAX_TENANTS; index++) {
-    const account = readEnvValue(`TOKEN_RHYTHM_${index}_ACCOUNT`);
-    const password = readEnvValue(`TOKEN_RHYTHM_${index}_PASSWORD`);
+    const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(tenantId(index));
+    let account = stored?.account ?? "";
+    let password = stored?.password ?? "";
+    let key = stored?.apiKey ?? "";
+    if (!account || !password) {
+      // The environment is where the account was configured the first time.
+      account = readEnvValue(`TOKEN_RHYTHM_${index}_ACCOUNT`) || account;
+      password = readEnvValue(`TOKEN_RHYTHM_${index}_PASSWORD`) || password;
+      key = readEnvValue(`TOKEN_RHYTHM_${index}_API_KEY`) || key;
+      if (account && password) {
+        setSecret(tenantId(index), "account", { account, password, apiKey: key || null });
+      }
+    }
     if (!account || !password) continue;
-    const key = readEnvValue(`TOKEN_RHYTHM_${index}_API_KEY`);
     out.push({ index, account, password, apiKey: key || null });
   }
   return out;
+}
+
+/** Where the account of a tenant is kept. */
+function tenantId(index: number): string {
+  return `account:tokenrhythm:${index}`;
 }
 
 /** The tenant with this number, if the environment names it. */
@@ -76,22 +98,28 @@ export function dataDir(): string {
   return dataDirFor("TOKENRHYTHM_DATA_DIR", ".tokenrhythm-proxy");
 }
 
-export function sessionPath(index: number): string {
+/** Where the session lives in the database. */
+export function sessionId(index: number): string {
+  return `session:tokenrhythm:${index}`;
+}
+
+/** Where the session used to live, while the migration is under way. */
+export function legacySessionPath(index: number): string {
   return path.join(dataDir(), `tokenrhythm-session.${index}.json`);
 }
 
 export function loadSession(index: number): TokenRhythmSession | null {
-  return readSession<TokenRhythmSession>(sessionPath(index), (raw) => {
+  return readSession<TokenRhythmSession>(sessionId(index), (raw) => {
     if (!raw?.cookie) return false;
     // The cookie lives for thirty days; an expired one is no session.
     if (typeof raw.expiresAtMs === "number" && raw.expiresAtMs < Date.now()) return false;
     return true;
-  });
+  }, legacySessionPath(index));
 }
 
 /** Atomic write, 0600 — this file is a credential. */
 export function saveSession(session: TokenRhythmSession): void {
-  writeSession(sessionPath(session.index), session);
+  writeSession(sessionId(session.index), session);
 }
 
 export class TokenRhythmError extends Error {

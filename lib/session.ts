@@ -1,16 +1,22 @@
-// lib/session.ts — the session file every client keeps, and the machinery around it.
+// lib/session.ts — the session every client keeps, and the machinery around it.
 //
 // Each client logs in its own way and refreshes its own way — the endpoints,
 // the request shapes and the error texts are all different. The parts around
-// that are the same everywhere: where the file lives, how it is written, the
-// lock that keeps two writers from rotating a refresh token twice, and the
-// credential the upstream call is handed. That is what lives here.
+// that are the same everywhere: where the session is kept, how it is written,
+// the lock that keeps two writers from rotating a refresh token twice, and
+// the credential the upstream call is handed. That is what lives here.
+//
+// The sessions live in the database (lib/store.ts). The file names the clients
+// pass in are the ones the sessions used to have; they are only read while the
+// migration is under way, and the first read moves the session into the
+// database.
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AuthError, type Credential } from "./credential.ts";
-import { readEnvNumber, readEnvString } from "./env.ts";
+import { readEnvString } from "./env.ts";
+import { LockUnavailableError, getSecret, setSecret, withLock } from "./store.ts";
 
 /** The fields every session file has. */
 export interface SessionTokens {
@@ -19,9 +25,6 @@ export interface SessionTokens {
   expiresAtMs: number;
   generation?: number;
 }
-
-/** A lock file older than this counts as abandoned. */
-const LOCK_STALE_MS = readEnvNumber("SESSION_LOCK_STALE_MS", 30_000);
 
 /**
  * Where the sessions live: the environment override, else the mounted volume,
@@ -34,17 +37,33 @@ export function dataDirFor(envVar: string, fallback: string): string {
 }
 
 /** The default check: a session with both tokens in it. */
-function hasTokens(raw: any): boolean {
+export function hasTokens(raw: any): boolean {
   return !!raw?.accessToken && !!raw?.refreshToken;
 }
 
 /**
- * Read a session file; a broken file counts as no session.
+ * Read a session.
  *
- * The check is a parameter because not every client keeps the same thing: the
- * token clients keep an access and a refresh token, TokenRhythm keeps a cookie.
+ * The database is where the session lives. The file is where it used to live:
+ * it is read once — on the first read after the migration — and moved into the
+ * database, so nothing has to log in again because of the move.
  */
-export function readSession<T>(file: string, valid: (raw: any) => boolean = hasTokens): T | null {
+export function readSession<T>(
+  id: string,
+  valid: (raw: any) => boolean = hasTokens,
+  legacyFile?: string,
+): T | null {
+  const fromDb = getSecret<T>(id);
+  if (fromDb) return valid(fromDb) ? fromDb : null;
+  if (!legacyFile) return null;
+  const raw = readLegacyFile<T>(legacyFile, valid);
+  if (!raw) return null;
+  setSecret(id, "session", raw);
+  return raw;
+}
+
+/** Read the session from the file it used to live in. */
+function readLegacyFile<T>(file: string, valid: (raw: any) => boolean): T | null {
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8"));
     if (!raw || typeof raw !== "object" || !valid(raw)) return null;
@@ -54,60 +73,31 @@ export function readSession<T>(file: string, valid: (raw: any) => boolean = hasT
   }
 }
 
-/** Atomic write, 0600 — this file is a credential, not configuration. */
-export function writeSession(file: string, session: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(session, null, 2) + "\n", { mode: 0o600 });
-  fs.renameSync(tmp, file);
+/** How to get rid of a credential and log in again. */
+export function clearHint(id: string): string {
+  return `清掉数据库里的这条凭据（node router-proxy.ts --clear ${id}）后重启，服务会重新登录`;
+}
+
+/** Write a session. */
+export function writeSession(id: string, session: unknown): void {
+  setSecret(id, "session", session);
 }
 
 /**
- * Single-writer lock around a refresh. Two containers sharing the same volume would
- * otherwise rotate the refresh token twice and one of them would be logged out.
+ * Single-writer lock around a refresh. Two holders of the same refresh token
+ * would rotate it twice and one of them would be logged out, so a refresh
+ * takes this lock first.
  */
-export async function withSessionLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
-  const lock = `${file}.lock`;
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  let acquired = false;
-  for (let i = 0; i < 3 && !acquired; i++) {
-    try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-      acquired = true;
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") throw e;
-      let age = 0;
-      try {
-        age = Date.now() - fs.statSync(lock).mtimeMs;
-      } catch {
-        break;
-      }
-      if (age > LOCK_STALE_MS) {
-        try {
-          fs.unlinkSync(lock);
-        } catch {
-          /* someone else won the race */
-        }
-        continue;
-      }
-      // Another writer is mid-refresh: wait for its result instead of racing it.
-      await new Promise((r) => setTimeout(r, Math.min(LOCK_STALE_MS - age, 2000)));
-    }
-  }
-  if (!acquired) {
-    const existing = readSession<SessionTokens>(file);
-    if (existing) return existing as unknown as T; // the other writer already landed its result
-    throw new AuthError("could not acquire the credential lock", `另一个进程正在刷新凭据，稍后重试。`, 503);
-  }
+export async function withSessionLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   try {
-    return await fn();
-  } finally {
-    try {
-      fs.unlinkSync(lock);
-    } catch {
-      /* already gone */
-    }
+    return await withLock(id, fn);
+  } catch (e) {
+    if (!(e instanceof LockUnavailableError)) throw e;
+    // Another writer is mid-refresh: its result is the session it wrote, so
+    // read that and use it.
+    const existing = getSecret<SessionTokens>(id);
+    if (existing) return existing as unknown as T;
+    throw new AuthError("could not acquire the credential lock", `另一个进程正在刷新凭据，稍后重试。`, 503);
   }
 }
 
@@ -168,8 +158,8 @@ export interface EnsureCredentialOptions<T extends SessionTokens> {
   cacheMs: number;
   /** True means "the token we sent was rejected, get a new one". */
   force: boolean;
-  /** The session file, which is also what the lock is named after. */
-  lockFile: string;
+  /** The session id, which is also what the lock is named after. */
+  lockId: string;
   /** The session, as it is on disk. */
   load: () => T | null;
   /** Refresh, or return the session when it is still good. */
@@ -192,7 +182,7 @@ export async function ensureCredential<T extends SessionTokens>(
   if (!opts.force && cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
     return cached.cred;
   }
-  const session = await withSessionLock(opts.lockFile, () => opts.refresh(opts.force));
+  const session = await withSessionLock(opts.lockId, () => opts.refresh(opts.force));
   const cred = opts.toCredential(session);
   if (cred.remainingMs <= 0) throw opts.expired(session);
   opts.setCache({ at: Date.now(), cred, key: opts.key });

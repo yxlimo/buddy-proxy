@@ -16,6 +16,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getSecret, setSecret } from "./store.ts";
+
+/** Where the salt is kept. */
+const SALT_ID = "salt:device";
 
 export interface DeviceIdentity {
   /** The machine id: the official client sends a UUID here. */
@@ -67,25 +71,29 @@ const saltCache = new Map<string, string>();
  * It lives next to the sessions, is created once, and is never written to the
  * repository — losing it only means a new fingerprint, not a lost login.
  */
+/**
+ * The salt of the installation.
+ *
+ * It lives in the database now; the file is where it used to live, and it is
+ * read once so that a move does not change the fingerprint of the accounts.
+ */
 export function deviceSalt(dataDir: string): string {
   const cached = saltCache.get(dataDir);
   if (cached) return cached;
-  const file = path.join(dataDir, "identity.salt");
-  let salt = "";
-  try {
-    salt = fs.readFileSync(file, "utf8").trim();
-  } catch {
-    /* not there yet */
+  let salt = getSecret<{ salt: string }>(SALT_ID)?.salt ?? "";
+  if (salt.length < 32) {
+    // The file the salt used to live in.
+    const file = path.join(dataDir, "identity.salt");
+    try {
+      salt = fs.readFileSync(file, "utf8").trim();
+    } catch {
+      /* not there yet */
+    }
   }
   if (salt.length < 32) {
     salt = crypto.randomBytes(32).toString("base64url");
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, salt, { mode: 0o600 });
-    } catch {
-      /* a read-only data directory still works, the salt just stays in memory */
-    }
   }
+  setSecret(SALT_ID, "salt", { salt });
   saltCache.set(dataDir, salt);
   return salt;
 }
