@@ -115,6 +115,10 @@ export function loadSession(index: number): TokenRhythmSession | null {
     if (!raw?.cookie) return false;
     // The cookie lives for thirty days; an expired one is no session.
     if (typeof raw.expiresAtMs === "number" && raw.expiresAtMs < Date.now()) return false;
+    // A session written before the CSRF value was read properly carries the
+    // cookie's attributes with it ("…; Max-Age"). The platform would refuse
+    // every write with it, so such a session is no session either.
+    if (typeof raw.csrf === "string" && raw.csrf.includes(";")) return false;
     return true;
   }, legacySessionPath(index));
 }

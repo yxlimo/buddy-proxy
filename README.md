@@ -733,9 +733,13 @@ is for the **inference**. The two are different things on the platform — the
 key cannot read the wallet (every balance endpoint answers 401 for it), and
 the session cannot call the models.
 
-The key is not created for you: the platform's key management needs a CSRF
-token the browser has, so the key comes from the environment. Without one the
-account still shows its balance, it just cannot serve a request.
+The key usually comes from the environment (`TOKEN_RHYTHM_<n>_API_KEY`), because a
+key is shown in full only once, in the answer that creates it. The gateway can
+make one itself (`lib/tokenrhythm/keys.ts`), but that needs the platform's write
+check to be satisfied: the session cookie, the CSRF token sent twice — once as
+the `tr_csrf` cookie and once as the `X-CSRF-Token` header — and the browser's
+`Sec-Fetch-Site: same-origin`, which a script has to say for itself. Without a
+key the account still shows its balance, it just cannot serve a request.
 
 ### Which account pays
 

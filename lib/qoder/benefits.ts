@@ -37,6 +37,18 @@ function qoderClaimHeaders(session: QoderSession): Record<string, string> {
   // finds no device: the daily campaign is left out of the list, and claiming
   // it by id answers 503 RISK_DEPENDENCY_UNAVAILABLE. The identity stored at
   // login is the one the platform knows, so that is the one to send here.
+  //
+  // What "knows" means: the token is not checked against anything. The real
+  // client generates an encrypted blob (the Alibaba sgsdk component, 66 bytes
+  // starting with 3f 58 00) and the server never issues one; the two tokens
+  // here are plain UUIDs. So the platform cannot tell a real token from a
+  // made-up one — it can only tell whether the token was uploaded in the
+  // device flow (`/device/selectAccounts?...machine_token=…`), which is the
+  // one place a device is registered. The session holds exactly that.
+  //
+  // Two headers that are always wrong are worth more than a right one: a
+  // half-finished set of machine headers is what the risk service looks at
+  // hardest. When the session has no registered identity, send none of them.
   if (session.machineId) headers["Cosy-MachineId"] = session.machineId;
   if (session.machineToken) headers["Cosy-MachineToken"] = session.machineToken;
   if (session.machineType) headers["Cosy-MachineType"] = session.machineType;
