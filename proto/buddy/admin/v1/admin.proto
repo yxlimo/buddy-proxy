@@ -334,17 +334,19 @@ message PublishedModel {
   string id = 1;
   string display_name = 2;
   bool enabled = 3;
+  // 根路由现在真的公布它吗？上游全关着的时候，模型在库里但没人能接。
+  bool published = 4;
   // single / fallback
-  string strategy = 4;
+  string strategy = 5;
   // 不给表示继承目标的值。给了就用这个值。
-  optional int32 context_window = 5;
-  optional int32 max_output_tokens = 6;
-  optional bool reasoning = 7;
-  optional bool tool_call = 8;
+  optional int32 context_window = 6;
+  optional int32 max_output_tokens = 7;
+  optional bool reasoning = 8;
+  optional bool tool_call = 9;
   // 空表示继承目标支持的档位。
-  repeated string effort_options = 9;
-  repeated PublishedTarget targets = 10;
-  int64 updated_at = 11;
+  repeated string effort_options = 10;
+  repeated PublishedTarget targets = 11;
+  int64 updated_at = 12;
 }
 
 message PublishedTarget {
