@@ -168,6 +168,28 @@ app.use(async (ctx, next) => {
   }
 });
 
+// 每个请求留一行。
+//
+// 排查的时候先看日志 —— 没有这行，失败请求的状态码在日志里就看不见了，
+// 只能靠猜或者去翻别的服务。聚合路由的成败另外记在用量表里，
+// 但各上游自己那条路（/qoder/v1/…）只有这里能看到。
+app.use(async (ctx, next) => {
+  const started = Date.now();
+  await next();
+  const body = ctx.request.body as Record<string, unknown> | undefined;
+  const model = typeof body?.model === "string" ? body.model : "";
+  const ms = Date.now() - started;
+  const status = ctx.status;
+  // 上游自己的路径（/qoder/v1/…）用前缀写在路径里，根路由的模型名在模型
+  // 那一栏 —— 两边都记下来，排查的时候不用猜是谁在说话。
+  const who = ctx.path.startsWith("/v1") ? model : ctx.path.replace(/^\//, "").split("/")[0];
+  const line = `${ctx.method} ${ctx.path}${model ? ` model=${model}` : ""} → ${status} ${ms}ms${who ? ` via=${who}` : ""}`;
+  // 失败的两级：5xx 是服务自己的问题，4xx 是请求本身的问题。
+  if (status >= 500) console.error(`[REQ] ${line}`);
+  else if (status >= 400) console.warn(`[REQ] ${line}`);
+  else console.log(`[REQ] ${line}`);
+});
+
 // The body is only parsed once the caller is allowed in: a request with a bad
 // key should not cost a megabyte of parsing.
 const requireKey: Koa.Middleware = async (ctx, next) => {
