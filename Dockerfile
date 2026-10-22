@@ -48,6 +48,12 @@ COPY --from=web /build/web/dist/ ./web/dist/
 RUN mkdir -p /data && chown node:node /data
 ENV MINIMAX_DATA_DIR=/data
 
+# 契约生成的代码里有 enum（protobuf 的枚举），而 Node 的「只剥类型」不认
+# enum —— enum 要编译，不能只剥。transform-types 走编译那条路，所以能跑。
+#
+# 生成物是 buf 原样吐出来的，没有额外加工，所以这里改一个开关就够了。
+ENV NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning"
+
 EXPOSE 6450
 
 # The check reads the port from the environment, so the same image can serve on

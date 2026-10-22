@@ -2207,17 +2207,61 @@ export const ImportLoginTokenResponseSchema: GenMessage<ImportLoginTokenResponse
  *
  * @generated from enum buddy.admin.v1.UpstreamState
  */
-export const UpstreamState = {
-  UNSPECIFIED: 0,
-  READY: 1,
-  DISABLED: 2,
-  NO_CREDENTIAL: 3,
-  CREDENTIAL_EXPIRED: 4,
-  CREDENTIAL_REJECTED: 5,
-  OUT_OF_CREDITS: 6,
-  LOGGING_IN: 7,
-} as const;
-export type UpstreamState = (typeof UpstreamState)[keyof typeof UpstreamState];
+export enum UpstreamState {
+  /**
+   * @generated from enum value: UPSTREAM_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * 可以接。
+   *
+   * @generated from enum value: UPSTREAM_STATE_READY = 1;
+   */
+  READY = 1,
+
+  /**
+   * 开关关着。
+   *
+   * @generated from enum value: UPSTREAM_STATE_DISABLED = 2;
+   */
+  DISABLED = 2,
+
+  /**
+   * 没登录。
+   *
+   * @generated from enum value: UPSTREAM_STATE_NO_CREDENTIAL = 3;
+   */
+  NO_CREDENTIAL = 3,
+
+  /**
+   * 登录过期了。
+   *
+   * @generated from enum value: UPSTREAM_STATE_CREDENTIAL_EXPIRED = 4;
+   */
+  CREDENTIAL_EXPIRED = 4,
+
+  /**
+   * 登录被拒了。
+   *
+   * @generated from enum value: UPSTREAM_STATE_CREDENTIAL_REJECTED = 5;
+   */
+  CREDENTIAL_REJECTED = 5,
+
+  /**
+   * 上游的额度用完了。
+   *
+   * @generated from enum value: UPSTREAM_STATE_OUT_OF_CREDITS = 6;
+   */
+  OUT_OF_CREDITS = 6,
+
+  /**
+   * 正在登录。
+   *
+   * @generated from enum value: UPSTREAM_STATE_LOGGING_IN = 7;
+   */
+  LOGGING_IN = 7,
+}
 
 /**
  * Describes the enum buddy.admin.v1.UpstreamState.
@@ -2232,16 +2276,54 @@ export const UpstreamStateSchema: GenEnum<UpstreamState> = /*@__PURE__*/
  *
  * @generated from enum buddy.admin.v1.CredentialState
  */
-export const CredentialState = {
-  UNSPECIFIED: 0,
-  AUTHENTICATED: 1,
-  MISSING: 2,
-  EXPIRED: 3,
-  ERROR: 4,
-  USABLE: 5,
-  ANONYMOUS: 6,
-} as const;
-export type CredentialState = (typeof CredentialState)[keyof typeof CredentialState];
+export enum CredentialState {
+  /**
+   * @generated from enum value: CREDENTIAL_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * 有凭据，没过期。
+   *
+   * @generated from enum value: CREDENTIAL_STATE_AUTHENTICATED = 1;
+   */
+  AUTHENTICATED = 1,
+
+  /**
+   * 没有凭据。
+   *
+   * @generated from enum value: CREDENTIAL_STATE_MISSING = 2;
+   */
+  MISSING = 2,
+
+  /**
+   * 有凭据，但过期了。
+   *
+   * @generated from enum value: CREDENTIAL_STATE_EXPIRED = 3;
+   */
+  EXPIRED = 3,
+
+  /**
+   * 拿到的凭据上游不认。
+   *
+   * @generated from enum value: CREDENTIAL_STATE_ERROR = 4;
+   */
+  ERROR = 4,
+
+  /**
+   * 账号密码型上游：账号在，密码没存。
+   *
+   * @generated from enum value: CREDENTIAL_STATE_USABLE = 5;
+   */
+  USABLE = 5,
+
+  /**
+   * 有凭据，但还没过期 —— 账号密码型上游的常态。
+   *
+   * @generated from enum value: CREDENTIAL_STATE_ANONYMOUS = 6;
+   */
+  ANONYMOUS = 6,
+}
 
 /**
  * Describes the enum buddy.admin.v1.CredentialState.
@@ -2254,16 +2336,54 @@ export const CredentialStateSchema: GenEnum<CredentialState> = /*@__PURE__*/
  *
  * @generated from enum buddy.admin.v1.UnpublishedReason
  */
-export const UnpublishedReason = {
-  UNSPECIFIED: 0,
-  DISABLED: 1,
-  UPSTREAM_DISABLED: 2,
-  NO_CREDENTIAL: 3,
-  MODEL_GONE: 4,
-  TARGET_DISABLED: 5,
-  NO_TARGET: 6,
-} as const;
-export type UnpublishedReason = (typeof UnpublishedReason)[keyof typeof UnpublishedReason];
+export enum UnpublishedReason {
+  /**
+   * @generated from enum value: UNPUBLISHED_REASON_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * 模型自己被停用了。
+   *
+   * @generated from enum value: UNPUBLISHED_REASON_DISABLED = 1;
+   */
+  DISABLED = 1,
+
+  /**
+   * 目标的上游关着。
+   *
+   * @generated from enum value: UNPUBLISHED_REASON_UPSTREAM_DISABLED = 2;
+   */
+  UPSTREAM_DISABLED = 2,
+
+  /**
+   * 目标的上游没登录。
+   *
+   * @generated from enum value: UNPUBLISHED_REASON_NO_CREDENTIAL = 3;
+   */
+  NO_CREDENTIAL = 3,
+
+  /**
+   * 目标的上游不列这个模型了。
+   *
+   * @generated from enum value: UNPUBLISHED_REASON_MODEL_GONE = 4;
+   */
+  MODEL_GONE = 4,
+
+  /**
+   * 目标自己被停用了。
+   *
+   * @generated from enum value: UNPUBLISHED_REASON_TARGET_DISABLED = 5;
+   */
+  TARGET_DISABLED = 5,
+
+  /**
+   * 一个能用的目标都没有。
+   *
+   * @generated from enum value: UNPUBLISHED_REASON_NO_TARGET = 6;
+   */
+  NO_TARGET = 6,
+}
 
 /**
  * Describes the enum buddy.admin.v1.UnpublishedReason.

@@ -6,6 +6,16 @@ pnpm = "latest"
 # normal build never needs it — only a change to the contract does.
 buf = "1.74.0"
 
+# 运行的每一个 node 都带着这个。
+#
+# 契约生成的代码里有 enum（protobuf 的枚举），而 Node 的「只剥类型」不认
+# enum —— 它要把 enum 编译成对象，不是剥掉就算。transform-types 走的是编译
+# 那条路，所以 enum 能跑。
+#
+# 放在这里，mise 起的每一个任务都带着它（跑测试、起服务、起面板）。
+[env]
+NODE_OPTIONS = "--experimental-transform-types --disable-warning=ExperimentalWarning"
+
 # ── 后端 ──────────────────────────────────────────────────────────────────
 
 [tasks.serve]
@@ -54,12 +64,7 @@ run = "node --experimental-strip-types test/intern-ai-check.ts"
 
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract"
-run = """
-buf generate
-# Node 的「只剥类型」模式不认 enum 语法 —— 后端直接跑 .ts 文件，所以生成物
-# 里的 enum 要换成 const 对象（值与类型都不变）。
-node scripts/patch-enums.mjs
-"""
+run = "buf generate"
 
 [tasks."proto:lint"]
 description = "Check the contract"
