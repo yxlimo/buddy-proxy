@@ -366,6 +366,7 @@ function upstreamContext(): UpstreamContext {
     tokenRhythmMaxAttempts: TOKENRHYTHM_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
     workbuddyMaxOutput: (model: string) => WORKBUDDY_CN.find((m) => m.id === model)?.maxOutput ?? 64000,
+    workbuddyModel: (model: string) => WORKBUDDY_CN.find((m) => m.id === model) ?? null,
   };
 }
 

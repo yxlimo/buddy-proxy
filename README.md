@@ -715,10 +715,29 @@ Two things are not what they look like:
   here.
 - **The catalogue comes from the upstream** at `GET /v3/config`, and the
   upstream adds models without a client release. The proxy fetches it at
-  startup and every half hour, and trims it the way the official picker does:
-  no completion-only models, no tier aliases, no paid build of a name the list
-  already carries (`hy3-x` next to the free `hy3`), and no paid sibling of a
-  free one. The bundled snapshot is only the fallback.
+  startup and then keeps it for three quarters of an hour, and falls back to
+  the last good one when the server cannot be reached. The bundled snapshot is
+  only the fallback.
+
+The request is built the way the official client builds it, not by passing the
+caller's parameters through:
+
+- the thinking level is clamped to the ones the model accepts, downwards;
+- a model that cannot call tools is sent no tools;
+- the temperature and the top_p are the model's own, unless the caller chose
+  them;
+- the conversation keeps one id for all its turns, so the upstream sees the
+  turns as one conversation instead of a new one each time.
+
+The identity around the request is the official client's: the product version
+in the user agent, the account headers, the agent and IDE headers, the trace
+family, and the identifiers in the shape the client checks (a lowercase
+UUIDv7). The headers the official client does not send are not sent here
+either.
+
+`docs/workbuddy/DIVERGENCES.md` (local, not in the repository) lists every
+difference between this and the official client that the review found, with
+the evidence for it.
 
 ### Login
 
@@ -733,10 +752,11 @@ WORKBUDDY_CN=true node router-proxy.ts   # prints the login URL
 
 ### Models
 
-18 models as of 2026-10-21, from `hy3` and `step-5-preview` (free) through
+19 models as of 2026-10-22, from `hy3` and `step-5-preview` (free) through
 `kimi-k3-1` (the most expensive). The label carries the credit multiplier, so
 the list reads as a price list: `Hy3 免费`, `GLM-5.3-Flash 0.08×`,
-`Kimi-K3 1.62×`.
+`Kimi-K3 1.62×`. The paid build of a name is listed next to the free one, the
+way the official picker shows it (`hy3` and `hy3-x`).
 
 `glm-5.1` is in the upstream's own catalogue but every request for it is
 rejected with code 11133, so it is left out.
@@ -747,7 +767,8 @@ rejected with code 11133, so it is left out.
 |----------|---------|------|
 | `WORKBUDDY_CN` | `false` | switch the WorkBuddy China upstream on |
 | `WORKBUDDY_CN_BASE` | `https://www.workbuddy.cn` | the host that serves the account |
-| `WORKBUDDY_CN_ORIGIN` | `https://www.codebuddy.cn` | Origin / Referer on the auth calls |
+| `WORKBUDDY_VERSION` | `5.8.3` | the version the identity headers claim |
+| `WORKBUDDY_AUTH_PLATFORM` | `workbuddy` | the platform the login asks about |
 | `WORKBUDDY_CATALOG_TTL_MS` | `1800000` | how long the upstream's catalogue is trusted |
 | `WORKBUDDY_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
 | `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |

@@ -18,6 +18,7 @@ import { configString, configNumber } from "../config.ts";
 import { readEnvValue } from "../env.ts";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
+import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
@@ -50,9 +51,23 @@ export const CONFIG_PATH = "/v3/config";
 /** The server answers this while the user has not approved yet. */
 const LOGIN_PENDING = 11217;
 
-/** The client version the identity headers claim to be. */
-const DESKTOP_VERSION_CN = "5.5.6";
-const CLI_VERSION = "2.168.2";
+/**
+ * The platform the auth endpoints are asked about.
+ *
+ * The official client asks for `workbuddy` — that is what its product
+ * configuration says — even though it is the CLI talking.
+ */
+const AUTH_PLATFORM = configString("WORKBUDDY_AUTH_PLATFORM", "workbuddy");
+
+/**
+ * The version the identity headers claim to be.
+ *
+ * The official client reports the product version, not the version of the
+ * bundle that happens to be installed: `cli/product.json` and the install
+ * manifest both say 5.8.3, and the user agent is built from that.
+ */
+const DESKTOP_VERSION_CN = configString("WORKBUDDY_VERSION", "5.8.3");
+const CLI_VERSION = DESKTOP_VERSION_CN;
 
 const REFRESH_BUFFER_MS = configNumber("WORKBUDDY_REFRESH_BUFFER_MS", 24 * 3600 * 1000);
 const WARN_MS = configNumber("WORKBUDDY_AUTH_WARN_MS", 7 * 24 * 3600 * 1000);
@@ -167,15 +182,23 @@ async function requestJson(
   }
 }
 
-/** The browser-ish headers the auth endpoints expect. */
+/**
+ * The headers the auth endpoints carry.
+ *
+ * The four `X-No-` headers tell the server to ignore whatever global identity
+ * it would otherwise use, so the login is about this account and not about
+ * whoever is logged in elsewhere. The official client sends them, and the
+ * server may answer about the wrong account without them.
+ */
 function authHeaders(base: WorkBuddyEndpoints): Record<string, string> {
   return {
     "Content-Type": "application/json",
     Accept: "application/json, text/plain, */*",
-    "X-Requested-With": "XMLHttpRequest",
     "User-Agent": `WorkBuddy/${DESKTOP_VERSION_CN}`,
-    Origin: base.origin,
-    Referer: `${base.origin}/`,
+    "X-No-Authorization": "true",
+    "X-No-User-Id": "true",
+    "X-No-Enterprise-Id": "true",
+    "X-No-Department-Info": "true",
   };
 }
 
@@ -186,7 +209,7 @@ function authHeaders(base: WorkBuddyEndpoints): Record<string, string> {
 export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySession> {
   const base = ENDPOINTS[region];
 
-  const start = await requestJson(`${base.base}${AUTH_STATE_PATH}?platform=CLI`, {
+  const start = await requestJson(`${base.base}${AUTH_STATE_PATH}?platform=${AUTH_PLATFORM}`, {
     method: "POST",
     headers: authHeaders(base),
     body: "{}",
@@ -297,11 +320,12 @@ export async function refreshSession(
     headers: {
       ...authHeaders(base),
       "X-Refresh-Token": session.refreshToken,
-      "X-Auth-Refresh-Source": "workbuddy",
-      "X-User-Id": session.uid,
-      "X-Domain": session.domain,
-      "X-CodeBuddy-Request": "1",
-      "Accept-Language": "zh-CN",
+      // The official client says where the refresh came from, and the server
+      // has a strategy for each source.
+      "X-Auth-Refresh-Source": "plugin",
+      // The domain is the endpoint we are talking to, not the one the login
+      // answered with.
+      "X-Domain": new URL(base.base).host,
     },
     body: "{}",
   });
@@ -435,9 +459,12 @@ export function workbuddyDeviceId(session: WorkBuddySession): string | undefined
  * The chat call adds the agent, IDE and trace headers on top of these; the
  * growth centre does not need them, but it needs the same identity.
  */
-export function accountHeaders(session: WorkBuddySession): Record<string, string> {
+export function accountHeaders(
+  session: WorkBuddySession,
+  opts: { chat?: boolean } = {},
+): Record<string, string> {
   const deviceId = workbuddyDeviceId(session);
-  return {
+  const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
     Authorization: `Bearer ${session.accessToken}`,
@@ -445,43 +472,43 @@ export function accountHeaders(session: WorkBuddySession): Record<string, string
     "X-Domain": session.domain,
     ...(deviceId ? { "X-Device-Id": deviceId } : {}),
   };
+  if (opts.chat) {
+    // The model request is not the account's own API: the official client
+    // sends neither the device id nor the domain there — the device id belongs
+    // to the sandbox SDK, and the domain to the auth calls.
+    delete headers["X-Device-Id"];
+    delete headers["X-Domain"];
+  }
+  return headers;
 }
 
 export function chatHeaders(
   session: WorkBuddySession,
   opts: { conversationId?: string; turnRequestId?: string } = {},
 ): Record<string, string> {
-  const trace = randomUUID().replace(/-/g, "");
+  const trace = uuidv7Hex();
   const span = randomBytes(8).toString("hex");
-  const messageId = randomUUID().replace(/-/g, "");
-  const conversationId = opts.conversationId ?? randomUUID();
-  const turnRequestId = opts.turnRequestId ?? randomUUID().replace(/-/g, "");
+  const messageId = uuidv7Hex();
+  // The conversation id is the id of the conversation, not of the request: the
+  // same conversation keeps it for every turn, and the upstream counts what it
+  // is told per conversation.
+  const conversationId = opts.conversationId ?? uuidv7();
+  const turnRequestId = opts.turnRequestId ?? uuidv7Hex();
   const headers: Record<string, string> = {
-    ...accountHeaders(session),
+    ...accountHeaders(session, { chat: true }),
     "X-Agent-Intent": "craft",
     "X-Agent-Purpose": "conversation",
-    "X-Agent-Runtime": "other",
     "X-Agent-Type": "main",
     "X-IDE-Type": "CLI",
     "X-IDE-Name": "CLI",
     "X-IDE-Version": CLI_VERSION,
     "X-Product": "SaaS",
-    "User-Agent": `CLI/${CLI_VERSION} CodeBuddy/${CLI_VERSION}`,
+    "User-Agent": `CLI/${CLI_VERSION} WorkBuddy/${CLI_VERSION}`,
     "X-Conversation-ID": conversationId,
     "X-Conversation-Request-ID": turnRequestId,
-    "X-Root-Request-ID": turnRequestId,
     "X-Conversation-Message-ID": messageId,
     "X-Request-ID": messageId,
     "X-Private-Data": "false",
-    // The OpenAI Node SDK fingerprint the official CLI carries.
-    "x-stainless-lang": "js",
-    "x-stainless-package-version": "6.25.0",
-    "x-stainless-os": process.platform === "darwin" ? "MacOS" : "Linux",
-    "x-stainless-arch": process.arch === "x64" ? "x64" : process.arch,
-    "x-stainless-runtime": "node",
-    "x-stainless-runtime-version": `v${process.versions.node}`,
-    "x-stainless-retry-count": "0",
-    "x-stainless-timeout": "1200",
     // The trace family.
     "X-Trace-ID": trace,
     traceparent: `00-${trace}-${span}-01`,

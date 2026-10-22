@@ -3,6 +3,10 @@
 // The check-in, the Buddy that travels and brings a gift back, the tasks, the
 // streak and the blind box. The order matters: the tasks hand out the lottery
 // chances and the energy the later steps use.
+//
+// Only the check-in and the Buddy trip are in the official client. The others
+// are the account's own API and answer when they are asked — the tasks hand
+// out credits, and the streak reports the days — so they are used as well.
 
 import { loadSession as loadWorkBuddySession, type WorkBuddySession } from "./auth.ts";
 import { clientToken, dataOf, GROWTH, workbuddyApi } from "./api.ts";
@@ -50,7 +54,9 @@ const travel = await workbuddyApi(session, `${GROWTH}/buddy/travel/status`, "GET
 if (travel.status === 200) {
   const state = dataOf(travel.body) ?? {};
   if (state.state === "arrived" && state.record_id) {
-    const claim = await workbuddyApi(session, `${GROWTH}/buddy/travel/claim`, "POST", { record_id: state.record_id });
+    // The official client sends an empty body here; the record id is not
+    // needed, and the server does not look for it.
+    const claim = await workbuddyApi(session, `${GROWTH}/buddy/travel/claim`, "POST", {});
     if (claim.status >= 200 && claim.status < 300) {
       const got = Number(dataOf(claim.body)?.reward_credit ?? 0);
       credits += got;
@@ -114,7 +120,7 @@ if (pending.length) {
 }
 for (const t of list) {
   if (t.locked || t.accept_status !== "completed" || !t.task_code) continue;
-  const claim = await workbuddyApi(session, `/tasks/${t.task_code}/claim`, "POST", {});
+  const claim = await workbuddyApi(session, `${GROWTH}/tasks/${t.task_code}/claim`, "POST", {});
   if (claim.status >= 200 && claim.status < 300) {
     if (dataOf(claim.body)?.already_claimed) {
       report.push(`任务奖「${titles.get(t.task_code)}」已领过`);

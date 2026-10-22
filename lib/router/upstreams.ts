@@ -18,7 +18,8 @@ import {
 } from "../qoder/models.ts";
 import { qoderChatCompletion, LimitError } from "../qoder/transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../qoder/legacy.ts";
-import { workbuddyChat, aggregateStream } from "../workbuddy/transport.ts";
+import { workbuddyChat, aggregateStream, conversationIdFor } from "../workbuddy/transport.ts";
+import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
 import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
@@ -57,6 +58,8 @@ export interface UpstreamContext {
   logRoute: boolean;
   /** The output limit of a WorkBuddy model, as its own catalogue says. */
   workbuddyMaxOutput(model: string): number;
+  /** The model itself, so the request can be built the way the client builds it. */
+  workbuddyModel(model: string): WorkBuddyModel | null;
   /** Told what the upstream charged for the answer, if anyone is keeping score. */
   onUsage?: (usage: any) => void;
 }
@@ -92,7 +95,15 @@ export async function toWorkBuddy(
     console.log(`[ROUTE] workbuddy model=${route.model} stream=${stream}`);
   }
 
-  const { response } = await workbuddyChat(openaiBody, { region: "cn", stream });
+  // The conversation keeps its id for every turn, so the upstream can see
+  // that the turns belong together.
+  const conversationId = conversationIdFor(openaiBody.messages, openaiBody.conversation_id);
+  const { response } = await workbuddyChat(openaiBody, {
+    region: "cn",
+    stream,
+    conversationId,
+    model: ctx.workbuddyModel(model),
+  });
 
   if (!stream) {
     // The upstream always answers with a stream, so a non-streaming request is

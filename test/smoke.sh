@@ -59,6 +59,15 @@ if [ $config_status -ne 0 ]; then
   status=$config_status
 fi
 
+# The parts of the WorkBuddy client that were changed to match the official
+# one are checked on their own too.
+echo ""
+node --experimental-strip-types test/workbuddy-check.ts
+wb_status=$?
+if [ $wb_status -ne 0 ]; then
+  status=$wb_status
+fi
+
 if [ "$status" -ne 0 ]; then
   echo "--- router log ---"
   tail -20 /tmp/opencode/smoke-router.log

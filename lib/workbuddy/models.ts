@@ -30,6 +30,10 @@ export interface WorkBuddyModel {
   onlyReasoning: boolean;
   /** Effort levels the model accepts. Empty means the level is not selectable. */
   efforts: string[];
+  /** The temperature the official client sends for this model. */
+  temperature?: number;
+  /** The top_p the official client sends for this model. */
+  topP?: number;
 }
 
 export const WORKBUDDY_CN_MODELS: WorkBuddyModel[] = [
@@ -295,12 +299,10 @@ export interface RemoteCatalog {
   meta: Record<string, Partial<WorkBuddyModel>>;
 }
 
-/** Models that are not chat models: completion-only, or a tier alias. */
+/** Models that are not chat models: completion-only, or an alias. */
 const NON_CHAT_PREFIXES = ["codewise-", "completion-"];
 const NON_CHAT_SUFFIXES = ["-image-alpha", "-image-alpha-edit", "-taco-completion"];
-const NON_CHAT_MODELS = new Set(["lite", "auto", "default", "default-1", "default-1.1", "default-1.2"]);
-/** A paid build of a name the list already carries. */
-const VARIANT_SUFFIXES = ["-sg", "-x"];
+const NON_CHAT_MODELS = new Set(["lite", "default", "default-1", "default-1.1", "default-1.2"]);
 
 /**
  * Models the upstream lists but cannot serve.
@@ -329,9 +331,7 @@ function isChatModel(id: string): boolean {
  * show up there either.
  */
 export function workBuddyFallbackModels(): WorkBuddyModel[] {
-  return WORKBUDDY_CN_MODELS.filter(
-    (m) => isChatModel(m.id) && !BROKEN_MODELS.has(m.id) && !VARIANT_SUFFIXES.some((s) => m.id.endsWith(s)),
-  );
+  return WORKBUDDY_CN_MODELS.filter((m) => isChatModel(m.id) && !BROKEN_MODELS.has(m.id));
 }
 
 /** "x0.51 credits" → 0.51 */
@@ -392,6 +392,8 @@ export function parseRemoteCatalog(payload: any): RemoteCatalog | null {
           efforts: Array.isArray(item.reasoning?.supportedEfforts)
             ? item.reasoning.supportedEfforts
             : (meta[id]?.efforts ?? []),
+          temperature: typeof item.temperature === "number" ? item.temperature : meta[id]?.temperature,
+          topP: typeof (item.topP ?? item.top_p) === "number" ? (item.topP ?? item.top_p) : meta[id]?.topP,
         };
       }
     }
@@ -404,8 +406,12 @@ export function parseRemoteCatalog(payload: any): RemoteCatalog | null {
 
 /**
  * Trim the catalogue to what the official picker shows: no completion-only
- * models, no tier aliases, no paid build of a name the list already carries,
- * and no paid sibling of a free one.
+ * models and no aliases.
+ *
+ * The official list keeps the paid build of a name and the free build of the
+ * same name side by side — `hy3` and `hy3-x`, `hy4-preview` and
+ * `hy4-preview-x` — so both are published here too. The picker shows what
+ * each one costs, and the agent decides.
  */
 export function curateCatalog(remote: RemoteCatalog): WorkBuddyModel[] {
   const credits: Record<string, number> = {};
@@ -418,22 +424,10 @@ export function curateCatalog(remote: RemoteCatalog): WorkBuddyModel[] {
     if (credits[m.id] === undefined) credits[m.id] = m.credits;
   }
 
-  const free = (id: string): boolean => credits[id] === 0;
-  const ids = remote.ids;
-  const idSet = new Set(ids);
-
   const out: string[] = [];
-  for (const id of ids) {
+  for (const id of remote.ids) {
     if (!isChatModel(id)) continue;
     if (BROKEN_MODELS.has(id)) continue;
-    if (VARIANT_SUFFIXES.some((s) => id.endsWith(s))) continue;
-    // "-f" is the free build of the name; when both are listed, the paid one goes.
-    if (id.endsWith("-f")) {
-      const base = id.slice(0, -2);
-      if (idSet.has(base) && free(base) && !free(id)) continue;
-    } else if (idSet.has(`${id}-f`) && free(`${id}-f`) && !free(id)) {
-      continue;
-    }
     out.push(id);
   }
   return mergeWorkBuddyCatalog(out, remote.meta);
@@ -473,4 +467,32 @@ export function mergeWorkBuddyCatalog(
     out.push({ ...known, ...extra, id, display_name: extra.display_name ?? known.display_name });
   }
   return out;
+}
+
+/**
+ * The thinking level a model accepts.
+ *
+ * The official client clamps the level a request asks for to the ones the
+ * model supports, and it clamps downwards: the level below the one asked for
+ * is used. A level that is not a level at all falls back to the smallest one
+ * the model supports.
+ *
+ * A model that lists no levels takes everything, except that the two levels
+ * above `high` become `high` — those are the ones the client never sends.
+ */
+export const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+export function clampEffort(requested: string | undefined, supported: string[]): string | undefined {
+  if (!requested) return undefined;
+  const wanted = requested.toLowerCase();
+  if (!supported.length) {
+    return wanted === "max" || wanted === "xhigh" ? "high" : wanted;
+  }
+  const order = EFFORT_LEVELS;
+  const index = order.indexOf(wanted);
+  if (index < 0) return supported[0];
+  for (let i = index; i >= 0; i--) {
+    if (supported.includes(order[i])) return order[i];
+  }
+  return supported[0];
 }
