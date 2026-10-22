@@ -4,12 +4,12 @@
 // and the credit balance both live behind these endpoints, and both need the
 // same identity headers.
 
-import { readEnvString } from "../env.ts";
+import { configString } from "../config.ts";
 import { accountHeaders, loadSession, type WorkBuddySession } from "./auth.ts";
 
 /** The host the account's own API is on. */
 export function workBuddyApiBase(): string {
-  const override = readEnvString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
+  const override = configString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
   if (override) return override;
   const session = loadSession("cn");
   const host = session?.domain || "www.workbuddy.cn";

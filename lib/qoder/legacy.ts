@@ -27,10 +27,10 @@
 // `data:{"headers":…,"body":"<json string>"}`, where the inner JSON is a regular
 // OpenAI chat completion chunk. Errors arrive as their own frames.
 
+import { configString } from "../config.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
 import { ensureCredential, loadSession, deviceIdentity, ENDPOINTS, type QoderRegion } from "./auth.ts";
-import { readEnvString } from "../env.ts";
 
 /** Qoder's server public key. Fixed; the protocol has never rotated it. */
 const SERVER_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
@@ -95,13 +95,13 @@ export async function buildSession(region: QoderRegion = "global"): Promise<Lega
   const stored = loadSession(region);
   const uid = stored?.userId ?? "";
   const identity: LegacyIdentity = {
-    name: readEnvString("QODER_ACCOUNT_NAME", ""),
+    name: configString("QODER_ACCOUNT_NAME", ""),
     aid: uid,
     uid,
     yx_uid: "",
     organization_id: "",
     organization_name: "",
-    user_type: readEnvString("QODER_USER_TYPE", "personal_professional_trial"),
+    user_type: configString("QODER_USER_TYPE", "personal_professional_trial"),
     security_oauth_token: cred.accessToken,
     refresh_token: stored?.refreshToken ?? "",
   };

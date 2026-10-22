@@ -16,14 +16,15 @@
 // inference. They are different things on the platform: the key cannot read
 // the wallet, and the session cannot call the models.
 
+import { configString } from "../config.ts";
+import { readEnvValue } from "../env.ts";
 import fs from "node:fs";
 import path from "node:path";
-import { readEnvValue, readEnvString } from "../env.ts";
 import { dataDirFor, readSession, writeSession } from "../session.ts";
 import { getSecret, setSecret } from "../store.ts";
 
-export const TOKENRHYTHM_API_BASE = readEnvString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
-export const TOKENRHYTHM_INFER_BASE = readEnvString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
+export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
+export const TOKENRHYTHM_INFER_BASE = configString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
 
 /** One account, and the key that belongs to it. */
 export interface TokenRhythmTenant {
@@ -42,26 +43,26 @@ const MAX_TENANTS = 32;
  * The tenants, in order.
  *
  * The account and the password are what log in; the key is what the inference
- * uses. All three live in the database now — the environment is only where
- * they are read from the first time, before they are moved in.
+ * uses. All three are credentials, so the environment wins: a key that was
+ * rotated in .env has to take effect. The database holds a copy, so the
+ * service still works when the .env file is not there.
  */
 export function tokenRhythmTenants(): TokenRhythmTenant[] {
   const out: TokenRhythmTenant[] = [];
   for (let index = 1; index <= MAX_TENANTS; index++) {
     const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(tenantId(index));
-    let account = stored?.account ?? "";
-    let password = stored?.password ?? "";
-    let key = stored?.apiKey ?? "";
-    if (!account || !password) {
-      // The environment is where the account was configured the first time.
-      account = readEnvValue(`TOKEN_RHYTHM_${index}_ACCOUNT`) || account;
-      password = readEnvValue(`TOKEN_RHYTHM_${index}_PASSWORD`) || password;
-      key = readEnvValue(`TOKEN_RHYTHM_${index}_API_KEY`) || key;
-      if (account && password) {
-        setSecret(tenantId(index), "account", { account, password, apiKey: key || null });
-      }
-    }
+    const account = readEnvValue(`TOKEN_RHYTHM_${index}_ACCOUNT`) || stored?.account || "";
+    const password = readEnvValue(`TOKEN_RHYTHM_${index}_PASSWORD`) || stored?.password || "";
+    const key = readEnvValue(`TOKEN_RHYTHM_${index}_API_KEY`) || stored?.apiKey || "";
     if (!account || !password) continue;
+    if (
+      !stored ||
+      stored.account !== account ||
+      stored.password !== password ||
+      (stored.apiKey ?? null) !== (key || null)
+    ) {
+      setSecret(tenantId(index), "account", { account, password, apiKey: key || null });
+    }
     out.push({ index, account, password, apiKey: key || null });
   }
   return out;

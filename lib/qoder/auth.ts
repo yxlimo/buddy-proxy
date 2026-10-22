@@ -16,9 +16,10 @@
 // The client id differs between prod and the daily/test environments, not between
 // regions — both use the prod one.
 
+import { configString, configNumber } from "../config.ts";
+import { readEnvValue } from "../env.ts";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
@@ -43,16 +44,16 @@ export interface QoderEndpoints {
 export const ENDPOINTS: Record<QoderRegion, QoderEndpoints> = {
   cn: {
     site: "https://qoder.cn",
-    openapi: readEnvString("QODER_CN_OPENAPI_BASE", "https://openapi.qoder.com.cn").replace(/\/+$/, ""),
-    infer: readEnvString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/model/v1/chat/completions",
-    inferLegacy: readEnvString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
+    openapi: configString("QODER_CN_OPENAPI_BASE", "https://openapi.qoder.com.cn").replace(/\/+$/, ""),
+    infer: configString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/model/v1/chat/completions",
+    inferLegacy: configString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
   },
   global: {
     site: "https://qoder.com",
-    openapi: readEnvString("QODER_GLOBAL_OPENAPI_BASE", "https://openapi.qoder.sh").replace(/\/+$/, ""),
-    infer: readEnvString("QODER_GLOBAL_INFER_BASE", "https://api2-v2.qoder.sh").replace(/\/+$/, "") + "/model/v1/chat/completions",
+    openapi: configString("QODER_GLOBAL_OPENAPI_BASE", "https://openapi.qoder.sh").replace(/\/+$/, ""),
+    infer: configString("QODER_GLOBAL_INFER_BASE", "https://api2-v2.qoder.sh").replace(/\/+$/, "") + "/model/v1/chat/completions",
     // The legacy protocol lives on another host, so it has its own base.
-    inferLegacy: readEnvString("QODER_GLOBAL_LEGACY_BASE", "https://api3.qoder.sh").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
+    inferLegacy: configString("QODER_GLOBAL_LEGACY_BASE", "https://api3.qoder.sh").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
   },
 };
 
@@ -60,15 +61,15 @@ export const REGION: QoderRegion = "global";
 export const REGION_NAME = REGION;
 export const ENDPOINT = ENDPOINTS[REGION];
 
-const CACHE_MS = readEnvNumber("QODER_AUTH_CACHE_MS", 5000);
+const CACHE_MS = configNumber("QODER_AUTH_CACHE_MS", 5000);
 // A Qoder access token is good for about 30 days (measured: 2591998s), so the
 // warning window is days, not minutes. The refresh token is good for about a
 // year, which is why the refresh path is barely ever taken.
-const WARN_MS = readEnvNumber("QODER_AUTH_WARN_MS", 7 * 24 * 60 * 60 * 1000);
-const REFRESH_BUFFER_MS = readEnvNumber("QODER_REFRESH_BUFFER_MS", 24 * 60 * 60 * 1000);
-const POLL_INTERVAL_MS = readEnvNumber("QODER_POLL_INTERVAL_MS", 1000);
-const POLL_TIMEOUT_MS = readEnvNumber("QODER_POLL_TIMEOUT_MS", 5 * 60 * 1000);
-export const USER_AGENT = readEnvString("QODER_USER_AGENT", "qoder/1.1.74");
+const WARN_MS = configNumber("QODER_AUTH_WARN_MS", 7 * 24 * 60 * 60 * 1000);
+const REFRESH_BUFFER_MS = configNumber("QODER_REFRESH_BUFFER_MS", 24 * 60 * 60 * 1000);
+const POLL_INTERVAL_MS = configNumber("QODER_POLL_INTERVAL_MS", 1000);
+const POLL_TIMEOUT_MS = configNumber("QODER_POLL_TIMEOUT_MS", 5 * 60 * 1000);
+export const USER_AGENT = configString("QODER_USER_AGENT", "qoder/1.1.74");
 
 export const QODER_WARN_MS = WARN_MS;
 export const QODER_REFRESH_BUFFER_MS = REFRESH_BUFFER_MS;
@@ -104,7 +105,7 @@ export function sessionId(region: QoderRegion = REGION): string {
 
 /** Where the session used to live, while the migration is under way. */
 export function legacySessionPath(region: QoderRegion = REGION): string {
-  const explicit = readEnvString("QODER_CREDENTIAL_FILE", "");
+  const explicit = readEnvValue("QODER_CREDENTIAL_FILE") || "";
   if (explicit) return explicit;
   return path.join(dataDir(), `qoder-session.${region}.json`);
 }

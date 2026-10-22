@@ -11,7 +11,8 @@ RUN corepack enable && pnpm install --frozen-lockfile --prod
 
 # Only what the router actually loads: the entry point and lib/. There is no login
 # program: the router runs the device flow itself when a credential is missing.
-COPY router-proxy.ts ./
+# config-cli.ts is the way to look at and change the settings in the database.
+COPY router-proxy.ts config-cli.ts ./
 COPY lib/ ./lib/
 
 # The OAuth session is a credential, not configuration: it lives in a named volume

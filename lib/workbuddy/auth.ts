@@ -14,9 +14,10 @@
 // www.workbuddy.cn, the older gateway was copilot.tencent.com, and the
 // account's own domain decides which one answers for it.
 
+import { configString, configNumber } from "../config.ts";
+import { readEnvValue } from "../env.ts";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
-import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
@@ -33,8 +34,8 @@ export interface WorkBuddyEndpoints {
 
 export const ENDPOINTS: Record<WorkBuddyRegion, WorkBuddyEndpoints> = {
   cn: {
-    base: readEnvString("WORKBUDDY_CN_BASE", "https://www.workbuddy.cn").replace(/\/+$/, ""),
-    origin: readEnvString("WORKBUDDY_CN_ORIGIN", "https://www.codebuddy.cn").replace(/\/+$/, ""),
+    base: configString("WORKBUDDY_CN_BASE", "https://www.workbuddy.cn").replace(/\/+$/, ""),
+    origin: configString("WORKBUDDY_CN_ORIGIN", "https://www.codebuddy.cn").replace(/\/+$/, ""),
   },
 };
 
@@ -52,11 +53,11 @@ const LOGIN_PENDING = 11217;
 const DESKTOP_VERSION_CN = "5.5.6";
 const CLI_VERSION = "2.168.2";
 
-const REFRESH_BUFFER_MS = readEnvNumber("WORKBUDDY_REFRESH_BUFFER_MS", 24 * 3600 * 1000);
-const WARN_MS = readEnvNumber("WORKBUDDY_AUTH_WARN_MS", 7 * 24 * 3600 * 1000);
-const CACHE_MS = readEnvNumber("WORKBUDDY_AUTH_CACHE_MS", 5000);
-const POLL_INTERVAL_MS = readEnvNumber("WORKBUDDY_LOGIN_POLL_MS", 3000);
-const LOGIN_TIMEOUT_MS = readEnvNumber("WORKBUDDY_LOGIN_TIMEOUT_MS", 10 * 60 * 1000);
+const REFRESH_BUFFER_MS = configNumber("WORKBUDDY_REFRESH_BUFFER_MS", 24 * 3600 * 1000);
+const WARN_MS = configNumber("WORKBUDDY_AUTH_WARN_MS", 7 * 24 * 3600 * 1000);
+const CACHE_MS = configNumber("WORKBUDDY_AUTH_CACHE_MS", 5000);
+const POLL_INTERVAL_MS = configNumber("WORKBUDDY_LOGIN_POLL_MS", 3000);
+const LOGIN_TIMEOUT_MS = configNumber("WORKBUDDY_LOGIN_TIMEOUT_MS", 10 * 60 * 1000);
 
 export interface WorkBuddySession {
   accessToken: string;
@@ -85,7 +86,7 @@ export function sessionId(region: WorkBuddyRegion = "cn"): string {
 
 /** Where the session used to live, while the migration is under way. */
 export function legacySessionPath(region: WorkBuddyRegion = "cn"): string {
-  const explicit = readEnvString("WORKBUDDY_CREDENTIAL_FILE", "");
+  const explicit = readEnvValue("WORKBUDDY_CREDENTIAL_FILE") || "";
   if (explicit) return explicit;
   return path.join(dataDir(), `workbuddy-session.${region}.json`);
 }
@@ -498,7 +499,7 @@ export function chatHeaders(
 export function chatBase(session: WorkBuddySession): string {
   // The override is what the mock server is reached through; without it the
   // account's own domain is used.
-  const override = readEnvString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
+  const override = configString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
   if (override) return override;
   const host = session.domain || ENDPOINTS[session.region].base.replace(/^https?:\/\//, "");
   return `https://${host}`;

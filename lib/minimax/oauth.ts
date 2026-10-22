@@ -20,10 +20,11 @@
 // a platform API key gets 401 on this gateway (measured), because the gateway is locked
 // to audience `agent-backend`. Only this grant works.
 
+import { configString, configNumber } from "../config.ts";
+import { readEnvValue } from "../env.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { clearHint, dataDirFor, ensureCredential as ensureCredentialShared, hasTokens, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
@@ -35,16 +36,16 @@ export const OAUTH_ORIGINS: Record<string, string> = {
   en: "https://account.minimax.io",
 };
 
-const CLIENT_ID = readEnvString("MINIMAX_CLIENT_ID", DEFAULT_CLIENT_ID);
-const AUDIENCE = readEnvString("MINIMAX_AUDIENCE", DEFAULT_AUDIENCE);
-const SCOPES = readEnvString("MINIMAX_SCOPES", DEFAULT_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
-const REGION = readEnvString("MINIMAX_REGION", DEFAULT_REGION);
-const ORIGIN = readEnvString("MINIMAX_OAUTH_ORIGIN", OAUTH_ORIGINS[REGION] ?? OAUTH_ORIGINS.cn);
-const CACHE_MS = readEnvNumber("MINIMAX_AUTH_CACHE_MS", 5000);
-const WARN_MS = readEnvNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
+const CLIENT_ID = configString("MINIMAX_CLIENT_ID", DEFAULT_CLIENT_ID);
+const AUDIENCE = configString("MINIMAX_AUDIENCE", DEFAULT_AUDIENCE);
+const SCOPES = configString("MINIMAX_SCOPES", DEFAULT_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
+const REGION = configString("MINIMAX_REGION", DEFAULT_REGION);
+const ORIGIN = configString("MINIMAX_OAUTH_ORIGIN", OAUTH_ORIGINS[REGION] ?? OAUTH_ORIGINS.cn);
+const CACHE_MS = configNumber("MINIMAX_AUTH_CACHE_MS", 5000);
+const WARN_MS = configNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 // Refresh when this much life is left. The real client uses 5 min; a 1-hour token
 // means the proxy refreshes roughly once an hour.
-const REFRESH_BUFFER_MS = readEnvNumber("MINIMAX_REFRESH_BUFFER_MS", 5 * 60 * 1000);
+const REFRESH_BUFFER_MS = configNumber("MINIMAX_REFRESH_BUFFER_MS", 5 * 60 * 1000);
 
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -88,7 +89,7 @@ export function sessionId(): string {
 
 /** Where the session used to live, while the migration is under way. */
 export function legacySessionPath(): string {
-  const explicit = readEnvString("MINIMAX_CREDENTIAL_FILE", "");
+  const explicit = readEnvValue("MINIMAX_CREDENTIAL_FILE") || "";
   if (explicit) return explicit;
   return path.join(dataDir(), "minimax-session.json");
 }

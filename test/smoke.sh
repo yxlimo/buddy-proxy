@@ -50,6 +50,15 @@ done
 bash test/e2e.sh "http://127.0.0.1:$ROUTER_PORT"
 status=$?
 
+# The settings layer is checked on its own: the order the three sources are
+# read in is what decides how the service behaves.
+echo ""
+node --experimental-strip-types test/config-check.ts
+config_status=$?
+if [ $config_status -ne 0 ]; then
+  status=$config_status
+fi
+
 if [ "$status" -ne 0 ]; then
   echo "--- router log ---"
   tail -20 /tmp/opencode/smoke-router.log

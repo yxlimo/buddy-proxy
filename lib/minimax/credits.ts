@@ -11,7 +11,9 @@
 // money on the platform account — the cash, the vouchers and the credits, with
 // the credits being the ones that were given rather than paid for.
 
-import { readEnvString } from "../env.ts";
+import { configString } from "../config.ts";
+import { readEnvValue } from "../env.ts";
+import { getSecret, setSecret } from "../store.ts";
 
 /** The platform hosts. The key decides which one answers. */
 export const MINIMAX_API_HOSTS = {
@@ -22,7 +24,7 @@ export const MINIMAX_API_HOSTS = {
 export type MiniMaxRegion = keyof typeof MINIMAX_API_HOSTS;
 
 export function minimaxApiHost(region: MiniMaxRegion = "cn"): string {
-  const explicit = readEnvString("MINIMAX_API_BASE", "");
+  const explicit = configString("MINIMAX_API_BASE", "");
   if (explicit) return explicit.replace(/\/+$/, "");
   return MINIMAX_API_HOSTS[region];
 }
@@ -136,11 +138,26 @@ export async function fetchMiniMaxTokenPlan(
   }
 }
 
-/** The token plan's key, when one is configured. */
+/**
+ * The token plan's key, when one is configured.
+ *
+ * It is a credential, so the environment wins: a key that was rotated in .env
+ * has to take effect. The database holds a copy, so the service still works
+ * when the .env file is not there, and the panel can read what is configured.
+ */
 export function miniMaxTokenPlanKey(): string | null {
-  const key = readEnvString("MINIMAX_TOKEN_PLAN_KEY", "");
-  return key || null;
+  const fromEnv = readEnvValue("MINIMAX_TOKEN_PLAN_KEY") || "";
+  if (fromEnv) {
+    if (getSecret<string>(TOKEN_PLAN_KEY_ID) !== fromEnv) {
+      setSecret(TOKEN_PLAN_KEY_ID, "key", fromEnv);
+    }
+    return fromEnv;
+  }
+  return getSecret<string>(TOKEN_PLAN_KEY_ID) || null;
 }
+
+/** Where the token plan's key is kept. */
+const TOKEN_PLAN_KEY_ID = "key:minimax-token-plan";
 
 /* ------------------------------------------------------------------ *
  * The cached view

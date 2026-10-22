@@ -21,10 +21,11 @@
 // view (anonymous / authorizing / refreshing / authenticated / expired / error /
 // scope_upgrade_required).
 
+import { configString, configNumber } from "../config.ts";
+import { readEnvValue } from "../env.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readEnvNumber, readEnvString } from "../env.ts";
 import { AuthError, DEFAULT_CLIENT_ID, DEFAULT_REGION } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 
@@ -55,14 +56,14 @@ export interface AuthState {
   activeRecord?: StoredCredential;
 }
 
-const CLIENT_ID = readEnvString("MINIMAX_CLIENT_ID", DEFAULT_CLIENT_ID);
-const REGION = readEnvString("MINIMAX_REGION", DEFAULT_REGION);
-const CACHE_MS = readEnvNumber("MINIMAX_AUTH_CACHE_MS", 5000);
-const WARN_MS = readEnvNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
+const CLIENT_ID = configString("MINIMAX_CLIENT_ID", DEFAULT_CLIENT_ID);
+const REGION = configString("MINIMAX_REGION", DEFAULT_REGION);
+const CACHE_MS = configNumber("MINIMAX_AUTH_CACHE_MS", 5000);
+const WARN_MS = configNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 
 /** Explicit dir wins; otherwise try the native home, then the Windows drive mount. */
 export function authDir(): string {
-  const explicit = readEnvString("MINIMAX_AUTH_DIR", "");
+  const explicit = readEnvValue("MINIMAX_AUTH_DIR") || "";
   if (explicit) return explicit;
   const rel = path.join(".minimax", "auth", "prod", REGION, CLIENT_ID);
   const native = path.join(os.homedir(), rel);

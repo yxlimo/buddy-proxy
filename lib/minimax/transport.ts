@@ -12,20 +12,20 @@
 // The upstream speaks the Anthropic dialect natively: the request goes out as
 // it is, and the answer comes back the same way.
 
+import { configString, configFlag, configNumber } from "../config.ts";
 import crypto from "node:crypto";
-import { readEnvFlag, readEnvNumber, readEnvString } from "../env.ts";
 import { AUTH_MODE, AuthError, readCredential } from "./auth.ts";
 
-export const REGION = readEnvString("MINIMAX_REGION", "cn");
-const UA = readEnvString("MINIMAX_USER_AGENT", "MiniMaxCode");
-const ANTHROPIC_VERSION = readEnvString("MINIMAX_ANTHROPIC_VERSION", "2023-06-01");
-const ATTRIBUTION = readEnvFlag("MINIMAX_ATTRIBUTION_HEADERS", true);
+export const REGION = configString("MINIMAX_REGION", "cn");
+const UA = configString("MINIMAX_USER_AGENT", "MiniMaxCode");
+const ANTHROPIC_VERSION = configString("MINIMAX_ANTHROPIC_VERSION", "2023-06-01");
+const ATTRIBUTION = configFlag("MINIMAX_ATTRIBUTION_HEADERS", true);
 // Wire-protocol constants copied from the client; changing them requires a
 // coordinated server-side rollout.
 const YY_SUFFIX = "ooui";
 const SIGNATURE_SALT = "I*7Cf%WZ#S&%1RlZJ&C2";
 
-export const BASE_URL = readEnvString(
+export const BASE_URL = configString(
   "MINIMAX_BASE_URL",
   REGION === "en" ? "https://agent.minimax.io/mavis/api/v1/llm/v1" : "https://agent.minimax.cn/mavis/api/v1/llm/v1",
 );
@@ -35,7 +35,7 @@ export const UPSTREAM = `${BASE_URL}/messages`;
 export const MINIMAX_UPSTREAM = UPSTREAM;
 
 /** Heartbeat interval for streaming answers. 0 disables the ping entirely. */
-export const PING_MS = readEnvNumber("MINIMAX_PING_MS", 15000);
+export const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
 
 /** What to tell the operator when the credential is unusable. */
 export const RELOGIN_HINT =

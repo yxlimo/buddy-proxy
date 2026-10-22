@@ -45,10 +45,45 @@ MINIMAX_CODE=true QODER_GLOBAL=true QODER_CN=true WORKBUDDY_CN=true node router-
 
 API keys live in `api-keys.json` (auto-generated on first run if missing).
 
+## The settings
+
+Every setting comes from one of three places, and the first one that has an
+answer wins:
+
+1. **the database** — what a management panel writes
+2. **the environment** — what the deployment sets (`docker compose`, `.env`)
+3. **the default in the code**
+
+The service reads them all once, at startup, so a change in the database takes
+effect on the next restart rather than halfway through a request. The startup
+log says where each non-default value came from:
+
+```
+[CONFIG] 61 settings (0 from the database, 12 from the environment, 49 default)
+[CONFIG] HEALTH_CACHE_MS = 300000  [environment]
+```
+
+The settings can be looked at and changed without touching the environment:
+
+```bash
+node config-cli.ts list             # what the service will use
+node config-cli.ts overrides        # what the database holds
+node config-cli.ts set HEALTH_CACHE_MS=60000
+node config-cli.ts clear HEALTH_CACHE_MS
+node config-cli.ts secrets          # the credentials that are configured
+```
+
+The credentials are the exception: the environment wins for them, so a key that
+was rotated in `.env` takes effect. The database holds a copy, so the service
+still works when the `.env` file is not there.
+
 ## Layout
 
 ```
 router-proxy.ts        the entry point: the switches, the routes, the startup
+config-cli.ts          look at the settings, and change them
+lib/config.ts          the settings, and where they come from
+lib/store.ts           the database: the credentials, the settings, the cache
 lib/router/            the router's inside
   routes.ts            where a request goes: the model name and the path
   catalog.ts           the model lists, in both dialects

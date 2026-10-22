@@ -12,7 +12,7 @@
 // because the desktop app tracks a `generation` and would see a session change; the
 // oauth source is the sole writer of its own file, so refreshing is unambiguous.
 
-import { readEnvString } from "../env.ts";
+import { configString } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import * as fileStore from "./file-store.ts";
@@ -20,7 +20,7 @@ import * as oauth from "./oauth.ts";
 
 export type AuthMode = "oauth" | "file";
 
-const RAW_MODE = readEnvString("MINIMAX_AUTH_MODE", "oauth").trim().toLowerCase();
+const RAW_MODE = configString("MINIMAX_AUTH_MODE", "oauth").trim().toLowerCase();
 export const AUTH_MODE: AuthMode = RAW_MODE === "file" ? "file" : "oauth";
 
 export const AUTH_WARN_MS = AUTH_MODE === "file" ? fileStore.FILE_WARN_MS : oauth.OAUTH_WARN_MS;

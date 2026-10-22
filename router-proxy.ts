@@ -17,6 +17,7 @@
 //   Anthropic → Qoder  converted to Anthropic on the way in
 //   Anthropic → MiniMax passes through
 
+import { configString, configFlag, configNumber, logConfig } from "./lib/config.ts";
 import Koa from "koa";
 import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
@@ -67,21 +68,21 @@ import { type BenefitUpstream } from "./lib/benefits.ts";
 import { fetchWorkBuddyCredits } from "./lib/workbuddy/credits.ts";
 import { BenefitsRunner } from "./lib/router/benefits.ts";
 
-const PORT = readEnvNumber("ROUTER_PORT", 6450);
-const HOST = readEnvString("ROUTER_HOST", "0.0.0.0");
+const PORT = configNumber("ROUTER_PORT", 6450);
+const HOST = configString("ROUTER_HOST", "0.0.0.0");
 // Which upstreams this router serves. Each flag turns on one reverse proxy; an
 // upstream that is off is not looked at at all — no credential read, no login,
 // no models advertised, and a request for one is refused with a clear message.
-const ENABLED_MINIMAX = readEnvFlag("MINIMAX_CODE", false);
-const MINIMAX_REGION = readEnvString("MINIMAX_REGION", "cn");
+const ENABLED_MINIMAX = configFlag("MINIMAX_CODE", false);
+const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
 // How often the MiniMax credential is looked at, so a warning reaches the log
 // even when nothing is being asked for.
-const MINIMAX_WATCH_MS = readEnvNumber("MINIMAX_WATCH_MS", 5 * 60 * 1000);
-const ENABLED_QODER_GLOBAL = readEnvFlag("QODER_GLOBAL", false);
-const ENABLED_QODER_CN = readEnvFlag("QODER_CN", false);
-const ENABLED_WORKBUDDY_CN = readEnvFlag("WORKBUDDY_CN", false);
-const ENABLED_TOKENRHYTHM = readEnvFlag("TOKENRHYTHM", false);
-const TOKENRHYTHM_MAX_ATTEMPTS = readEnvNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
+const MINIMAX_WATCH_MS = configNumber("MINIMAX_WATCH_MS", 5 * 60 * 1000);
+const ENABLED_QODER_GLOBAL = configFlag("QODER_GLOBAL", false);
+const ENABLED_QODER_CN = configFlag("QODER_CN", false);
+const ENABLED_WORKBUDDY_CN = configFlag("WORKBUDDY_CN", false);
+const ENABLED_TOKENRHYTHM = configFlag("TOKENRHYTHM", false);
+const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 
 /* ------------------------------------------------------------------ *
  * The daily benefits of the China accounts
@@ -93,11 +94,11 @@ const TOKENRHYTHM_MAX_ATTEMPTS = readEnvNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
  * An hour, not a day: the Buddy trip lasts one to four hours, so a gift that
  * is already waiting would otherwise sit for hours after it arrived.
  */
-const BENEFITS_INTERVAL_MS = Number(readEnvString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
+const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
 
 /** The accounts that hand out credits and are switched on. */
 function benefitUpstreams(): BenefitUpstream[] {
-  if (readEnvFlag("BENEFITS_DISABLED", false)) return [];
+  if (configFlag("BENEFITS_DISABLED", false)) return [];
   const out: BenefitUpstream[] = [];
   if (ENABLED_WORKBUDDY_CN) out.push("workbuddy-cn");
   if (ENABLED_QODER_CN) out.push("qoder-cn");
@@ -111,15 +112,15 @@ const QODER_REGIONS: QoderRegion[] = [
   ...(ENABLED_QODER_GLOBAL ? (["global"] as QoderRegion[]) : []),
   ...(ENABLED_QODER_CN ? (["cn"] as QoderRegion[]) : []),
 ];
-const PING_MS = readEnvNumber("MINIMAX_PING_MS", 15000);
+const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
 // The legacy endpoint queues models and reports 429 while a request waits. The
 // CLI retries these, so the proxy does too — with the same shape.
-const LEGACY_MAX_ATTEMPTS = readEnvNumber("QODER_LEGACY_ATTEMPTS", 3);
-const LEGACY_RETRY_MS = readEnvNumber("QODER_LEGACY_RETRY_MS", 10000);
-const QODER_MAX_ATTEMPTS = readEnvNumber("QODER_MAX_ATTEMPTS", 3);
-const LOG_ROUTE = readEnvFlag("QODER_LOG_ROUTE", false);
+const LEGACY_MAX_ATTEMPTS = configNumber("QODER_LEGACY_ATTEMPTS", 3);
+const LEGACY_RETRY_MS = configNumber("QODER_LEGACY_RETRY_MS", 10000);
+const QODER_MAX_ATTEMPTS = configNumber("QODER_MAX_ATTEMPTS", 3);
+const LOG_ROUTE = configFlag("QODER_LOG_ROUTE", false);
 // How long the upstream's own catalogue is trusted before it is fetched again.
-const WORKBUDDY_CATALOG_TTL_MS = readEnvNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 60 * 1000);
+const WORKBUDDY_CATALOG_TTL_MS = configNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 60 * 1000);
 
 
 type Dialect = "anthropic" | "openai";
@@ -221,7 +222,7 @@ interface HealthSnapshot {
 }
 
 const HEALTH_CACHE_ID = "health:upstreams";
-const HEALTH_CACHE_MS = readEnvNumber("HEALTH_CACHE_MS", 300_000);
+const HEALTH_CACHE_MS = configNumber("HEALTH_CACHE_MS", 300_000);
 let healthRefresh: Promise<void> | null = null;
 
 /** Ask the upstreams how they are, and remember the answer. */
@@ -517,6 +518,12 @@ app.listen(PORT, HOST, () => {
     `    tokenrhythm ${ENABLED_TOKENRHYTHM ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
   );
   console.log(`  auth: ${REQUIRE_API_KEY ? "api key required" : "public"}`);
+  console.log("");
+
+  // Where the settings came from: the database first, then the environment,
+  // then the defaults in the code. A setting that is not the default is
+  // printed, so a change in the database is visible in the log.
+  logConfig();
   console.log("");
 
   // The server owns the credentials. An enabled region with no session runs the

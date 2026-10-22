@@ -31,7 +31,7 @@
 // Which models are free depends on the account and the current promotion; the
 // `billable`/`credits` fields in the usage are the authority, not the name.
 
-import { readEnvString } from "../env.ts";
+import { configString } from "../config.ts";
 
 export type QoderProtocol = "new" | "legacy";
 
@@ -104,7 +104,7 @@ const DEFAULT_EFFORT_TIERS: Record<string, string> = {
 
 /** Read the effort → tier mapping, allowing an override from the environment. */
 export function effortTiers(): Record<string, string> {
-  const raw = readEnvString("QODER_EFFORT_TIERS", "");
+  const raw = configString("QODER_EFFORT_TIERS", "");
   if (!raw.trim()) return DEFAULT_EFFORT_TIERS;
   const map: Record<string, string> = { ...DEFAULT_EFFORT_TIERS };
   for (const pair of raw.split(",")) {

@@ -10,13 +10,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readEnvFlag, readEnvString } from "./env.ts";
+import { configFlag } from "./config.ts";
+import { readEnvValue } from "./env.ts";
 import { getSecret, setSecret } from "./store.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export const REQUIRE_API_KEY = readEnvFlag("REQUIRE_API_KEY", false);
-export const KEYS_FILE = readEnvString("KEYS_FILE", path.join(HERE, "..", "api-keys.json"));
+export const REQUIRE_API_KEY = configFlag("REQUIRE_API_KEY", false);
+// The file the keys used to live in. It is only read once, when the database
+// has no keys yet, so it stays a path the deployment decides.
+export const KEYS_FILE = readEnvValue("KEYS_FILE") || path.join(HERE, "..", "api-keys.json");
 
 export type KeyStore = Record<string, string>;
 
