@@ -737,9 +737,12 @@ export function outOfCredits(id: UpstreamId): boolean {
   if (!snapshot) return false;
   switch (id) {
     case "minimax": {
-      const balance = snapshot.minimax?.balance as any;
-      if (!balance) return false;
-      return Number(balance.available ?? 0) <= 0;
+      // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑
+      // （实测过：余额 0，plan 99%，请求正常）。看 plan 的窗口。
+      const plan = snapshot.minimax?.tokenPlan as any;
+      const windows = (plan?.windows ?? []) as any[];
+      if (!windows.length) return false;
+      return windows.some((w) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0);
     }
     case "qoder":
     case "qoder-cn": {
@@ -748,10 +751,11 @@ export function outOfCredits(id: UpstreamId): boolean {
       if (!credits) return false;
       const plan = Number(credits.plan?.remaining ?? 0);
       const addOn = Number(credits.addOn?.remaining ?? 0);
+      // 上游自己说的：超了就是超了。
       if (credits.quotaExceeded === true) return true;
-      // 有套餐、套餐用光了：上游这时藏活动。
-      if (Number(credits.plan?.total ?? 0) > 0 && plan <= 0) return true;
-      // 两池都空。
+      // 两池都空才算没。加购那池还在的时候照样能跑（实测过：套餐 300/300，
+      // 加购还有 100，quotaExceeded 是 false，请求正常）。
+      // 套餐用光只是把活动藏起来，不影响请求。
       return plan <= 0 && addOn <= 0;
     }
     case "workbuddy-cn": {
