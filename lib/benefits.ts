@@ -154,6 +154,9 @@ if (travel.status === 200) {
     } else {
       report.push(`领旅行礼物失败：${claim.body?.msg ?? `HTTP ${claim.status}`}`);
     }
+  } else {
+    // Say where the Buddy is, so the log alone explains a missing gift.
+    report.push(`Buddy 状态：${String(state.state ?? "?")}`);
   }
   // Send the Buddy out again, so there is a gift to collect tomorrow.
   if (!state.daily_limit_reached && state.state !== "traveling") {
