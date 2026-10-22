@@ -130,10 +130,22 @@ export interface AggregateEntry {
 }
 
 /** The model behind a target, as the upstream currently lists it. */
+/**
+ * 目录里找那个模型。
+ *
+ * 名字不认大小写：MiniMax 的模型 id 是 "MiniMax-M3.1-Flash"，人写的是
+ * "Minmax-M3.1-Flash"，两个是同一个东西。认不出就当没有 —— 那样模型不会
+ * 被公布，客户端连不上，而没人知道为什么。
+ */
 function findModel(groups: CatalogGroup[], group: UpstreamGroup, id: string): CatalogModel | null {
   const entry = groups.find((g) => g.group === group);
   if (!entry) return null;
-  return entry.models.find((m) => m.id === id) ?? null;
+  const wanted = id.trim().toLowerCase();
+  return (
+    entry.models.find((m) => m.id === id) ??
+    entry.models.find((m) => m.id.toLowerCase() === wanted) ??
+    null
+  );
 }
 
 /**

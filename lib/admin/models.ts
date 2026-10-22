@@ -166,6 +166,27 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
   if (targets.some((t) => !t.upstreamModel)) {
     return { ok: false, id, message: "每个目标都要有上游的模型 id" };
   }
+  // 目标的上游模型得是真的存在。写错一个字（"Minmax-M3.1-Flash" 而不是
+  // "MiniMax-M3.1-Flash"）的话，模型能存进去，但根路由不会公布它 ——
+  // 客户端连不上，界面上只写「未公布」，没人看得出原因。
+  // 那个上游没有目录的时候说不了，存。
+  const groups = catalogGroups();
+  for (const target of targets) {
+    const group = groups.find((g) => g.group === target.group);
+    if (!group || group.models.length === 0) continue;
+    const wanted = target.upstreamModel.toLowerCase();
+    const found = group.models.some((m) => m.id.toLowerCase() === wanted);
+    if (!found) {
+      return {
+        ok: false,
+        id,
+        message: `上游 ${target.group} 里没有模型「${target.upstreamModel}」。目录里有：${group.models
+          .slice(0, 6)
+          .map((m) => m.id)
+          .join("、")}${group.models.length > 6 ? " …" : ""}`,
+      };
+    }
+  }
   const model = saveAggregateModel({
     id,
     displayName: String(input.displayName ?? id),
