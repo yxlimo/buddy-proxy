@@ -733,13 +733,17 @@ is for the **inference**. The two are different things on the platform — the
 key cannot read the wallet (every balance endpoint answers 401 for it), and
 the session cannot call the models.
 
-The key usually comes from the environment (`TOKEN_RHYTHM_<n>_API_KEY`), because a
-key is shown in full only once, in the answer that creates it. The gateway can
-make one itself (`lib/tokenrhythm/keys.ts`), but that needs the platform's write
-check to be satisfied: the session cookie, the CSRF token sent twice — once as
-the `tr_csrf` cookie and once as the `X-CSRF-Token` header — and the browser's
-`Sec-Fetch-Site: same-origin`, which a script has to say for itself. Without a
-key the account still shows its balance, it just cannot serve a request.
+A key is shown in full once, in the answer to the call that creates it, so a
+new account has no way to get one on its own. The gateway makes its own and
+keeps it next to the account: log in, create a key, store it. So
+`TOKEN_RHYTHM_<n>_API_KEY` is only needed to bring a key **you** made — one
+the environment names wins over the one the gateway made.
+
+Making a key is a write, and the platform checks three things on a write: the
+session cookie, the CSRF token sent twice — once as the `tr_csrf` cookie and
+once as the `X-CSRF-Token` header — and the browser's `Sec-Fetch-Site:
+same-origin`, which a script has to say for itself. Without a key the account
+still shows its balance, it just cannot serve a request.
 
 ### Which account pays
 
