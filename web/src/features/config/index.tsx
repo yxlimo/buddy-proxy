@@ -203,13 +203,13 @@ export function ConfigPage() {
   return (
     <PageShell
       title='配置'
-      description='每一项现在生效的值，以及这个值是从哪来的：数据库覆盖、环境变量，还是默认值。'
+      description='各设置项当前生效的值，以及值的来源：数据库覆盖、环境变量或默认值。'
     >
 
       {groups.length === 0 ? (
         <Card>
           <CardContent>
-            <EmptyState title='网关没有报任何配置项' />
+            <EmptyState title='网关未返回任何配置项' />
           </CardContent>
         </Card>
       ) : (
@@ -363,8 +363,8 @@ export function ConfigPage() {
             />
             <p className='text-xs text-muted-foreground'>
               {editing?.secret
-                ? '这一项的值读不出来（只写不读）。留空表示不改；要改就填新值。'
-                : '存进数据库，改完立刻生效。'}
+                ? '该项的值不可读取（只写不读）。留空表示不修改，填写新值即可更新。'
+                : '写入数据库后立即生效。'}
             </p>
           </div>
           <DialogFooter>
@@ -381,7 +381,7 @@ export function ConfigPage() {
                 if (!editing) return
                 if (editing.secret && draft.trim() === '') {
                   // 没填新值就别发请求：空串会被服务端当成「把密钥清空」。
-                  toast('敏感项原样保留', { description: '没填新值，什么都没改。' })
+                  toast('敏感项原样保留', { description: '未填写新值，未做修改。' })
                   setEditing(null)
                   return
                 }

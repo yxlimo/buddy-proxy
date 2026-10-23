@@ -311,7 +311,7 @@ export function listAccounts(): AccountView[] {
       label: account.label,
       status: session ? session.status : CredentialState.MISSING,
       credentialCount: credentials.length,
-      detail: session ? `会话 ${credentialStateText(session.status)}` : "还没有凭据",
+      detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无凭据",
     });
   }
   for (const tenant of tokenRhythmTenants()) {
@@ -324,7 +324,7 @@ export function listAccounts(): AccountView[] {
       label: `TokenRhythm 租户 ${tenant.index}`,
       status: session ? session.status : CredentialState.MISSING,
       credentialCount: credentials.length,
-      detail: session ? `会话 ${credentialStateText(session.status)}` : "还没有登录态",
+      detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无登录态",
     });
   }
   return out;
@@ -356,11 +356,11 @@ export async function testCredential(id: string): Promise<{ ok: boolean; message
     }
     if (id === "key:minimax-token-plan") {
       const key = miniMaxTokenPlanKey();
-      if (!key) return { ok: false, message: "没有配置 plan key" };
+      if (!key) return { ok: false, message: "未配置 plan key" };
       const plan = await fetchMiniMaxTokenPlan(key);
       return plan
         ? { ok: true, message: `plan 额度读到了（${plan.windows.length} 个窗口）` }
-        : { ok: false, message: "plan 额度读不到，key 可能不对" };
+        : { ok: false, message: "无法读取 plan 额度，key 可能不正确" };
     }
     const qoder = /^session:qoder:(global|cn)$/.exec(id);
     if (qoder) {
@@ -374,7 +374,7 @@ export async function testCredential(id: string): Promise<{ ok: boolean; message
       const credits = await fetchWorkBuddyCredits();
       return credits
         ? { ok: true, message: `能用，今日已签到：${credits.checkedIn ? "是" : "否"}` }
-        : { ok: false, message: "读不到签到状态" };
+        : { ok: false, message: "无法读取签到状态" };
     }
     const tr = /^(?:session|account):tokenrhythm:(\d+)/.exec(id);
     if (tr) {
@@ -415,7 +415,7 @@ export async function refreshCredential(id: string): Promise<{ ok: boolean; mess
       const tenant = tokenRhythmTenants().find((t) => t.index === index);
       if (!tenant) return { ok: false, message: `没有第 ${index} 个租户`, generation: 0 };
       await loginTokenRhythm(tenant);
-      return { ok: true, message: "重新登录好了", generation: 0 };
+      return { ok: true, message: "重新登录完成", generation: 0 };
     }
     return { ok: false, message: `这条凭据不能刷新：${id}`, generation: 0 };
   } catch (e) {

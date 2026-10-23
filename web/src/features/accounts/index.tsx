@@ -103,17 +103,17 @@ export function AccountsPage() {
   return (
     <PageShell
       title='账号与凭据'
-      description='账号是上游的一个登录身份，凭据挂在账号下面（refresh token、API key、cookie 之类）。'
+      description='账号是上游的一个登录身份，凭据归属于账号（refresh token、API key、cookie 等）。'
     >
 
       <Card className='mb-4'>
         <CardHeader>
           <CardTitle className='text-base'>账号</CardTitle>
-          <CardDescription>点账号名看它名下的凭据。没凭据的账号要点「登录」去授权。</CardDescription>
+          <CardDescription>点击账号名可查看其名下凭据。没有凭据的账号需要通过「登录」完成授权。</CardDescription>
         </CardHeader>
         <CardContent className='px-0'>
           {list.length === 0 ? (
-            <EmptyState title='网关没有报任何账号' />
+            <EmptyState title='网关未返回任何账号' />
           ) : (
             <Table>
               <TableHeader>
@@ -215,7 +215,7 @@ export function AccountsPage() {
           <CardDescription>
             {selected
               ? `只显示掩码和指纹，不给全文。`
-              : '上面选一个账号，这里列它的凭据。'}
+              : '在上方选择账号，这里列出其名下凭据。'}
           </CardDescription>
         </CardHeader>
         <CardContent className='px-0'>
@@ -229,7 +229,7 @@ export function AccountsPage() {
               onRetry={() => credentials.refetch()}
             />
           ) : (credentials.data?.credentials.length ?? 0) === 0 ? (
-            <EmptyState title='这个账号名下没有凭据' />
+            <EmptyState title='该账号下没有凭据' />
           ) : (
             <Table>
               <TableHeader>

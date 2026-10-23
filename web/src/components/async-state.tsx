@@ -2,7 +2,7 @@ import { AlertTriangle, Inbox, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { describeError } from '@/lib/errors'
 
-export function LoadingState({ label = '正在取数据…' }: { label?: string }) {
+export function LoadingState({ label = '正在加载…' }: { label?: string }) {
   return (
     <div className='flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground'>
       <Loader2 className='size-4 animate-spin' />
@@ -32,7 +32,7 @@ export function ErrorState({
 }
 
 export function EmptyState({
-  title = '这里还没有东西',
+  title = '暂无数据',
   description,
   action,
 }: {

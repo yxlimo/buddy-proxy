@@ -356,7 +356,7 @@ export async function pollDeviceToken(auth: DeviceAuthorization): Promise<Sessio
       throw new AuthError("access_denied", "授权被拒绝或在浏览器里取消了。", 503);
     }
     if (r.ok && (status === "expired" || status === "expired_token")) {
-      throw new AuthError("expired_token", "device code 超时了，重新跑一次登录。", 503);
+      throw new AuthError("expired_token", "device code 已超时，请重新发起登录。", 503);
     }
     if (r.ok) return sessionFromGrant(parseGrant(r.body));
     if (r.error === "authorization_pending") {
@@ -370,7 +370,7 @@ export async function pollDeviceToken(auth: DeviceAuthorization): Promise<Sessio
     }
     throw new AuthError(r.error ?? "device_authorization_failed", `轮询被服务端拒绝（${r.error ?? `HTTP ${r.status}`}）。`, 502);
   }
-  throw new AuthError("expired_token", "device code 超时了，重新跑一次登录。", 503);
+  throw new AuthError("expired_token", "device code 已超时，请重新发起登录。", 503);
 }
 
 export async function login(): Promise<Session> {

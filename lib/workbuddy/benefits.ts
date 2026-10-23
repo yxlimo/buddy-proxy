@@ -258,7 +258,7 @@ export async function runWorkBuddyBenefits(): Promise<BenefitOutcome> {
   const report: string[] = [];
   const session = loadWorkBuddySession("cn");
   if (!session) {
-    return { upstream: "workbuddy-cn", ok: false, credits: 0, report: ["没有 WorkBuddy 登录态"], at: new Date().toISOString() };
+    return { upstream: "workbuddy-cn", ok: false, credits: 0, report: ["未找到 WorkBuddy 登录态"], at: new Date().toISOString() };
   }
   let credits = 0;
   try {

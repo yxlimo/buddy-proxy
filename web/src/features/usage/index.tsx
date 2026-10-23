@@ -23,7 +23,7 @@ import { useUpstreams } from '@/features/upstreams/api'
 import { useUsageEvents } from '@/features/usage/api'
 import { UsageTable } from '@/features/usage/usage-table'
 import { type NavigateFn } from '@/hooks/use-table-url-state'
-import { formatCount } from '@/lib/format'
+import { formatCompact, formatCount } from '@/lib/format'
 
 const route = getRouteApi('/_authenticated/usage')
 
@@ -76,7 +76,7 @@ export function UsagePage() {
   return (
     <PageShell
       title='用量'
-      description='走过的请求：令牌、耗时、明细。记的是真正发到上游的那些请求 —— 模型名写错、在路由就被拒的，不算用量。'
+      description='走过的请求：token、耗时与明细。只有真正发到上游的请求计入用量，模型名写错或在路由阶段被拒的请求不计入。'
       actions={
         <Select
           value={windowFilter}
@@ -104,7 +104,7 @@ export function UsagePage() {
       }
     >
       {summary.isPending ? (
-        <LoadingState label='正在取用量…' />
+        <LoadingState label='正在加载用量…' />
       ) : summary.isError ? (
         <ErrorState error={summary.error} onRetry={() => summary.refetch()} />
       ) : (
@@ -118,17 +118,17 @@ export function UsagePage() {
               )}`}
             />
             <StatCard
-              title='输入令牌'
-              value={formatCount(total?.promptTokens ?? 0n)}
-            />
-            <StatCard
-              title='输出令牌'
-              value={formatCount(total?.completionTokens ?? 0n)}
+              title='输出 token'
+              value={formatCompact(total?.completionTokens ?? 0n)}
               hint={
                 total && total.reasoningTokens > 0n
-                  ? `其中推理 ${formatCount(total.reasoningTokens)}`
+                  ? `其中推理 ${formatCompact(total.reasoningTokens)}`
                   : undefined
               }
+            />
+            <StatCard
+              title='输入 token'
+              value={formatCompact(total?.promptTokens ?? 0n)}
             />
             <StatCard
               title='总耗时'
@@ -226,7 +226,7 @@ function BreakdownCard({
       <CardContent className='grid gap-2'>
         {buckets.length === 0 ? (
           <p className='py-6 text-center text-sm text-muted-foreground'>
-            还没有数据。
+            暂无数据。
           </p>
         ) : (
           buckets.map((bucket) => (
@@ -237,8 +237,8 @@ function BreakdownCard({
               <span className='truncate font-mono text-xs'>{bucket.key}</span>
               <span className='whitespace-nowrap font-mono text-xs text-muted-foreground'>
                 {formatCount(bucket.summary?.requests ?? 0n)} 次 · 入{' '}
-                {formatCount(bucket.summary?.promptTokens ?? 0n)} / 出{' '}
-                {formatCount(bucket.summary?.completionTokens ?? 0n)}
+                {formatCompact(bucket.summary?.promptTokens ?? 0n)} / 出{' '}
+                {formatCompact(bucket.summary?.completionTokens ?? 0n)}
               </span>
             </div>
           ))
@@ -267,7 +267,7 @@ function DaySeries({
       <CardContent>
         {buckets.length === 0 ? (
           <p className='py-6 text-center text-sm text-muted-foreground'>
-            还没有数据。
+            暂无数据。
           </p>
         ) : (
           <div className='flex items-end gap-1 overflow-x-auto pb-2'>

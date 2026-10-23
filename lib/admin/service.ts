@@ -301,7 +301,7 @@ function loginErrorText(e: unknown): string {
   const hint = err?.hint ?? "";
   const code = err?.message ?? "";
   if (hint && code && !hint.includes(code)) return `${hint}（${code}）`;
-  return hint || code || "登录没成功。";
+  return hint || code || "登录未成功。";
 }
 
 /** 管理接口的实现。 */
@@ -565,7 +565,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async savePublishedModel(request) {
     const model = request.model;
     if (!model) {
-      return create(SavePublishedModelResponseSchema, { ok: false, id: "", message: "得有模型" });
+      return create(SavePublishedModelResponseSchema, { ok: false, id: "", message: "需要提供模型" });
     }
     const result = savePublishedModel({
       id: model.id,
@@ -609,7 +609,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       if (!outcome) {
         return create(BenefitStatusSchema, {
           upstreamId: benefitUpstreamId(upstream),
-          summary: "还没有签到记录",
+          summary: "暂无签到记录",
           lines: [],
           checkedAt: 0n,
           credits: 0,
@@ -617,10 +617,10 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         });
       }
       const summary = !outcome.ok
-        ? "签到没成"
+        ? "签到未成功"
         : outcome.credits > 0
           ? `今日已签到 +${outcome.credits}`
-          : "今天没有新的活动";
+          : "今日暂无新活动";
       return create(BenefitStatusSchema, {
         upstreamId: benefitUpstreamId(upstream),
         summary,
@@ -686,7 +686,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async getLoginStatus(request) {
     const session = getLoginStatus(String(request.loginId ?? ""));
     if (!session) {
-      return create(GetLoginStatusResponseSchema, { ok: false, message: "没有这次登录。" });
+      return create(GetLoginStatusResponseSchema, { ok: false, message: "未找到本次登录。" });
     }
     return create(GetLoginStatusResponseSchema, {
       session: loginSessionMessage(session),

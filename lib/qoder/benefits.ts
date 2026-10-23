@@ -87,7 +87,7 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
   const report: string[] = [];
   const session = loadQoderSession(region);
   if (!session) {
-    return { upstream, ok: false, credits: 0, report: ["没有 Qoder 登录态"], at: new Date().toISOString() };
+    return { upstream, ok: false, credits: 0, report: ["未找到 Qoder 登录态"], at: new Date().toISOString() };
   }
   let credits = 0;
   try {
@@ -107,7 +107,7 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
           : ""),
     );
     if (!rows.length) {
-      report.push("没有可领的活动");
+      report.push("无可领取的活动");
     }
     const now = Math.floor(Date.now() / 1000);
     let claimable = 0;
@@ -159,7 +159,7 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
         console.log(`[BENEFITS] ${upstream}: claim ${row.campaignKey} failed (HTTP ${claim.status}): ${why}`);
       }
     }
-    if (!creditCampaigns) report.push("没有可领积分的活动");
+    if (!creditCampaigns) report.push("无可领取积分的活动");
   } catch (e) {
     report.push(`异常：${(e as Error).message}`);
   }

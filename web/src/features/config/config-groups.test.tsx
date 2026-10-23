@@ -43,7 +43,7 @@ describe('配置页的分组', () => {
         create(ListConfigResponseSchema, {
           items: [
             item('ADMIN_CORS_ORIGINS', 'general', '允许的跨域来源'),
-            item('REQUIRE_API_KEY', 'gateway', '前门要 API key'),
+            item('REQUIRE_API_KEY', 'gateway', '是否开启 API KEY 验证'),
             item('MINIMAX_CODE', 'minimax', 'MiniMax Code 上游'),
             item('QODER_GLOBAL', 'qoder', 'Qoder 全球区'),
             item('QODER_CN', 'qoder', 'Qoder 中国区'),
@@ -114,7 +114,7 @@ describe('配置页的分组', () => {
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {
-          items: [item('REQUIRE_API_KEY', 'gateway', '前门要 API key')],
+          items: [item('REQUIRE_API_KEY', 'gateway', '是否开启 API KEY 验证')],
         }),
     })
 
@@ -122,7 +122,7 @@ describe('配置页的分组', () => {
 
     const gateway = await screen.findByRole('tab', { name: /网关/ })
     expect(gateway).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByText('前门要 API key')).toBeInTheDocument()
+    expect(screen.getByText('是否开启 API KEY 验证')).toBeInTheDocument()
   })
 
   it('一项都没有的时候给空状态', async () => {
@@ -133,7 +133,7 @@ describe('配置页的分组', () => {
     renderWithClient({ client, children: <ConfigPage /> })
 
     expect(
-      await screen.findByText('网关没有报任何配置项')
+      await screen.findByText('网关未返回任何配置项')
     ).toBeInTheDocument()
   })
 

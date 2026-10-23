@@ -23,7 +23,7 @@ function renderTable(props: Partial<Parameters<typeof UsageTable>[0]> = {}) {
 describe('用量明细的状态', () => {
   it('还在取的时候显示加载中，不说「没有记录」', () => {
     renderTable({ isPending: true })
-    expect(screen.getByText('正在取明细…')).toBeInTheDocument()
+    expect(screen.getByText('正在加载明细…')).toBeInTheDocument()
     expect(screen.queryByText('没有匹配的记录。')).not.toBeInTheDocument()
   })
 
@@ -32,7 +32,7 @@ describe('用量明细的状态', () => {
       error: new ConnectError('炸了', Code.Internal),
       onRetry: () => {},
     })
-    expect(screen.getByText(/网关内部出错/)).toBeInTheDocument()
+    expect(screen.getByText(/网关内部错误/)).toBeInTheDocument()
     expect(screen.queryByText('没有匹配的记录。')).not.toBeInTheDocument()
   })
 

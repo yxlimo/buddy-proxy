@@ -102,7 +102,7 @@ describe('主路由模型的发布与停用', () => {
     expect(sent.targets[0].upstreamModel).toBe('MiniMax-M3')
   })
 
-  it('停用要先确认', async () => {
+  it('停用前需确认', async () => {
     const user = userEvent.setup({ delay: null })
     const saved: PublishedModel[] = []
     const client = mockAdminClient({
@@ -122,7 +122,7 @@ describe('主路由模型的发布与停用', () => {
     await user.click(await screen.findByRole('button', { name: '停用' }))
 
     // 还没确认，什么都没存。
-    expect(await screen.findByText('停用这个模型？')).toBeInTheDocument()
+    expect(await screen.findByText('确认停用该模型？')).toBeInTheDocument()
     expect(saved).toHaveLength(0)
 
     // 确认了才存。
@@ -158,7 +158,7 @@ describe('主路由模型的发布与停用', () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByText('停用这个模型？')
+        screen.queryByText('确认停用该模型？')
       ).not.toBeInTheDocument()
     })
     expect(saved).toHaveLength(0)

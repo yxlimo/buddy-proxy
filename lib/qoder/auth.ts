@@ -387,7 +387,7 @@ export async function pollDeviceToken(auth: DeviceAuthorization, region: QoderRe
     }
     await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
   }
-  throw new AuthError("expired_token", "授权超时了，重新跑一次登录。", 503);
+  throw new AuthError("expired_token", "授权超时，请重新发起登录。", 503);
 }
 
 export async function login(region: QoderRegion = REGION): Promise<QoderSession> {

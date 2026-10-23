@@ -65,24 +65,24 @@ export function TokenGate({ children }: { children: React.ReactNode }) {
         <CardHeader>
           <CardTitle className='flex items-center gap-2'>
             <KeyRound className='size-5' />
-            输入面板令牌
+            输入访问令牌
           </CardTitle>
           <CardDescription>
-            令牌在网关的 <code className='font-mono'>/data/admin-token</code>{' '}
-            文件里。它跟 agent 侧的 API key 是两回事，只给面板用。令牌会存在
-            这台机器的 localStorage 里。
+            访问令牌在网关的 <code className='font-mono'>/data/admin-token</code>{' '}
+            文件里。它与 agent 侧的 API KEY 是两回事，仅供面板使用。访问令牌会保存在
+            这台机器的 localStorage 中。
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className='grid gap-4'>
             <div className='grid gap-2'>
-              <Label htmlFor='admin-token'>令牌</Label>
+              <Label htmlFor='admin-token'>访问令牌</Label>
               <Input
                 id='admin-token'
                 type='password'
                 autoFocus
                 autoComplete='off'
-                placeholder='粘贴 /data/admin-token 里的内容'
+                placeholder='粘贴 /data/admin-token 文件中的内容'
                 value={draft}
                 aria-invalid={error ? true : undefined}
                 aria-describedby={error ? 'admin-token-error' : undefined}

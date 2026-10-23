@@ -24,7 +24,7 @@ export function CreditLotsTable({ lots }: { lots: CreditLot[] }) {
     return (
       <EmptyState
         title='没有积分批次'
-        description='平台没有报任何一笔积分。'
+        description='平台未返回积分批次。'
       />
     )
   }

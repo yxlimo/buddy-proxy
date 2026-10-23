@@ -588,7 +588,7 @@ function tokenrhythmCredential(): CredentialView {
       expiresAt: 0,
       remainingSec: 0,
       warning: false,
-      detail: "没有配置 TokenRhythm 账号",
+      detail: "未配置 TokenRhythm 账号",
       generation: 0,
     };
   }
@@ -629,7 +629,7 @@ function senseNovaCredential(): CredentialView {
       expiresAt: 0,
       remainingSec: 0,
       warning: false,
-      detail: "账号上没有推理用的 API key，登录之后网关会建一把",
+      detail: "账号上没有推理用的 API key，登录后网关将自动创建",
       generation: 0,
     };
   }
@@ -660,7 +660,7 @@ function internAiCredential(): CredentialView {
       expiresAt: 0,
       remainingSec: 0,
       warning: false,
-      detail: "账号上没有 Discovery 的推理 key，登录之后网关会建一把",
+      detail: "账号上没有 Discovery 推理 key，登录后网关将自动创建",
       generation: 0,
     };
   }

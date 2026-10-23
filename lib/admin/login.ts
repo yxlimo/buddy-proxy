@@ -117,7 +117,7 @@ function errorText(e: unknown): string {
   const hint = err?.hint ?? "";
   const code = err?.message ?? "";
   if (hint && code && !hint.includes(code)) return `${hint}（${code}）`;
-  return hint || code || "登录没成功。";
+  return hint || code || "登录未成功。";
 }
 
 /* ------------------------------------------------------------------ *
@@ -143,7 +143,7 @@ async function startMinimax(): Promise<Started> {
     authorizationUrl: url,
     userCode: auth.userCode,
     expiresAt: Date.now() + auth.expiresInSec * 1000,
-    message: "在浏览器里打开上面的链接，同意之后这里会自动变成已登录。",
+    message: "请在浏览器中打开上方链接并完成授权，之后此处会自动显示为已登录。",
     poll: { kind: "minimax", auth: auth as unknown as Record<string, unknown> },
   };
 }
@@ -156,7 +156,7 @@ async function startQoder(region: QoderRegion): Promise<Started> {
     authorizationUrl: auth.authUrl,
     userCode: "",
     expiresAt: auth.expiresAtMs,
-    message: "在浏览器里打开上面的链接，选账号并同意之后这里会自动变成已登录。",
+    message: "请在浏览器中打开上方链接，选择账号并完成授权，之后此处会自动显示为已登录。",
     poll: { kind: "qoder", region, auth: auth as unknown as Record<string, unknown> },
   };
 }
@@ -169,7 +169,7 @@ async function startWorkBuddy(): Promise<Started> {
     authorizationUrl: start.authUrl,
     userCode: "",
     expiresAt: start.expiresAtMs,
-    message: "在浏览器里打开上面的链接，登录完成之后这里会自动变成已登录。",
+    message: "请在浏览器中打开上方链接并完成登录，之后此处会自动显示为已登录。",
     poll: { kind: "workbuddy", state: start.state },
   };
 }
@@ -183,7 +183,7 @@ function startPassword(upstreamId: string): Started {
     // 面板上填账号密码这件事没有「窗口」可言，但给个时刻，面板好算倒计时
     // （密码流的面板上没有倒计时，这一栏只是让它有个值）。
     expiresAt: Date.now() + 30 * 60 * 1000,
-    message: "在面板上填账号与密码，然后点「登录」。",
+    message: "在面板中填写账号与密码，然后点击「登录」。",
     poll: null,
   };
 }
@@ -271,7 +271,7 @@ async function pollLoop(session: StoredLogin): Promise<void> {
     if (!current || current.status === "cancelled") return;
     updateLogin(session.loginId, {
       status: "approved",
-      message: "登录好了。",
+      message: "登录完成。",
       credentialId,
     });
   } catch (e) {
@@ -305,7 +305,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
       return "session:workbuddy:cn";
     }
     default:
-      throw new AuthError("unknown poll", "这个登录会话没有可轮询的东西。", 400);
+      throw new AuthError("unknown poll", "该登录会话没有可轮询的内容。", 400);
   }
 }
 
@@ -347,7 +347,7 @@ export function getLoginStatus(loginId: string): StoredLogin | null {
   const current = loadLogin(loginId);
   if (!current) return null;
   if (current.status === "pending" && current.expiresAt > 0 && Date.now() > current.expiresAt) {
-    return updateLogin(loginId, { status: "expired", message: "登录窗口过期了，重新点一次登录。" });
+    return updateLogin(loginId, { status: "expired", message: "登录窗口已过期，请重新发起登录。" });
   }
   return current;
 }
@@ -359,8 +359,8 @@ export function cancelLogin(loginId: string): { ok: boolean; message: string } {
   if (current.status !== "pending") {
     return { ok: false, message: `这次登录已经结束了（${current.status}）。` };
   }
-  updateLogin(loginId, { status: "cancelled", message: "已经取消了。" });
-  return { ok: true, message: "已经取消了。" };
+  updateLogin(loginId, { status: "cancelled", message: "登录已取消。" });
+  return { ok: true, message: "登录已取消。" };
 }
 
 /* ------------------------------------------------------------------ *
@@ -414,7 +414,7 @@ export async function loginWithPassword(input: {
     case "tokenrhythm": {
       const index = tenantIndex(input.accountId);
       if (!index) {
-        return { ok: false, message: "要一个租户号：账号写成 tokenrhythm:1 这样的样子。", credentialId: "", accountId: "" };
+        return { ok: false, message: "需要指定租户编号：账号填写为 tokenrhythm:1 形式。", credentialId: "", accountId: "" };
       }
       const session = await loginWithCredentials(index, input.username, input.password, input.remember);
       // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。
@@ -425,7 +425,7 @@ export async function loginWithPassword(input: {
       await ensureApiKey(session, index, stored?.apiKey ?? null);
       return {
         ok: true,
-        message: `租户 ${index} 登录好了。`,
+        message: `租户 ${index} 登录完成。`,
         credentialId: `session:tokenrhythm:${index}`,
         accountId: `tokenrhythm:${index}`,
       };
@@ -446,8 +446,8 @@ export async function loginWithPassword(input: {
       return {
         ok: true,
         message: keyReady
-          ? "SenseNova 登录好了，推理用的 key 也备好了。"
-          : "SenseNova 登录好了，但推理用的 key 没能建出来 —— 上游暂时不能接请求，再登录一次试试。",
+          ? "SenseNova 登录完成，推理用的 key 已就绪。"
+          : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
         credentialId: "session:sensenova",
         accountId: "sensenova",
       };
@@ -472,8 +472,8 @@ export async function loginWithPassword(input: {
       return {
         ok: true,
         message: keyReady
-          ? "intern-ai 登录好了，推理用的 key 也备好了。"
-          : "intern-ai 登录好了，但推理用的 key 没能建出来 —— 上游暂时不能接请求，再登录一次试试。",
+          ? "intern-ai 登录完成，推理用的 key 已就绪。"
+          : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
         credentialId: "session:intern-ai",
         accountId: "intern-ai",
       };
@@ -528,7 +528,7 @@ export async function exchangeLoginCode(input: {
     return { ok: false, message: `这个上游不用授权码：${input.upstreamId}`, credentialId: "", accountId: "" };
   }
   if (!input.code.trim()) {
-    return { ok: false, message: "没有授权码。", credentialId: "", accountId: "" };
+    return { ok: false, message: "缺少授权码。", credentialId: "", accountId: "" };
   }
   // 换 token 用 discovery 那个子站（端砚），换出来的 token 两个子站都能用。
   const token = await exchangeInternAiCode(input.code.trim(), internAiSite("discovery"));
@@ -536,7 +536,7 @@ export async function exchangeLoginCode(input: {
   await ensureImportedInternAiKey();
   return {
     ok: true,
-    message: "换好了凭据，两个子站共用它，推理用的 key 也备好了。",
+    message: "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。",
     credentialId: "session:intern-ai",
     accountId: "intern-ai",
   };
@@ -557,13 +557,13 @@ export async function importLoginToken(input: {
     return { ok: false, message: `这个上游不用回填 token：${input.upstreamId}`, credentialId: "", accountId: "" };
   }
   if (!input.token.trim()) {
-    return { ok: false, message: "没有 token。", credentialId: "", accountId: "" };
+    return { ok: false, message: "缺少 token。", credentialId: "", accountId: "" };
   }
   importInternAiToken(input.token.trim());
   await ensureImportedInternAiKey();
   return {
     ok: true,
-    message: "导入好了凭据，两个子站共用它，推理用的 key 也备好了。",
+    message: "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。",
     credentialId: "session:intern-ai",
     accountId: "intern-ai",
   };

@@ -3,20 +3,20 @@ import { describe, expect, it } from 'vitest'
 import { ApiFailure, assertOk, describeError, isAuthError } from '@/lib/errors'
 
 describe('把错误翻成人话', () => {
-  it('鉴权没过要说清楚是令牌的问题', () => {
+  it('鉴权未通过时要说明是访问令牌的问题', () => {
     const error = new ConnectError('面板令牌不对。', Code.Unauthenticated)
     const text = describeError(error)
-    expect(text).toContain('鉴权没过')
+    expect(text).toContain('鉴权未通过')
     expect(text).toContain('面板令牌不对。')
   })
 
-  it('网关连不上、没实现、参数不合法各说各的', () => {
+  it('网关不可用、未实现、参数不合法各说各的', () => {
     expect(describeError(new ConnectError('连不上', Code.Unavailable))).toContain(
-      '网关连不上'
+      '网关不可用'
     )
     expect(
       describeError(new ConnectError('还没做', Code.Unimplemented))
-    ).toContain('还没实现')
+    ).toContain('未实现该接口')
     expect(
       describeError(new ConnectError('键不对', Code.InvalidArgument))
     ).toContain('参数不合法')
@@ -54,7 +54,7 @@ describe('isAuthError', () => {
     expect(isAuthError(new ConnectError('x', Code.Unauthenticated))).toBe(true)
   })
 
-  it('403 不算：令牌没问题，只是不许', () => {
+  it('403 不计为鉴权失败：访问令牌有效，仅权限不足', () => {
     expect(isAuthError(new ConnectError('x', Code.PermissionDenied))).toBe(false)
   })
 

@@ -25,7 +25,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { QuotaSummary } from '@/features/balance/quota'
 import { useSystemStatus, useUsageSummary } from '@/features/overview/api'
-import { formatCount, formatUptime } from '@/lib/format'
+import { formatCompact, formatCount, formatUptime } from '@/lib/format'
 
 export function OverviewPage() {
   const status = useSystemStatus()
@@ -44,7 +44,7 @@ export function OverviewPage() {
   return (
     <PageShell
       title='总览'
-      description='网关现在的状态：各上游、还有一点用量摘要。'
+      description='网关当前状态：上游概况与今日用量。'
     >
 
       {/* 额度不在这里求和：余额（钱）、积分（点数）、套餐额度（百分比）
@@ -65,7 +65,7 @@ export function OverviewPage() {
               ? `成功 ${formatCount(total.succeeded)} · 失败 ${formatCount(
                   total.failed
                 )}`
-              : '还没有用量数据'}
+              : '暂无用量数据'}
           </CardContent>
         </Card>
 
@@ -115,7 +115,7 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent className='grid gap-3'>
             {data.upstreams.length === 0 ? (
-              <EmptyState title='还没有上游' />
+              <EmptyState title='暂无上游' />
             ) : (
               data.upstreams.map((upstream) => (
                 <div
@@ -156,15 +156,15 @@ export function OverviewPage() {
               <Activity className='size-4' />
               今日用量
             </CardTitle>
-            <CardDescription>按上游分。</CardDescription>
+            <CardDescription>按上游分的 token 数。</CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>
             {usage.isPending ? (
-              <LoadingState label='正在取用量…' />
+              <LoadingState label='正在加载用量…' />
             ) : usage.isError ? (
               <ErrorState error={usage.error} onRetry={() => usage.refetch()} />
             ) : (usage.data?.byUpstream.length ?? 0) === 0 ? (
-              <EmptyState title='今天还没有请求' />
+              <EmptyState title='今日暂无请求' />
             ) : (
               usage.data?.byUpstream.map((bucket) => (
                 <div
@@ -173,7 +173,8 @@ export function OverviewPage() {
                 >
                   <span className='font-medium'>{bucket.key}</span>
                   <span className='font-mono text-muted-foreground'>
-                    {formatCount(bucket.summary?.requests ?? 0n)} 次
+                    入 {formatCompact(bucket.summary?.promptTokens ?? 0n)} / 出{' '}
+                    {formatCompact(bucket.summary?.completionTokens ?? 0n)}
                   </span>
                 </div>
               ))

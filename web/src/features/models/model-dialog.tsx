@@ -267,7 +267,7 @@ export function ModelDialog({
                 onChange={(event) =>
                   patch({ displayName: event.target.value })
                 }
-                placeholder='留空就跟对外 id 一样'
+                placeholder='留空则与对外 id 相同'
               />
             </div>
             <div className='grid gap-2'>
@@ -280,8 +280,8 @@ export function ModelDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value='single'>single（走一个）</SelectItem>
-                  <SelectItem value='fallback'>fallback（依次退）</SelectItem>
+                  <SelectItem value='single'>single（单一目标）</SelectItem>
+                  <SelectItem value='fallback'>fallback（依次回退）</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -33,7 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatCount, formatDateTime, formatMillis } from '@/lib/format'
+import { formatCompact, formatDateTime, formatMillis } from '@/lib/format'
 
 // Radix 的 Select 不让用空字符串当值，用一个哨兵表示「不筛」。
 const ALL = '__all__'
@@ -110,14 +110,7 @@ export function UsageTable({
         header: '模型',
         filterFn: 'equalsString',
         cell: ({ row }) => (
-          <div className='grid gap-0.5'>
-            <span className='font-mono text-xs'>{row.original.model || '—'}</span>
-            {row.original.agentModel ? (
-              <span className='font-mono text-xs text-muted-foreground'>
-                agent 写的是 {row.original.agentModel}
-              </span>
-            ) : null}
-          </div>
+          <span className='font-mono text-xs'>{row.original.model || '—'}</span>
         ),
       },
       {
@@ -138,13 +131,13 @@ export function UsageTable({
       },
       {
         id: 'tokens',
-        header: '令牌',
+        header: 'token（入 / 出）',
         cell: ({ row }) => (
           <span className='font-mono text-xs whitespace-nowrap'>
-            {formatCount(row.original.promptTokens)} /{' '}
-            {formatCount(row.original.completionTokens)}
+            {formatCompact(row.original.promptTokens)} /{' '}
+            {formatCompact(row.original.completionTokens)}
             {row.original.reasoningTokens > 0n
-              ? ` / ${formatCount(row.original.reasoningTokens)}`
+              ? ` / ${formatCompact(row.original.reasoningTokens)}`
               : ''}
           </span>
         ),
@@ -215,7 +208,7 @@ export function UsageTable({
     <div className='flex flex-col gap-4'>
       <DataTableToolbar
         table={table}
-        searchPlaceholder='搜模型、错误…'
+        searchPlaceholder='搜索模型或错误…'
         extra={
           <>
             <Select
@@ -263,7 +256,7 @@ export function UsageTable({
       />
 
       {isPending ? (
-        <LoadingState label='正在取明细…' />
+        <LoadingState label='正在加载明细…' />
       ) : error ? (
         <ErrorState error={error} onRetry={onRetry} />
       ) : (

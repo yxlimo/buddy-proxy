@@ -24,7 +24,7 @@ export function BalanceLotsTable({ lots }: { lots: BalanceLot[] }) {
     return (
       <EmptyState
         title='没有余额批次'
-        description='平台没有报任何一笔余额明细。'
+        description='平台未返回余额明细。'
       />
     )
   }

@@ -126,7 +126,7 @@ export function PublishedModelsPage() {
   return (
     <PageShell
       title='主路由模型'
-      description='主路由：对外面公布一个 id，背后挂几个上游模型，客户端只看见公布的这一层。'
+      description='主路由：对外公布一个模型 id，可挂载多个上游模型，客户端仅看到公布的这一层。'
       actions={
         <Button onClick={openCreate}>
           <Plus />
@@ -139,16 +139,16 @@ export function PublishedModelsPage() {
           <CardTitle className='text-base'>主路由模型</CardTitle>
           <CardDescription>
             <span>
-              根路由现在公布 {publishedCount} 个（共 {list.length} 个）。
+              根路由当前公布 {publishedCount} 个（共 {list.length} 个）。
             </span>{' '}
-            目标分到了多少请求，是网关跑出来的统计。
+            各目标的请求量为网关运行统计。
           </CardDescription>
         </CardHeader>
         <CardContent className='px-0'>
           {list.length === 0 ? (
             <EmptyState
-              title='还没有主路由模型'
-              description='根路由只服务这里公布出来的模型。'
+              title='暂无主路由模型'
+              description='根路由仅服务此处公布的模型。'
               action={
                 <Button onClick={openCreate}>
                   <Plus />
@@ -163,7 +163,7 @@ export function PublishedModelsPage() {
                   <TableHead>对外 id</TableHead>
                   <TableHead>显示名</TableHead>
                   <TableHead>策略</TableHead>
-                  <TableHead>上下文 / 输出</TableHead>
+                  <TableHead>上下文 / 输出 token</TableHead>
                   <TableHead>上游目标</TableHead>
                   <TableHead className='text-right'>请求</TableHead>
                   <TableHead className='text-right'>更新时间</TableHead>
@@ -188,7 +188,7 @@ export function PublishedModelsPage() {
                           {model.published ? null : (
                             <Badge
                               variant='outline'
-                              title='根路由现在没有它。发布这个模型也改不了这个，得先把上游打开、登录好。'
+                              title='根路由当前未公布该模型。发布操作无法改变这一点，需要先启用并登录对应上游。'
                             >
                               {`未公布：${UNPUBLISHED_REASON_LABELS[model.unpublishedReason] ?? '原因未知'}`}
                             </Badge>
@@ -315,10 +315,10 @@ export function PublishedModelsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>停用这个模型？</DialogTitle>
+            <DialogTitle>确认停用该模型？</DialogTitle>
             <DialogDescription>
               <span className='font-mono'>{disabling?.id}</span>{' '}
-              停用之后根路由就不公布它了，客户端会看不到这个模型。
+              停用后根路由不再公布该模型，客户端将无法看到。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -352,10 +352,10 @@ export function PublishedModelsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>删掉这个模型？</DialogTitle>
+            <DialogTitle>确认删除该模型？</DialogTitle>
             <DialogDescription>
               <span className='font-mono'>{deleting?.id}</span>{' '}
-              删了之后客户端就看不见它了。
+              删除后客户端将无法看到该模型。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

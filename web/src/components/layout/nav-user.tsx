@@ -35,7 +35,7 @@ export function NavUser() {
                 <ShieldCheck className='size-4' />
               </div>
               <div className='grid flex-1 text-start text-sm leading-tight'>
-                <span className='truncate font-semibold'>面板令牌</span>
+                <span className='truncate font-semibold'>访问令牌</span>
                 <span className='truncate text-xs'>已保存在这台机器上</span>
               </div>
             </SidebarMenuButton>
@@ -48,8 +48,8 @@ export function NavUser() {
           >
             <DropdownMenuLabel className='p-0 font-normal'>
               <div className='px-1 py-1.5 text-start text-sm'>
-                令牌存在浏览器的 localStorage 里。忘掉它之后，下次打开面板要
-                再填一次。
+                访问令牌保存在浏览器的 localStorage 中。清除后，下次打开面板需
+                重新填写。
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
@@ -58,7 +58,7 @@ export function NavUser() {
               onClick={() => clearToken()}
             >
               <LogOut />
-              忘掉令牌
+              清除访问令牌
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

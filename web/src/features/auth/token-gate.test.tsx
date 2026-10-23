@@ -10,7 +10,7 @@ import { clearToken, setToken } from '@/features/auth/use-admin-token'
 import { mockAdminClient } from '@/test/mock-transport'
 import { renderWithClient } from '@/test/render'
 
-describe('令牌闸门', () => {
+describe('访问令牌闸门', () => {
   beforeEach(() => {
     // 默认测试环境里是有令牌的，这里把它摘掉，单独测闸门。
     clearToken()
@@ -21,7 +21,7 @@ describe('令牌闸门', () => {
     setToken('test-token')
   })
 
-  it('没有令牌的时候给令牌输入页，面板不渲染', () => {
+  it('没有访问令牌时显示令牌输入页，且不渲染面板', () => {
     const client = mockAdminClient({
       GetSystemStatus: () => create(GetSystemStatusResponseSchema, {}),
     })
@@ -35,11 +35,11 @@ describe('令牌闸门', () => {
       ),
     })
 
-    expect(screen.getByLabelText('令牌')).toBeInTheDocument()
+    expect(screen.getByLabelText('访问令牌')).toBeInTheDocument()
     expect(screen.queryByText('面板内容')).not.toBeInTheDocument()
   })
 
-  it('令牌不对的时候说清楚原因，而且不把它存下来', async () => {
+  it('访问令牌不正确时说明原因，且不写入存储', async () => {
     const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       GetSystemStatus: () => {
@@ -56,19 +56,19 @@ describe('令牌闸门', () => {
       ),
     })
 
-    await user.type(screen.getByLabelText('令牌'), 'wrong-token')
+    await user.type(screen.getByLabelText('访问令牌'), 'wrong-token')
     await user.click(screen.getByRole('button', { name: '进入面板' }))
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument()
     })
-    expect(screen.getByRole('alert').textContent).toContain('鉴权没过')
+    expect(screen.getByRole('alert').textContent).toContain('鉴权未通过')
     // 错的令牌不能落到存储里。
     expect(getToken()).toBe('')
     expect(screen.queryByText('面板内容')).not.toBeInTheDocument()
   })
 
-  it('令牌对了才存下来，然后进面板', async () => {
+  it('访问令牌校验通过后写入存储并进入面板', async () => {
     const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       GetSystemStatus: () => create(GetSystemStatusResponseSchema, {}),
@@ -83,7 +83,7 @@ describe('令牌闸门', () => {
       ),
     })
 
-    await user.type(screen.getByLabelText('令牌'), 'good-token')
+    await user.type(screen.getByLabelText('访问令牌'), 'good-token')
     await user.click(screen.getByRole('button', { name: '进入面板' }))
 
     await waitFor(() => {

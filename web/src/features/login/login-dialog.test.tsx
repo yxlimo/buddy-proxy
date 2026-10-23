@@ -201,7 +201,7 @@ describe('登录对话框', () => {
     expect(screen.getByLabelText('uaa-token')).toBeInTheDocument()
     // 人机校验要说清楚是人自己过。
     expect(
-      screen.getByText(/人机校验要你在自己的浏览器里过一遍/)
+      screen.getByText(/人机验证需要在浏览器中完成/)
     ).toBeInTheDocument()
     // token 从哪拿：开发者工具的 Cookie。
     expect(screen.getByText(/开发者工具/)).toBeInTheDocument()
@@ -342,7 +342,7 @@ describe('登录对话框', () => {
     expect(screen.queryByText(/invalid_grant/)).not.toBeInTheDocument()
   })
 
-  it('过期了：给一个「重新开始」', async () => {
+  it('过期后提供重新发起入口', async () => {
     const onRestart = vi.fn()
     renderWithClient({
       client: clientWith(
@@ -358,7 +358,7 @@ describe('登录对话框', () => {
       ),
     })
 
-    const button = await screen.findByRole('button', { name: '重新开始' })
+    const button = await screen.findByRole('button', { name: '重新发起' })
     expect(button).toBeInTheDocument()
   })
 

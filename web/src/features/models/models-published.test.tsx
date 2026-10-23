@@ -48,7 +48,7 @@ describe('主路由模型的公布数', () => {
 
     // 三个模型，只公布一个。
     expect(
-      await screen.findByText('根路由现在公布 1 个（共 3 个）。')
+      await screen.findByText('根路由当前公布 1 个（共 3 个）。')
     ).toBeInTheDocument()
 
     // 没公布的要标出来，还带原因。
@@ -118,7 +118,7 @@ describe('主路由模型的公布数', () => {
 
     renderWithClient({ client, children: <PublishedModelsPage /> })
 
-    await screen.findByText('根路由现在公布 1 个（共 1 个）。')
+    await screen.findByText('根路由当前公布 1 个（共 1 个）。')
     expect(screen.queryByText(/未公布/)).not.toBeInTheDocument()
   })
 
@@ -146,7 +146,7 @@ describe('主路由模型的公布数', () => {
     renderWithClient({ client, children: <PublishedModelsPage /> })
 
     expect(
-      await screen.findByText('根路由现在公布 2 个（共 2 个）。')
+      await screen.findByText('根路由当前公布 2 个（共 2 个）。')
     ).toBeInTheDocument()
     expect(screen.queryByText('未公布')).not.toBeInTheDocument()
   })

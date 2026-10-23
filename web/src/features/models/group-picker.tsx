@@ -47,7 +47,7 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
       <div className='grid gap-1'>
         <Select disabled value=''>
           <SelectTrigger id={id} className='w-full'>
-            <SelectValue placeholder='正在取上游…' />
+            <SelectValue placeholder='正在加载上游…' />
           </SelectTrigger>
         </Select>
       </div>

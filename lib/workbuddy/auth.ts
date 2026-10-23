@@ -288,7 +288,7 @@ export async function pollLogin(
     break;
   }
   if (!token) {
-    throw new AuthError("login timed out", "登录窗口过期了，重启服务再试一次。", 504);
+    throw new AuthError("login timed out", "登录窗口已过期，请重启服务后重试。", 504);
   }
 
   const uid = jwtUid(token);

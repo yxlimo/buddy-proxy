@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatCompact,
   formatCount,
   formatDate,
   formatDateTime,
@@ -10,6 +11,46 @@ import {
   isFarFuture,
   remainingDays,
 } from '@/lib/format'
+
+/**
+ * 大数缩写成 K / M / B。用量页上的 token 数动辄几百万，写全了没人看。
+ */
+describe('大数的写法', () => {
+  it('一万以下照原样写', () => {
+    expect(formatCompact(0)).toBe('0')
+    expect(formatCompact(999)).toBe('999')
+  })
+
+  it('上千写成 K', () => {
+    expect(formatCompact(1000)).toBe('1K')
+    expect(formatCompact(1500)).toBe('1.5K')
+    expect(formatCompact(12_345)).toBe('12.3K')
+  })
+
+  it('上百万写成 M', () => {
+    expect(formatCompact(1_000_000)).toBe('1M')
+    expect(formatCompact(2_500_000)).toBe('2.5M')
+    expect(formatCompact(5_187_487)).toBe('5.2M')
+  })
+
+  it('上十亿写成 B', () => {
+    expect(formatCompact(1_000_000_000)).toBe('1B')
+    expect(formatCompact(3_200_000_000)).toBe('3.2B')
+  })
+
+  it('bigint 也一样', () => {
+    expect(formatCompact(5_187_487n)).toBe('5.2M')
+  })
+
+  it('没有值是 0', () => {
+    expect(formatCompact(undefined)).toBe('0')
+    expect(formatCompact(null)).toBe('0')
+  })
+
+  it('千分位那种写法还在', () => {
+    expect(formatCount(12345)).toBe('12,345')
+  })
+})
 
 /**
  * 契约里的时间戳是 Unix 毫秒（网关那边是 Date.now()），只有名字里带

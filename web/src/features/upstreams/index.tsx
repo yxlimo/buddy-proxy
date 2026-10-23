@@ -54,15 +54,15 @@ export function UpstreamsPage() {
   return (
     <PageShell
       title='上游'
-      description='每个上游就是一个模拟的桌面客户端（MiniMax Code、Qoder、WorkBuddy、TokenRhythm）。开关改完立刻生效。'
+      description='每个上游对应一个模拟的桌面客户端（MiniMax Code、Qoder、WorkBuddy、TokenRhythm 等）。开关修改后立即生效。'
     >
 
       <Card>
         <CardContent className='px-0'>
           {list.length === 0 ? (
             <EmptyState
-              title='网关没有报任何上游'
-              description='上游的开关就在这一页，不用去「配置」页。'
+              title='网关未返回任何上游'
+              description='上游开关位于本页，无需前往「配置」页。'
             />
           ) : (
             <Table>
@@ -125,7 +125,7 @@ export function UpstreamsPage() {
                           </span>
                           {upstream.credential.warning ? (
                             <span className='text-xs text-destructive'>
-                              {upstream.credential.detail || '有点问题'}
+                              {upstream.credential.detail || '状态异常'}
                             </span>
                           ) : null}
                         </div>

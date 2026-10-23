@@ -40,23 +40,23 @@ export function describeError(error: unknown): string {
     const detail = error.rawMessage || error.message
     switch (error.code) {
       case Code.Unauthenticated:
-        return `鉴权没过：${detail}（令牌填错了，或者还没填）`
+        return `鉴权未通过：${detail}（访问令牌填写错误或尚未填写）`
       case Code.PermissionDenied:
-        return `没有权限：${detail}`
+        return `权限不足：${detail}`
       case Code.NotFound:
-        return `找不到：${detail}`
+        return `资源不存在：${detail}`
       case Code.InvalidArgument:
         return `参数不合法：${detail}`
       case Code.AlreadyExists:
-        return `已经存在：${detail}`
+        return `资源已存在：${detail}`
       case Code.Unavailable:
-        return `网关连不上：${detail}`
+        return `网关不可用：${detail}`
       case Code.DeadlineExceeded:
         return `请求超时：${detail}`
       case Code.Unimplemented:
-        return `网关还没实现这个接口：${detail}`
+        return `网关未实现该接口：${detail}`
       case Code.Internal:
-        return `网关内部出错：${detail}`
+        return `网关内部错误：${detail}`
       default:
         return `请求失败（${codeLabel(error.code)}）：${detail}`
     }
@@ -82,17 +82,17 @@ export function codeLabel(code: Code): string {
     case Code.AlreadyExists:
       return '已存在'
     case Code.PermissionDenied:
-      return '没权限'
+      return '权限不足'
     case Code.ResourceExhausted:
       return '资源用尽'
     case Code.FailedPrecondition:
       return '前置条件不满足'
     case Code.Aborted:
-      return '被中止'
+      return '已中止'
     case Code.OutOfRange:
       return '越界'
     case Code.Unimplemented:
-      return '没实现'
+      return '未实现'
     case Code.Internal:
       return '内部出错'
     case Code.Unavailable:
@@ -100,7 +100,7 @@ export function codeLabel(code: Code): string {
     case Code.DataLoss:
       return '数据丢失'
     case Code.Unauthenticated:
-      return '没鉴权'
+      return '未鉴权'
     default:
       return String(code)
   }

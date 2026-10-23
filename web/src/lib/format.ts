@@ -49,6 +49,31 @@ export function formatCount(value: bigint | number | undefined | null): string {
   return numberFormat.format(n)
 }
 
+/**
+ * 一个大数，缩写成 K / M / B。
+ *
+ * 用量页上的 token 数动辄几十万、几百万，写全了没人看。一万以下照原样写，
+ * 往上就留一位小数：1.2K、3.4M、5.6B。
+ */
+export function formatCompact(
+  value: bigint | number | undefined | null
+): string {
+  if (value === undefined || value === null) return '0'
+  const n = typeof value === 'bigint' ? Number(value) : value
+  if (!Number.isFinite(n)) return '0'
+  const abs = Math.abs(n)
+  if (abs < 1000) return numberFormat.format(n)
+  if (abs < 1_000_000) return `${trim(n / 1000)}K`
+  if (abs < 1_000_000_000) return `${trim(n / 1_000_000)}M`
+  return `${trim(n / 1_000_000_000)}B`
+}
+
+/** 缩放之后的小数：整数不带小数点，一位的保留一位。 */
+function trim(n: number): string {
+  const rounded = Math.round(n * 10) / 10
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
+}
+
 export function formatCny(value: number | undefined | null): string {
   if (value === undefined || value === null || !Number.isFinite(value)) {
     return '¥0.00'
@@ -86,8 +111,9 @@ export function formatPoints(value: number | undefined | null): string {
   return Number.isInteger(value) ? numberFormat.format(value) : value.toFixed(2)
 }
 
+/** token 数。缩写成 K / M / B 那种。 */
 export function formatTokens(value: bigint | number | undefined | null): string {
-  return formatCount(value)
+  return formatCompact(value)
 }
 
 /** 时长（毫秒）。 */

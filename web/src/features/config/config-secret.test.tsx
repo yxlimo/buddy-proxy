@@ -58,7 +58,7 @@ describe('配置页的敏感项', () => {
 
     const input = screen.getByLabelText('新值') as HTMLInputElement
     expect(input.value).toBe('')
-    expect(screen.getByText(/留空表示不改/)).toBeInTheDocument()
+    expect(screen.getByText(/留空表示不修改/)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '保存' }))
 

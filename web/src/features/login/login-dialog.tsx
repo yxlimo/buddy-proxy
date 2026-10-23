@@ -38,12 +38,12 @@ type LoginDialogProps = {
   open: boolean
   /** 这次登录的 id。空 = 还没开始。 */
   loginId: string
-  /** 上次点的那个账号：会话没了也要能「重新开始」。 */
+  /** 上次点的那个账号：会话没了也要能「重新发起」。 */
   upstreamId?: string
   accountId?: string
   accountLabel?: string
   onOpenChange: (open: boolean) => void
-  /** 「重新开始」：重新发起一次登录。 */
+  /** 「重新发起」：重新发起一次登录。 */
   onRestart?: () => void
 }
 
@@ -69,7 +69,7 @@ export function LoginDialog({
     // 「说一声」只说一次；关对话框每次都要做（同一个会话可能被重新打开）。
     if (announced.current !== session.loginId) {
       announced.current = session.loginId
-      toast.success(humanMessage(session.message) || '登录好了。')
+      toast.success(humanMessage(session.message) || '登录完成。')
     }
     void queryClient.invalidateQueries({ queryKey: accountKeys.all })
     // 登录好了，上游的状态就变了（从「没登录」变成「就绪」），重取一下。
@@ -96,30 +96,30 @@ export function LoginDialog({
                 里已经有一句结果了，这里别重复。 */}
             {session && session.status === 'pending'
               ? humanMessage(session.message)
-              : '这次登录的状态。'}
+              : '本次登录的状态。'}
           </DialogDescription>
         </DialogHeader>
 
         {!session && status.isPending ? (
           <p className='flex items-center gap-2 py-6 text-sm text-muted-foreground'>
             <Loader2 className='size-4 animate-spin' />
-            正在取这次登录的情况…
+            正在获取本次登录状态…
           </p>
         ) : null}
 
         {!session && status.isError ? (
           <div className='grid gap-3 py-4'>
             <p className='text-sm text-destructive'>
-              这次登录接不上了：{humanMessage(
+              本次登录无法继续：{humanMessage(
                 status.error instanceof Error
                   ? status.error.message
                   : ''
-              ) || '会话不在了。'}
+              ) || '会话已失效。'}
             </p>
             {onRestart ? (
               <Button variant='outline' onClick={onRestart}>
                 <RotateCcw />
-                重新开始
+                重新发起
               </Button>
             ) : null}
           </div>
@@ -128,24 +128,24 @@ export function LoginDialog({
         {session ? (
           <div className='grid gap-4'>
             {session.status === 'approved' ? (
-              <LoginResult ok message='登录好了。' />
+              <LoginResult ok message='登录完成。' />
             ) : null}
             {session.status === 'failed' ? (
               <LoginResult
                 ok={false}
-                message={humanMessage(session.message) || '登录没成功。'}
+                message={humanMessage(session.message) || '登录未成功。'}
                 onRestart={onRestart}
               />
             ) : null}
             {session.status === 'expired' ? (
               <LoginResult
                 ok={false}
-                message='登录窗口过期了，重新点一次登录。'
+                message='登录窗口已过期，请重新发起登录。'
                 onRestart={onRestart}
               />
             ) : null}
             {session.status === 'cancelled' ? (
-              <LoginResult ok={false} message='已经取消了。' />
+              <LoginResult ok={false} message='登录已取消。' />
             ) : null}
 
             {session.status === 'pending' ? (
@@ -202,7 +202,7 @@ function LoginResult({
       {onRestart ? (
         <Button variant='outline' size='sm' className='w-fit' onClick={onRestart}>
           <RotateCcw />
-          重新开始
+          重新发起
         </Button>
       ) : null}
     </div>
@@ -325,7 +325,7 @@ function AuthorizationForm({
         <p className='text-xs text-muted-foreground'>
           {remaining > 0
             ? `还剩 ${formatCountdown(remaining)}，过了就过期了。`
-            : '快过期了。'}
+            : '即将过期。'}
         </p>
       </div>
 
@@ -382,7 +382,7 @@ function PasswordForm({
           value={username}
           autoComplete='username'
           onChange={(event) => setUsername(event.target.value)}
-          placeholder='平台上的账号名'
+          placeholder='平台账号名称'
         />
       </div>
       <div className='grid gap-1.5'>
@@ -454,15 +454,15 @@ function TokenForm({
 
       <div className='rounded-md border border-amber-500/40 bg-amber-500/5 p-3'>
         <p className='text-sm'>
-          人机校验要你在自己的浏览器里过一遍，服务器替不了：
+          人机验证需要在浏览器中完成，服务器无法代替：
         </p>
         <ol className='mt-2 grid gap-1 text-xs text-muted-foreground'>
-          <li>1. 点上面的链接，在你自己的浏览器里登录（会过一次验证码）。</li>
+          <li>1. 点击上方链接，在浏览器中完成登录（需通过人机验证）。</li>
           <li>
-            2. 登录完之后，在同一个浏览器里按 F12 打开开发者工具 → Application
-            （或 Storage）→ Cookies，找到 uaa-token，复制它的值。
+            2. 登录完成后，在同一浏览器中按 F12 打开开发者工具 → Application
+            （或 Storage）→ Cookies，找到 uaa-token 并复制其值。
           </li>
-          <li>3. 把值贴到下面，点「导入」。</li>
+          <li>3. 将该值粘贴到下方，点击「导入」。</li>
         </ol>
       </div>
 
@@ -472,7 +472,7 @@ function TokenForm({
           id='login-token'
           value={token}
           onChange={(event) => setToken(event.target.value)}
-          placeholder='从浏览器 Cookie 里复制的那一串'
+          placeholder='从浏览器 Cookie 中复制的字符串'
         />
       </div>
 
@@ -530,7 +530,7 @@ function CodeForm({
           id='login-code'
           value={code}
           onChange={(event) => setCode(event.target.value)}
-          placeholder='浏览器地址栏里那串 code'
+          placeholder='浏览器地址栏中的 code 参数'
         />
       </div>
 

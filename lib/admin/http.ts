@@ -65,7 +65,7 @@ async function handleConnect(req: IncomingMessage, res: ServerResponse): Promise
 /** 令牌不对时的答复。Connect 的错误就是这个形状。 */
 function unauthorized(ctx: Koa.Context): void {
   ctx.status = 401;
-  ctx.body = { code: "unauthenticated", message: "面板令牌不对。" };
+  ctx.body = { code: "unauthenticated", message: "访问令牌不正确。" };
 }
 
 /**

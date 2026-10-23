@@ -27,7 +27,7 @@ export function BalancePage() {
   return (
     <PageShell
       title='额度'
-      description='每个账号的额度。余额（钱）、积分（点数）、套餐额度（百分比）是三样东西，各是各的，不相加。'
+      description='各账号的额度。余额、积分与套餐额度分别列示。'
     >
 
       {quotas.length === 0 ? (

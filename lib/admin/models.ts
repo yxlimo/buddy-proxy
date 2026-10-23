@@ -204,9 +204,9 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
   if (!id) {
     // 契约里说「id 为空表示新建」，可新建的模型总得有个对外的 id：网关不替
     // 面板起名字，起了面板也不知道。
-    return { ok: false, id: "", message: "模型得有 id（新建的时候先给它起一个对外的名字）" };
+    return { ok: false, id: "", message: "模型必须有 id（新建时先指定一个对外名称）" };
   }
-  if (!input.targets?.length) return { ok: false, id, message: "模型至少要有一个上游" };
+  if (!input.targets?.length) return { ok: false, id, message: "模型至少需要配置一个上游" };
   const strategy: AggregateStrategy = input.strategy === "fallback" ? "fallback" : "single";
   // 权重从大到小。权重一样时排序是稳定的，面板给的先后留着。
   const sorted = [...input.targets].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
@@ -218,7 +218,7 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
     enabled: target.enabled !== false,
   }));
   if (targets.some((t) => !t.upstreamModel)) {
-    return { ok: false, id, message: "每个目标都要有上游的模型 id" };
+    return { ok: false, id, message: "每个目标都需要填写上游模型 id" };
   }
   // 目标的上游模型得是真的存在。写错一个字（"Minmax-M3.1-Flash" 而不是
   // "MiniMax-M3.1-Flash"）的话，模型能存进去，但根路由不会公布它 ——

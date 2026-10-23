@@ -73,7 +73,7 @@ export function ModelPicker({
             先选上游组，才有模型目录可选。
           </p>
         ) : loading ? (
-          <p className='text-xs text-muted-foreground'>正在取模型目录…</p>
+          <p className='text-xs text-muted-foreground'>正在加载模型目录…</p>
         ) : catalog.isError ? (
           <p className='text-xs text-destructive'>
             取模型目录失败，手填一个上游模型 id。
@@ -121,7 +121,7 @@ export function ModelPicker({
                 !value && 'text-muted-foreground'
               )}
             >
-              {value || (loading ? '正在取模型目录…' : placeholder)}
+              {value || (loading ? '正在加载模型目录…' : placeholder)}
             </span>
             <ChevronDown className='size-4 opacity-50' />
           </Button>
@@ -130,7 +130,7 @@ export function ModelPicker({
           <Command>
             <CommandInput placeholder='搜模型…' />
             <CommandList>
-              <CommandEmpty>目录里没有匹配的模型。</CommandEmpty>
+              <CommandEmpty>目录中没有匹配的模型。</CommandEmpty>
               <CommandGroup>
                 {models.map((model) => (
                   <CommandItem

@@ -97,7 +97,7 @@ const DESCRIPTIONS: Record<string, string> = {
   ROUTER_PORT: "网关听哪个端口",
   ROUTER_HOST: "网关听哪个地址",
   HEALTH_CACHE_MS: "/health 的快照放多久（毫秒）",
-  REQUIRE_API_KEY: "agent 侧的前门要不要 api key",
+  REQUIRE_API_KEY: "开启后，调用网关的 agent 必须带 API KEY；关闭则任何请求都放行",
   BENEFITS_INTERVAL_MS: "多久签到一次（毫秒）",
   BENEFITS_DISABLED: "把签到整个关掉",
 };
@@ -173,7 +173,7 @@ const LABELS: Record<string, string> = {
   ROUTER_PORT: "网关端口",
   ROUTER_HOST: "网关监听地址",
   HEALTH_CACHE_MS: "健康检查缓存时长",
-  REQUIRE_API_KEY: "前门要 API key",
+  REQUIRE_API_KEY: "是否开启 API KEY 验证",
   BENEFITS_INTERVAL_MS: "签到间隔",
   BENEFITS_DISABLED: "关掉每日签到",
 };
