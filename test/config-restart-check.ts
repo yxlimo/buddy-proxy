@@ -204,12 +204,16 @@ check("Qoder 全球区现在是关着的", before.upstreams?.find((u: any) => u.
 
 const configBefore = await admin("ListConfig");
 const keys = (configBefore.items ?? []).map((i: any) => i.key);
-check("配置项只有 7 个", (configBefore.items ?? []).length === 7, JSON.stringify(keys));
+// 上游的开关搬到了上游那一页，配置页不再重复一份。
+check("配置项只有网关自己的两个", (configBefore.items ?? []).length === 2, JSON.stringify(keys));
 check(
-  "公布的是用户能改的那几个",
-  ["MINIMAX_CODE", "QODER_GLOBAL", "QODER_CN", "WORKBUDDY_CN", "TOKENRHYTHM", "REQUIRE_API_KEY", "ADMIN_CORS_ORIGINS"].every(
-    (k) => keys.includes(k),
-  ),
+  "公布的是网关自己能改的那几个",
+  ["REQUIRE_API_KEY", "ADMIN_CORS_ORIGINS"].every((k) => keys.includes(k)),
+  JSON.stringify(keys),
+);
+check(
+  "上游的开关不在配置页里",
+  !keys.some((k) => ["MINIMAX_CODE", "QODER_GLOBAL", "QODER_CN", "WORKBUDDY_CN", "TOKENRHYTHM"].includes(k)),
   JSON.stringify(keys),
 );
 check(
@@ -244,14 +248,16 @@ const rows = configRows();
 const qoderRow = rows.find((r) => r.key === "QODER_GLOBAL");
 check("值进了数据库", qoderRow?.value === "true", JSON.stringify(rows));
 
-const listed = await admin("ListConfig");
-const qoderItem = (listed.items ?? []).find((i: any) => i.key === "QODER_GLOBAL");
-check("读回来是新值", qoderItem?.value === "true", JSON.stringify(qoderItem));
-check("来源是数据库覆盖", qoderItem?.source === "database", JSON.stringify(qoderItem));
+// 开关不在配置页里（上游那一页管），所以「读回来」问的是上游列表。
+const upstreamList = await admin("ListUpstreams");
+const qoderUpstream = (upstreamList.upstreams ?? []).find((u: any) => u.id === "qoder");
+check("读回来是新值", qoderUpstream?.enabled === true, JSON.stringify(qoderUpstream));
+check(
+  "配置页里没有上游的开关",
+  !(await admin("ListConfig")).items?.some((i: any) => i.key === "QODER_GLOBAL"),
+  JSON.stringify((await admin("ListConfig")).items?.map((i: any) => i.key)),
+);
 
-const upstreams = await admin("ListUpstreams");
-const qoderUpstream = (upstreams.upstreams ?? []).find((u: any) => u.id === "qoder");
-check("上游列表里的值也是新的", qoderUpstream?.enabled === true, JSON.stringify(qoderUpstream));
 check("上游列表里没有待生效的标志", !("pending" in (qoderUpstream ?? {})), JSON.stringify(qoderUpstream));
 
 // 关键：跑着的进程立刻用新值。

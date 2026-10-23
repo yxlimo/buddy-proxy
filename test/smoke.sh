@@ -68,6 +68,16 @@ if [ $wb_status -ne 0 ]; then
   status=$wb_status
 fi
 
+# The two upstreams that came later (SenseNova and 书生·端砚): the catalogue,
+# a request, the credits and the state. Against a fake upstream — no credits
+# are spent.
+echo ""
+node --experimental-strip-types test/sensenova-intern-ai-check.ts
+sn_status=$?
+if [ $sn_status -ne 0 ]; then
+  status=$sn_status
+fi
+
 if [ "$status" -ne 0 ]; then
   echo "--- router log ---"
   tail -20 /tmp/opencode/smoke-router.log

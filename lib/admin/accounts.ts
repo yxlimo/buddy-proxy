@@ -56,8 +56,9 @@ export interface CredentialRow {
 /**
  * 固定的账号：一个上游一个登录身份。
  *
- * SenseNova 与 intern-ai 也在里面：这两个上游还没有接进路由（不在上游的
- * 列表里），但它们的登录是可以做的，面板上要有地方点。
+ * SenseNova 与 intern-ai 也在里面：它们的登录是可以做的，面板上要有地方点。
+ * 推理用的 key 也列在凭据里 —— 那是这两个上游真正干活的东西（cookie 只是
+ * 登录态，读额度用的）。
  */
 const FIXED_ACCOUNTS: { id: string; upstream: string; label: string }[] = [
   { id: "minimax", upstream: "minimax", label: "MiniMax Code" },
@@ -65,7 +66,7 @@ const FIXED_ACCOUNTS: { id: string; upstream: string; label: string }[] = [
   { id: "qoder-cn", upstream: "qoder-cn", label: "Qoder（中国区）" },
   { id: "workbuddy-cn", upstream: "workbuddy-cn", label: "WorkBuddy（中国区）" },
   { id: "sensenova", upstream: "sensenova", label: "SenseNova" },
-  { id: "intern-ai", upstream: "intern-ai", label: "intern-ai" },
+  { id: "intern-ai", upstream: "intern-ai", label: "书生·端砚" },
 ];
 
 /** 指纹：同一个值永远是同一个指纹，换一个值就是另一个。 */
@@ -183,6 +184,25 @@ export function credentialsOf(accountId: string): CredentialRow[] {
           updatedAt: Number(loginRow?.updatedAt ?? 0),
         });
       }
+      // 推理用的 key：推理端点要的是它，不是 cookie。
+      const apiKey = String(login?.apiKey ?? "");
+      if (apiKey) {
+        out.push({
+          id: `${loginId}#api_key`,
+          accountId,
+          upstreamId: "sensenova",
+          kind: "api_key",
+          label: "推理 key",
+          masked: maskOf(apiKey),
+          fingerprint: fingerprintOf(apiKey),
+          status: CredentialState.USABLE,
+          generation: 0,
+          expiresAt: 0,
+          lastOkAt: 0,
+          lastError: "",
+          updatedAt: Number(loginRow?.updatedAt ?? 0),
+        });
+      }
       return out;
     }
     case "intern-ai": {
@@ -207,6 +227,28 @@ export function credentialsOf(accountId: string): CredentialRow[] {
         lastError: "",
         updatedAt: Number(row?.updatedAt ?? 0),
       });
+      // 推理用的 key（Discovery 子站那把）：推理端点要的是它。
+      const loginId = "account:intern-ai";
+      const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
+      const login = loginRow?.data as any;
+      const discoveryKey = String(login?.discoveryKey ?? "");
+      if (discoveryKey) {
+        out.push({
+          id: `${loginId}#discovery_key`,
+          accountId,
+          upstreamId: "intern-ai",
+          kind: "api_key",
+          label: "推理 key（Discovery）",
+          masked: maskOf(discoveryKey),
+          fingerprint: fingerprintOf(discoveryKey),
+          status: CredentialState.USABLE,
+          generation: 0,
+          expiresAt: 0,
+          lastOkAt: 0,
+          lastError: "",
+          updatedAt: Number(loginRow?.updatedAt ?? 0),
+        });
+      }
       return out;
     }
   }

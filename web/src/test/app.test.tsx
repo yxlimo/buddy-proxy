@@ -9,6 +9,7 @@ import {
   GetSystemStatusResponseSchema,
   GetUsageSummaryResponseSchema,
   ListUpstreamsResponseSchema,
+  UpstreamQuotaSchema,
   UpstreamSchema,
   UsageBucketSchema,
   UsageSummarySchema,
@@ -74,10 +75,14 @@ describe('面板', () => {
         }),
       GetBalance: () =>
         create(GetBalanceResponseSchema, {
-          balances: [
-            create(BalanceSummarySchema, {
-              availableCny: 42.5,
-              currency: 'CNY',
+          quotas: [
+            create(UpstreamQuotaSchema, {
+              upstreamId: 'tokenrhythm',
+              accountId: 'tokenrhythm:1',
+              balance: create(BalanceSummarySchema, {
+                availableCny: 42.5,
+                currency: 'CNY',
+              }),
             }),
           ],
         }),
@@ -110,7 +115,7 @@ describe('面板', () => {
     expect(
       screen.getByRole('link', { name: '账号与凭据' })
     ).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '余额' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '额度' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '用量' })).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: '主路由模型' })

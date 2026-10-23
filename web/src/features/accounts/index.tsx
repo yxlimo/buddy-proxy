@@ -33,7 +33,8 @@ import {
 import { useBeginLogin } from '@/features/login/api'
 import { useLoginIdInHash } from '@/features/login/hash'
 import { LoginDialog } from '@/features/login/login-dialog'
-import { formatCny, formatDateTime } from '@/lib/format'
+import { QuotaSummary } from '@/features/balance/quota'
+import { formatDateTime } from '@/lib/format'
 
 export function AccountsPage() {
   const accounts = useAccounts()
@@ -121,7 +122,7 @@ export function AccountsPage() {
                   <TableHead>上游</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className='text-right'>凭据</TableHead>
-                  <TableHead className='text-right'>余额</TableHead>
+                  <TableHead className='text-right'>额度</TableHead>
                   <TableHead className='text-right'>详情</TableHead>
                   <TableHead className='text-right'>操作</TableHead>
                 </TableRow>
@@ -172,10 +173,10 @@ export function AccountsPage() {
                       <TableCell className='text-right font-mono'>
                         {account.credentialCount}
                       </TableCell>
-                      <TableCell className='text-right font-mono'>
-                        {account.balance
-                          ? formatCny(account.balance.availableCny)
-                          : '—'}
+                      <TableCell className='text-right'>
+                        {/* 额度分三种：套餐额度、积分、余额。单位不同，
+                            不相加，也不换算。 */}
+                        <QuotaSummary quota={account.quota} />
                       </TableCell>
                       <TableCell className='text-right text-xs text-muted-foreground'>
                         {account.detail || '—'}

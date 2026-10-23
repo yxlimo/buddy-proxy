@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useSetUpstreamEnabled, useUpstreams, upstreamKeys } from '@/features/upstreams/api'
+import { QuotaSummary } from '@/features/balance/quota'
 import { formatCount } from '@/lib/format'
 
 const REGION_LABELS: Record<string, string> = {
@@ -61,7 +62,7 @@ export function UpstreamsPage() {
           {list.length === 0 ? (
             <EmptyState
               title='网关没有报任何上游'
-              description='上游的开关写在配置里，先去「配置」页看一下。'
+              description='上游的开关就在这一页，不用去「配置」页。'
             />
           ) : (
             <Table>
@@ -72,7 +73,7 @@ export function UpstreamsPage() {
                   <TableHead>状态</TableHead>
                   <TableHead>凭据</TableHead>
                   <TableHead className='text-right'>模型</TableHead>
-                  <TableHead className='text-right'>余额</TableHead>
+                  <TableHead className='text-right'>额度</TableHead>
                   <TableHead className='text-right'>启用</TableHead>
                 </TableRow>
               </TableHeader>
@@ -89,10 +90,14 @@ export function UpstreamsPage() {
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className='grid gap-0.5'>
+                    <TableCell className='max-w-[16rem]'>
+                      {/* min-w-0：网格项默认不肯比容器窄，长地址会顶到隔壁列上去。 */}
+                      <div className='grid min-w-0 gap-0.5'>
                         {upstream.baseUrl ? (
-                          <span className='font-mono text-xs break-all'>
+                          <span
+                            className='font-mono text-xs break-all whitespace-normal'
+                            title={upstream.baseUrl}
+                          >
                             {upstream.baseUrl}
                           </span>
                         ) : (
@@ -131,10 +136,10 @@ export function UpstreamsPage() {
                     <TableCell className='text-right font-mono'>
                       {formatCount(upstream.modelCount)}
                     </TableCell>
-                    <TableCell className='text-right font-mono'>
-                      {upstream.balance
-                        ? `¥${upstream.balance.availableCny.toFixed(2)}`
-                        : '—'}
+                    <TableCell className='max-w-[18rem] text-right'>
+                      {/* 额度有三样，单位和单位都不一样：有套餐额度就显示
+                          套餐额度，没有才显示积分，余额另外显示。不相加。 */}
+                      <QuotaSummary quota={upstream.quota} />
                     </TableCell>
                     <TableCell className='text-right'>
                       <Switch

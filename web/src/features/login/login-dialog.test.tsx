@@ -138,9 +138,38 @@ describe('登录对话框', () => {
 
     expect(await screen.findByLabelText('账号名')).toBeInTheDocument()
     expect(screen.getByLabelText('密码')).toBeInTheDocument()
+    // TokenRhythm 的密码要留着才能再登一次，所以有「记住密码」。
     expect(screen.getByText(/记住密码吗/)).toBeInTheDocument()
     // 密码型没有链接也没有大字码。
     expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  })
+
+  it('sensenova 的密码型不给「记住密码」这个选项', async () => {
+    renderWithClient({
+      client: clientWith(
+        session({
+          method: 'password',
+          upstreamId: 'sensenova',
+          accountId: 'sensenova',
+          authorizationUrl: '',
+          userCode: '',
+          message: '在面板上填账号与密码，然后点「登录」。',
+        })
+      ),
+      children: (
+        <LoginDialog
+          open
+          loginId='login-1'
+          upstreamId='sensenova'
+          accountId='sensenova'
+          onOpenChange={() => {}}
+        />
+      ),
+    })
+
+    expect(await screen.findByLabelText('账号名')).toBeInTheDocument()
+    // SenseNova 的 cookie 就是会话本身，密码存不存没有意义。
+    expect(screen.queryByText(/记住密码吗/)).not.toBeInTheDocument()
   })
 
   it('token 形态：SSO 链接、贴 token 的框、人机校验的说明', async () => {
@@ -176,6 +205,10 @@ describe('登录对话框', () => {
     ).toBeInTheDocument()
     // token 从哪拿：开发者工具的 Cookie。
     expect(screen.getByText(/开发者工具/)).toBeInTheDocument()
+    // intern-ai 的两个子站共用一个 token：不问子站了。
+    expect(screen.queryByText('子站')).not.toBeInTheDocument()
+    expect(screen.queryByText(/discovery/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/chat（对话）/)).not.toBeInTheDocument()
   })
 
   it('code 形态：授权码的框', async () => {
@@ -201,6 +234,9 @@ describe('登录对话框', () => {
     })
 
     expect(await screen.findByLabelText('授权码')).toBeInTheDocument()
+    // intern-ai 的两个子站共用一个 token：不问子站了。
+    expect(screen.queryByText('子站')).not.toBeInTheDocument()
+    expect(screen.queryByText(/discovery/)).not.toBeInTheDocument()
   })
 
   it('每 3 秒问一次进度', async () => {
@@ -443,7 +479,7 @@ describe('登录对话框', () => {
         imported.push(input.token ?? '')
         return create(ImportLoginTokenResponseSchema, {
           ok: true,
-          message: '导入好了 discovery 子站的凭据。',
+          message: '导入好了凭据。',
         })
       },
     })

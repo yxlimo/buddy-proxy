@@ -39,7 +39,7 @@ export const sidebarData: SidebarData = {
           icon: Layers,
         },
         {
-          title: '余额',
+          title: '额度',
           url: '/balance',
           icon: Wallet,
         },

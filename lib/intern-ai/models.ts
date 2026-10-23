@@ -28,8 +28,10 @@ export interface InternAiModel {
   contextLength: number;
   /** 输入模态，比如 ["text"]。 */
   inputTypes: string[];
-  /** 支持的能力。 */
+  /** 支持的能力。平台给的是中文，比如「工具调用」。 */
   capabilities: string[];
+  /** 能力的英文说法。平台给中文的时候这一份是空的。 */
+  capabilitiesEn: string[];
   /** 支持的协议，比如 ["OpenAI ChatCompletions"]。 */
   supportedProtocols: string[];
 }
@@ -63,6 +65,7 @@ export function parseModelRow(row: any): InternAiModel {
     contextLength: num(row?.context_length),
     inputTypes: Array.isArray(row?.input_types) ? row.input_types.map(String) : [],
     capabilities: Array.isArray(row?.capabilities) ? row.capabilities.map(String) : [],
+    capabilitiesEn: Array.isArray(row?.capabilities_en) ? row.capabilities_en.map(String) : [],
     supportedProtocols: Array.isArray(row?.supported_protocols) ? row.supported_protocols.map(String) : [],
   };
 }
@@ -123,6 +126,7 @@ export async function listDiscoveryConsoleModels(
     contextLength: num(row?.context_length),
     inputTypes: Array.isArray(row?.input_types) ? row.input_types.map(String) : [],
     capabilities: Array.isArray(row?.capabilities) ? row.capabilities.map(String) : [],
+    capabilitiesEn: Array.isArray(row?.capabilities_en) ? row.capabilities_en.map(String) : [],
     supportedProtocols: Array.isArray(row?.supported_protocols) ? row.supported_protocols.map(String) : [],
   }));
 }
@@ -168,4 +172,63 @@ export async function listChatConsoleModels(session: InternAiSession, token: str
     /** 支不支持 agent 模式（agent 模式才要查每日额度）。 */
     enableAgent: row?.enable_agent === true || row?.enable_agent === 1,
   }));
+}
+
+/* ------------------------------------------------------------------ *
+ * 目录
+ * ------------------------------------------------------------------ */
+
+/** 目录里的一个模型：面板与客户端看的那些字段。 */
+export interface InternAiCatalogModel {
+  /** 调模型时用的 id。 */
+  id: string;
+  /** 人看的名字。 */
+  name: string;
+  /** 上下文长度，token 数。平台没报就是 0（= 不知道）。 */
+  contextLength: number;
+  /** 能不能思考。 */
+  reasoning: boolean;
+  /** 能不能调工具。 */
+  toolCall: boolean;
+}
+
+/**
+ * 平台说的能力里有没有这一样。
+ *
+ * 平台给的是中文（「工具调用」「深度思考」），也有一份英文的。两份都看，
+ * 免得平台哪天只给中文或者只给英文。
+ */
+export function hasCapability(capabilities: string[], kind: "tool" | "reasoning"): boolean {
+  const text = capabilities.join(" ").toLowerCase();
+  if (kind === "tool") return /tool|function|工具/.test(text);
+  return /reason|think|思考|推理/.test(text);
+}
+
+/**
+ * 把推理端的清单与控制台在售的清单合成目录里的那一份。
+ *
+ * 推理端是准的 —— 这把 key 真正能调的就是这些 —— 但它只给 id 与名字。上下文
+ * 长度与「能不能思考、能不能调工具」在控制台那份清单里（平台给的是中文的能
+ * 力名）。所以两份合起来看：推理端说了算有哪个模型，控制台补上它的脾气。
+ *
+ * 控制台那份拿不到的时候，工具调用按「有」算：推理端是 OpenAI 方言的接口，
+ * 回答里就带着 tool_calls —— 平台在售的模型都接 tools。
+ */
+export function mergeCatalogModels(
+  inference: InternAiModel[],
+  consoleModels: InternAiModel[] = [],
+): InternAiCatalogModel[] {
+  return inference.map((model) => {
+    const listed = consoleModels.find((c) => c.id === model.id);
+    const capabilities = listed ? [...listed.capabilities, ...listed.capabilitiesEn] : [];
+    // 推理端只给 id，名字其实也是 id；有正经名字就用控制台那份的。
+    const name = model.name && model.name !== model.id ? model.name : listed?.name;
+    return {
+      id: model.id,
+      name: name || model.id,
+      contextLength: Number(model.contextLength || listed?.contextLength || 0),
+      reasoning: capabilities.length ? hasCapability(capabilities, "reasoning") : false,
+      toolCall: capabilities.length ? hasCapability(capabilities, "tool") : true,
+    };
+  });
 }

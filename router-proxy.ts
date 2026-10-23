@@ -36,10 +36,30 @@ import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
 import { ensureMinimaxSession, ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
 import {
+  ensureSenseNovaKey,
+  refreshSenseNovaCatalog,
+  senseNovaCatalog,
+  senseNovaInferenceKey,
+  senseNovaModelIds,
+} from "./lib/sensenova/transport.ts";
+import { loadSession as loadSenseNovaSession } from "./lib/sensenova/auth.ts";
+import { SENSENOVA_INFER_BASE } from "./lib/sensenova/config.ts";
+import {
+  ensureInternAiKey,
+  internAiCatalog,
+  internAiInferenceKey,
+  internAiModelIds,
+  refreshInternAiCatalog,
+} from "./lib/intern-ai/transport.ts";
+import { loadSession as loadInternAiSession } from "./lib/intern-ai/auth.ts";
+import { INTERN_AI_DISCOVERY_API_BASE } from "./lib/intern-ai/config.ts";
+import {
   toMinimax,
   toQoder,
   toTokenRhythm,
   toWorkBuddy,
+  toSenseNova,
+  toInternAi,
   type UpstreamContext,
 } from "./lib/router/upstreams.ts";
 import {
@@ -227,6 +247,8 @@ router.get("/health", async (ctx) => {
       qoderCn: upstreamEnabled("qoder-cn"),
       workbuddyCn: upstreamEnabled("workbuddy-cn"),
       tokenrhythm: upstreamEnabled("tokenrhythm"),
+      sensenova: upstreamEnabled("sensenova"),
+      internAi: upstreamEnabled("intern-ai"),
     },
     upstreams: {
       minimax: upstreamEnabled("minimax")
@@ -254,6 +276,24 @@ router.get("/health", async (ctx) => {
         ? {
             models: TOKENRHYTHM_MODELS.length,
             tenants: snapshot.data?.tokenrhythm?.tenants ?? null,
+          }
+        : { enabled: false },
+      sensenova: upstreamEnabled("sensenova")
+        ? {
+            base: SENSENOVA_INFER_BASE,
+            models: senseNovaCatalog().length,
+            // 推理端点要的是 key，不是 cookie。
+            credential: senseNovaInferenceKey() ? "api_key" : "missing",
+            pools: snapshot.data?.sensenova?.pools ?? null,
+          }
+        : { enabled: false },
+      internAi: upstreamEnabled("intern-ai")
+        ? {
+            base: INTERN_AI_DISCOVERY_API_BASE,
+            models: internAiCatalog().length,
+            credential: internAiInferenceKey() ? "api_key" : "missing",
+            balance: snapshot.data?.internAi?.balance ?? null,
+            packs: snapshot.data?.internAi?.packs ?? null,
           }
         : { enabled: false },
     },
@@ -303,6 +343,8 @@ function routingContext(): RoutingContext {
       qoderCn: upstreamEnabled("qoder-cn"),
       workbuddyCn: upstreamEnabled("workbuddy-cn"),
       tokenrhythm: upstreamEnabled("tokenrhythm"),
+      sensenova: upstreamEnabled("sensenova"),
+      internAi: upstreamEnabled("intern-ai"),
     },
     ids: {
       qoderGlobal: GLOBAL_QODER_IDS,
@@ -311,6 +353,8 @@ function routingContext(): RoutingContext {
       minimax: MINIMAX_MODEL_IDS,
       workbuddy: workbuddyModelIds(),
       tokenrhythm: TOKENRHYTHM_MODEL_IDS,
+      sensenova: senseNovaModelIds(),
+      internAi: internAiModelIds(),
     },
   };
 }
@@ -438,6 +482,8 @@ for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
     // The upstream's catalogue is the source of truth; fetch it in the background
     // so this answer is never blocked by it.
     if (upstreamEnabled("workbuddy-cn")) void refreshWorkBuddyCatalog();
+    if (upstreamEnabled("sensenova")) void refreshSenseNovaCatalog();
+    if (upstreamEnabled("intern-ai")) void refreshInternAiCatalog();
     const groups = catalogGroups();
     if (group) {
       ctx.body = groupCatalog(group, groups, dialect === "openai");
@@ -538,6 +584,10 @@ async function callUpstream(
     await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
   } else if (route.upstream === "tokenrhythm") {
     await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
+  } else if (route.upstream === "sensenova") {
+    await toSenseNova(uctx, body, route, dialect, stream, ctx);
+  } else if (route.upstream === "intern-ai") {
+    await toInternAi(uctx, body, route, dialect, stream, ctx);
   } else {
     await toMinimax(uctx, body, route, dialect, stream, ctx);
   }
@@ -605,6 +655,12 @@ app.listen(PORT, HOST, () => {
   );
   console.log(
     `    tokenrhythm ${upstreamEnabled("tokenrhythm") ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
+  );
+  console.log(
+    `    sensenova ${upstreamEnabled("sensenova") ? `${senseNovaCatalog().length} models` : "off"}`,
+  );
+  console.log(
+    `    intern-ai ${upstreamEnabled("intern-ai") ? `${internAiCatalog().length} models` : "off"}`,
   );
   console.log(`  auth: ${requireApiKey() ? "api key required" : "public"}`);
   console.log("");
@@ -714,6 +770,35 @@ app.listen(PORT, HOST, () => {
         }
       })
       .catch((e) => console.warn(`  [TOKENRHYTHM] 账号状态获取失败: ${(e as Error).message}`));
+  }
+
+  if (upstreamEnabled("sensenova")) {
+    // 推理端点要的是一把 key，不是 cookie。账号上有会话却没有 key 的（老版本
+    // 登录留下的），在这里补一把 —— 登录完了上游才是 READY 的。
+    void (async () => {
+      const session = loadSenseNovaSession();
+      if (!session) {
+        console.log("  [SENSENOVA] 还没有登录态");
+        return;
+      }
+      await ensureSenseNovaKey(session);
+      await refreshSenseNovaCatalog(true);
+      console.log(`  [SENSENOVA] 模型清单：${senseNovaCatalog().length} 个`);
+    })().catch((e) => console.warn(`  [SENSENOVA] ${(e as Error).message}`));
+  }
+
+  if (upstreamEnabled("intern-ai")) {
+    // 与 SenseNova 一样：推理端点认的是 Discovery 子站那把 key。
+    void (async () => {
+      const session = loadInternAiSession();
+      if (!session) {
+        console.log("  [INTERN-AI] 还没有登录态");
+        return;
+      }
+      await ensureInternAiKey(session);
+      await refreshInternAiCatalog(true);
+      console.log(`  [INTERN-AI] 模型目录：${internAiCatalog().length} 个`);
+    })().catch((e) => console.warn(`  [INTERN-AI] ${(e as Error).message}`));
   }
 
   // The daily benefits of the China accounts: the check-in, the growth centre

@@ -23,6 +23,8 @@ import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
 import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
+import { senseNovaChat } from "../sensenova/transport.ts";
+import { internAiChat } from "../intern-ai/transport.ts";
 import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax/transport.ts";
 import type { QoderRegion } from "../qoder/auth.ts";
 import {
@@ -537,4 +539,88 @@ async function tokenRhythmChatWithRetry(
       throw e;
     }
   }
+}
+
+/**
+ * SenseNova。
+ *
+ * 上游讲 OpenAI 方言，所以请求几乎原样发过去，答案也原样回来。Anthropic 的
+ * 请求先转成 OpenAI。
+ *
+ * 鉴权用的是账号上的推理 key（不是 cookie）：cookie 是登录态，key 才是推理
+ * 端点要的东西。
+ */
+export async function toSenseNova(
+  ctx: UpstreamContext,
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  out: Koa.Context,
+): Promise<void> {
+  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
+  const model = upstreamModel(route);
+  openaiBody.model = model;
+  openaiBody.stream = stream;
+  if (ctx.logRoute) {
+    console.log(`[ROUTE] sensenova model=${route.model} stream=${stream}`);
+  }
+
+  const response = await senseNovaChat(openaiBody);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new AuthError(
+      `upstream HTTP ${response.status}`,
+      `SenseNova 上游返回 ${response.status}：${text.slice(0, 300)}`,
+      502,
+    );
+  }
+
+  if (!stream) {
+    const json = await response.json();
+    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+    return;
+  }
+
+  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+}
+
+/**
+ * 书生·端砚（Discovery 子站）。
+ *
+ * 与 SenseNova 一样是 OpenAI 方言：请求原样发过去，答案原样回来。
+ */
+export async function toInternAi(
+  ctx: UpstreamContext,
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  out: Koa.Context,
+): Promise<void> {
+  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
+  const model = upstreamModel(route);
+  openaiBody.model = model;
+  openaiBody.stream = stream;
+  if (ctx.logRoute) {
+    console.log(`[ROUTE] intern-ai model=${route.model} stream=${stream}`);
+  }
+
+  const response = await internAiChat(openaiBody);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new AuthError(
+      `upstream HTTP ${response.status}`,
+      `书生·端砚上游返回 ${response.status}：${text.slice(0, 300)}`,
+      502,
+    );
+  }
+
+  if (!stream) {
+    const json = await response.json();
+    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+    return;
+  }
+
+  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
 }

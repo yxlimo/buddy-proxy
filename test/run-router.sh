@@ -42,6 +42,11 @@ fs.writeFileSync(path, JSON.stringify({
 ' "$BUDDY_DATA_DIR"
 fi
 
+# The other upstreams need a credential too, or the router starts their login
+# flow and answers 503. They live in the database now, so the dummy sessions
+# go there as well.
+node --experimental-strip-types test/fake-sessions.ts >/dev/null
+
 if [ -n "$BASE" ]; then
   export QODER_GLOBAL_INFER_BASE="$BASE/qoder-global"
   export QODER_GLOBAL_LEGACY_BASE="$BASE/qoder-global-legacy"

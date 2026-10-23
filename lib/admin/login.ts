@@ -35,7 +35,14 @@ import {
 import { loginWithCredentials, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { ensureApiKey } from "../tokenrhythm/keys.ts";
 import { login as loginSenseNova, ACCOUNT_ID as SENSENOVA_ACCOUNT_ID } from "../sensenova/auth.ts";
-import { importToken as importInternAiToken, internAiSite, login as loginInternAi } from "../intern-ai/auth.ts";
+import { ensureSenseNovaKey } from "../sensenova/transport.ts";
+import {
+  importToken as importInternAiToken,
+  internAiSite,
+  loadSession as loadInternAiSession,
+  login as loginInternAi,
+} from "../intern-ai/auth.ts";
+import { ensureInternAiKey } from "../intern-ai/transport.ts";
 import { exchangeCode as exchangeInternAiCode } from "../intern-ai/auth.ts";import { INTERN_AI_SSO_BASE } from "../intern-ai/config.ts";
 
 /** 一次登录的状态。 */
@@ -61,8 +68,6 @@ export interface StoredLogin {
   message: string;
   /** 账号密码型上游的账号名。 */
   username: string;
-  /** intern-ai：登哪个子站。 */
-  site: string;
   /** 轮询用的材料。半凭据，不进日志。 */
   poll: Record<string, unknown> | null;
   /** 登录成功后落库的凭据 id。 */
@@ -184,9 +189,8 @@ function startPassword(upstreamId: string): Started {
 }
 
 /** intern-ai：只能半自动 —— 人在浏览器里登录，把 token 贴回来。 */
-function startInternAi(site: string): Started {
+function startInternAi(): Started {
   const url = `${INTERN_AI_SSO_BASE}/login`;
-  const which = site ? `「${site}」` : "两个子站";
   return {
     method: "token",
     authorizationUrl: url,
@@ -194,7 +198,8 @@ function startInternAi(site: string): Started {
     // 人在浏览器里登录、打开开发者工具、复制 token，都要时间：半小时够。
     expiresAt: Date.now() + 30 * 60 * 1000,
     message:
-      `在浏览器里打开上面的链接登录，然后从开发者工具的 Cookie 里复制 uaa-token，贴回面板（${which}）。` +
+      `在浏览器里打开上面的链接登录，然后从开发者工具的 Cookie 里复制 uaa-token，贴回面板。` +
+      `两个子站共用这个 token，不用分别登。` +
       `这一步要人自己点，服务器替不了。`,
     poll: null,
   };
@@ -206,7 +211,7 @@ function startInternAi(site: string): Started {
  * 同一个上游的「开始」用锁串行化：两次同时开始会各自在上游那里建一份状态，
  * 互相踩。
  */
-export async function beginLogin(upstreamId: string, accountId = "", site = ""): Promise<StoredLogin> {
+export async function beginLogin(upstreamId: string, accountId = ""): Promise<StoredLogin> {
   cleanupLogins();
   const id = crypto.randomUUID();
   const started = await withLock(`login:${upstreamId}`, async () => {
@@ -224,7 +229,7 @@ export async function beginLogin(upstreamId: string, accountId = "", site = ""):
       case "sensenova":
         return startPassword(upstreamId);
       case "intern-ai":
-        return startInternAi(site);
+        return startInternAi();
       default:
         throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${upstreamId}`, 400);
     }
@@ -240,7 +245,6 @@ export async function beginLogin(upstreamId: string, accountId = "", site = ""):
     expiresAt: started.expiresAt,
     message: started.message,
     username: "",
-    site,
     poll: started.poll,
     credentialId: "",
   };
@@ -357,6 +361,22 @@ export function cancelLogin(loginId: string): { ok: boolean; message: string } {
  * 账号密码
  * ------------------------------------------------------------------ */
 
+/**
+ * 建推理用的 key，失败不算登录失败。
+ *
+ * 登录本身是成功的（会话已经存下来了），只是那把 key 没建出来 —— 上游暂时接
+ * 不了请求，但登录不算白做：面板上把这件事说清楚，用户再登一次就好。
+ */
+async function ensureKeySafe(label: string, make: () => Promise<string>): Promise<boolean> {
+  try {
+    await make();
+    return true;
+  } catch (e) {
+    console.warn(`[${label}] 推理 key 没建出来：${(e as Error)?.message}`);
+    return false;
+  }
+}
+
 /** 账号密码登录的结果。 */
 export interface PasswordLoginResult {
   ok: boolean;
@@ -405,20 +425,23 @@ export async function loginWithPassword(input: {
       };
     }
     case "sensenova": {
-      await loginSenseNova(input.username, input.password);
-      if (!input.remember) {
-        // 现有实现总是把账号密码存一份；不记住密码的时候就把密码抹掉 ——
-        // 账号留着，密码下次再问。
-        const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(SENSENOVA_ACCOUNT_ID);
-        setSecret(SENSENOVA_ACCOUNT_ID, "account", {
-          user: stored?.user ?? input.username,
-          password: "",
-          apiKey: stored?.apiKey ?? null,
-        });
-      }
+      const session = await loginSenseNova(input.username, input.password);
+      // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整
+      // 值，建它的那个函数负责存下来）。登录完了上游才是 READY 的。
+      const keyReady = await ensureKeySafe("SENSENOVA", () => ensureSenseNovaKey(session));
+      // cookie 必然要存 —— 它就是登录态，没有它就没有会话。所以不提供「要不要
+      // 记住」这个选择：cookie 留着，密码不留（下次要密码的时候再问一次）。
+      const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(SENSENOVA_ACCOUNT_ID);
+      setSecret(SENSENOVA_ACCOUNT_ID, "account", {
+        user: stored?.user ?? input.username,
+        password: "",
+        apiKey: stored?.apiKey ?? null,
+      });
       return {
         ok: true,
-        message: "SenseNova 登录好了。",
+        message: keyReady
+          ? "SenseNova 登录好了，推理用的 key 也备好了。"
+          : "SenseNova 登录好了，但推理用的 key 没能建出来 —— 上游暂时不能接请求，再登录一次试试。",
         credentialId: "session:sensenova",
         accountId: "sensenova",
       };
@@ -433,14 +456,18 @@ export async function loginWithPassword(input: {
             }
           : undefined;
       // 契约里这个请求没有「登哪个子站」这一项，所以两个子站都登。
-      await loginInternAi({
+      const session = await loginInternAi({
         user: input.username,
         password: input.password,
         captcha,
       });
+      // 推理端点认的是 Discovery 子站那把 key：账号上没有就建一把。
+      const keyReady = await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session));
       return {
         ok: true,
-        message: "intern-ai 登录好了。",
+        message: keyReady
+          ? "intern-ai 登录好了，推理用的 key 也备好了。"
+          : "intern-ai 登录好了，但推理用的 key 没能建出来 —— 上游暂时不能接请求，再登录一次试试。",
         credentialId: "session:intern-ai",
         accountId: "intern-ai",
       };
@@ -469,6 +496,18 @@ function tenantIndex(accountId: string): number | null {
  * ------------------------------------------------------------------ */
 
 /**
+ * 导入的登录态也要有推理用的 key。
+ *
+ * 推理端点认的是 key，不是那个 uaa-token。所以贴回 token 之后还要建一把
+ * Discovery 的 key —— 建完了上游才是 READY 的。
+ */
+async function ensureImportedInternAiKey(): Promise<void> {
+  const session = loadInternAiSession();
+  if (!session) return;
+  await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session));
+}
+
+/**
  * 用浏览器里拿到的授权码换凭据。
  *
  * 只有 intern-ai 有这条路（而且不建议：chat 的页面换完就把地址栏里的 code
@@ -478,7 +517,6 @@ export async function exchangeLoginCode(input: {
   upstreamId: string;
   accountId: string;
   code: string;
-  site: string;
 }): Promise<PasswordLoginResult> {
   if (input.upstreamId !== "intern-ai") {
     return { ok: false, message: `这个上游不用授权码：${input.upstreamId}`, credentialId: "", accountId: "" };
@@ -486,12 +524,13 @@ export async function exchangeLoginCode(input: {
   if (!input.code.trim()) {
     return { ok: false, message: "没有授权码。", credentialId: "", accountId: "" };
   }
-  const site = input.site === "chat" ? "chat" : "discovery";
-  const token = await exchangeInternAiCode(input.code.trim(), internAiSite(site));
-  importInternAiToken(token, site);
+  // 换 token 用 discovery 那个子站（端砚），换出来的 token 两个子站都能用。
+  const token = await exchangeInternAiCode(input.code.trim(), internAiSite("discovery"));
+  importInternAiToken(token);
+  await ensureImportedInternAiKey();
   return {
     ok: true,
-    message: `换好了 ${site} 子站的凭据。`,
+    message: "换好了凭据，两个子站共用它，推理用的 key 也备好了。",
     credentialId: "session:intern-ai",
     accountId: "intern-ai",
   };
@@ -507,7 +546,6 @@ export async function importLoginToken(input: {
   upstreamId: string;
   accountId: string;
   token: string;
-  site: string;
 }): Promise<PasswordLoginResult> {
   if (input.upstreamId !== "intern-ai") {
     return { ok: false, message: `这个上游不用回填 token：${input.upstreamId}`, credentialId: "", accountId: "" };
@@ -515,11 +553,11 @@ export async function importLoginToken(input: {
   if (!input.token.trim()) {
     return { ok: false, message: "没有 token。", credentialId: "", accountId: "" };
   }
-  const site = input.site === "chat" ? "chat" : "discovery";
-  importInternAiToken(input.token.trim(), site);
+  importInternAiToken(input.token.trim());
+  await ensureImportedInternAiKey();
   return {
     ok: true,
-    message: `导入好了 ${site} 子站的凭据。`,
+    message: "导入好了凭据，两个子站共用它，推理用的 key 也备好了。",
     credentialId: "session:intern-ai",
     accountId: "intern-ai",
   };

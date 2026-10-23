@@ -12,6 +12,15 @@ const WINDOW_LABELS: Record<string, string> = {
   video: '视频',
 }
 
+/** 两个窗口的名字：interval 是 5 小时那个，weekly 是每周那个。 */
+export const INTERVAL_WINDOW_LABEL = '5 小时'
+export const WEEKLY_WINDOW_LABEL = '每周'
+
+/** 窗口的名字给人看。认不出来就原样显示，不猜。 */
+export function windowLabel(label: string): string {
+  return WINDOW_LABELS[label] ?? label
+}
+
 /** 剩余百分比：越少越红。 */
 function percentTone(percent: number): string {
   if (percent <= 10) return 'text-destructive'
@@ -40,7 +49,7 @@ export function TokenPlanPanel({
         >
           <div className='mb-3 flex items-center justify-between gap-2'>
             <span className='text-sm font-medium'>
-              {WINDOW_LABELS[window.label] ?? window.label ?? '额度窗口'}
+              {windowLabel(window.label) || '额度窗口'}
             </span>
             <span className='text-xs text-muted-foreground'>
               {window.label || '—'}
@@ -49,12 +58,12 @@ export function TokenPlanPanel({
 
           <div className='grid gap-3 sm:grid-cols-2'>
             <QuotaMeter
-              title='本窗口'
+              title={INTERVAL_WINDOW_LABEL}
               percent={window.intervalPercent}
               endsAt={window.intervalEndsAt}
             />
             <QuotaMeter
-              title='本周'
+              title={WEEKLY_WINDOW_LABEL}
               percent={window.weeklyPercent}
               endsAt={window.weeklyEndsAt}
             />

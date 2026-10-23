@@ -191,15 +191,12 @@ const NOT_SECRET = new Set(["REQUIRE_API_KEY"]);
  * 请求标识。这些改了也没用（env 覆盖了照样按代码走），而且露出来只会让人
  * 改出坏状态 —— 所以不公布。
  *
- * 面板只看到这 handful 个：各个上游的开关，和网关自己的两三个。
+ * 面板只看到这 handful 个：网关自己的两三个。
+ *
+ * 上游的开关**不在这里**：上游那一页有开关，在这儿再放一份是重复的，而且
+ * 两份会打架。
  */
 const USER_FACING = new Set([
-  // 上游的开关
-  "MINIMAX_CODE",
-  "QODER_GLOBAL",
-  "QODER_CN",
-  "WORKBUDDY_CN",
-  "TOKENRHYTHM",
   // 网关自己
   "REQUIRE_API_KEY",
   "ADMIN_CORS_ORIGINS",

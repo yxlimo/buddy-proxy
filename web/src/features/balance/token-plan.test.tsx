@@ -6,6 +6,7 @@ import {
   GetBalanceResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
+  UpstreamQuotaSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { BalancePage } from '@/features/balance/index'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -23,12 +24,10 @@ describe('套餐额度', () => {
     const client = mockAdminClient({
       GetBalance: () =>
         create(GetBalanceResponseSchema, {
-          balances: [
-            create(BalanceSummarySchema, {
+          quotas: [
+            create(UpstreamQuotaSchema, {
               upstreamId: 'minimax',
               accountId: 'minimax',
-              availableCny: 0,
-              currency: 'CNY',
               tokenPlan: create(TokenPlanSchema, {
                 windows: [
                   create(TokenPlanWindowSchema, {
@@ -55,16 +54,49 @@ describe('套餐额度', () => {
     expect(screen.getAllByText(/重置/).length).toBeGreaterThan(0)
   })
 
+  it('两个窗口的名字写清楚：5 小时和每周', async () => {
+    const client = mockAdminClient({
+      GetBalance: () =>
+        create(GetBalanceResponseSchema, {
+          quotas: [
+            create(UpstreamQuotaSchema, {
+              upstreamId: 'minimax',
+              accountId: 'minimax',
+              tokenPlan: create(TokenPlanSchema, {
+                windows: [
+                  create(TokenPlanWindowSchema, {
+                    label: 'general',
+                    intervalPercent: 72,
+                    weeklyPercent: 15,
+                    intervalEndsAt: ENDS_AT,
+                    weeklyEndsAt: ENDS_AT,
+                  }),
+                ],
+              }),
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <BalancePage /> })
+
+    await screen.findByText('套餐额度')
+    expect(screen.getByText('5 小时')).toBeInTheDocument()
+    expect(screen.getByText('每周')).toBeInTheDocument()
+  })
+
   it('没有套餐额度的时候不显示那一块', async () => {
     const client = mockAdminClient({
       GetBalance: () =>
         create(GetBalanceResponseSchema, {
-          balances: [
-            create(BalanceSummarySchema, {
-              upstreamId: 'qoder-cn',
-              accountId: 'qoder-cn',
-              availableCny: 12.5,
-              currency: 'CNY',
+          quotas: [
+            create(UpstreamQuotaSchema, {
+              upstreamId: 'tokenrhythm',
+              accountId: 'tokenrhythm:1',
+              balance: create(BalanceSummarySchema, {
+                availableCny: 12.5,
+                currency: 'CNY',
+              }),
             }),
           ],
         }),

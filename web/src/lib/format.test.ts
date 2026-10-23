@@ -4,6 +4,8 @@ import {
   formatDate,
   formatDateTime,
   formatMillis,
+  formatMoney,
+  formatPoints,
   formatUptime,
   isFarFuture,
   remainingDays,
@@ -44,5 +46,27 @@ describe('时间的单位', () => {
     expect(formatDateTime(undefined)).toBe('—')
     expect(formatUptime(0n)).toBe('—')
     expect(formatCount(undefined)).toBe('0')
+  })
+})
+
+/**
+ * 钱和点数是两种单位：钱带 ¥，点数不带。
+ *
+ * 积分不是钱，界面上不能把点数写成 ¥，也不能拿点数去加余额。
+ */
+describe('钱和点数', () => {
+  it('人民币写 ¥，别的币种把币种写出来', () => {
+    expect(formatMoney(42.5, 'CNY')).toBe('¥42.50')
+    expect(formatMoney(42.5, '')).toBe('¥42.50')
+    expect(formatMoney(42.5, 'USD')).toBe('USD 42.50')
+    // 不猜汇率，也不换算。
+    expect(formatMoney(42.5, 'USD')).not.toContain('¥')
+  })
+
+  it('点数就是点数，不带 ¥', () => {
+    expect(formatPoints(1200)).toBe('1,200')
+    expect(formatPoints(12.5)).toBe('12.50')
+    expect(formatPoints(undefined)).toBe('0')
+    expect(formatPoints(1200)).not.toContain('¥')
   })
 })

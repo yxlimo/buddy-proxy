@@ -12,7 +12,7 @@ Point a client at it and it works with either dialect — see
 
 ## What is switched on
 
-There are five reverse proxies behind this, and each has a switch. All of them
+There are seven reverse proxies behind this, and each has a switch. All of them
 are **off by default**; turn on the ones you actually use.
 
 | Switch | Turns on |
@@ -22,6 +22,8 @@ are **off by default**; turn on the ones you actually use.
 | `QODER_CN=true` | the Qoder China account (qoder.cn) |
 | `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
 | `TOKENRHYTHM=true` | the TokenRhythm relay station (tokenrhythm.studio) |
+| `SENSENOVA=true` | SenseNova (token.sensenova.cn) |
+| `INTERN_AI=true` | 书生·端砚 (discovery-api.intern-ai.org.cn) |
 
 A proxy that is switched off is not looked at: no credential is read, no login
 is attempted, no models are advertised, and a request for one is refused with a
@@ -29,7 +31,7 @@ message saying which switch to flip. The two Qoder regions are separate
 accounts, so they are switched on separately, and WorkBuddy's China account is
 a third one.
 
-One process reads all five.
+One process reads all seven.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -121,6 +123,18 @@ lib/tokenrhythm/        TokenRhythm: the accounts, the wallet, the relay call
   wallet.ts             what the accounts have left, and which one to use
   models.ts             the model catalog
   transport.ts          the relay call
+lib/sensenova/          SenseNova: the login, the keys, the pools, the relay call
+  auth.ts               the login with a password, the cookie session, the refresh
+  keys.ts               the API keys, and the pools they draw from
+  models.ts             the model catalog
+  quota.ts              the pools: how much is left in each
+  transport.ts          the inference endpoint
+lib/intern-ai/          书生·端砚: the login, the keys, the credits, the relay call
+  auth.ts               the SSO session, the shared uaa-token
+  keys.ts               the API keys of the two sub-sites
+  models.ts             the model catalog, from the inference endpoint and the console
+  quota.ts              the credits, and the packs they come in
+  transport.ts          the inference endpoint
 lib/aggregate.ts        the published models: the catalog, the targets, the traffic
 lib/benefits.ts         the daily credits of the China accounts
 lib/session.ts          the session: read it, write it, lock it, refresh it
@@ -174,6 +188,24 @@ printed in the log that one time).
 It is meant for the network it runs on. To reach it from outside, put it
 behind HTTPS or reach the host over Tailscale — the panel holds the
 credentials, so it should not travel in the clear.
+
+### Quota, credits, and the token plan
+
+Three different things, and they are never added together:
+
+| | What it is | Who has it |
+|---|---|---|
+| **余额 (balance)** | money | the relay stations (TokenRhythm) |
+| **积分 (credits)** | points | Qoder, WorkBuddy, SenseNova, InternAI |
+| **套餐额度 (token plan)** | a percentage per window (5 hours, weekly) | MiniMax's coding plan |
+
+The upstream list shows the token plan when there is one, the credits
+otherwise, and the balance separately when there is one. A platform that does
+not report a total says so by reporting `0` — the panel leaves that row out
+rather than showing a total of zero.
+
+The upstream switches live in the 上游 tab, not in the 配置 tab: one switch,
+one place.
 
 ## Endpoints
 
@@ -313,6 +345,9 @@ Each upstream is a provider of its own, so the model ids are the real ones:
 | `qoder_cn` | `{router}/qoder-cn/v1` | Qoder, China account |
 | `workbuddy_cn` | `{router}/workbuddy-cn/v1` | WorkBuddy, China account |
 | `minimax_code` | `{router}/minimax/v1` | the MiniMax Code gateway |
+| `sensenova` | `{router}/sensenova/v1` | SenseNova |
+| `intern_ai` | `{router}/intern-ai/v1` | 书生·端砚 (Discovery) |
+| `tokenrhythm` | `{router}/tokenrhythm/v1` | the TokenRhythm relay station |
 
 The opencode **TUI** model picker lists each model exactly once: anything
 already shown under **Favorites** or **Recent** is not repeated in the
@@ -525,7 +560,7 @@ is.
 
 ## Router (`router-proxy.ts`, port 6450)
 
-One entry point, two dialects, five upstreams. The model name decides the
+One entry point, two dialects, seven upstreams. The model name decides the
 upstream; the dialect decides how much translation happens.
 
 | Method | Path | Format |

@@ -452,14 +452,19 @@ export async function login(opts: InternAiLoginOptions = {}): Promise<InternAiSe
  * 人机校验要人点，那就让人在浏览器里点完，把 `uaa-token` 拿过来存上。
  * 这条路跟 login() 换来的会话没有区别。
  */
-export function importToken(token: string, site: "discovery" | "chat" = "discovery"): InternAiSession {
+/**
+ * 把 uaa-token 记下来。
+ *
+ * 两个子站共用同一个 token —— 登录的是同一个账号，token 也是同一个。所以
+ * 这里一次登记两个子站，登录的时候不必问「登哪个子站」。
+ */
+export function importToken(token: string): InternAiSession {
   const stored = loadSession();
-  const sites = (stored?.sites ?? []).filter((s) => s.name !== site);
-  sites.push({
-    name: site,
+  const sites = siteTargets().map((target) => ({
+    name: target.name,
     token,
-    clientId: site === "discovery" ? INTERN_AI_DISCOVERY_CLIENT_ID : INTERN_AI_CHAT_CLIENT_ID,
-  });
+    clientId: target.clientId,
+  }));
   const session: InternAiSession = {
     sites,
     ssoUid: stored?.ssoUid ?? ssoUidFromToken(token),

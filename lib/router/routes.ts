@@ -13,7 +13,7 @@ export { GROUP_PREFIX, UPSTREAM_GROUPS };
 export type { UpstreamGroup };
 
 export interface Route {
-  upstream: "qoder" | "minimax" | "workbuddy" | "tokenrhythm";
+  upstream: "qoder" | "minimax" | "workbuddy" | "tokenrhythm" | "sensenova" | "intern-ai";
   /** The model as the server names it: prefixed, e.g. `qoder-cn/glm-5.3`. */
   model: string;
   /** Which Qoder region to talk to. Unset for MiniMax. */
@@ -35,6 +35,8 @@ export interface RoutingContext {
     qoderCn: boolean;
     workbuddyCn: boolean;
     tokenrhythm: boolean;
+    sensenova: boolean;
+    internAi: boolean;
   };
   /** The models each upstream can serve. */
   ids: {
@@ -44,6 +46,8 @@ export interface RoutingContext {
     minimax: Set<string>;
     workbuddy: Set<string>;
     tokenrhythm: Set<string>;
+    sensenova: Set<string>;
+    internAi: Set<string>;
   };
 }
 
@@ -68,6 +72,8 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
   if (raw.startsWith("workbuddy-cn/")) return workbuddyRoute(raw.slice("workbuddy-cn/".length), ctx);
   if (raw.startsWith("qoder-cn/")) return qoderRoute(raw.slice("qoder-cn/".length), "cn", ctx);
   if (raw.startsWith("qoder/")) return qoderRoute(raw.slice("qoder/".length), "global", ctx);
+  if (raw.startsWith("sensenova/")) return senseNovaRoute(raw.slice("sensenova/".length), ctx);
+  if (raw.startsWith("intern-ai/")) return internAiRoute(raw.slice("intern-ai/".length), ctx);
   if (raw.startsWith("tokenrhythm/")) {
     if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
     return { upstream: "tokenrhythm", model: raw };
@@ -142,7 +148,49 @@ export function routeInGroup(group: UpstreamGroup, id: string, ctx: RoutingConte
       // The client catalog's id goes upstream, not the agent's spelling of it.
       return { upstream: "minimax", model: `minimax/${canonical}` };
     }
+    case "sensenova":
+      return senseNovaRoute(id, ctx);
+    case "intern-ai":
+      return internAiRoute(id, ctx);
   }
+}
+
+/**
+ * SenseNova 的一个模型。
+ *
+ * 目录是跟着 key 走的，所以它一开始是空的（网关还没问过上游）。空的时候不
+ * 拦：拦了说的是「没有这个模型」，而真相是「还不知道有哪些模型」。上游自己
+ * 会把不认得的模型退回来，那时才是该说的话。
+ */
+function senseNovaRoute(id: string, ctx: RoutingContext): Route {
+  if (!ctx.enabled.sensenova) throw disabledUpstream("sensenova");
+  const known = ctx.ids.sensenova;
+  if (known.size && !known.has(id)) {
+    throw new AuthError(
+      `unknown model "${id}"`,
+      `SenseNova 没有这个模型。可用：${[...known].join("、")}。`,
+      400,
+    );
+  }
+  return { upstream: "sensenova", model: `sensenova/${id}` };
+}
+
+/**
+ * 书生·端砚（Discovery）的一个模型。
+ *
+ * 与 SenseNova 一样：目录空着的时候不拦，让上游说话。
+ */
+function internAiRoute(id: string, ctx: RoutingContext): Route {
+  if (!ctx.enabled.internAi) throw disabledUpstream("intern-ai");
+  const known = ctx.ids.internAi;
+  if (known.size && !known.has(id)) {
+    throw new AuthError(
+      `unknown model "${id}"`,
+      `书生·端砚没有这个模型。可用：${[...known].join("、")}。`,
+      400,
+    );
+  }
+  return { upstream: "intern-ai", model: `intern-ai/${id}` };
 }
 
 /**
@@ -177,7 +225,14 @@ function workbuddyRoute(id: string, ctx: RoutingContext): Route {
 
 /** An upstream that this router is not serving, because it was not enabled. */
 export function disabledUpstream(
-  which: "minimax" | "qoder-global" | "qoder-cn" | "workbuddy-cn" | "tokenrhythm",
+  which:
+    | "minimax"
+    | "qoder-global"
+    | "qoder-cn"
+    | "workbuddy-cn"
+    | "tokenrhythm"
+    | "sensenova"
+    | "intern-ai",
 ): AuthError {
   const flag =
     which === "minimax"
@@ -188,7 +243,11 @@ export function disabledUpstream(
           ? "WORKBUDDY_CN"
           : which === "tokenrhythm"
             ? "TOKENRHYTHM"
-            : "QODER_GLOBAL";
+            : which === "sensenova"
+              ? "SENSENOVA"
+              : which === "intern-ai"
+                ? "INTERN_AI"
+                : "QODER_GLOBAL";
   const what =
     which === "minimax"
       ? "MiniMax Code"
@@ -198,7 +257,11 @@ export function disabledUpstream(
           ? "WorkBuddy 中国区"
           : which === "tokenrhythm"
             ? "TokenRhythm"
-            : "Qoder 全球区";
+            : which === "sensenova"
+              ? "SenseNova"
+              : which === "intern-ai"
+                ? "书生·端砚"
+                : "Qoder 全球区";
   return new AuthError(
     `${which} is not enabled`,
     `${what}没有启用。设置 ${flag}=true 后重启 router。`,

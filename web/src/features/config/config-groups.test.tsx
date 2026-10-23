@@ -33,8 +33,8 @@ function item(
 /**
  * 配置页按分组切成 tab。
  *
- * 服务端现在只公布用户能改的那几项（各个上游的开关 + 网关自己的两个），
- * 内部设置不再公布。
+ * 服务端公布什么就画什么：上游的开关搬去「上游」页之后，配置页剩下的多半
+ * 只有网关自己的设置。空的组不画。
  */
 describe('配置页的分组', () => {
   it('每个分组一个 tab，名字是中文的', async () => {
@@ -92,7 +92,7 @@ describe('配置页的分组', () => {
     expect(screen.queryByText('MiniMax Code 上游')).not.toBeInTheDocument()
   })
 
-  it('「常规」那一组是空的时，tab 也在，打开时停在这儿，并给空状态', async () => {
+  it('空的组不画：没有设置项的组连 tab 都没有', async () => {
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {
@@ -102,10 +102,39 @@ describe('配置页的分组', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
-    const general = await screen.findByRole('tab', { name: /常规/ })
-    expect(general).toHaveAttribute('aria-selected', 'true')
-    expect(general.textContent).toBe('常规(0)')
-    expect(screen.getByText('这一组暂时没有可改的设置')).toBeInTheDocument()
+    await screen.findByRole('tab', { name: /MiniMax/ })
+    // 「常规」这一组是空的：不画 tab，也不给空状态。
+    expect(screen.queryByRole('tab', { name: /常规/ })).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('这一组暂时没有可改的设置')
+    ).not.toBeInTheDocument()
+  })
+
+  it('只有网关自己的设置时也照常显示', async () => {
+    const client = mockAdminClient({
+      ListConfig: () =>
+        create(ListConfigResponseSchema, {
+          items: [item('REQUIRE_API_KEY', 'gateway', '前门要 API key')],
+        }),
+    })
+
+    renderWithClient({ client, children: <ConfigPage /> })
+
+    const gateway = await screen.findByRole('tab', { name: /网关/ })
+    expect(gateway).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('前门要 API key')).toBeInTheDocument()
+  })
+
+  it('一项都没有的时候给空状态', async () => {
+    const client = mockAdminClient({
+      ListConfig: () => create(ListConfigResponseSchema, { items: [] }),
+    })
+
+    renderWithClient({ client, children: <ConfigPage /> })
+
+    expect(
+      await screen.findByText('网关没有报任何配置项')
+    ).toBeInTheDocument()
   })
 
   it('切到别的组，那一组的设置就出来了', async () => {

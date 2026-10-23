@@ -24,7 +24,8 @@ run = "node router-proxy.ts"
 
 [tasks.typecheck]
 description = "Type-check the router"
-run = "tsc --noEmit"
+# pnpm exec：node_modules/.bin 不在 mise 任务的 PATH 里，直接调 tsc 会找不到。
+run = "pnpm exec tsc --noEmit"
 
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"

@@ -2,7 +2,6 @@ import { Link } from '@tanstack/react-router'
 import {
   Activity,
   Boxes,
-  CircleDollarSign,
   Clock,
   Layers,
 } from 'lucide-react'
@@ -24,14 +23,13 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import { useBalance } from '@/features/balance/api'
+import { QuotaSummary } from '@/features/balance/quota'
 import { useSystemStatus, useUsageSummary } from '@/features/overview/api'
-import { formatCount, formatCny, formatUptime } from '@/lib/format'
+import { formatCount, formatUptime } from '@/lib/format'
 
 export function OverviewPage() {
   const status = useSystemStatus()
   const usage = useUsageSummary({ upstreamId: '', window: 'day' })
-  const balance = useBalance('')
 
   if (status.isPending) {
     return <LoadingState />
@@ -42,19 +40,16 @@ export function OverviewPage() {
 
   const data = status.data
   const total = usage.data?.total
-  const balances = balance.data?.balances ?? []
-  const totalAvailable = balances.reduce(
-    (sum, item) => sum + item.availableCny,
-    0
-  )
 
   return (
     <PageShell
       title='总览'
-      description='网关现在的状态：各上游、余额、还有一点用量摘要。'
+      description='网关现在的状态：各上游、还有一点用量摘要。'
     >
 
-      <div className='grid gap-4 lg:grid-cols-4'>
+      {/* 额度不在这里求和：余额（钱）、积分（点数）、套餐额度（百分比）
+          单位不同，加起来没有意义。各上游的额度去「上游」页看。 */}
+      <div className='grid gap-4 lg:grid-cols-3'>
         <Card>
           <CardHeader>
             <CardDescription className='flex items-center gap-1.5'>
@@ -71,21 +66,6 @@ export function OverviewPage() {
                   total.failed
                 )}`
               : '还没有用量数据'}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardDescription className='flex items-center gap-1.5'>
-              <CircleDollarSign className='size-3.5' />
-              可用余额
-            </CardDescription>
-            <CardTitle className='text-2xl'>{formatCny(totalAvailable)}</CardTitle>
-          </CardHeader>
-          <CardContent className='text-sm text-muted-foreground'>
-            {balances.length > 0
-              ? `${balances.length} 笔余额`
-              : '上游没有报余额'}
           </CardContent>
         </Card>
 
@@ -130,7 +110,7 @@ export function OverviewPage() {
               上游
             </CardTitle>
             <CardDescription>
-              开关改完立刻生效。
+              开关在「上游」页改，改完立刻生效。
             </CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>
@@ -155,15 +135,13 @@ export function OverviewPage() {
                       </span>
                     ) : null}
                   </div>
-                  <div className='flex shrink-0 flex-col items-end gap-1'>
+                  <div className='flex min-w-0 flex-col items-end gap-1'>
                     <UpstreamStateBadge state={upstream.state} />
                     {upstream.credential ? (
                       <CredentialStateBadge status={upstream.credential.status} />
                     ) : null}
-                    {upstream.balance ? (
-                      <span className='text-xs font-mono'>
-                        {formatCny(upstream.balance.availableCny)}
-                      </span>
+                    {upstream.quota ? (
+                      <QuotaSummary quota={upstream.quota} />
                     ) : null}
                   </div>
                 </div>

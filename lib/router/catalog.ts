@@ -13,11 +13,28 @@ import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "../qod
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy/models.ts";
 import type { MiniMaxModel } from "../minimax/models.ts";
 import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
+import type { SenseNovaModel } from "../sensenova/models.ts";
+import type { InternAiCatalogModel } from "../intern-ai/models.ts";
 import type { AggregateModel } from "../aggregate.ts";
 
-export type UpstreamGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax" | "tokenrhythm";
+export type UpstreamGroup =
+  | "qoder"
+  | "qoder-cn"
+  | "workbuddy-cn"
+  | "minimax"
+  | "tokenrhythm"
+  | "sensenova"
+  | "intern-ai";
 
-export const UPSTREAM_GROUPS: UpstreamGroup[] = ["qoder", "qoder-cn", "workbuddy-cn", "minimax", "tokenrhythm"];
+export const UPSTREAM_GROUPS: UpstreamGroup[] = [
+  "qoder",
+  "qoder-cn",
+  "workbuddy-cn",
+  "minimax",
+  "tokenrhythm",
+  "sensenova",
+  "intern-ai",
+];
 
 /** The prefix the server puts in front of a model id. */
 export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
@@ -26,6 +43,8 @@ export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
   "workbuddy-cn": "workbuddy-cn/",
   minimax: "minimax/",
   tokenrhythm: "tokenrhythm/",
+  sensenova: "sensenova/",
+  "intern-ai": "intern-ai/",
 };
 
 /** A model, the same whatever the shape the client wants it in. */
@@ -40,7 +59,8 @@ export interface CatalogModel {
   toolCall: boolean;
   /** Absent when the gateway advertises no context window for the model. */
   contextWindow?: number;
-  maxOutputTokens: number;
+  /** Absent when the platform does not say how much the model may answer. */
+  maxOutputTokens?: number;
   /** The thinking levels the model accepts, if it has a choice. */
   effortOptions?: string[];
   /** The model the gateway actually ran, when it is not the one that was asked for. */
@@ -108,6 +128,40 @@ export function tokenRhythmCatalogModels(): CatalogModel[] {
   }));
 }
 
+/**
+ * SenseNova 的模型目录。
+ *
+ * 能力是平台自己报的（supported_features 里有 tools、reasoning），上下文长度
+ * 与输出上限也是（context_length、max_output_length）。平台没报的那一项这里
+ * 就没有 —— 不拿别的数来填。
+ */
+export function senseNovaCatalogModels(models: SenseNovaModel[]): CatalogModel[] {
+  return models.map((m) => ({
+    id: m.id,
+    displayName: m.name || m.id,
+    reasoning: m.features.includes("reasoning"),
+    toolCall: m.features.includes("tools"),
+    ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
+    ...(m.maxOutputLength > 0 ? { maxOutputTokens: m.maxOutputLength } : {}),
+  }));
+}
+
+/**
+ * 书生·端砚的模型目录。
+ *
+ * 上下文长度是平台报的；输出上限平台没报，所以这里也没有 —— 客户端问多少
+ * 就发多少。
+ */
+export function internAiCatalogModels(models: InternAiCatalogModel[]): CatalogModel[] {
+  return models.map((m) => ({
+    id: m.id,
+    displayName: m.name || m.id,
+    reasoning: m.reasoning,
+    toolCall: m.toolCall,
+    ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
+  }));
+}
+
 /* ------------------------------------------------------------------ *
  * The aggregate catalog
  * ------------------------------------------------------------------ */
@@ -127,12 +181,12 @@ export interface AggregateEntry {
   reasoning: boolean;
   toolCall: boolean;
   contextWindow?: number;
-  maxOutputTokens: number;
+  /** 平台没报输出上限的时候没有这个数。 */
+  maxOutputTokens?: number;
   effortOptions?: string[];
   strategy: "single" | "fallback";
   targets: AggregateTargetSpec[];
 }
-
 /** The model behind a target, as the upstream currently lists it. */
 /**
  * 目录里找那个模型。
@@ -183,7 +237,7 @@ export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateMo
     if (targets.length === 0) continue;
 
     const contexts = found.map((m) => m.contextWindow).filter((v): v is number => typeof v === "number");
-    const outputs = found.map((m) => m.maxOutputTokens);
+    const outputs = found.map((m) => m.maxOutputTokens).filter((v): v is number => typeof v === "number");
     const efforts = found
       .map((m) => m.effortOptions)
       .filter((v): v is string[] => Array.isArray(v));
@@ -197,7 +251,7 @@ export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateMo
       reasoning: model.reasoning ?? found.some((m) => m.reasoning),
       toolCall: model.toolCall ?? found.every((m) => m.toolCall),
       contextWindow: model.contextWindow ?? (contexts.length ? Math.min(...contexts) : undefined),
-      maxOutputTokens: model.maxOutputTokens ?? (outputs.length ? Math.min(...outputs) : 0),
+      maxOutputTokens: model.maxOutputTokens ?? (outputs.length ? Math.min(...outputs) : undefined),
       effortOptions: model.effortOptions ?? (commonEfforts?.length ? commonEfforts : undefined),
       strategy: model.strategy,
       targets,
@@ -220,7 +274,7 @@ export function anthropicCatalog(groups: CatalogGroup[]): any {
         reasoning: m.reasoning,
         tool_call: m.toolCall,
         ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
-        max_output_tokens: m.maxOutputTokens,
+        ...(m.maxOutputTokens ? { max_output_tokens: m.maxOutputTokens } : {}),
         ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
         ...(m.backend ? { backend: m.backend } : {}),
       });
@@ -286,7 +340,7 @@ export function aggregateAnthropicCatalog(entries: AggregateEntry[]): any {
     reasoning: e.reasoning,
     tool_call: e.toolCall,
     ...(e.contextWindow ? { context_window: e.contextWindow } : {}),
-    max_output_tokens: e.maxOutputTokens,
+    ...(e.maxOutputTokens ? { max_output_tokens: e.maxOutputTokens } : {}),
     ...(e.effortOptions ? { effort_options: [...e.effortOptions] } : {}),
   }));
   return {
@@ -322,7 +376,7 @@ export function groupCatalog(group: UpstreamGroup, groups: CatalogGroup[], opena
     reasoning: m.reasoning,
     tool_call: m.toolCall,
     ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
-    max_output_tokens: m.maxOutputTokens,
+    ...(m.maxOutputTokens ? { max_output_tokens: m.maxOutputTokens } : {}),
     ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
     ...(m.backend ? { backend: m.backend } : {}),
   }));

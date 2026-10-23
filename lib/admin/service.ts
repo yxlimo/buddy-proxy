@@ -16,6 +16,7 @@ import type { ServiceImpl } from "@connectrpc/connect";
 import {
   AccountSchema,
   AdminService,
+  BalanceLotSchema,
   BalanceSummarySchema,
   BeginLoginResponseSchema,
   BenefitStatusSchema,
@@ -25,6 +26,7 @@ import {
   CredentialSchema,
   CredentialStatusSchema,
   CreditLotSchema,
+  CreditSummarySchema,
   DeletePublishedModelResponseSchema,
   ExchangeLoginCodeResponseSchema,
   GetBalanceResponseSchema,
@@ -54,6 +56,7 @@ import {
   TestCredentialResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
+  UpstreamQuotaSchema,
   UpstreamSchema,
   UsageBucketSchema,
   UsageEventSchema,
@@ -67,14 +70,15 @@ import {
   UPSTREAM_LABELS,
   healthSnapshot,
   setUpstreamEnabled,
-  upstreamBalances,
+  upstreamQuota,
+  upstreamQuotas,
   upstreamBaseUrl,
   upstreamCredential,
   upstreamModelCount,
   upstreamRegion,
   upstreamState,
   upstreamStates,
-  type BalanceView,
+  type QuotaView,
   type UpstreamId,
   type UpstreamSwitch,
 } from "./upstreams.ts";
@@ -106,28 +110,51 @@ function serviceVersion(): string {
   }
 }
 
-/** 一个余额摘要。 */
-function balanceMessage(balance: BalanceView) {
-  return create(BalanceSummarySchema, {
-    upstreamId: balance.upstreamId,
-    accountId: balance.accountId,
-    availableCny: balance.availableCny,
-    currency: balance.currency,
-    lots: balance.lots.map((lot) =>
-      create(CreditLotSchema, {
-        id: lot.id,
-        sourceLabel: lot.sourceLabel,
-        remainingCny: lot.remainingCny,
-        expiresAt: BigInt(lot.expiresAt),
-        status: lot.status,
-      }),
-    ),
-    nextExpiryAt: BigInt(balance.nextExpiryAt),
-    expiringCny: balance.expiringCny,
+/** 一个额度摘要。 */
+function quotaMessage(quota: QuotaView) {
+  return create(UpstreamQuotaSchema, {
+    upstreamId: quota.upstreamId,
+    accountId: quota.accountId,
+    // 余额（钱）。只有中转站这类平台有。
+    balance: quota.balance
+      ? create(BalanceSummarySchema, {
+          availableCny: quota.balance.availableCny,
+          currency: quota.balance.currency,
+          lots: quota.balance.lots.map((lot) =>
+            create(BalanceLotSchema, {
+              id: lot.id,
+              sourceLabel: lot.sourceLabel,
+              remainingCny: lot.remainingCny,
+              expiresAt: BigInt(lot.expiresAt),
+              status: lot.status,
+            }),
+          ),
+          nextExpiryAt: BigInt(quota.balance.nextExpiryAt),
+          expiringCny: quota.balance.expiringCny,
+        })
+      : undefined,
+    // 积分（点数）。跟余额不是一回事。
+    credits: quota.credits
+      ? create(CreditSummarySchema, {
+          total: quota.credits.total,
+          used: quota.credits.used,
+          remaining: quota.credits.remaining,
+          lots: quota.credits.lots.map((lot) =>
+            create(CreditLotSchema, {
+              id: lot.id,
+              sourceLabel: lot.sourceLabel,
+              remaining: lot.remaining,
+              expiresAt: BigInt(lot.expiresAt),
+              status: lot.status,
+            }),
+          ),
+          note: quota.credits.note,
+        })
+      : undefined,
     // 套餐额度：只有 MiniMax 有别的上游不带这个。
-    tokenPlan: balance.tokenPlan
+    tokenPlan: quota.tokenPlan
       ? create(TokenPlanSchema, {
-          windows: balance.tokenPlan.windows.map((window) =>
+          windows: quota.tokenPlan.windows.map((window) =>
             create(TokenPlanWindowSchema, {
               label: window.label,
               intervalPercent: window.intervalPercent,
@@ -141,26 +168,10 @@ function balanceMessage(balance: BalanceView) {
   });
 }
 
-/** 几个余额合成一个（面板上每个上游只显示一个）。 */
-function mergeBalances(balances: BalanceView[]): BalanceView | null {
-  if (!balances.length) return null;
-  return {
-    upstreamId: balances[0].upstreamId,
-    accountId: balances[0].accountId,
-    availableCny: balances.reduce((sum, b) => sum + b.availableCny, 0),
-    currency: balances[0].currency,
-    lots: balances.flatMap((b) => b.lots),
-    nextExpiryAt: balances.reduce((max, b) => Math.max(max, b.nextExpiryAt), 0),
-    expiringCny: balances.reduce((sum, b) => sum + b.expiringCny, 0),
-    tokenPlan: balances.find((b) => b.tokenPlan)?.tokenPlan,
-  };
-}
-
 /** 一个上游在面板上的样子。 */
 async function upstreamMessage(id: UpstreamId, state: UpstreamSwitch) {
   const credential = upstreamCredential(id);
-  const balances = await upstreamBalances(id);
-  const balance = mergeBalances(balances);
+  const quota = upstreamQuota(id);
   return create(UpstreamSchema, {
     id,
     label: UPSTREAM_LABELS[id],
@@ -179,7 +190,7 @@ async function upstreamMessage(id: UpstreamId, state: UpstreamSwitch) {
       detail: credential.detail,
       generation: credential.generation,
     }),
-    balance: balance ? balanceMessage(balance) : undefined,
+    quota: quota ? quotaMessage(quota) : undefined,
     baseUrl: upstreamBaseUrl(id),
     region: upstreamRegion(id),
   });
@@ -372,16 +383,16 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async listAccounts() {
     const accounts = listAccounts();
-    // 每个账号的余额。余额在快照里，这里不现问上游（那是 GetBalance 的事）。
-    const balances = new Map<string, BalanceView>();
+    // 每个账号的额度。额度在快照里，这里不现问上游（那是 GetBalance 的事）。
+    const quotas = new Map<string, QuotaView>();
     for (const id of UPSTREAM_IDS) {
-      for (const balance of await upstreamBalances(id)) {
-        balances.set(balance.accountId, balance);
+      for (const quota of await upstreamQuotas(id)) {
+        quotas.set(quota.accountId, quota);
       }
     }
     return create(ListAccountsResponseSchema, {
       accounts: accounts.map((account) => {
-        const balance = balances.get(account.id);
+        const quota = quotas.get(account.id);
         return create(AccountSchema, {
           id: account.id,
           upstreamId: account.upstreamId,
@@ -389,7 +400,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           status: credentialStateText(account.status),
           credentialCount: account.credentialCount,
           detail: account.detail,
-          balance: balance ? balanceMessage(balance) : undefined,
+          quota: quota ? quotaMessage(quota) : undefined,
         });
       }),
     });
@@ -438,16 +449,16 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     });
   },
 
-  /* ---------------- 余额 ---------------- */
+  /* ---------------- 额度 ---------------- */
 
   async getBalance(request) {
     const wanted = String(request.upstreamId ?? "");
     const ids = (wanted ? [wanted] : UPSTREAM_IDS) as UpstreamId[];
-    const balances = [];
+    const quotas = [];
     for (const id of ids) {
-      for (const balance of await upstreamBalances(id, true)) balances.push(balanceMessage(balance));
+      for (const quota of await upstreamQuotas(id, true)) quotas.push(quotaMessage(quota));
     }
-    return create(GetBalanceResponseSchema, { balances });
+    return create(GetBalanceResponseSchema, { quotas });
   },
 
   /* ---------------- 用量 ---------------- */
@@ -683,7 +694,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async beginLogin(request) {
     const upstreamId = String(request.upstreamId ?? "");
     try {
-      const session = await beginLogin(upstreamId, String(request.accountId ?? ""), String(request.site ?? ""));
+      const session = await beginLogin(upstreamId, String(request.accountId ?? ""));
       return create(BeginLoginResponseSchema, {
         session: loginSessionMessage(session),
         ok: true,
@@ -740,7 +751,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         upstreamId: String(request.upstreamId ?? ""),
         accountId: String(request.accountId ?? ""),
         code: String(request.code ?? ""),
-        site: String(request.site ?? ""),
       });
       return create(ExchangeLoginCodeResponseSchema, {
         ok: result.ok,
@@ -758,7 +768,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         upstreamId: String(request.upstreamId ?? ""),
         accountId: String(request.accountId ?? ""),
         token: String(request.token ?? ""),
-        site: String(request.site ?? ""),
       });
       return create(ImportLoginTokenResponseSchema, {
         ok: result.ok,

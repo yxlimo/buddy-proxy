@@ -188,9 +188,17 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "五个上游都在",
-  list(status.body?.upstreams).length === 5,
+  "七个上游都在",
+  list(status.body?.upstreams).length === 7,
   String(status.body?.upstreams?.length),
+);
+check(
+  "上游的名字与 id 都对",
+  list(status.body?.upstreams).every((u: any) => typeof u.id === "string" && typeof u.label === "string") &&
+    ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"].every((id) =>
+      list(status.body?.upstreams).some((u: any) => u.id === id),
+    ),
+  JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
 );
 check("面板令牌已配置", status.body?.adminTokenSet === true);
 
@@ -198,7 +206,7 @@ console.log("");
 console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
-check("上游列表有五个", list(upstreams.body?.upstreams).length === 5);
+check("上游列表有七个", list(upstreams.body?.upstreams).length === 7, String(list(upstreams.body?.upstreams).length));
 
 const config = await call("ListConfig", {}, token);
 check("配置项列出来了", Array.isArray(config.body?.items) && config.body.items.length > 0);
@@ -208,7 +216,7 @@ check(
 );
 check(
   "配置项带说明",
-  list(config.body?.items).some((i: any) => i.key === "QODER_CN" && i.description.length > 0),
+  list(config.body?.items).some((i: any) => i.key === "REQUIRE_API_KEY" && i.description.length > 0),
 );
 
 const setConfig = await call("SetConfig", { key: "ADMIN_CORS_ORIGINS", value: "123456" }, token);
@@ -462,10 +470,11 @@ check(
   configItems.every((i: any) => !/^[A-Z][A-Z0-9_]+$/.test(i.label)),
   JSON.stringify(configItems.filter((i: any) => /^[A-Z][A-Z0-9_]+$/.test(i.label)).map((i: any) => i.key)),
 );
+// 上游的开关搬到了上游那一页，配置页不再重复一份。
 check(
-  "开关的项有名字",
-  configItems.find((i: any) => i.key === "QODER_CN")?.label === "Qoder 中国区",
-  JSON.stringify(configItems.find((i: any) => i.key === "QODER_CN")),
+  "配置页里没有上游的开关",
+  configItems.every((i: any) => !["MINIMAX_CODE", "QODER_GLOBAL", "QODER_CN", "WORKBUDDY_CN", "TOKENRHYTHM"].includes(i.key)),
+  JSON.stringify(configItems.map((i: any) => i.key)),
 );
 
 console.log("");

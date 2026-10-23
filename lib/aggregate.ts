@@ -13,7 +13,14 @@
 import { store } from "./store.ts";
 
 /** The upstream a target belongs to. Same names the route paths use. */
-export type AggregateGroup = "qoder" | "qoder-cn" | "workbuddy-cn" | "minimax" | "tokenrhythm";
+export type AggregateGroup =
+  | "qoder"
+  | "qoder-cn"
+  | "workbuddy-cn"
+  | "minimax"
+  | "tokenrhythm"
+  | "sensenova"
+  | "intern-ai";
 
 /**
  * How the targets of a model are used.

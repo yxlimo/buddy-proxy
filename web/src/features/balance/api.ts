@@ -8,7 +8,10 @@ export const balanceKeys = {
 }
 
 /**
- * 余额。upstreamId 为空表示所有上游。
+ * 额度。upstreamId 为空表示所有上游。
+ *
+ * 回来的每一条是一个账号的额度：余额、积分、套餐额度，三样各是各的，
+ * 前端不把它们加起来。
  */
 export function useBalance(upstreamId: string) {
   const client = useAdminClient()

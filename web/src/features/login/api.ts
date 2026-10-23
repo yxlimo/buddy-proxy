@@ -68,13 +68,11 @@ export function useBeginLogin() {
     mutationFn: async (input: {
       upstreamId: string
       accountId?: string
-      site?: string
     }) => {
       const result = await client.beginLogin(
         create(BeginLoginRequestSchema, {
           upstreamId: input.upstreamId,
           accountId: input.accountId ?? '',
-          site: input.site ?? '',
         })
       )
       assertOk(result, '没能开始登录')
@@ -146,14 +144,12 @@ export function useExchangeLoginCode() {
       upstreamId: string
       accountId: string
       code: string
-      site: string
     }) => {
       const result = await client.exchangeLoginCode(
         create(ExchangeLoginCodeRequestSchema, {
           upstreamId: input.upstreamId,
           accountId: input.accountId,
           code: input.code,
-          site: input.site,
         })
       )
       assertOk(result, '换码没成功')
@@ -178,14 +174,12 @@ export function useImportLoginToken() {
       upstreamId: string
       accountId: string
       token: string
-      site: string
     }) => {
       const result = await client.importLoginToken(
         create(ImportLoginTokenRequestSchema, {
           upstreamId: input.upstreamId,
           accountId: input.accountId,
           token: input.token,
-          site: input.site,
         })
       )
       assertOk(result, '导入没成功')

@@ -441,25 +441,41 @@ check(
 );
 check("effortOptions 读得回来", Array.isArray(explicitModel?.effortOptions), JSON.stringify(explicitModel?.effortOptions));
 
-// GetBalance：每条余额带着上游与账号。
+// GetBalance：每条额度带着上游与账号。余额、积分、套餐额度是三样东西，
+// 各是各的 —— 不能混着看。
 const balance = await call("GetBalance");
-const balances: any[] = Array.isArray(balance.body?.balances) ? balance.body.balances : [];
-check("余额答得上来", balance.status === 200);
+const quotas: any[] = Array.isArray(balance.body?.quotas) ? balance.body.quotas : [];
+check("额度答得上来", balance.status === 200);
 check(
-  "每条余额有 upstreamId 与 accountId",
-  balances.every((b) => typeof b.upstreamId === "string" && b.upstreamId.length > 0 && typeof b.accountId === "string" && b.accountId.length > 0),
-  JSON.stringify(balances.slice(0, 2)),
+  "每条额度有 upstreamId 与 accountId",
+  quotas.every((q) => typeof q.upstreamId === "string" && q.upstreamId.length > 0 && typeof q.accountId === "string" && q.accountId.length > 0),
+  JSON.stringify(quotas.slice(0, 2)),
 );
 check(
-  "赠金带着批次与到期时间",
-  balances.every((b) => (b.lots ?? []).every((l: any) => typeof l.id === "string" && l.expiresAt !== undefined)),
-  JSON.stringify(balances.slice(0, 1)),
+  "余额的批次带着到期时间",
+  quotas.every((q) => (q.balance?.lots ?? []).every((l: any) => typeof l.id === "string" && l.expiresAt !== undefined)),
+  JSON.stringify(quotas.slice(0, 1)),
+);
+check(
+  "积分的批次带着到期时间",
+  quotas.every((q) => (q.credits?.lots ?? []).every((l: any) => typeof l.id === "string" && l.expiresAt !== undefined)),
+  JSON.stringify(quotas.slice(0, 1)),
+);
+check(
+  "一条额度不会同时是余额和积分",
+  quotas.every((q) => !(q.balance && q.credits)),
+  JSON.stringify(quotas.filter((q) => q.balance && q.credits)),
 );
 const oneBalance = await call("GetBalance", { upstreamId: "tokenrhythm" });
 check(
-  "余额能按上游筛",
-  Array.isArray(oneBalance.body?.balances) && oneBalance.body.balances.every((b: any) => b.upstreamId === "tokenrhythm"),
-  JSON.stringify(oneBalance.body?.balances?.map((b: any) => b.upstreamId)),
+  "额度能按上游筛",
+  Array.isArray(oneBalance.body?.quotas) && oneBalance.body.quotas.every((q: any) => q.upstreamId === "tokenrhythm"),
+  JSON.stringify(oneBalance.body?.quotas?.map((q: any) => q.upstreamId)),
+);
+check(
+  "TokenRhythm 报的是余额（钱），不是积分",
+  oneBalance.body?.quotas?.every((q: any) => q.balance && !q.credits),
+  JSON.stringify(oneBalance.body?.quotas),
 );
 
 // GetSystemStatus：面板能改的设置是热的，改完就生效，没有待重启的东西。
@@ -501,8 +517,8 @@ check(
 // 套餐额度：只有 MiniMax 有这个。
 check(
   "套餐额度只有 MiniMax 有",
-  balances.every((b: any) => b.tokenPlan === undefined || b.upstreamId === "minimax"),
-  JSON.stringify(balances.map((b: any) => [b.upstreamId, b.tokenPlan !== undefined])),
+  quotas.every((q: any) => q.tokenPlan === undefined || q.upstreamId === "minimax"),
+  JSON.stringify(quotas.map((q: any) => [q.upstreamId, q.tokenPlan !== undefined])),
 );
 
 // 时间：毫秒还是秒。

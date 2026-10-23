@@ -10,15 +10,20 @@ const NEVER = BigInt(Date.UTC(2099, 11, 31))
 const SOON = BigInt(Date.UTC(2030, 0, 15))
 const PAST = BigInt(Date.UTC(2020, 0, 1))
 
-describe('赠金批次', () => {
-  it('把每一笔赠金列出来', () => {
+/**
+ * 积分批次：点数。
+ *
+ * 积分不是钱：表里没有 ¥，也不跟余额加在一起。
+ */
+describe('积分批次', () => {
+  it('把每一笔积分列出来（点数，不是钱）', () => {
     render(
       <CreditLotsTable
         lots={[
           create(CreditLotSchema, {
             id: 'lot-1',
             sourceLabel: '新人活动',
-            remainingCny: 12.5,
+            remaining: 1250,
             expiresAt: SOON,
             status: 'active',
           }),
@@ -28,7 +33,9 @@ describe('赠金批次', () => {
 
     expect(screen.getByText('lot-1')).toBeInTheDocument()
     expect(screen.getByText('新人活动')).toBeInTheDocument()
-    expect(screen.getByText('¥12.50')).toBeInTheDocument()
+    // 点数就是点数，不写成钱。
+    expect(screen.getByText('1,250 点')).toBeInTheDocument()
+    expect(screen.queryByText(/¥/)).not.toBeInTheDocument()
     const row = screen.getByText('lot-1').closest('tr')
     expect(row?.textContent).toContain('2030')
   })
@@ -40,7 +47,7 @@ describe('赠金批次', () => {
           create(CreditLotSchema, {
             id: 'lot-never',
             sourceLabel: '永久赠金',
-            remainingCny: 100,
+            remaining: 100,
             expiresAt: NEVER,
             status: 'active',
           }),
@@ -63,7 +70,7 @@ describe('赠金批次', () => {
         lots={[
           create(CreditLotSchema, {
             id: 'lot-past',
-            remainingCny: 1,
+            remaining: 1,
             expiresAt: PAST,
             status: 'expired',
           }),
@@ -76,6 +83,6 @@ describe('赠金批次', () => {
 
   it('没有批次的时候给空状态', () => {
     render(<CreditLotsTable lots={[]} />)
-    expect(screen.getByText('没有赠金批次')).toBeInTheDocument()
+    expect(screen.getByText('没有积分批次')).toBeInTheDocument()
   })
 })

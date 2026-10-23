@@ -47,8 +47,8 @@ message Upstream {
   int32 model_count = 5;
   // 凭据的状态摘要。
   CredentialStatus credential = 6;
-  // 余额的摘要，没有余额的上游不带这个。
-  BalanceSummary balance = 7;
+  // 额度摘要：余额 / 积分 / 套餐额度，有哪个是哪个。
+  UpstreamQuota quota = 7;
   // 上游的地址。
   string base_url = 8;
   // 区域：cn / global。
@@ -88,22 +88,72 @@ message CredentialStatus {
   int32 generation = 8;
 }
 
-// 余额。
-message BalanceSummary {
-  // 这个余额属于哪个上游。
+// 一个上游账号上的额度。
+//
+// 三样东西，各是各的，**不能相加**：
+//
+//   balance     余额（钱）。只有中转站这类平台才有。
+//   credits     积分（点数）。Qoder、WorkBuddy、SenseNova 这类。
+//   token_plan  套餐额度（按窗口的百分比）。MiniMax 的 coding plan。
+//
+// 后端把能拿到的都放上来，前端按有哪个显示哪个：有 token_plan 就显示
+// token_plan，没有就显示积分，有余额就另外显示余额。
+message UpstreamQuota {
+  // 这个额度属于哪个上游。
   string upstream_id = 1;
   // 属于哪个账号。同一个上游可能有多个账号（TokenRhythm 每个租户一条）。
   string account_id = 2;
-  double available_cny = 3;
-  string currency = 4;
+  // 余额（钱）。
+  BalanceSummary balance = 3;
+  // 积分（点数）。
+  CreditSummary credits = 4;
+  // 套餐额度（按窗口的百分比）。
+  TokenPlan token_plan = 5;
+}
+
+// 余额：钱。同一平台的多个账号可以合并。
+message BalanceSummary {
+  double available_cny = 1;
+  string currency = 2;
   // 每一笔赠金。
-  repeated CreditLot lots = 5;
+  repeated BalanceLot lots = 3;
   // 平台给的到期指针：最早到期的赠金是哪一批。
   // Unix 毫秒。
-  int64 next_expiry_at = 6;
-  double expiring_cny = 7;
-  // 套餐额度：几个窗口，每个窗口剩多少。没有套餐的账号不带这个。
-  TokenPlan token_plan = 8;
+  int64 next_expiry_at = 4;
+  double expiring_cny = 5;
+}
+
+// 余额里的一笔：赠金、充值本金。
+message BalanceLot {
+  string id = 1;
+  string source_label = 2;
+  double remaining_cny = 3;
+  // Unix 毫秒。
+  int64 expires_at = 4;
+  // 平台用 2099-12-31 标记「永不过期」，这里原样透出。
+  string status = 5;
+}
+
+// 积分：点数。跟余额不是一回事。
+message CreditSummary {
+  // 总额、已用、还剩。剩下的是权威的数，前两个由平台报。
+  double total = 1;
+  double used = 2;
+  double remaining = 3;
+  // 明细：套餐额度、加油包、每日签到……
+  repeated CreditLot lots = 4;
+  // 一句话说明，比如「每天 100 点，连签 3 天」。
+  string note = 5;
+}
+
+// 积分里的一笔。
+message CreditLot {
+  string id = 1;
+  string source_label = 2;
+  double remaining = 3;
+  // Unix 毫秒。
+  int64 expires_at = 4;
+  string status = 5;
 }
 
 // 套餐额度的一个窗口。
@@ -121,16 +171,6 @@ message TokenPlanWindow {
 // 套餐额度。
 message TokenPlan {
   repeated TokenPlanWindow windows = 1;
-}
-
-// 一笔赠金。
-message CreditLot {
-  string id = 1;
-  string source_label = 2;
-  double remaining_cny = 3;
-  int64 expires_at = 4;
-  // 平台用 2099-12-31 标记「永不过期」，这里原样透出。
-  string status = 5;
 }
 
 // ── 系统 ──────────────────────────────────────────────────────────────────
@@ -231,8 +271,8 @@ message Account {
   string status = 4;
   int32 credential_count = 5;
   string detail = 6;
-  // 这个账号的余额摘要。没有余额的账号不带这个。
-  BalanceSummary balance = 7;
+  // 这个账号的额度摘要。没有额度的账号不带这个。
+  UpstreamQuota quota = 7;
 }
 
 message ListAccountsRequest {}
@@ -299,7 +339,8 @@ message GetBalanceRequest {
 }
 
 message GetBalanceResponse {
-  repeated BalanceSummary balances = 1;
+  // 每个账号一条。TokenRhythm 一个租户一条，别的上游一条。
+  repeated UpstreamQuota quotas = 1;
 }
 
 // ── 用量 ──────────────────────────────────────────────────────────────────
@@ -535,8 +576,9 @@ message BeginLoginRequest {
   // minimax / qoder / qoder-cn / workbuddy-cn / tokenrhythm / sensenova / intern-ai
   string upstream_id = 1;
   string account_id = 2;
-  // intern-ai：登哪个子站。discovery / chat。空 = 两个都要。
-  string site = 3;
+  // 3 曾是 intern-ai 的子站选择。intern-ai 的两个子站现在共用一个 token，
+  // 登录不再问子站。
+  reserved 3;
 }
 
 message BeginLoginResponse {
@@ -590,8 +632,8 @@ message ExchangeLoginCodeRequest {
   string account_id = 2;
   // 浏览器里拿到的 code。
   string code = 3;
-  // intern-ai：code 是给哪个子站签的。
-  string site = 4;
+  // 4 曾是 intern-ai 的子站选择，现在没有了。
+  reserved 4;
 }
 
 message ExchangeLoginCodeResponse {
@@ -605,7 +647,8 @@ message ImportLoginTokenRequest {
   string account_id = 2;
   // intern-ai 的 uaa-token。
   string token = 3;
-  string site = 4;
+  // 4 曾是 intern-ai 的子站选择，现在没有了。
+  reserved 4;
 }
 
 message ImportLoginTokenResponse {

@@ -9,10 +9,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatCny, formatDate, isFarFuture, remainingDays } from '@/lib/format'
+import { formatDate, formatPoints, isFarFuture, remainingDays } from '@/lib/format'
 
 /**
- * 赠金批次。
+ * 积分批次。
+ *
+ * 积分是点数，不是钱：这里不写 ¥，也不跟余额加在一起。
  *
  * 到期时间原样显示平台的日期：平台用 2099-12-31 标记「永不过期」，这里
  * 不翻译它。倒计时那一列对这种批次给「—」。
@@ -21,8 +23,8 @@ export function CreditLotsTable({ lots }: { lots: CreditLot[] }) {
   if (lots.length === 0) {
     return (
       <EmptyState
-        title='没有赠金批次'
-        description='平台没有报任何一笔赠金。'
+        title='没有积分批次'
+        description='平台没有报任何一笔积分。'
       />
     )
   }
@@ -59,7 +61,7 @@ function CreditLotRow({ lot }: { lot: CreditLot }) {
       </TableCell>
       <TableCell>{lot.sourceLabel || '—'}</TableCell>
       <TableCell className='text-right font-mono'>
-        {formatCny(lot.remainingCny)}
+        {formatPoints(lot.remaining)} 点
       </TableCell>
       <TableCell className='font-mono text-xs'>
         {formatDate(lot.expiresAt)}

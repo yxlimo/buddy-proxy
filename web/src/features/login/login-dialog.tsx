@@ -23,13 +23,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   useCancelLogin,
   useExchangeLoginCode,
   useImportLoginToken,
@@ -366,6 +359,11 @@ function PasswordForm({
   const [remember, setRemember] = useState(false)
   const login = useLoginWithPassword()
 
+  // SenseNova 的 cookie 就是会话本身：留不留密码都一样用得上，后端那边
+  // 登录完总是把存的密码擦掉、只留 cookie。所以这个上游不给「记住密码」
+  // 这个选项 —— 给了一个说了也不算的选项。
+  const canRemember = upstreamId !== 'sensenova'
+
   return (
     <form
       className='grid gap-3'
@@ -397,13 +395,15 @@ function PasswordForm({
           onChange={(event) => setPassword(event.target.value)}
         />
       </div>
-      <label className='flex items-center gap-2 text-sm'>
-        <Checkbox
-          checked={remember}
-          onCheckedChange={(checked) => setRemember(checked === true)}
-        />
-        记住密码吗（记住的话密码会存进网关的 secrets）
-      </label>
+      {canRemember ? (
+        <label className='flex items-center gap-2 text-sm'>
+          <Checkbox
+            checked={remember}
+            onCheckedChange={(checked) => setRemember(checked === true)}
+          />
+          记住密码吗（记住的话密码会存进网关的 secrets）
+        </label>
+      ) : null}
       <Button type='submit' disabled={login.isPending} className='w-fit'>
         {login.isPending ? <Loader2 className='animate-spin' /> : <KeyRound />}
         登录
@@ -429,7 +429,6 @@ function TokenForm({
   onDone: () => void
 }) {
   const [token, setToken] = useState('')
-  const [site, setSite] = useState('discovery')
   const importToken = useImportLoginToken()
 
   return (
@@ -437,7 +436,7 @@ function TokenForm({
       className='grid gap-3'
       onSubmit={(event) => {
         event.preventDefault()
-        importToken.mutate({ upstreamId, accountId, token, site }, { onSuccess: onDone })
+        importToken.mutate({ upstreamId, accountId, token }, { onSuccess: onDone })
       }}
     >
       <div className='grid gap-1.5'>
@@ -465,19 +464,6 @@ function TokenForm({
           </li>
           <li>3. 把值贴到下面，点「导入」。</li>
         </ol>
-      </div>
-
-      <div className='grid gap-1.5'>
-        <Label htmlFor='login-site'>子站</Label>
-        <Select value={site} onValueChange={setSite}>
-          <SelectTrigger id='login-site'>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value='discovery'>discovery（问答）</SelectItem>
-            <SelectItem value='chat'>chat（对话）</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
 
       <div className='grid gap-1.5'>
@@ -515,7 +501,6 @@ function CodeForm({
   onDone: () => void
 }) {
   const [code, setCode] = useState('')
-  const [site, setSite] = useState('discovery')
   const exchange = useExchangeLoginCode()
 
   return (
@@ -523,7 +508,7 @@ function CodeForm({
       className='grid gap-3'
       onSubmit={(event) => {
         event.preventDefault()
-        exchange.mutate({ upstreamId, accountId, code, site }, { onSuccess: onDone })
+        exchange.mutate({ upstreamId, accountId, code }, { onSuccess: onDone })
       }}
     >
       <div className='grid gap-1.5'>
@@ -537,19 +522,6 @@ function CodeForm({
           {session.authorizationUrl}
           <ExternalLink className='size-3 shrink-0' />
         </a>
-      </div>
-
-      <div className='grid gap-1.5'>
-        <Label htmlFor='login-code-site'>子站</Label>
-        <Select value={site} onValueChange={setSite}>
-          <SelectTrigger id='login-code-site'>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value='discovery'>discovery（问答）</SelectItem>
-            <SelectItem value='chat'>chat（对话）</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
 
       <div className='grid gap-1.5'>

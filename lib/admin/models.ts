@@ -304,7 +304,7 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
         id: m.id,
         displayName: m.displayName,
         contextWindow: m.contextWindow ?? 0,
-        maxOutputTokens: m.maxOutputTokens,
+        maxOutputTokens: m.maxOutputTokens ?? 0,
         reasoning: m.reasoning,
         toolCall: m.toolCall,
         effortOptions: m.effortOptions ?? [],

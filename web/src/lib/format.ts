@@ -56,6 +56,36 @@ export function formatCny(value: number | undefined | null): string {
   return `¥${value.toFixed(2)}`
 }
 
+/**
+ * 钱，带币种。
+ *
+ * 余额不一定是人民币：是 CNY 就写 ¥，别的币种就把币种写出来。不猜汇率，
+ * 也不换算 —— 换算出来的数是编的。
+ */
+export function formatMoney(
+  value: number | undefined | null,
+  currency?: string | null
+): string {
+  const code = (currency ?? '').trim().toUpperCase()
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return code && code !== 'CNY' ? `${code} 0.00` : '¥0.00'
+  }
+  if (!code || code === 'CNY') return `¥${value.toFixed(2)}`
+  return `${code} ${value.toFixed(2)}`
+}
+
+/**
+ * 积分（点数）。
+ *
+ * 点数一般是整数，小数就保留两位。跟钱分开：点数不是钱，不加也不减。
+ */
+export function formatPoints(value: number | undefined | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return '0'
+  }
+  return Number.isInteger(value) ? numberFormat.format(value) : value.toFixed(2)
+}
+
 export function formatTokens(value: bigint | number | undefined | null): string {
   return formatCount(value)
 }
