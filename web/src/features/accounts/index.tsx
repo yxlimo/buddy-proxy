@@ -103,7 +103,7 @@ export function AccountsPage() {
   return (
     <PageShell
       title='账号与凭据'
-      description='账号是上游的一个登录身份，凭据归属于账号（refresh token、API key、cookie 等）。'
+      description='账号是 Provider 的一个登录身份，凭据归属于账号（refresh token、API key、cookie 等）。'
     >
 
       <Card className='mb-4'>
@@ -119,7 +119,7 @@ export function AccountsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>账号</TableHead>
-                  <TableHead>上游</TableHead>
+                  <TableHead>Provider</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className='text-right'>凭据</TableHead>
                   <TableHead className='text-right'>额度</TableHead>

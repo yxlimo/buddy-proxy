@@ -108,12 +108,25 @@ export function usageSummary(
     agents.set(event.agent, agent);
   }
 
-  const byUpstream = [...upstreams.entries()].map(([key, summary]) => ({ key, summary }));
-  const byModel = [...models.entries()].map(([key, summary]) => ({ key, summary }));
+  // 从大到小：令牌多的排前面。天数那一份按日期排 —— 它是一条时间线。
+  const byTokens = (a: UsageBucketView, b: UsageBucketView): number => {
+    const at = Number(a.summary?.promptTokens ?? 0n) + Number(a.summary?.completionTokens ?? 0n);
+    const bt = Number(b.summary?.promptTokens ?? 0n) + Number(b.summary?.completionTokens ?? 0n);
+    if (bt !== at) return bt - at;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  };
+  const byUpstream = [...upstreams.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
+  const byModel = [...models.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
   const byDay = [...days.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort((a, b) => (a.key < b.key ? -1 : 1));
-  const byAgent = [...agents.entries()].map(([key, summary]) => ({ key, summary }));
+  const byAgent = [...agents.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
   return { total, byUpstream, byModel, byDay, byAgent };
 }
 

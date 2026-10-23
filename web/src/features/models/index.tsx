@@ -126,7 +126,7 @@ export function PublishedModelsPage() {
   return (
     <PageShell
       title='主路由模型'
-      description='主路由：对外公布一个模型 id，可挂载多个上游模型，客户端仅看到公布的这一层。'
+      description='主路由：对外公布一个模型 id，可挂载多个 Provider 的模型，客户端仅看到公布的这一层。'
       actions={
         <Button onClick={openCreate}>
           <Plus />
@@ -164,7 +164,7 @@ export function PublishedModelsPage() {
                   <TableHead>显示名</TableHead>
                   <TableHead>策略</TableHead>
                   <TableHead>上下文 / 输出 token</TableHead>
-                  <TableHead>上游目标</TableHead>
+                  <TableHead>Provider 目标</TableHead>
                   <TableHead className='text-right'>请求</TableHead>
                   <TableHead className='text-right'>更新时间</TableHead>
                   <TableHead className='text-right'>操作</TableHead>
@@ -188,7 +188,7 @@ export function PublishedModelsPage() {
                           {model.published ? null : (
                             <Badge
                               variant='outline'
-                              title='根路由当前未公布该模型。发布操作无法改变这一点，需要先启用并登录对应上游。'
+                              title='根路由当前未公布该模型。发布操作无法改变这一点，需要先启用并登录对应 Provider。'
                             >
                               {`未公布：${UNPUBLISHED_REASON_LABELS[model.unpublishedReason] ?? '原因未知'}`}
                             </Badge>
@@ -203,11 +203,16 @@ export function PublishedModelsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {/* 不给就是继承目标的值 */}
+                      {/* 后端给的是继承之后的值：没填就是跟着目标走，
+                          目标之间不一致时取最小的那个。 */}
                       <span className='font-mono text-xs'>
-                        {model.contextWindow ?? '继承'}
+                        {model.contextWindow
+                          ? formatCount(model.contextWindow)
+                          : '继承'}
                         {' / '}
-                        {model.maxOutputTokens ?? '继承'}
+                        {model.maxOutputTokens
+                          ? formatCount(model.maxOutputTokens)
+                          : '继承'}
                       </span>
                     </TableCell>
                     <TableCell>

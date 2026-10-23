@@ -188,14 +188,14 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "七个上游都在",
-  list(status.body?.upstreams).length === 7,
+  "八个上游都在",
+  list(status.body?.upstreams).length === 8,
   String(status.body?.upstreams?.length),
 );
 check(
   "上游的名字与 id 都对",
   list(status.body?.upstreams).every((u: any) => typeof u.id === "string" && typeof u.label === "string") &&
-    ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"].every((id) =>
+    ["minimax", "minimax-api", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"].every((id) =>
       list(status.body?.upstreams).some((u: any) => u.id === id),
     ),
   JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
@@ -206,7 +206,7 @@ console.log("");
 console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
-check("上游列表有七个", list(upstreams.body?.upstreams).length === 7, String(list(upstreams.body?.upstreams).length));
+check("上游列表有八个", list(upstreams.body?.upstreams).length === 8, String(list(upstreams.body?.upstreams).length));
 
 const config = await call("ListConfig", {}, token);
 check("配置项列出来了", Array.isArray(config.body?.items) && config.body.items.length > 0);

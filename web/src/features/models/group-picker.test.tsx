@@ -134,7 +134,7 @@ describe('上游组下拉', () => {
     })
 
     expect(
-      await screen.findByText(/先在上游页登录并打开一个上游/)
+      await screen.findByText(/先在 Provider 页登录并打开一个 Provider/)
     ).toBeInTheDocument()
     expect(screen.getByText('Qoder 中国区：开关关着')).toBeInTheDocument()
     expect(screen.getByText('MiniMax Code：没登录')).toBeInTheDocument()

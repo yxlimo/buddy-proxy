@@ -18,6 +18,7 @@ export type AggregateGroup =
   | "qoder-cn"
   | "workbuddy-cn"
   | "minimax"
+  | "minimax-api"
   | "tokenrhythm"
   | "sensenova"
   | "intern-ai";

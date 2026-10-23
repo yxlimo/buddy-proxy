@@ -16,6 +16,12 @@ import {
   reloadConfig,
 } from "../config.ts";
 import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
+import {
+  MINIMAX_API_MODELS,
+  miniMaxApiBase,
+  miniMaxApiTenantPlans,
+  miniMaxApiTenants,
+} from "../minimax/api.ts";
 import { credentialStatus, readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
 import { MINIMAX_UPSTREAM } from "../minimax/transport.ts";
@@ -56,6 +62,7 @@ import { loginActivity } from "./login.ts";
 import {
   internAiCatalogModels,
   minimaxCatalogModels,
+  miniMaxApiCatalogModels,
   qoderCatalogModels,
   senseNovaCatalogModels,
   tokenRhythmCatalogModels,
@@ -66,6 +73,7 @@ import {
 /** 上游的 id。跟聚合路由里的分组名一致。 */
 export type UpstreamId =
   | "minimax"
+  | "minimax-api"
   | "qoder"
   | "qoder-cn"
   | "workbuddy-cn"
@@ -76,6 +84,7 @@ export type UpstreamId =
 /** 上游的开关对应的配置键。 */
 export const UPSTREAM_FLAG_KEYS: Record<UpstreamId, string> = {
   minimax: "MINIMAX_CODE",
+  "minimax-api": "MINIMAX_API",
   qoder: "QODER_GLOBAL",
   "qoder-cn": "QODER_CN",
   "workbuddy-cn": "WORKBUDDY_CN",
@@ -104,6 +113,7 @@ export function upstreamEnabled(id: UpstreamId): boolean {
 /** 上游的名字，给人看的。 */
 export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
   minimax: "MiniMax Code",
+  "minimax-api": "MiniMax 开放平台",
   qoder: "Qoder（全球区）",
   "qoder-cn": "Qoder（中国区）",
   "workbuddy-cn": "WorkBuddy（中国区）",
@@ -115,6 +125,7 @@ export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
 /** 所有上游，顺序就是面板里显示的顺序。 */
 export const UPSTREAM_IDS: UpstreamId[] = [
   "minimax",
+  "minimax-api",
   "qoder",
   "qoder-cn",
   "workbuddy-cn",
@@ -165,6 +176,8 @@ export function upstreamBaseUrl(id: UpstreamId): string {
   switch (id) {
     case "minimax":
       return MINIMAX_UPSTREAM.replace(/\/messages$/, "");
+    case "minimax-api":
+      return miniMaxApiBase();
     case "qoder":
       return QODER_ENDPOINTS.global.infer.replace(/\/model\/v1\/chat\/completions$/, "");
     case "qoder-cn":
@@ -190,6 +203,8 @@ export function upstreamRegion(id: UpstreamId): string {
   switch (id) {
     case "minimax":
       return MINIMAX_REGION;
+    case "minimax-api":
+      return "cn";
     case "qoder":
       return "global";
     case "qoder-cn":
@@ -295,6 +310,9 @@ export function catalogGroups(): CatalogGroup[] {
   }
   const minimax = minimaxVisible();
   if (minimax.length) groups.push({ group: "minimax", models: minimaxCatalogModels(minimax) });
+  if (upstreamEnabled("minimax-api") && miniMaxApiTenants().length) {
+    groups.push({ group: "minimax-api", models: miniMaxApiCatalogModels(MINIMAX_API_MODELS) });
+  }
   if (upstreamEnabled("tokenrhythm")) groups.push({ group: "tokenrhythm", models: tokenRhythmCatalogModels() });
   const senseNova = senseNovaModels();
   if (upstreamEnabled("sensenova") && senseNova.length) {
@@ -312,6 +330,8 @@ export function upstreamModelCount(id: UpstreamId): number {
   switch (id) {
     case "minimax":
       return minimaxVisible().length;
+    case "minimax-api":
+      return upstreamEnabled("minimax-api") ? MINIMAX_API_MODELS.length : 0;
     case "qoder":
       return qoderVisible("global").length;
     case "qoder-cn":
@@ -340,6 +360,8 @@ export function upstreamModelCount(id: UpstreamId): number {
 export interface HealthSnapshot {
   qoder: Record<string, { account: unknown; credits: unknown }>;
   minimax: { balance: unknown; tokenPlan: unknown };
+  /** MiniMax 开放平台：每个租户一份套餐额度。 */
+  minimaxApi: { tenants: unknown };
   workbuddy: { credits: unknown };
   tokenrhythm: { tenants: unknown };
   /** SenseNova 的积分池。 */
@@ -435,6 +457,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
   const snapshot: HealthSnapshot = {
     qoder,
     minimax: { balance: await miniMaxBalance(), tokenPlan: await miniMaxTokenPlan() },
+    minimaxApi: { tenants: await miniMaxApiTenantPlans() },
     workbuddy: { credits: await fetchWorkBuddyCredits() },
     tokenrhythm: { tenants: await tokenRhythmStatuses() },
     sensenova: { pools: await senseNovaPools() },
@@ -520,6 +543,8 @@ export function upstreamCredential(id: UpstreamId): CredentialView {
   switch (id) {
     case "minimax":
       return minimaxCredential();
+    case "minimax-api":
+      return miniMaxApiCredential();
     case "qoder":
       return qoderCredential("global");
     case "qoder-cn":
@@ -540,6 +565,17 @@ function fromUpstreamStatus(raw: Record<string, unknown>, kind: string, secretId
   const status = String(raw.status ?? "missing");
   const session = getSecret<any>(secretId);
   const token = String(session?.accessToken ?? "");
+  const warning = Boolean(raw.warning);
+  const remainingSec = Number(raw.remainingSec ?? 0);
+  // 告警要说清楚是什么告警。「快到期了」是常态（令牌一小时内就换一次），
+  // 说成「状态异常」会让人以为出了故障。
+  let detail = String(raw.error ?? raw.hint ?? "");
+  if (!detail && warning) {
+    detail =
+      remainingSec > 0
+        ? `令牌还有 ${Math.round(remainingSec / 60)} 分钟到期，会自动刷新`
+        : "令牌即将到期，会自动刷新";
+  }
   return {
     kind,
     // 上游的 "anonymous" 是「没登录」的意思（qoder、workbuddy、minimax 都
@@ -547,9 +583,9 @@ function fromUpstreamStatus(raw: Record<string, unknown>, kind: string, secretId
     status: status === "anonymous" ? CredentialState.MISSING : credentialState(status),
     fingerprint: fingerprintOf(token),
     expiresAt: raw.expiresAt ? Date.parse(String(raw.expiresAt)) : 0,
-    remainingSec: Number(raw.remainingSec ?? 0),
-    warning: Boolean(raw.warning),
-    detail: String(raw.error ?? raw.hint ?? ""),
+    remainingSec,
+    warning,
+    detail,
     generation: Number(raw.generation ?? 0),
   };
 }
@@ -560,6 +596,37 @@ function minimaxCredential(): CredentialView {
   const view = fromUpstreamStatus(raw, "session", "session:minimax");
   if (raw.mode === "file") view.detail = view.detail || "读的是桌面端的 store，刷新由桌面端负责";
   return view;
+}
+
+/**
+ * MiniMax 开放平台的凭据。
+ *
+ * 它一把 key 就是一个租户：有几把 key 就是几个租户，一个都不剩就是没配。
+ */
+function miniMaxApiCredential(): CredentialView {
+  const tenants = miniMaxApiTenants();
+  if (!tenants.length) {
+    return {
+      kind: "api_key",
+      status: CredentialState.MISSING,
+      fingerprint: "",
+      expiresAt: 0,
+      remainingSec: 0,
+      warning: false,
+      detail: "未配置 MiniMax 开放平台的 API Key",
+      generation: 0,
+    };
+  }
+  return {
+    kind: "api_key",
+    status: CredentialState.AUTHENTICATED,
+    fingerprint: tokenFingerprint(tenants[0].key),
+    expiresAt: 0,
+    remainingSec: 0,
+    warning: false,
+    detail: tenants.length === 1 ? "1 个租户" : `${tenants.length} 个租户`,
+    generation: 0,
+  };
 }
 
 /** Qoder 的凭据。 */
@@ -771,6 +838,8 @@ export async function upstreamQuotas(id: UpstreamId, fresh = false): Promise<Quo
   switch (id) {
     case "minimax":
       return minimaxQuotas(snapshot);
+    case "minimax-api":
+      return miniMaxApiQuotas(snapshot);
     case "qoder":
       return qoderQuotas(snapshot, "global");
     case "qoder-cn":
@@ -836,6 +905,8 @@ function upstreamQuotasCached(id: UpstreamId): QuotaView[] {
   switch (id) {
     case "minimax":
       return minimaxQuotas(snapshot);
+    case "minimax-api":
+      return miniMaxApiQuotas(snapshot);
     case "qoder":
       return qoderQuotas(snapshot, "global");
     case "qoder-cn":
@@ -857,6 +928,21 @@ function upstreamQuotasCached(id: UpstreamId): QuotaView[] {
  * 它的账户余额（钱）不在这儿报 —— 这个网关花的是 coding plan，钱和积分是
  * 两回事，混在一起会让人以为套餐能拿钱买。
  */
+/**
+ * MiniMax 开放平台的额度。
+ *
+ * 一个 key 就是一份套餐，所以每个租户一条：套餐额度是百分比，账户余额不算
+ * （那是另一件事）。
+ */
+function miniMaxApiQuotas(snapshot: HealthSnapshot): QuotaView[] {
+  const tenants = (snapshot.minimaxApi?.tenants ?? []) as any[];
+  return tenants.map((t: any) => ({
+    upstreamId: "minimax-api",
+    accountId: `minimax-api:${t.index}`,
+    ...(t.plan ? { tokenPlan: t.plan } : {}),
+  }));
+}
+
 function minimaxQuotas(snapshot: HealthSnapshot): QuotaView[] {
   const balance = snapshot.minimax?.balance as any;
   const plan = minimaxTokenPlan(snapshot);
@@ -1169,6 +1255,13 @@ export function outOfCredits(id: UpstreamId): boolean {
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return false;
   switch (id) {
+    case "minimax-api": {
+      // 开放平台用的也是 coding plan：看窗口，不看账户余额。
+      const tenants = (snapshot.minimaxApi?.tenants ?? []) as any[];
+      const windows = tenants.flatMap((t: any) => ((t.plan?.windows ?? []) as any[]));
+      if (!windows.length) return false;
+      return windows.some((w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0);
+    }
     case "minimax": {
       // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑
       // （实测过：余额 0，plan 99%，请求正常）。看 plan 的窗口。

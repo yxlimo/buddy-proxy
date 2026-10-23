@@ -13,7 +13,14 @@ export { GROUP_PREFIX, UPSTREAM_GROUPS };
 export type { UpstreamGroup };
 
 export interface Route {
-  upstream: "qoder" | "minimax" | "workbuddy" | "tokenrhythm" | "sensenova" | "intern-ai";
+  upstream:
+    | "qoder"
+    | "minimax"
+    | "minimax-api"
+    | "workbuddy"
+    | "tokenrhythm"
+    | "sensenova"
+    | "intern-ai";
   /** The model as the server names it: prefixed, e.g. `qoder-cn/glm-5.3`. */
   model: string;
   /** Which Qoder region to talk to. Unset for MiniMax. */
@@ -31,6 +38,7 @@ export interface Route {
 export interface RoutingContext {
   enabled: {
     minimax: boolean;
+    minimaxApi: boolean;
     qoderGlobal: boolean;
     qoderCn: boolean;
     workbuddyCn: boolean;
@@ -44,6 +52,7 @@ export interface RoutingContext {
     qoderCn: Set<string>;
     qoderHidden: Set<string>;
     minimax: Set<string>;
+    minimaxApi: Set<string>;
     workbuddy: Set<string>;
     tokenrhythm: Set<string>;
     sensenova: Set<string>;
@@ -82,6 +91,10 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
     if (!ctx.enabled.minimax) throw disabledUpstream("minimax");
     return { upstream: "minimax", model: raw };
   }
+  if (raw.startsWith("minimax-api/")) {
+    if (!ctx.enabled.minimaxApi) throw disabledUpstream("minimax-api");
+    return { upstream: "minimax-api", model: raw };
+  }
   if (ctx.ids.tokenrhythm.has(raw)) {
     if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
     return { upstream: "tokenrhythm", model: `tokenrhythm/${raw}` };
@@ -105,7 +118,7 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
   if (ctx.ids.qoderHidden.has(raw)) throw unavailableQoderModel(raw, ctx);
   throw new AuthError(
     `unknown model "${raw}"`,
-    `这个模型不在目录里。用 qoder/、workbuddy-cn/、minimax/ 或 tokenrhythm/ 前缀显式指定，例如 qoder/auto、workbuddy-cn/glm-5.3、minimax/MiniMax-M3、tokenrhythm/deepseek-v4.1-flash-1017。`,
+    `这个模型不在目录里。用 qoder/、workbuddy-cn/、minimax/、minimax-api/ 或 tokenrhythm/ 前缀显式指定，例如 qoder/auto、workbuddy-cn/glm-5.3、minimax/MiniMax-M3、tokenrhythm/deepseek-v4.1-flash-1017。`,
     400,
   );
 }
@@ -147,6 +160,18 @@ export function routeInGroup(group: UpstreamGroup, id: string, ctx: RoutingConte
       }
       // The client catalog's id goes upstream, not the agent's spelling of it.
       return { upstream: "minimax", model: `minimax/${canonical}` };
+    }
+    case "minimax-api": {
+      if (!ctx.enabled.minimaxApi) throw disabledUpstream("minimax-api");
+      const canonical = matchMinimaxModel(id, ctx.ids.minimaxApi);
+      if (!canonical) {
+        throw new AuthError(
+          `unknown model "${id}"`,
+          `MiniMax 开放平台没有这个模型。可用：${[...ctx.ids.minimaxApi].join("、")}。`,
+          400,
+        );
+      }
+      return { upstream: "minimax-api", model: `minimax-api/${canonical}` };
     }
     case "sensenova":
       return senseNovaRoute(id, ctx);
@@ -227,6 +252,7 @@ function workbuddyRoute(id: string, ctx: RoutingContext): Route {
 export function disabledUpstream(
   which:
     | "minimax"
+    | "minimax-api"
     | "qoder-global"
     | "qoder-cn"
     | "workbuddy-cn"
@@ -237,7 +263,9 @@ export function disabledUpstream(
   const flag =
     which === "minimax"
       ? "MINIMAX_CODE"
-      : which === "qoder-cn"
+      : which === "minimax-api"
+        ? "MINIMAX_API"
+        : which === "qoder-cn"
         ? "QODER_CN"
         : which === "workbuddy-cn"
           ? "WORKBUDDY_CN"
@@ -251,7 +279,9 @@ export function disabledUpstream(
   const what =
     which === "minimax"
       ? "MiniMax Code"
-      : which === "qoder-cn"
+      : which === "minimax-api"
+        ? "MiniMax 开放平台"
+        : which === "qoder-cn"
         ? "Qoder 中国区"
         : which === "workbuddy-cn"
           ? "WorkBuddy 中国区"

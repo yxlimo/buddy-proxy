@@ -237,7 +237,7 @@ export function ModelDialog({
               {basicMissing ? <RequiredDot /> : null}
             </TabsTrigger>
             <TabsTrigger value='targets'>
-              上游目标
+              Provider 目标
               {targetsMissing ? <RequiredDot /> : null}
             </TabsTrigger>
           </TabsList>
@@ -405,7 +405,7 @@ export function ModelDialog({
           <TabsContent value='targets' className='grid gap-3'>
             {targetsMissing ? (
               <p className='text-xs text-destructive'>
-                至少要有一个填全的目标：上游组和上游模型 id 都要填。
+                至少要有一个填全的目标：Provider 组和上游模型 id 都要填。
               </p>
             ) : null}
             {draft.targets.map((target, index) => (
@@ -414,7 +414,7 @@ export function ModelDialog({
                 className='grid gap-2 rounded-lg border p-3 sm:grid-cols-2'
               >
                 <div className='grid gap-2'>
-                  <Label htmlFor={`target-group-${index}`}>上游组</Label>
+                  <Label htmlFor={`target-group-${index}`}>Provider 组</Label>
                   <GroupPicker
                     id={`target-group-${index}`}
                     value={target.groupName}
@@ -458,7 +458,7 @@ export function ModelDialog({
                 ) : null}
                 {!targetFilled(target) ? (
                   <p className='text-xs text-destructive sm:col-span-2'>
-                    这一行还没填全：上游组和上游模型 id 都要填。
+                    这一行还没填全：Provider 组和上游模型 id 都要填。
                   </p>
                 ) : null}
                 <div className='flex items-center justify-between gap-2 sm:col-span-2'>

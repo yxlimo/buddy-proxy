@@ -25,3 +25,6 @@ tools/
 # The panel's dependencies and build output
 web/node_modules/
 web/dist/
+
+# 这台机器专用的 mise 任务
+mise.local.toml

@@ -56,7 +56,7 @@ function upstreamHandlers() {
 
 /** 在组下拉里选一个上游组。 */
 async function pickGroup(user: ReturnType<typeof userEvent.setup>) {
-  const trigger = await screen.findByRole('combobox', { name: '上游组' })
+  const trigger = await screen.findByRole('combobox', { name: 'Provider 组' })
   await waitFor(() => {
     expect(trigger).toBeEnabled()
   })
@@ -77,7 +77,7 @@ describe('模型保存失败的时候', () => {
       SavePublishedModel: () =>
         create(SavePublishedModelResponseSchema, {
           ok: false,
-          message: '模型至少要有一个上游',
+          message: '模型至少要有一个 Provider',
         }),
     })
 
@@ -86,7 +86,7 @@ describe('模型保存失败的时候', () => {
     await user.click(await screen.findByRole('button', { name: '新建' }))
     await user.type(screen.getByLabelText('对外 id'), 'buddy-max')
 
-    await user.click(screen.getByRole('tab', { name: '上游目标' }))
+    await user.click(screen.getByRole('tab', { name: 'Provider 目标' }))
     await pickGroup(user)
     await user.type(screen.getByLabelText('上游模型 id'), 'claude-sonnet-4')
 
@@ -94,7 +94,7 @@ describe('模型保存失败的时候', () => {
 
     await waitFor(
       () => {
-        expect(toastError).toHaveBeenCalledWith('模型至少要有一个上游')
+        expect(toastError).toHaveBeenCalledWith('模型至少要有一个 Provider')
       },
       // 整套一起跑的时候这个用例偶尔赶不上 5 秒。
       { timeout: 15000 },
@@ -123,7 +123,7 @@ describe('模型保存失败的时候', () => {
     expect(save).toBeDisabled()
 
     // 目标那一页里，没填全的行有行内提示。
-    await user.click(screen.getByRole('tab', { name: '上游目标' }))
+    await user.click(screen.getByRole('tab', { name: 'Provider 目标' }))
     expect(screen.getByText(/这一行还没填全/)).toBeInTheDocument()
 
     // 填了对外 id 还是不够：目标也是空的。
@@ -131,7 +131,7 @@ describe('模型保存失败的时候', () => {
     await user.type(screen.getByLabelText('对外 id'), 'buddy-max')
     expect(save).toBeDisabled()
 
-    await user.click(screen.getByRole('tab', { name: '上游目标' }))
+    await user.click(screen.getByRole('tab', { name: 'Provider 目标' }))
     await pickGroup(user)
     expect(save).toBeDisabled()
 

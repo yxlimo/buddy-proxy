@@ -76,7 +76,7 @@ export function UsagePage() {
   return (
     <PageShell
       title='用量'
-      description='走过的请求：token、耗时与明细。只有真正发到上游的请求计入用量，模型名写错或在路由阶段被拒的请求不计入。'
+      description='走过的请求：token、耗时与明细。只有真正发到 Provider 的请求计入用量，模型名写错或在路由阶段被拒的请求不计入。'
       actions={
         <Select
           value={windowFilter}
@@ -145,7 +145,7 @@ export function UsagePage() {
 
           <div className='grid gap-4 lg:grid-cols-2'>
             <BreakdownCard
-              title='按上游'
+              title='按 Provider'
               buckets={summary.data?.byUpstream ?? []}
             />
             <BreakdownCard title='按模型' buckets={summary.data?.byModel ?? []} />

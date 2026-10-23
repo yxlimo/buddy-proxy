@@ -23,6 +23,13 @@ import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
 import { markTenantOutOfMoney, pickTenants, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
 import {
+  MAX_ATTEMPTS,
+  MiniMaxApiTenantError,
+  miniMaxApiChat,
+  miniMaxApiTenants,
+  nextMiniMaxApiTenant,
+} from "../minimax/api.ts";
+import {
   tokenRhythmChat,
   TokenRhythmBusyError,
   TokenRhythmNoBalanceError,
@@ -434,6 +441,67 @@ export async function toMinimax(
   await deliverAnthropicStream(out, r.body!, dialect, route.label ?? upstreamModel(route), PING_MS, ctx.onUsage);
 }
 
+
+/**
+ * MiniMax 开放平台，按 API Key 分租户。
+ *
+ * 平台说的是 OpenAI 方言，所以 Anthropic 的请求在方言层转过去（跟别的
+ * 上游一样）。租户轮着来：一个 key 的套餐用完了就换下一个。
+ */
+export async function toMiniMaxApi(
+  ctx: UpstreamContext,
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  out: Koa.Context,
+): Promise<void> {
+  const model = upstreamModel(route);
+  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
+  openaiBody.model = model;
+  openaiBody.stream = stream;
+
+  const tenants = miniMaxApiTenants();
+  if (!tenants.length) {
+    throw new AuthError(
+      "no minimax api key is configured",
+      "没有配置 MiniMax 开放平台的 API Key（MINIMAX_API_1_KEY）。",
+      503,
+    );
+  }
+
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const tenant = nextMiniMaxApiTenant(tenants);
+    if (!tenant) break;
+    if (ctx.logRoute) {
+      console.log(`[ROUTE] minimax-api model=${route.model} tenant=${tenant.index} stream=${stream}`);
+    }
+    let response: Response;
+    try {
+      response = await miniMaxApiChat(tenant, openaiBody);
+    } catch (e) {
+      if (e instanceof MiniMaxApiTenantError) {
+        // 这个租户接不了：套餐用完、key 不对、或者被限流。换一个。
+        console.log(`[ROUTE] minimax-api tenant ${tenant.index} cannot serve it: ${e.message}`);
+        lastError = e;
+        continue;
+      }
+      throw e;
+    }
+
+    if (!stream) {
+      const json = await response.json();
+      deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+      return;
+    }
+    await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+    return;
+  }
+
+  const message = lastError instanceof Error ? lastError.message : "没有能用的租户";
+  throw new AuthError("no minimax api tenant can serve the request", message, 503, "api_error");
+}
 
 /**
  * TokenRhythm, the relay station.

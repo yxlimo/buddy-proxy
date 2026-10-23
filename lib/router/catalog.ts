@@ -12,6 +12,7 @@
 import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "../qoder/models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy/models.ts";
 import type { MiniMaxModel } from "../minimax/models.ts";
+import type { MiniMaxApiModel } from "../minimax/api.ts";
 import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
 import type { SenseNovaModel } from "../sensenova/models.ts";
 import type { InternAiCatalogModel } from "../intern-ai/models.ts";
@@ -22,6 +23,7 @@ export type UpstreamGroup =
   | "qoder-cn"
   | "workbuddy-cn"
   | "minimax"
+  | "minimax-api"
   | "tokenrhythm"
   | "sensenova"
   | "intern-ai";
@@ -31,6 +33,7 @@ export const UPSTREAM_GROUPS: UpstreamGroup[] = [
   "qoder-cn",
   "workbuddy-cn",
   "minimax",
+  "minimax-api",
   "tokenrhythm",
   "sensenova",
   "intern-ai",
@@ -42,6 +45,7 @@ export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
   "qoder-cn": "qoder-cn/",
   "workbuddy-cn": "workbuddy-cn/",
   minimax: "minimax/",
+  "minimax-api": "minimax-api/",
   tokenrhythm: "tokenrhythm/",
   sensenova: "sensenova/",
   "intern-ai": "intern-ai/",
@@ -113,6 +117,18 @@ export function minimaxCatalogModels(models: MiniMaxModel[]): CatalogModel[] {
     contextWindow: m.context,
     maxOutputTokens: m.output,
     effortOptions: m.effortOptions,
+  }));
+}
+
+/** MiniMax 开放平台的模型。 */
+export function miniMaxApiCatalogModels(models: MiniMaxApiModel[]): CatalogModel[] {
+  return models.map((m) => ({
+    id: m.id,
+    displayName: m.displayName,
+    reasoning: m.reasoning,
+    toolCall: m.toolCall,
+    contextWindow: m.context,
+    maxOutputTokens: m.output,
   }));
 }
 

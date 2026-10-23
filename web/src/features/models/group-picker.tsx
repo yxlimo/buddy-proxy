@@ -62,7 +62,7 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
         disabled={ready.length === 0}
       >
         <SelectTrigger id={id} className='w-full'>
-          <SelectValue placeholder='选一个上游组' />
+          <SelectValue placeholder='选一个 Provider' />
         </SelectTrigger>
         <SelectContent>
           {stale ? (
@@ -81,15 +81,15 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
 
       {ready.length === 0 ? (
         <p className='text-xs text-muted-foreground'>
-          先在上游页登录并打开一个上游，才有组可以选。
+          先在 Provider 页登录并打开一个 Provider，才有组可以选。
         </p>
       ) : null}
       {stale ? (
         <p className='text-xs text-muted-foreground'>
-          现在选的这个组不能用（上游关着或者没登录），换一个吧。
+          现在选的这个组不能用（Provider 关着或者没登录），换一个吧。
         </p>
       ) : null}
-      {/* 不能用的上游不列，但说清楚为什么。 */}
+      {/* 不能用的 Provider 不列，但说清楚为什么。 */}
       {unusable.length > 0 ? (
         <ul className='space-y-0.5 text-xs text-muted-foreground'>
           {unusable.map((upstream) => (

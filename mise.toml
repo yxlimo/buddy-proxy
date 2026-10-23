@@ -126,7 +126,7 @@ run = "cd web && pnpm typecheck"
 description = "Run the panel's tests"
 run = "cd web && pnpm test"
 
-# ── 发布 ──────────────────────────────────────────────────────────────────
+# ── 构建 ──────────────────────────────────────────────────────────────────
 
 [tasks.build]
 description = "Build the panel and the image"
@@ -135,15 +135,3 @@ depends = ["web.build", "image.build"]
 [tasks."image:build"]
 description = "Build the image that carries the router and the panel"
 run = "podman build --format docker -t localhost/buddy-proxy:latest ."
-
-[tasks.deploy]
-description = "Build the image, ship it to the NAS and reload the service"
-run = "bash tools/deploy-nas.sh"
-
-[tasks."deploy:nobuild"]
-description = "Ship the current image to the NAS as it is"
-run = "bash tools/deploy-nas.sh --no-build"
-
-[tasks.logs]
-description = "Show the service's log on the NAS"
-run = "ssh nas 'cd /vol1/1000/services/buddy-proxy && docker compose logs -f --tail 100'"

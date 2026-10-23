@@ -110,7 +110,7 @@ describe('面板', () => {
       { timeout: 5000 }
     )
     expect(screen.getByText('网关管理面板')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '上游' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Provider' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '配置' })).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: '账号与凭据' })

@@ -18,6 +18,9 @@ services:
       # the ones that are off are not looked at — no credential, no models, and a
       # request for one is refused.
       MINIMAX_CODE: "true"
+      # MiniMax 开放平台：按 API Key 分租户。key 在 .env 里
+      # （MINIMAX_API_1_KEY、MINIMAX_API_2_KEY……）。
+      MINIMAX_API: "true"
       QODER_GLOBAL: "true"
       QODER_CN: "true"
       WORKBUDDY_CN: "true"

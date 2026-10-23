@@ -33,7 +33,7 @@ export function BalancePage() {
       {quotas.length === 0 ? (
         <Card>
           <CardContent className='py-12 text-center text-sm text-muted-foreground'>
-            上游没有报额度。
+            Provider 没有报额度。
           </CardContent>
         </Card>
       ) : (
@@ -42,7 +42,7 @@ export function BalancePage() {
             <Card className='mb-4'>
               <CardHeader>
                 <CardTitle className='text-base'>
-                  {quota.upstreamId || '未知上游'}
+                  {quota.upstreamId || '未知 Provider'}
                   {quota.accountId ? ` · ${quota.accountId}` : ''}
                 </CardTitle>
               </CardHeader>

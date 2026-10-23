@@ -53,22 +53,22 @@ export function UpstreamsPage() {
 
   return (
     <PageShell
-      title='上游'
-      description='每个上游对应一个模拟的桌面客户端（MiniMax Code、Qoder、WorkBuddy、TokenRhythm 等）。开关修改后立即生效。'
+      title='Provider'
+      description='每个 Provider 是一路请求的去处。开关修改后立即生效。'
     >
 
       <Card>
         <CardContent className='px-0'>
           {list.length === 0 ? (
             <EmptyState
-              title='网关未返回任何上游'
-              description='上游开关位于本页，无需前往「配置」页。'
+              title='网关未返回任何 Provider'
+              description='Provider 开关位于本页，无需前往「配置」页。'
             />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>上游</TableHead>
+                  <TableHead>Provider</TableHead>
                   <TableHead>地址</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>凭据</TableHead>
@@ -125,7 +125,7 @@ export function UpstreamsPage() {
                           </span>
                           {upstream.credential.warning ? (
                             <span className='text-xs text-destructive'>
-                              {upstream.credential.detail || '状态异常'}
+                              {upstream.credential.detail || '凭据即将到期'}
                             </span>
                           ) : null}
                         </div>

@@ -98,7 +98,7 @@ export function UsageTable({
       {
         id: 'upstream',
         accessorKey: 'upstreamId',
-        header: '上游',
+        header: 'Provider',
         filterFn: 'equalsString',
         cell: ({ row }) => (
           <span className='text-xs'>{row.original.upstreamId || '—'}</span>
@@ -220,10 +220,10 @@ export function UsageTable({
               }
             >
               <SelectTrigger className='h-8 w-40'>
-                <SelectValue placeholder='全部上游' />
+                <SelectValue placeholder='全部 Provider' />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL}>全部上游</SelectItem>
+                <SelectItem value={ALL}>全部 Provider</SelectItem>
                 {upstreamOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}

@@ -70,7 +70,7 @@ export function ModelPicker({
         />
         {groupName.trim() === '' ? (
           <p className='text-xs text-muted-foreground'>
-            先选上游组，才有模型目录可选。
+            先选 Provider 组，才有模型目录可选。
           </p>
         ) : loading ? (
           <p className='text-xs text-muted-foreground'>正在加载模型目录…</p>

@@ -27,6 +27,7 @@ import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder/transport.ts";
 import { QODER_MODELS } from "./lib/qoder/models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax/models.ts";
+import { MINIMAX_API_MODELS, miniMaxApiBase, miniMaxApiTenants } from "./lib/minimax/api.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
@@ -58,6 +59,7 @@ import { loadSession as loadInternAiSession } from "./lib/intern-ai/auth.ts";
 import { INTERN_AI_DISCOVERY_API_BASE } from "./lib/intern-ai/config.ts";
 import {
   toMinimax,
+  toMiniMaxApi,
   toQoder,
   toTokenRhythm,
   toWorkBuddy,
@@ -124,6 +126,8 @@ const WORKBUDDY_CATALOG_TTL_MS = configNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 6
 type Dialect = "anthropic" | "openai";
 
 const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
+// The open platform's models. The same two, under their own names.
+const MINIMAX_API_MODEL_IDS = new Set(MINIMAX_API_MODELS.map((m) => m.id));
 // The models a region can serve, whether the region is on or not.
 const GLOBAL_QODER_IDS = new Set(QODER_GLOBAL_ALL.map((m) => m.id));
 const CN_QODER_IDS = new Set(QODER_CN_ALL.map((m) => m.id));
@@ -250,6 +254,7 @@ router.get("/health", async (ctx) => {
     dialects: ["anthropic", "openai"],
     enabled: {
       minimax: upstreamEnabled("minimax"),
+      minimaxApi: upstreamEnabled("minimax-api"),
       qoderGlobal: upstreamEnabled("qoder"),
       qoderCn: upstreamEnabled("qoder-cn"),
       workbuddyCn: upstreamEnabled("workbuddy-cn"),
@@ -268,6 +273,15 @@ router.get("/health", async (ctx) => {
             // the plan's own windows.
             balance: snapshot.data?.minimax?.balance ?? null,
             tokenPlan: snapshot.data?.minimax?.tokenPlan ?? null,
+          }
+        : { enabled: false },
+      "minimax-api": upstreamEnabled("minimax-api")
+        ? {
+            base: miniMaxApiBase(),
+            models: MINIMAX_API_MODELS.length,
+            // 一把 key 一个租户。
+            tenants: miniMaxApiTenants().length,
+            plans: snapshot.data?.minimaxApi?.tenants ?? null,
           }
         : { enabled: false },
       qoder: { regions },
@@ -354,6 +368,7 @@ function routingContext(): RoutingContext {
   return {
     enabled: {
       minimax: upstreamEnabled("minimax"),
+      minimaxApi: upstreamEnabled("minimax-api"),
       qoderGlobal: upstreamEnabled("qoder"),
       qoderCn: upstreamEnabled("qoder-cn"),
       workbuddyCn: upstreamEnabled("workbuddy-cn"),
@@ -366,6 +381,7 @@ function routingContext(): RoutingContext {
       qoderCn: CN_QODER_IDS,
       qoderHidden: qoderHiddenIds(),
       minimax: MINIMAX_MODEL_IDS,
+      minimaxApi: MINIMAX_API_MODEL_IDS,
       workbuddy: workbuddyModelIds(),
       tokenrhythm: TOKENRHYTHM_MODEL_IDS,
       sensenova: senseNovaModelIds(),
@@ -603,6 +619,8 @@ async function callUpstream(
       await toSenseNova(uctx, body, route, dialect, stream, ctx);
     } else if (route.upstream === "intern-ai") {
       await toInternAi(uctx, body, route, dialect, stream, ctx);
+    } else if (route.upstream === "minimax-api") {
+      await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
     } else {
       await toMinimax(uctx, body, route, dialect, stream, ctx);
     }

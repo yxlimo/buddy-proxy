@@ -56,7 +56,7 @@ function catalogClient() {
 
 /** 在下拉里选一个上游组。 */
 async function pickGroup(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
-  const trigger = await screen.findByRole('combobox', { name: '上游组' })
+  const trigger = await screen.findByRole('combobox', { name: 'Provider 组' })
   await waitFor(() => {
     expect(trigger).toBeEnabled()
   })
@@ -76,7 +76,7 @@ describe('模型编辑弹窗', () => {
 
     // 一开始两个分组都有没填的必填项。
     const basicTab = screen.getByRole('tab', { name: /基本/ })
-    const targetsTab = screen.getByRole('tab', { name: /上游目标/ })
+    const targetsTab = screen.getByRole('tab', { name: /Provider 目标/ })
     expect(basicTab.querySelector('.bg-destructive')).not.toBeNull()
     expect(targetsTab.querySelector('.bg-destructive')).not.toBeNull()
 
@@ -99,14 +99,14 @@ describe('模型编辑弹窗', () => {
       ),
     })
 
-    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    await user.click(screen.getByRole('tab', { name: /Provider 目标/ }))
 
     expect(
-      screen.getByText('至少要有一个填全的目标：上游组和上游模型 id 都要填。')
+      screen.getByText('至少要有一个填全的目标：Provider 组和上游模型 id 都要填。')
     ).toBeInTheDocument()
   })
 
-  it('选了上游组之后，上游模型 id 变成目录里的下拉', async () => {
+  it('选了 Provider 组之后，上游模型 id 变成目录里的下拉', async () => {
     const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
@@ -115,10 +115,10 @@ describe('模型编辑弹窗', () => {
       ),
     })
 
-    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    await user.click(screen.getByRole('tab', { name: /Provider 目标/ }))
 
     // 还没选组：没有目录，输入框手填。
-    expect(screen.getByText(/先选上游组/)).toBeInTheDocument()
+    expect(screen.getByText(/先选 Provider 组/)).toBeInTheDocument()
 
     await pickGroup(user, /Qoder 全球区/)
 
@@ -150,7 +150,7 @@ describe('模型编辑弹窗', () => {
       ),
     })
 
-    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    await user.click(screen.getByRole('tab', { name: /Provider 目标/ }))
     await pickGroup(user, /MiniMax Code/)
 
     await waitFor(() => {
@@ -172,7 +172,7 @@ describe('模型编辑弹窗', () => {
     })
 
     // 默认是 single：权重没意义，整块不画。
-    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    await user.click(screen.getByRole('tab', { name: /Provider 目标/ }))
     expect(screen.queryByLabelText('权重')).not.toBeInTheDocument()
     expect(
       screen.queryByText('权重大的先试，失败了才试小的。')
@@ -184,7 +184,7 @@ describe('模型编辑弹窗', () => {
     await user.click(await screen.findByRole('option', { name: /fallback/ }))
 
     // 再回到「上游目标」，权重就出来了。
-    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    await user.click(screen.getByRole('tab', { name: /Provider 目标/ }))
     expect(screen.getByLabelText('权重')).toBeInTheDocument()
     expect(screen.getByText('权重大的先试，失败了才试小的。')).toBeInTheDocument()
   })
@@ -198,7 +198,7 @@ describe('模型编辑弹窗', () => {
       ),
     })
 
-    await user.click(screen.getByRole('tab', { name: /上游目标/ }))
+    await user.click(screen.getByRole('tab', { name: /Provider 目标/ }))
 
     expect(screen.queryByLabelText('顺序')).not.toBeInTheDocument()
   })

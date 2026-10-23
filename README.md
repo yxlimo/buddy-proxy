@@ -12,12 +12,13 @@ Point a client at it and it works with either dialect — see
 
 ## What is switched on
 
-There are seven reverse proxies behind this, and each has a switch. All of them
+There are eight reverse proxies behind this, and each has a switch. All of them
 are **off by default**; turn on the ones you actually use.
 
 | Switch | Turns on |
 |--------|----------|
 | `MINIMAX_CODE=true` | the MiniMax Code gateway |
+| `MINIMAX_API=true` | the MiniMax open platform (api.minimax.cn), by API key |
 | `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
 | `QODER_CN=true` | the Qoder China account (qoder.cn) |
 | `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
@@ -31,7 +32,7 @@ message saying which switch to flip. The two Qoder regions are separate
 accounts, so they are switched on separately, and WorkBuddy's China account is
 a third one.
 
-One process reads all seven.
+One process reads all eight.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -149,6 +150,19 @@ no enums).
 The HTTP layer is Koa 3, with `@koa/router` for the paths and
 `koa-bodyparser` for the JSON body. The body is parsed after the key is
 checked, so a request that is turned away costs no parsing at all.
+
+## Tasks
+
+The common tasks are in `mise.toml`; the ones that belong to one machine (the
+deploy to that machine, the logs on it) are in `mise.local.toml`, which is not
+in the repository.
+
+```bash
+mise run test          # the offline self-test
+mise run typecheck
+mise run web:build
+mise run build         # the panel and the image
+```
 
 ## Testing
 
@@ -379,6 +393,35 @@ browser's `localStorage` (key `opencode.global.dat:model`), and a custom
 provider's models are not in there by default. Open the picker → **Manage
 models** → flip the provider's switch (one switch covers all its models). That
 is per-browser.
+
+## MiniMax open platform
+
+Another upstream of the router, reached through `/minimax-api`: MiniMax's own
+platform, not the Code gateway. It is the ordinary OpenAI-compatible API, and
+the credential is an API key (`sk-cp-…`, the coding-plan kind).
+
+| Method | Path | Format |
+|--------|------|--------|
+| `POST` | `/minimax-api/v1/messages` | Anthropic messages (stream supported) |
+| `POST` | `/minimax-api/v1/chat/completions` | OpenAI chat completions |
+| `GET`  | `/minimax-api/v1/models` | model catalog |
+
+**Several tenants, one key each.** A key is a plan, so several keys are several
+plans. They are configured by key, in the environment:
+
+```
+MINIMAX_API_1_KEY=sk-cp-…
+MINIMAX_API_2_KEY=sk-cp-…
+```
+
+The gateway takes the tenants in turn, and a tenant that cannot serve the
+request (the plan ran out, the key was refused, the key is rate limited) is
+skipped for the next one. The environment wins over the database, so a key
+rotated in `.env` takes effect at once; the database keeps a copy so the
+service still runs without the `.env` file.
+
+The quota of each tenant is its plan's own windows (five hours and a week) —
+the same thing the Code gateway's account has.
 
 ## MiniMax Code gateway
 

@@ -162,13 +162,13 @@ describe('额度按种类渲染', () => {
     expect(screen.queryAllByText(/¥1,?242\.50/)).toHaveLength(0)
   })
 
-  it('上游没有报额度的时候给空状态', async () => {
+  it('Provider 没有报额度的时候给空状态', async () => {
     const client = mockAdminClient({
       GetBalance: () => create(GetBalanceResponseSchema, { quotas: [] }),
     })
 
     renderWithClient({ client, children: <BalancePage /> })
 
-    expect(await screen.findByText('上游没有报额度。')).toBeInTheDocument()
+    expect(await screen.findByText('Provider 没有报额度。')).toBeInTheDocument()
   })
 })

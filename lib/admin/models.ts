@@ -23,7 +23,7 @@ import {
   type UpstreamId,
 } from "./upstreams.ts";
 import { hasUsableCredential } from "./credentials.ts";
-import type { CatalogGroup } from "../router/catalog.ts";
+import { aggregateCatalog, type AggregateEntry, type CatalogGroup } from "../router/catalog.ts";
 import { UnpublishedReason } from "../gen/buddy/admin/v1/admin_pb.ts";
 
 /** 一个公布出来的模型。 */
@@ -123,15 +123,26 @@ function targetBlocker(target: AggregateTarget, groups: CatalogGroup[]): Unpubli
  * 原样存回去还是继承。合出来的值由目录那边算（lib/router/catalog.ts），
  * 面板要显示的话可以用 ListModels 与目标自己算。
  *
+ * `contextWindow` 与 `maxOutputTokens` 报的是**继承之后的值** —— 面板上写
+ * 「继承」对谁都没用，要看的是这个模型实际上能用多少。合出来的算法跟
+ * aggregateCatalog 一样（几个目标不一致时取最小的），所以面板上看到的
+ * 就是根路由公布的。
+ *
  * `published` 与 `unpublishedReason` 是同一个判断的两面：公布了就没有理由，
  * 没公布就有理由。两边不能各算一套 —— 上游一关，模型立刻就不公布了。
  */
 export function publishedModels(): PublishedModelView[] {
   const usage = listAggregateUsage();
   const groups = catalogGroups();
+  // 继承之后的值：跟根路由公布的是同一套算法。
+  const effective = new Map<string, AggregateEntry>();
+  for (const entry of aggregateCatalog(groups, listAggregateModels())) {
+    effective.set(entry.id, entry);
+  }
   return listAggregateModels().map((model) => {
     // 一个判断，两处用：公布了就是没有理由，没公布就有理由。
     const reason = unpublishedReason(model, groups);
+    const inherited = effective.get(model.id);
     return {
       id: model.id,
       displayName: model.displayName,
@@ -139,8 +150,8 @@ export function publishedModels(): PublishedModelView[] {
       published: reason === UnpublishedReason.UNSPECIFIED,
       unpublishedReason: reason,
       strategy: model.strategy,
-      contextWindow: model.contextWindow ?? undefined,
-      maxOutputTokens: model.maxOutputTokens ?? undefined,
+      contextWindow: model.contextWindow ?? inherited?.contextWindow,
+      maxOutputTokens: model.maxOutputTokens ?? inherited?.maxOutputTokens,
       reasoning: model.reasoning ?? undefined,
       toolCall: model.toolCall ?? undefined,
       effortOptions: model.effortOptions ?? [],
