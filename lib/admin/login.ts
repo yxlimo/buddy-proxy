@@ -326,6 +326,12 @@ export function loginActivity(upstreamId: string): { loggingIn: boolean; rejecte
   for (const row of listCached("login:")) {
     const session = peekCached<StoredLogin>(row.id)?.data;
     if (!session || session.upstreamId !== upstreamId) continue;
+    // 还在等、但窗口已经过了，就不是「正在登录」了 —— 那次登录早就没戏了。
+    // 留着这个状态，面板会一直说「正在登录」，而实际上什么都没在等。
+    if (session.status === "pending" && session.expiresAt > 0 && Date.now() > session.expiresAt) {
+      latest = "expired";
+      continue;
+    }
     if (session.status === "pending") loggingIn = true;
     latest = session.status;
   }

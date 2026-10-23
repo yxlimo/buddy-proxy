@@ -656,12 +656,10 @@ app.listen(PORT, HOST, () => {
   console.log(
     `    tokenrhythm ${upstreamEnabled("tokenrhythm") ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
   );
-  console.log(
-    `    sensenova ${upstreamEnabled("sensenova") ? `${senseNovaCatalog().length} models` : "off"}`,
-  );
-  console.log(
-    `    intern-ai ${upstreamEnabled("intern-ai") ? `${internAiCatalog().length} models` : "off"}`,
-  );
+  // 这两个的目录是启动后从上游问来的（要拿推理 key、要问平台），所以这里只说
+  // 「正在取」——数目在下面的日志里。
+  console.log(`    sensenova ${upstreamEnabled("sensenova") ? "loading" : "off"}`);
+  console.log(`    intern-ai ${upstreamEnabled("intern-ai") ? "loading" : "off"}`);
   console.log(`  auth: ${requireApiKey() ? "api key required" : "public"}`);
   console.log("");
 
