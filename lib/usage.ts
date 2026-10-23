@@ -27,8 +27,8 @@ export interface UsageEvent {
   upstreamModel: string;
   /** 客户端写的模型 id（聚合路由里是公布出来的名字）。 */
   agentModel: string;
-  /** 客户端说的是哪种方言：openai / anthropic。 */
-  dialect: string;
+  /** 谁发来的请求：pi、opencode、dsh……从请求头认出来的。 */
+  agent: string;
   /** 这次请求模拟的是哪个桌面客户端。 */
   client: string;
   /** 成没成。 */
@@ -68,7 +68,7 @@ function ensureTable(): void {
       upstream_id       TEXT NOT NULL,
       upstream_model    TEXT NOT NULL,
       agent_model       TEXT NOT NULL,
-      dialect           TEXT NOT NULL,
+      agent             TEXT NOT NULL,
       client            TEXT NOT NULL,
       ok                INTEGER NOT NULL,
       status            INTEGER NOT NULL,
@@ -91,7 +91,7 @@ export function recordUsage(input: UsageEventInput): void {
     store()
       .prepare(
         "INSERT INTO usage_event (ts, day, hour, upstream_id, upstream_model, agent_model, " +
-          "dialect, client, ok, status, prompt_tokens, completion_tokens, reasoning_tokens, " +
+          "agent, client, ok, status, prompt_tokens, completion_tokens, reasoning_tokens, " +
           "latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
@@ -101,7 +101,7 @@ export function recordUsage(input: UsageEventInput): void {
         input.upstreamId,
         input.upstreamModel,
         input.agentModel,
-        input.dialect,
+        input.agent,
         input.client,
         input.ok ? 1 : 0,
         input.status,
@@ -164,7 +164,7 @@ export function listUsage(filter: UsageFilter = {}): UsageEvent[] {
     args.push(filter.beforeId);
   }
   const sql =
-    "SELECT id, ts, day, hour, upstream_id, upstream_model, agent_model, dialect, client, " +
+    "SELECT id, ts, day, hour, upstream_id, upstream_model, agent_model, agent, client, " +
     "ok, status, prompt_tokens, completion_tokens, reasoning_tokens, latency_ms, error " +
     `FROM usage_event${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY id DESC`;
   const rows = store().prepare(sql).all(...args) as any[];
@@ -177,7 +177,7 @@ export function listUsage(filter: UsageFilter = {}): UsageEvent[] {
     upstreamId: String(r.upstream_id),
     upstreamModel: String(r.upstream_model),
     agentModel: String(r.agent_model),
-    dialect: String(r.dialect),
+    agent: String(r.agent),
     client: String(r.client),
     ok: Number(r.ok) !== 0,
     status: Number(r.status),

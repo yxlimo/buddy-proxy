@@ -370,6 +370,8 @@ message GetUsageSummaryResponse {
   repeated UsageBucket by_model = 3;
   // 按天分组的时间序列。
   repeated UsageBucket by_day = 4;
+  // 按发请求的 agent 分组：pi、opencode、dsh……
+  repeated UsageBucket by_agent = 5;
 }
 
 message UsageBucket {
@@ -396,7 +398,8 @@ message UsageEvent {
   string model = 4;
   // agent 写的模型 id。
   string agent_model = 5;
-  string dialect = 6;
+  // 谁发来的请求，从请求头认出来的：pi、opencode、dsh……
+  string agent = 6;
   // 这次请求模拟的是哪个桌面客户端。
   string client = 7;
   int64 prompt_tokens = 8;

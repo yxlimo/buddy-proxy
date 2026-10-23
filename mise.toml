@@ -67,6 +67,10 @@ run = "node --experimental-strip-types test/intern-ai-check.ts"
 description = "Run the tests for the request-level usage log (no network)"
 run = "node --experimental-strip-types test/usage-check.ts"
 
+[tasks."test:agent"]
+description = "Run the tests for telling the agents apart by their headers"
+run = "node --experimental-strip-types test/agent-check.ts"
+
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract"
 run = "buf generate"

@@ -68,6 +68,7 @@ export function usageSummary(
   byUpstream: UsageBucketView[];
   byModel: UsageBucketView[];
   byDay: UsageBucketView[];
+  byAgent: UsageBucketView[];
 } {
   const key = String(window ?? "").trim().toLowerCase();
   const filter: { upstreamId?: string; since?: number; until?: number } = {};
@@ -87,6 +88,7 @@ export function usageSummary(
   const upstreams = new Map<string, UsageTotals>();
   const models = new Map<string, UsageTotals>();
   const days = new Map<string, UsageTotals>();
+  const agents = new Map<string, UsageTotals>();
 
   for (const event of events) {
     addToTotals(total, event);
@@ -100,6 +102,10 @@ export function usageSummary(
     const day = days.get(event.day) ?? emptyTotals();
     addToTotals(day, event);
     days.set(event.day, day);
+    // 谁发来的：pi、opencode、dsh……
+    const agent = agents.get(event.agent) ?? emptyTotals();
+    addToTotals(agent, event);
+    agents.set(event.agent, agent);
   }
 
   const byUpstream = [...upstreams.entries()].map(([key, summary]) => ({ key, summary }));
@@ -107,7 +113,8 @@ export function usageSummary(
   const byDay = [...days.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort((a, b) => (a.key < b.key ? -1 : 1));
-  return { total, byUpstream, byModel, byDay };
+  const byAgent = [...agents.entries()].map(([key, summary]) => ({ key, summary }));
+  return { total, byUpstream, byModel, byDay, byAgent };
 }
 
 /** 用量的明细：每条请求一行。 */

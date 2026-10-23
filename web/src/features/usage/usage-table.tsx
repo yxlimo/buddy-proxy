@@ -121,19 +121,19 @@ export function UsageTable({
         ),
       },
       {
-        id: 'client',
-        accessorKey: 'client',
-        header: '客户端',
+        id: 'agent',
+        accessorKey: 'agent',
+        header: '来源',
         cell: ({ row }) => (
-          <span className='text-xs'>{row.original.client || '—'}</span>
+          <span className='text-xs'>{row.original.agent || '—'}</span>
         ),
       },
       {
-        id: 'dialect',
-        accessorKey: 'dialect',
-        header: '方言',
+        id: 'client',
+        accessorKey: 'client',
+        header: '模拟客户端',
         cell: ({ row }) => (
-          <span className='text-xs'>{row.original.dialect || '—'}</span>
+          <span className='text-xs'>{row.original.client || '—'}</span>
         ),
       },
       {

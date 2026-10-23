@@ -310,9 +310,9 @@ if (rows.length) {
     JSON.stringify(rows.map((r) => r.client)),
   );
   check(
-    "明细记着客户端说的是哪种方言",
-    rows.every((r) => r.dialect === "openai" || r.dialect === "anthropic"),
-    JSON.stringify(rows.map((r) => r.dialect)),
+    "明细记着是谁发来的请求",
+    rows.every((r) => typeof r.agent === "string" && r.agent.length > 0),
+    JSON.stringify(rows.map((r) => r.agent)),
   );
   check("明细带着上游与模型", rows.every((r) => r.upstreamId && r.model), JSON.stringify(rows.map((r) => [r.upstreamId, r.model])));
 

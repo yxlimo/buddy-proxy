@@ -94,7 +94,7 @@ import {
   type StoredLogin,
 } from "./login.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
-import { usageEvents, usageSummary } from "./usage.ts";
+import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
 import { tailLog } from "./log.ts";
 import { benefitUpstreams, benefits } from "./benefits.ts";
 
@@ -108,6 +108,27 @@ function serviceVersion(): string {
   } catch {
     return "";
   }
+}
+
+/** 一个用量的合计。 */
+function usageSummaryMessage(summary: UsageTotals) {
+  return create(UsageSummarySchema, {
+    requests: BigInt(summary.requests),
+    succeeded: BigInt(summary.succeeded),
+    failed: BigInt(summary.failed),
+    promptTokens: BigInt(summary.promptTokens),
+    completionTokens: BigInt(summary.completionTokens),
+    reasoningTokens: BigInt(summary.reasoningTokens),
+    latencyMsSum: BigInt(summary.latencyMsSum),
+  });
+}
+
+/** 一组用量。 */
+function usageBucketMessage(bucket: { key: string; summary: UsageTotals }) {
+  return create(UsageBucketSchema, {
+    key: bucket.key,
+    summary: usageSummaryMessage(bucket.summary),
+  });
 }
 
 /** 一个额度摘要。 */
@@ -466,57 +487,11 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async getUsageSummary(request) {
     const summary = usageSummary(String(request.upstreamId ?? ""), String(request.window ?? ""));
     return create(GetUsageSummaryResponseSchema, {
-      total: create(UsageSummarySchema, {
-        requests: BigInt(summary.total.requests),
-        succeeded: BigInt(summary.total.succeeded),
-        failed: BigInt(summary.total.failed),
-        promptTokens: BigInt(summary.total.promptTokens),
-        completionTokens: BigInt(summary.total.completionTokens),
-        reasoningTokens: BigInt(summary.total.reasoningTokens),
-        latencyMsSum: BigInt(summary.total.latencyMsSum),
-      }),
-      byUpstream: summary.byUpstream.map((bucket) =>
-        create(UsageBucketSchema, {
-          key: bucket.key,
-          summary: create(UsageSummarySchema, {
-            requests: BigInt(bucket.summary.requests),
-            succeeded: BigInt(bucket.summary.succeeded),
-            failed: BigInt(bucket.summary.failed),
-            promptTokens: BigInt(bucket.summary.promptTokens),
-            completionTokens: BigInt(bucket.summary.completionTokens),
-            reasoningTokens: BigInt(bucket.summary.reasoningTokens),
-            latencyMsSum: BigInt(bucket.summary.latencyMsSum),
-          }),
-        }),
-      ),
-      byModel: summary.byModel.map((bucket) =>
-        create(UsageBucketSchema, {
-          key: bucket.key,
-          summary: create(UsageSummarySchema, {
-            requests: BigInt(bucket.summary.requests),
-            succeeded: BigInt(bucket.summary.succeeded),
-            failed: BigInt(bucket.summary.failed),
-            promptTokens: BigInt(bucket.summary.promptTokens),
-            completionTokens: BigInt(bucket.summary.completionTokens),
-            reasoningTokens: BigInt(bucket.summary.reasoningTokens),
-            latencyMsSum: BigInt(bucket.summary.latencyMsSum),
-          }),
-        }),
-      ),
-      byDay: summary.byDay.map((bucket) =>
-        create(UsageBucketSchema, {
-          key: bucket.key,
-          summary: create(UsageSummarySchema, {
-            requests: BigInt(bucket.summary.requests),
-            succeeded: BigInt(bucket.summary.succeeded),
-            failed: BigInt(bucket.summary.failed),
-            promptTokens: BigInt(bucket.summary.promptTokens),
-            completionTokens: BigInt(bucket.summary.completionTokens),
-            reasoningTokens: BigInt(bucket.summary.reasoningTokens),
-            latencyMsSum: BigInt(bucket.summary.latencyMsSum),
-          }),
-        }),
-      ),
+      total: usageSummaryMessage(summary.total),
+      byUpstream: summary.byUpstream.map((bucket) => usageBucketMessage(bucket)),
+      byModel: summary.byModel.map((bucket) => usageBucketMessage(bucket)),
+      byDay: summary.byDay.map((bucket) => usageBucketMessage(bucket)),
+      byAgent: summary.byAgent.map((bucket) => usageBucketMessage(bucket)),
     });
   },
 
@@ -536,7 +511,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           upstreamId: event.upstreamId,
           model: event.upstreamModel,
           agentModel: event.agentModel,
-          dialect: event.dialect,
+          agent: event.agent,
           client: event.client,
           promptTokens: BigInt(event.promptTokens),
           completionTokens: BigInt(event.completionTokens),

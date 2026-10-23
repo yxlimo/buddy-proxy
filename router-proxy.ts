@@ -78,6 +78,7 @@ import {
 } from "./lib/router/catalog.ts";
 import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
 import { recordUsage, pruneUsage } from "./lib/usage.ts";
+import { detectAgent } from "./lib/agent.ts";
 // The panel: the Connect routes, the token, the static files.
 import { adminToken } from "./lib/admin/token.ts";
 import { CONNECT_PREFIX, connectMiddleware, hasWebDist, staticMiddleware, webDistDir } from "./lib/admin/http.ts";
@@ -205,7 +206,9 @@ app.use(async (ctx, next) => {
   // 模型名已经在那一栏了，不用再说一遍。
   const first = ctx.path.replace(/^\//, "").split("/")[0];
   const via = first === "v1" || first === "admin" || first === "health" ? "" : first;
-  const line = `${ctx.method} ${ctx.path}${model ? ` model=${model}` : ""} → ${status} ${ms}ms${via ? ` via=${via}` : ""}`;
+  // 谁发来的：pi、opencode、dsh……排查的时候一眼看出是哪边在打。
+  const agent = detectAgent(ctx.request.headers).name;
+  const line = `${ctx.method} ${ctx.path}${model ? ` model=${model}` : ""} → ${status} ${ms}ms${via ? ` via=${via}` : ""} from=${agent}`;
   // 失败的两级：5xx 是服务自己的问题，4xx 是请求本身的问题。
   if (status >= 500) console.error(`[REQ] ${line}`);
   else if (status >= 400) console.warn(`[REQ] ${line}`);
@@ -583,6 +586,7 @@ async function callUpstream(
   ctx: Koa.Context,
 ): Promise<void> {
   const started = Date.now();
+  const agent = detectAgent(ctx.request.headers).name;
   try {
     if (route.upstream === "qoder") {
       await toQoder(uctx, body, route, dialect, stream, ctx);
@@ -597,11 +601,11 @@ async function callUpstream(
     } else {
       await toMinimax(uctx, body, route, dialect, stream, ctx);
     }
-    recordRequestUsage(body, route, dialect, uctx, ctx.status || 200, started, "");
+    recordRequestUsage(body, route, agent, uctx, ctx.status || 200, started, "");
   } catch (e) {
     const err = e as AuthError;
     const status = typeof err?.status === "number" ? err.status : 500;
-    recordRequestUsage(body, route, dialect, uctx, status, started, err?.message ?? String(e));
+    recordRequestUsage(body, route, agent, uctx, status, started, err?.message ?? String(e));
     throw e;
   }
 }
@@ -609,13 +613,13 @@ async function callUpstream(
 /**
  * 记下这一条请求。
  *
- * 每条走过的请求都记：哪个上游、哪个模型、客户端要的是什么、成功还是失败、
- * 用了多少令牌。面板的用量页和「今日用量」从这张表出。
+ * 每条走过的请求都记：哪个上游、哪个模型、客户端要的是什么、谁发来的、
+ * 成功还是失败、用了多少令牌。面板的用量页和「今日用量」从这张表出。
  */
 function recordRequestUsage(
   body: Record<string, any>,
   route: Route,
-  dialect: Dialect,
+  agent: string,
   uctx: UpstreamContext,
   status: number,
   started: number,
@@ -629,7 +633,7 @@ function recordRequestUsage(
     upstreamId: providerId(route),
     upstreamModel,
     agentModel: String(body.model ?? route.label ?? upstreamModel),
-    dialect,
+    agent,
     client: route.upstream,
     ok: !error && status < 400,
     status,
