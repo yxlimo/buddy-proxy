@@ -37,6 +37,9 @@ const KEY_NAME = "buddy";
 /** 清单最多放多久。模型清单变得不快，半小时问一次够了。 */
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
+/** 新建的 key 要等多久才能用。平台上放行要一点时间。 */
+const KEY_SETTLE_MS = 8_000;
+
 /** 账号上现在有的 Discovery 推理 key（环境变量优先，其次数据库）。 */
 export function internAiInferenceKey(): string {
   const stored = getSecret<StoredAccount>(ACCOUNT_ID);
@@ -85,23 +88,34 @@ export async function refreshInternAiCatalog(force = false): Promise<void> {
   if (!force && catalog.length && Date.now() - catalogAt < CATALOG_TTL_MS) return;
   const key = internAiInferenceKey();
   if (!key) return;
-  try {
-    const list = await listDiscoveryModels(key);
-    const models = list.models;
-    if (!models.length) return;
-    let consoleModels: Awaited<ReturnType<typeof listDiscoveryConsoleModels>> = [];
+  // 刚建出来的 key 不是马上就能用的：平台那边要把它放行，刚建完去问会被
+  // 说「invalid API key」（HTTP 401）。等一会儿再问。
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const session = loadSession();
-      if (session) {
-        consoleModels = await listDiscoveryConsoleModels(session, tokenFor(session, "discovery"));
+      const list = await listDiscoveryModels(key);
+      const models = list.models;
+      if (!models.length) return;
+      let consoleModels: Awaited<ReturnType<typeof listDiscoveryConsoleModels>> = [];
+      try {
+        const session = loadSession();
+        if (session) {
+          consoleModels = await listDiscoveryConsoleModels(session, tokenFor(session, "discovery"));
+        }
+      } catch {
+        // 控制台那一份拿不到就算了：推理端的清单是准的。
       }
-    } catch {
-      // 控制台那一份拿不到就算了：推理端的清单是准的。
+      catalog = mergeCatalogModels(models, consoleModels);
+      catalogAt = Date.now();
+      return;
+    } catch (e) {
+      const message = (e as Error)?.message ?? String(e);
+      if (!message.includes("401") || attempt === 4) {
+        console.warn(`[INTERN-AI] 模型目录刷新失败：${message}`);
+        return;
+      }
+      console.log(`[INTERN-AI] 推理 key 还没生效（${attempt}/4），${KEY_SETTLE_MS / 1000}s 后再问`);
+      await new Promise((r) => setTimeout(r, KEY_SETTLE_MS));
     }
-    catalog = mergeCatalogModels(models, consoleModels);
-    catalogAt = Date.now();
-  } catch (e) {
-    console.warn(`[INTERN-AI] 模型目录刷新失败：${(e as Error)?.message}`);
   }
 }
 

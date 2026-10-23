@@ -22,6 +22,8 @@ services:
       QODER_CN: "true"
       WORKBUDDY_CN: "true"
       TOKENRHYTHM: "true"
+      SENSENOVA: "true"
+      INTERN_AI: "true"
       # Anthropic and OpenAI dialects, routed per model name.
       ROUTER_PORT: "6450"
       # Everything the service keeps lives in this one directory: the database
