@@ -928,13 +928,15 @@ function qoderQuotas(snapshot: HealthSnapshot, region: QoderRegion): QuotaView[]
   const credits = snapshot.qoder?.[region]?.credits as any;
   if (!credits) return [];
   const resetsAt = credits.resetsAt ? Date.parse(String(credits.resetsAt)) : 0;
+  const planRemaining = Number(credits.plan?.remaining ?? 0);
   const lots: CreditLotView[] = [
     {
       id: `qoder-${region}-plan`,
       sourceLabel: "套餐额度",
-      remaining: Number(credits.plan?.remaining ?? 0),
+      remaining: planRemaining,
       expiresAt: resetsAt,
-      status: credits.quotaExceeded ? "已用尽" : "可用",
+      // 这一池自己说了算：套餐用光了就是用光了。加油包还有多少不影响它。
+      status: planRemaining > 0 ? "可用" : "已用尽",
     },
   ];
   if (Number(credits.addOn?.remaining ?? 0) > 0) {
@@ -1119,7 +1121,13 @@ function internAiQuotas(snapshot: HealthSnapshot): QuotaView[] {
     sourceLabel: pack.remark || pack.cycleType || pack.id,
     remaining: pack.remainingCredits,
     expiresAt: platformTimeMs(pack.expireAt) || platformTimeMs(pack.cycleEndAt),
-    status: pack.status === "unused" ? "未使用" : "可用",
+    // 一批墨点用完了就是用完了，不管平台还把它算不算「还在」。
+    status:
+      pack.remainingCredits > 0
+        ? pack.status === "unused"
+          ? "未使用"
+          : "可用"
+        : "已用尽",
   }));
   const total = alive.reduce((sum, pack) => sum + pack.totalCredits, 0);
   return [

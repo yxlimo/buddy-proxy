@@ -304,8 +304,16 @@ const rows: any[] = Array.isArray(events.body?.events) ? events.body.events : []
 check("用量明细有数据", rows.length > 0, `${rows.length} 行`);
 if (rows.length) {
   check("明细带 ts", rows.every((r) => Number(r.ts) > 1_000_000_000_000), JSON.stringify(rows.map((r) => r.ts)));
-  check("明细的 client 是空串", rows.every((r) => r.client === ""), JSON.stringify(rows.map((r) => r.client)));
-  check("明细的 dialect 是空串", rows.every((r) => r.dialect === ""), JSON.stringify(rows.map((r) => r.dialect)));
+  check(
+    "明细记着模拟的是哪个客户端",
+    rows.every((r) => typeof r.client === "string" && r.client.length > 0),
+    JSON.stringify(rows.map((r) => r.client)),
+  );
+  check(
+    "明细记着客户端说的是哪种方言",
+    rows.every((r) => r.dialect === "openai" || r.dialect === "anthropic"),
+    JSON.stringify(rows.map((r) => r.dialect)),
+  );
   check("明细带着上游与模型", rows.every((r) => r.upstreamId && r.model), JSON.stringify(rows.map((r) => [r.upstreamId, r.model])));
 
   // 游标：一页一页往前翻，不重不漏。

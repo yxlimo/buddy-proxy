@@ -64,6 +64,14 @@ export interface UpstreamContext {
   workbuddyModel(model: string): WorkBuddyModel | null;
   /** Told what the upstream charged for the answer, if anyone is keeping score. */
   onUsage?: (usage: any) => void;
+  /**
+   * The usage the last upstream call reported.
+   *
+   * The delivery layer calls `onUsage` with the upstream's own usage object;
+   * whoever built the context keeps the last one here so the caller can
+   * record it after the call.
+   */
+  lastUsage?: any;
 }
 
 /**

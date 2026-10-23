@@ -1,0 +1,243 @@
+// lib/usage.ts — 请求级的用量日志。
+//
+// 以前只有 aggregate_usage 那张聚合表：每个「公布的模型 × 上游 × 上游模型」
+// 一行，记着累计的请求数与令牌数。它回答不了「今天用了多少」「哪个上游、
+// 哪个模型用掉的令牌最多」—— 那张表只有 last_used_at，按天分组只能把一行
+// 的全部历史算到它最后一次被用到的那天。
+//
+// 这张表记的是每一条请求：什么时候、哪个上游、哪个模型、客户端要的是什么、
+// 模拟的是哪个桌面客户端、成功还是失败、用了多少令牌。面板的用量页和
+// 「今日用量」都从这里出。
+
+import { store } from "./store.ts";
+
+/** 一条请求。 */
+export interface UsageEvent {
+  /** 库里的自增 id，稳定的游标。 */
+  id: number;
+  /** Unix 毫秒。 */
+  ts: number;
+  /** 本地时区的天，YYYY-MM-DD。 */
+  day: string;
+  /** 本地时区的小时，0..23。 */
+  hour: number;
+  /** 哪个上游：minimax / qoder / qoder-cn / workbuddy-cn / tokenrhythm / sensenova / intern-ai。 */
+  upstreamId: string;
+  /** 上游认识的那个模型 id。 */
+  upstreamModel: string;
+  /** 客户端写的模型 id（聚合路由里是公布出来的名字）。 */
+  agentModel: string;
+  /** 客户端说的是哪种方言：openai / anthropic。 */
+  dialect: string;
+  /** 这次请求模拟的是哪个桌面客户端。 */
+  client: string;
+  /** 成没成。 */
+  ok: boolean;
+  /** HTTP 状态码。 */
+  status: number;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  latencyMs: number;
+  /** 失败时的原因。 */
+  error: string;
+}
+
+/** 写一条之前的东西：id 和时间由这里补。 */
+export type UsageEventInput = Omit<UsageEvent, "id" | "day" | "hour" | "ts"> & { ts?: number };
+
+/** 本地时区的天。 */
+export function localDay(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 本地时区的小时。 */
+export function localHour(ts: number): number {
+  return new Date(ts).getHours();
+}
+
+function ensureTable(): void {
+  store().exec(
+    `CREATE TABLE IF NOT EXISTS usage_event (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts                INTEGER NOT NULL,
+      day               TEXT NOT NULL,
+      hour              INTEGER NOT NULL,
+      upstream_id       TEXT NOT NULL,
+      upstream_model    TEXT NOT NULL,
+      agent_model       TEXT NOT NULL,
+      dialect           TEXT NOT NULL,
+      client            TEXT NOT NULL,
+      ok                INTEGER NOT NULL,
+      status            INTEGER NOT NULL,
+      prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
+      latency_ms        INTEGER NOT NULL DEFAULT 0,
+      error             TEXT NOT NULL DEFAULT ''
+    )`,
+  );
+  store().exec("CREATE INDEX IF NOT EXISTS usage_event_ts ON usage_event (ts)");
+  store().exec("CREATE INDEX IF NOT EXISTS usage_event_upstream ON usage_event (upstream_id)");
+}
+
+/** 记一条请求。 */
+export function recordUsage(input: UsageEventInput): void {
+  try {
+    ensureTable();
+    const ts = input.ts ?? Date.now();
+    store()
+      .prepare(
+        "INSERT INTO usage_event (ts, day, hour, upstream_id, upstream_model, agent_model, " +
+          "dialect, client, ok, status, prompt_tokens, completion_tokens, reasoning_tokens, " +
+          "latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        ts,
+        localDay(ts),
+        localHour(ts),
+        input.upstreamId,
+        input.upstreamModel,
+        input.agentModel,
+        input.dialect,
+        input.client,
+        input.ok ? 1 : 0,
+        input.status,
+        input.promptTokens,
+        input.completionTokens,
+        input.reasoningTokens,
+        input.latencyMs,
+        input.error,
+      );
+  } catch {
+    // 用量是记账，不是业务：写不进去也不能让请求失败。
+  }
+}
+
+/** 怎么筛。 */
+export interface UsageFilter {
+  /** 哪个上游，空表示全部。 */
+  upstreamId?: string;
+  /** 模型，可以是上游的 id，也可以是客户端写的那个。 */
+  model?: string;
+  /** 从什么时候开始（含）。 */
+  since?: number;
+  /** 到什么时候为止（含）。 */
+  until?: number;
+  /** 只要某一天（本地时区）。 */
+  day?: string;
+  /** 最多几条，从新到旧。 */
+  limit?: number;
+  /** 游标：只给 id 比它小的。 */
+  beforeId?: number;
+}
+
+/** 按条件取事件，从新到旧。 */
+export function listUsage(filter: UsageFilter = {}): UsageEvent[] {
+  ensureTable();
+  const where: string[] = [];
+  const args: any[] = [];
+  if (filter.upstreamId) {
+    where.push("upstream_id = ?");
+    args.push(filter.upstreamId);
+  }
+  if (filter.model) {
+    where.push("(upstream_model = ? OR agent_model = ?)");
+    args.push(filter.model, filter.model);
+  }
+  if (filter.since !== undefined) {
+    where.push("ts >= ?");
+    args.push(filter.since);
+  }
+  if (filter.until !== undefined) {
+    where.push("ts <= ?");
+    args.push(filter.until);
+  }
+  if (filter.day) {
+    where.push("day = ?");
+    args.push(filter.day);
+  }
+  if (filter.beforeId) {
+    where.push("id < ?");
+    args.push(filter.beforeId);
+  }
+  const sql =
+    "SELECT id, ts, day, hour, upstream_id, upstream_model, agent_model, dialect, client, " +
+    "ok, status, prompt_tokens, completion_tokens, reasoning_tokens, latency_ms, error " +
+    `FROM usage_event${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY id DESC`;
+  const rows = store().prepare(sql).all(...args) as any[];
+  const capped = filter.limit && filter.limit > 0 ? rows.slice(0, filter.limit) : rows;
+  return capped.map((r) => ({
+    id: Number(r.id),
+    ts: Number(r.ts),
+    day: String(r.day),
+    hour: Number(r.hour),
+    upstreamId: String(r.upstream_id),
+    upstreamModel: String(r.upstream_model),
+    agentModel: String(r.agent_model),
+    dialect: String(r.dialect),
+    client: String(r.client),
+    ok: Number(r.ok) !== 0,
+    status: Number(r.status),
+    promptTokens: Number(r.prompt_tokens),
+    completionTokens: Number(r.completion_tokens),
+    reasoningTokens: Number(r.reasoning_tokens),
+    latencyMs: Number(r.latency_ms),
+    error: String(r.error ?? ""),
+  }));
+}
+
+/**
+ * 丢掉太老的记录。
+ *
+ * 表是每条请求一行，不删就会一直长。默认留 90 天。
+ */
+export function pruneUsage(keepDays = 90): number {
+  ensureTable();
+  const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000;
+  const result = store().prepare("DELETE FROM usage_event WHERE ts < ?").run(cutoff);
+  return Number(result.changes ?? 0);
+}
+
+/** 把用量记录全清掉。 */
+export function clearUsage(): void {
+  ensureTable();
+  store().exec("DELETE FROM usage_event");
+}
+
+/** 一段用量的合计。 */
+export interface UsageTotals {
+  requests: number;
+  succeeded: number;
+  failed: number;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  latencyMsSum: number;
+}
+
+/** 空的合计。 */
+export function emptyTotals(): UsageTotals {
+  return {
+    requests: 0,
+    succeeded: 0,
+    failed: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    reasoningTokens: 0,
+    latencyMsSum: 0,
+  };
+}
+
+/** 把一条加进合计。 */
+export function addToTotals(totals: UsageTotals, event: UsageEvent): void {
+  totals.requests += 1;
+  if (event.ok) totals.succeeded += 1;
+  else totals.failed += 1;
+  totals.promptTokens += event.promptTokens;
+  totals.completionTokens += event.completionTokens;
+  totals.reasoningTokens += event.reasoningTokens;
+  totals.latencyMsSum += event.latencyMs;
+}

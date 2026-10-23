@@ -77,6 +77,7 @@ import {
   type AggregateEntry,
 } from "./lib/router/catalog.ts";
 import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
+import { recordUsage, pruneUsage } from "./lib/usage.ts";
 // The panel: the Connect routes, the token, the static files.
 import { adminToken } from "./lib/admin/token.ts";
 import { CONNECT_PREFIX, connectMiddleware, hasWebDist, staticMiddleware, webDistDir } from "./lib/admin/http.ts";
@@ -322,7 +323,7 @@ router.get("/health", async (ctx) => {
 
 /** What the adapters need to know about the router they run in. */
 function upstreamContext(): UpstreamContext {
-  return {
+  const uctx: UpstreamContext = {
     qoderRegions: qoderRegions(),
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
@@ -332,6 +333,12 @@ function upstreamContext(): UpstreamContext {
     workbuddyMaxOutput: (model: string) => workbuddyCatalog().find((m) => m.id === model)?.maxOutput ?? 64000,
     workbuddyModel: (model: string) => workbuddyCatalog().find((m) => m.id === model) ?? null,
   };
+  // Keep the last usage the upstream reported, so the caller can write it down
+  // once the call is over.
+  uctx.onUsage = (u) => {
+    uctx.lastUsage = u;
+  };
+  return uctx;
 }
 
 /** What the router is serving, and what it knows about. */
@@ -416,13 +423,10 @@ async function handleAggregate(
     // though the upstream knows the model by another one.
     route.label = entry.id;
 
-    let usage: any = null;
     const uctx = upstreamContext();
-    uctx.onUsage = (u) => {
-      usage = u;
-    };
     try {
       await callUpstream(uctx, body, route, dialect, stream, ctx);
+      const usage = uctx.lastUsage;
       recordAggregateUsage({
         modelId: entry.id,
         group: target.group,
@@ -578,19 +582,72 @@ async function callUpstream(
   stream: boolean,
   ctx: Koa.Context,
 ): Promise<void> {
-  if (route.upstream === "qoder") {
-    await toQoder(uctx, body, route, dialect, stream, ctx);
-  } else if (route.upstream === "workbuddy") {
-    await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
-  } else if (route.upstream === "tokenrhythm") {
-    await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
-  } else if (route.upstream === "sensenova") {
-    await toSenseNova(uctx, body, route, dialect, stream, ctx);
-  } else if (route.upstream === "intern-ai") {
-    await toInternAi(uctx, body, route, dialect, stream, ctx);
-  } else {
-    await toMinimax(uctx, body, route, dialect, stream, ctx);
+  const started = Date.now();
+  try {
+    if (route.upstream === "qoder") {
+      await toQoder(uctx, body, route, dialect, stream, ctx);
+    } else if (route.upstream === "workbuddy") {
+      await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
+    } else if (route.upstream === "tokenrhythm") {
+      await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
+    } else if (route.upstream === "sensenova") {
+      await toSenseNova(uctx, body, route, dialect, stream, ctx);
+    } else if (route.upstream === "intern-ai") {
+      await toInternAi(uctx, body, route, dialect, stream, ctx);
+    } else {
+      await toMinimax(uctx, body, route, dialect, stream, ctx);
+    }
+    recordRequestUsage(body, route, dialect, uctx, ctx.status || 200, started, "");
+  } catch (e) {
+    const err = e as AuthError;
+    const status = typeof err?.status === "number" ? err.status : 500;
+    recordRequestUsage(body, route, dialect, uctx, status, started, err?.message ?? String(e));
+    throw e;
   }
+}
+
+/**
+ * 记下这一条请求。
+ *
+ * 每条走过的请求都记：哪个上游、哪个模型、客户端要的是什么、成功还是失败、
+ * 用了多少令牌。面板的用量页和「今日用量」从这张表出。
+ */
+function recordRequestUsage(
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  uctx: UpstreamContext,
+  status: number,
+  started: number,
+  error: string,
+): void {
+  const usage = uctx.lastUsage ?? {};
+  const upstreamModel = route.model.includes("/")
+    ? route.model.slice(route.model.indexOf("/") + 1)
+    : route.model;
+  recordUsage({
+    upstreamId: providerId(route),
+    upstreamModel,
+    agentModel: String(body.model ?? route.label ?? upstreamModel),
+    dialect,
+    client: route.upstream,
+    ok: !error && status < 400,
+    status,
+    promptTokens: Number(usage.prompt_tokens ?? usage.input_tokens ?? 0),
+    completionTokens: Number(usage.completion_tokens ?? usage.output_tokens ?? 0),
+    reasoningTokens: Number(
+      usage.completion_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens ?? 0,
+    ),
+    latencyMs: Date.now() - started,
+    error,
+  });
+}
+
+/** 面板里的上游 id：Qoder 按区分全球区与中国区。 */
+function providerId(route: Route): string {
+  if (route.upstream === "qoder") return route.region === "cn" ? "qoder-cn" : "qoder";
+  if (route.upstream === "workbuddy") return "workbuddy-cn";
+  return route.upstream;
 }
 
 /* ---------------- plumbing ---------------- */
@@ -633,6 +690,10 @@ app.listen(PORT, HOST, () => {
   // The panel's token: generated once, kept in the data directory. The
   // operator reads it from the file and hands it to the panel.
   adminToken();
+  // The usage log grows one row per request, so old rows go. Ninety days is
+  // enough for "today" and the monthly view.
+  const pruned = pruneUsage(90);
+  if (pruned > 0) console.log(`  [USAGE] 丢掉了 ${pruned} 条超过 90 天的用量记录`);
   console.log("");
   console.log(`  router listening on ${base}`);
   console.log(`    Anthropic  ${base}/v1/messages`);

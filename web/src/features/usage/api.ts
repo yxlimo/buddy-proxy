@@ -4,30 +4,37 @@ import { ListUsageEventsRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 
 export const usageKeys = {
-  events: (upstreamId: string, model: string, limit: number, beforeId: string) =>
-    ['usage', 'events', upstreamId, model, limit, beforeId] as const,
+  events: (
+    upstreamId: string,
+    model: string,
+    limit: number,
+    beforeId: string,
+    window: string
+  ) => ['usage', 'events', upstreamId, model, limit, beforeId, window] as const,
 }
 
 /**
  * 用量明细。
  *
- * 契约现在有 before_id 游标了（只返回 id 比它小的），后端还没实现，先把
- * 接口留着：现在一次拉 limit 条，在这一段里翻页。
+ * 时间窗跟合计那页是同一个：today = 本地零点起。
  */
 export function useUsageEvents(input: {
   upstreamId: string
   model: string
   limit: number
   beforeId?: bigint
+  window?: string
 }) {
   const client = useAdminClient()
   const beforeId = input.beforeId ?? 0n
+  const window = input.window ?? ''
   return useQuery({
     queryKey: usageKeys.events(
       input.upstreamId,
       input.model,
       input.limit,
-      beforeId.toString()
+      beforeId.toString(),
+      window
     ),
     queryFn: () =>
       client.listUsageEvents(
@@ -36,6 +43,7 @@ export function useUsageEvents(input: {
           upstreamId: input.upstreamId,
           model: input.model,
           beforeId,
+          window,
         })
       ),
   })

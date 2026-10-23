@@ -1,0 +1,178 @@
+// test/usage-check.ts — 请求级用量日志。
+//
+//   node --experimental-strip-types test/usage-check.ts
+//
+// 覆盖的是用量统计最容易写错的地方：按天分组（「今日用量」这个说法就靠它）、
+// 按上游和按模型的分组、令牌的分摊、时间窗的边界、游标翻页、过期记录丢掉。
+//
+// 用的库是测试自己的（临时目录），不碰真的那个。
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "usage-check-"));
+process.env.BUDDY_DATA_DIR = tmp;
+
+const { listUsage, pruneUsage, recordUsage, localDay, clearUsage } = await import(
+  "../lib/usage.ts"
+);
+const { usageEvents, usageSummary } = await import("../lib/admin/usage.ts");
+
+let pass = 0;
+let fail = 0;
+
+function check(name: string, ok: boolean, detail = ""): void {
+  if (ok) {
+    pass++;
+    console.log(`  ok   ${name}`);
+  } else {
+    fail++;
+    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+function clear(): void {
+  clearUsage();
+}
+
+console.log("");
+console.log("记一条请求");
+
+clear();
+const now = Date.now();
+recordUsage({
+  upstreamId: "qoder",
+  upstreamModel: "glm-5.3",
+  agentModel: "glm-5.3",
+  dialect: "openai",
+  client: "qoder",
+  ok: true,
+  status: 200,
+  promptTokens: 100,
+  completionTokens: 20,
+  reasoningTokens: 5,
+  latencyMs: 1200,
+  error: "",
+});
+
+let events = listUsage();
+check("记下一条", events.length === 1, String(events.length));
+check("令牌原样存着", events[0].promptTokens === 100 && events[0].completionTokens === 20);
+check("推理令牌单独存", events[0].reasoningTokens === 5);
+check("今天是哪天", events[0].day === localDay(now), events[0].day);
+check("id 是库里的序号", events[0].id > 0);
+
+console.log("");
+console.log("失败的请求也记");
+
+recordUsage({
+  upstreamId: "minimax",
+  upstreamModel: "MiniMax-M3.1-Flash",
+  agentModel: "MiniMax-M3.1-Flash",
+  dialect: "anthropic",
+  client: "minimax",
+  ok: false,
+  status: 429,
+  promptTokens: 10,
+  completionTokens: 0,
+  reasoningTokens: 0,
+  latencyMs: 300,
+  error: "upstream said no",
+});
+
+events = listUsage();
+check("两条了", events.length === 2, String(events.length));
+check("新的在前", events[0].upstreamId === "minimax");
+check("失败的那条带着原因", events[0].error === "upstream said no", events[0].error);
+
+console.log("");
+console.log("合计与分组");
+
+const summary = usageSummary();
+check("请求数是两条", summary.total.requests === 2, String(summary.total.requests));
+check("成功一条失败一条", summary.total.succeeded === 1 && summary.total.failed === 1);
+check("输入令牌加起来", summary.total.promptTokens === 110, String(summary.total.promptTokens));
+check("输出令牌加起来", summary.total.completionTokens === 20, String(summary.total.completionTokens));
+check("推理令牌加起来", summary.total.reasoningTokens === 5, String(summary.total.reasoningTokens));
+check("按上游分成两个", summary.byUpstream.length === 2, String(summary.byUpstream.length));
+check("按模型分成两个", summary.byModel.length === 2, String(summary.byModel.length));
+check("按天是一天", summary.byDay.length === 1, String(summary.byDay.length));
+
+const qoder = summary.byUpstream.find((b) => b.key === "qoder");
+check("qoder 那桶是第一条", qoder?.summary.requests === 1, String(qoder?.summary.requests));
+
+console.log("");
+console.log("今日用量");
+
+// 昨天的一条：按天分组时它不能算进今天。
+recordUsage({
+  upstreamId: "qoder",
+  upstreamModel: "glm-5.3",
+  agentModel: "glm-5.3",
+  dialect: "openai",
+  client: "qoder",
+  ok: true,
+  status: 200,
+  promptTokens: 999,
+  completionTokens: 999,
+  reasoningTokens: 0,
+  latencyMs: 1,
+  error: "",
+  ts: now - 30 * 60 * 60 * 1000,
+});
+
+const today = usageSummary("", "today");
+check("今日只有今天的两条", today.total.requests === 2, String(today.total.requests));
+check("今日的令牌不含昨天那条", today.total.promptTokens === 110, String(today.total.promptTokens));
+
+const all = usageSummary();
+check("全部是三条", all.total.requests === 3, String(all.total.requests));
+check("按天是两天", all.byDay.length === 2, String(all.byDay.length));
+check("按天从早到晚", all.byDay[0].key < all.byDay[1].key, JSON.stringify(all.byDay.map((b) => b.key)));
+
+console.log("");
+console.log("筛与游标");
+
+const byUpstream = usageSummary("qoder");
+check("按上游筛", byUpstream.total.requests === 2, String(byUpstream.total.requests));
+
+const onlyQoder = usageEvents("", "glm-5.3");
+check("按模型筛", onlyQoder.length === 2, String(onlyQoder.length));
+
+const page1 = usageEvents("", "", 2);
+check("限量", page1.length === 2, String(page1.length));
+const page2 = usageEvents("", "", 2, page1[page1.length - 1].id);
+check("游标取到更早的", page2.length === 1, String(page2.length));
+check(
+  "两页不重",
+  !page1.some((a) => page2.some((b) => b.id === a.id)),
+);
+
+console.log("");
+console.log("丢掉太老的");
+
+recordUsage({
+  upstreamId: "qoder",
+  upstreamModel: "old",
+  agentModel: "old",
+  dialect: "openai",
+  client: "qoder",
+  ok: true,
+  status: 200,
+  promptTokens: 1,
+  completionTokens: 1,
+  reasoningTokens: 0,
+  latencyMs: 1,
+  error: "",
+  ts: now - 200 * 24 * 60 * 60 * 1000,
+});
+const removed = pruneUsage(90);
+check("丢掉了那条", removed === 1, String(removed));
+check("剩下的还在", listUsage().length === 3, String(listUsage().length));
+
+fs.rmSync(tmp, { recursive: true, force: true });
+
+console.log("");
+console.log(`${pass} 项过了，${fail} 项没过`);
+process.exit(fail === 0 ? 0 : 1);

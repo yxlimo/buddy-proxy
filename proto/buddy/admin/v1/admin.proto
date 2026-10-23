@@ -383,6 +383,8 @@ message ListUsageEventsRequest {
   string model = 3;
   // 游标：只返回 id 比它小的。0 表示从头。
   int64 before_id = 4;
+  // 时间窗，跟 GetUsageSummaryRequest 一样：空 = 全部，today = 本地零点起。
+  string window = 5;
 }
 
 message UsageEvent {

@@ -526,6 +526,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       String(request.model ?? ""),
       Number(request.limit ?? 0),
       Number(request.beforeId ?? 0),
+      String(request.window ?? ""),
     );
     return create(ListUsageEventsResponseSchema, {
       events: events.map((event) =>
@@ -533,7 +534,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           id: BigInt(event.id),
           ts: BigInt(event.ts),
           upstreamId: event.upstreamId,
-          model: event.model,
+          model: event.upstreamModel,
           agentModel: event.agentModel,
           dialect: event.dialect,
           client: event.client,
@@ -541,7 +542,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           completionTokens: BigInt(event.completionTokens),
           reasoningTokens: BigInt(event.reasoningTokens),
           latencyMs: BigInt(event.latencyMs),
-          status: event.status,
+          // The status is the HTTP code the client got: 200 for a good answer,
+          // the upstream's own code for a failure.
+          status: String(event.status),
           error: event.error,
         }),
       ),

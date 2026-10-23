@@ -3,7 +3,6 @@ import { ErrorState, LoadingState } from '@/components/async-state'
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
@@ -46,12 +45,6 @@ export function BalancePage() {
                   {quota.upstreamId || '未知上游'}
                   {quota.accountId ? ` · ${quota.accountId}` : ''}
                 </CardTitle>
-                <CardDescription>
-                  {/* 额度是谁的：契约里 UpstreamQuota 带 upstream_id 和
-                      account_id，不用靠数组顺序去猜。 */}
-                  这个账号的额度。有套餐额度就显示套餐额度，没有才显示积分；
-                  余额有就另外显示。
-                </CardDescription>
               </CardHeader>
               <CardContent className='px-0'>
                 <QuotaDetail quota={quota} />

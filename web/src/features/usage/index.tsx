@@ -32,12 +32,14 @@ const route = getRouteApi('/_authenticated/usage')
 const EVENTS_LIMIT = 500
 
 // 时间窗。契约里的取值：hour / day / week / month，空表示全部。
+// today 是从本地零点算起的一段 —— 早上八点看「今天」，要的是零点到现在。
 const WINDOWS = [
-  { value: '', label: '全部' },
+  { value: 'today', label: '今日' },
   { value: 'hour', label: '最近一小时' },
   { value: 'day', label: '最近一天' },
   { value: 'week', label: '最近一周' },
   { value: 'month', label: '最近一个月' },
+  { value: 'all', label: '全部' },
 ]
 
 export function UsagePage() {
@@ -46,7 +48,8 @@ export function UsagePage() {
 
   const upstreamFilter = search.upstream ?? ''
   const modelFilter = search.model ?? ''
-  const windowFilter = search.window ?? ''
+  // 默认看今天：这个页面最常问的是「今天用了多少」。
+  const windowFilter = search.window ?? 'today'
 
   const summary = useUsageSummary({
     upstreamId: upstreamFilter,
@@ -57,6 +60,7 @@ export function UsagePage() {
     upstreamId: upstreamFilter,
     model: modelFilter,
     limit: EVENTS_LIMIT,
+    window: windowFilter,
   })
 
   const total = summary.data?.total
@@ -72,15 +76,15 @@ export function UsagePage() {
   return (
     <PageShell
       title='用量'
-      description='请求数、令牌数、还有每一条请求的明细。筛选和分页写在 URL 里。'
+      description='走过的请求：令牌、耗时、明细。记的是真正发到上游的那些请求 —— 模型名写错、在路由就被拒的，不算用量。'
       actions={
         <Select
-          value={windowFilter || 'all'}
+          value={windowFilter}
           onValueChange={(value) =>
             navigate({
               search: (prev) => ({
                 ...prev,
-                window: value === 'all' ? undefined : value,
+                window: value,
               }),
               replace: true,
             })
@@ -91,7 +95,7 @@ export function UsagePage() {
           </SelectTrigger>
           <SelectContent>
             {WINDOWS.map((item) => (
-              <SelectItem key={item.value || 'all'} value={item.value || 'all'}>
+              <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
             ))}
@@ -202,7 +206,14 @@ function BreakdownCard({
   buckets,
 }: {
   title: string
-  buckets: { key: string; summary?: { requests: bigint } }[]
+  buckets: {
+    key: string
+    summary?: {
+      requests: bigint
+      promptTokens: bigint
+      completionTokens: bigint
+    }
+  }[]
 }) {
   return (
     <Card>
@@ -221,8 +232,10 @@ function BreakdownCard({
               className='flex items-center justify-between gap-3 text-sm'
             >
               <span className='truncate font-mono text-xs'>{bucket.key}</span>
-              <span className='font-mono text-muted-foreground'>
-                {formatCount(bucket.summary?.requests ?? 0n)} 次
+              <span className='whitespace-nowrap font-mono text-xs text-muted-foreground'>
+                {formatCount(bucket.summary?.requests ?? 0n)} 次 · 入{' '}
+                {formatCount(bucket.summary?.promptTokens ?? 0n)} / 出{' '}
+                {formatCount(bucket.summary?.completionTokens ?? 0n)}
               </span>
             </div>
           ))

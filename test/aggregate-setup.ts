@@ -13,6 +13,7 @@
 // friends), which is why the test broke on a machine that had none.
 
 import { saveAggregateModel, deleteAggregateModel, clearAggregateUsage, listAggregateModels } from "../lib/aggregate.ts";
+import { clearUsage } from "../lib/usage.ts";
 import { setSecret } from "../lib/store.ts";
 
 const [, , command, ...rest] = process.argv;
@@ -37,6 +38,7 @@ switch (command) {
     break;
   case "clear-usage":
     clearAggregateUsage();
+    clearUsage();
     console.log("cleared the traffic");
     break;
   case "seed": {

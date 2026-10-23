@@ -207,6 +207,21 @@ rather than showing a total of zero.
 The upstream switches live in the 上游 tab, not in the 配置 tab: one switch,
 one place.
 
+### Usage
+
+Every request that reaches an upstream is written down, one row each: when,
+which upstream, which model, what the client asked for, which desktop client
+we impersonated, whether it worked, and how many tokens it used. The 用量 tab
+shows the totals (per upstream, per model, per day), the detail rows, and a
+`今日` window that means "since local midnight" rather than "the last 24
+hours".
+
+Requests that never leave the gateway — a model name nobody has, an upstream
+that is switched off — are not usage and are not counted. They show up in the
+request log instead.
+
+The rows older than 90 days are dropped at startup.
+
 ## Endpoints
 
 | Method | Path | Format |
