@@ -42,7 +42,10 @@ import {
   senseNovaInferenceKey,
   senseNovaModelIds,
 } from "./lib/sensenova/transport.ts";
-import { loadSession as loadSenseNovaSession } from "./lib/sensenova/auth.ts";
+import {
+  loadSession as loadSenseNovaSession,
+  login as loginSenseNova,
+} from "./lib/sensenova/auth.ts";
 import { SENSENOVA_INFER_BASE } from "./lib/sensenova/config.ts";
 import {
   ensureInternAiKey,
@@ -839,10 +842,12 @@ app.listen(PORT, HOST, () => {
     // 推理端点要的是一把 key，不是 cookie。账号上有会话却没有 key 的（老版本
     // 登录留下的），在这里补一把 —— 登录完了上游才是 READY 的。
     void (async () => {
-      const session = loadSenseNovaSession();
+      // SenseNova 的登录是账号密码加 PKCE，不用开浏览器，所以没有会话时
+      // 网关自己登 —— 凭据在环境里，够用。
+      let session = loadSenseNovaSession();
       if (!session) {
-        console.log("  [SENSENOVA] 还没有登录态");
-        return;
+        console.log("  [SENSENOVA] 还没有登录态，用环境里的账号密码登录");
+        session = await loginSenseNova();
       }
       await ensureSenseNovaKey(session);
       await refreshSenseNovaCatalog(true);
@@ -855,7 +860,8 @@ app.listen(PORT, HOST, () => {
     void (async () => {
       const session = loadInternAiSession();
       if (!session) {
-        console.log("  [INTERN-AI] 还没有登录态");
+        // 端砚的登录要过人机验证，服务器替不了：让人在面板上登一次。
+        console.log("  [INTERN-AI] 还没有登录态，在面板上登录一次即可");
         return;
       }
       await ensureInternAiKey(session);
