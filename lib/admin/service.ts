@@ -47,6 +47,7 @@ import {
   PublishedModelSchema,
   PublishedTargetSchema,
   RefreshCredentialResponseSchema,
+  SetProviderKeysResponseSchema,
   RestartSystemResponseSchema,
   RunBenefitNowResponseSchema,
   SavePublishedModelResponseSchema,
@@ -83,7 +84,7 @@ import {
   type UpstreamSwitch,
 } from "./upstreams.ts";
 import { listAccounts, listCredentials, refreshCredential, testCredential } from "./accounts.ts";
-import { credentialStateText } from "./credentials.ts";
+import { credentialStateText, setProviderKeys } from "./credentials.ts";
 import {
   beginLogin,
   cancelLogin,
@@ -457,6 +458,17 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       ok: result.ok,
       message: result.message,
       checkedAt: BigInt(Date.now()),
+    });
+  },
+
+  async setProviderKeys(request) {
+    const upstreamId = String(request.upstreamId ?? "");
+    const keys = (request.keys ?? []).map((k) => String(k).trim()).filter((k) => k.length > 0);
+    const result = setProviderKeys(upstreamId, keys);
+    return create(SetProviderKeysResponseSchema, {
+      ok: result.ok,
+      message: result.message,
+      count: result.count,
     });
   },
 

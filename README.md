@@ -446,9 +446,13 @@ MINIMAX_API_2_KEY=sk-cp-…
 
 The gateway takes the tenants in turn, and a tenant that cannot serve the
 request (the plan ran out, the key was refused, the key is rate limited) is
-skipped for the next one. The environment wins over the database, so a key
-rotated in `.env` takes effect at once; the database keeps a copy so the
-service still runs without the `.env` file.
+skipped for the next one.
+
+**The keys are written in the panel**, on the account page: the account "MiniMax
+开放平台" has an "API Key" button; one key per line, the first line is the
+first tenant. The environment wins over the database, so a key rotated in
+`.env` takes effect at once; the database keeps a copy so the service still
+runs without the `.env` file.
 
 The quota of each tenant is its plan's own windows (five hours and a week) —
 the same thing the Code gateway's account has.

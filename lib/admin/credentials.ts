@@ -7,6 +7,11 @@
 // status 仍是字符串），那是给人看的词。
 
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
+import {
+  MAX_MINIMAX_API_TENANTS,
+  miniMaxApiTenantSecretId,
+} from "../minimax/api.ts";
+import { deleteSecret, setSecret } from "../store.ts";
 
 /**
  * 上游报的状态 → 契约里的枚举。
@@ -17,6 +22,32 @@ import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
  * `fromUpstreamStatus` 那里单独判的。这里的 anonymous 是「有凭据，但还没
  * 过期」—— 账号密码型上游（TokenRhythm）的常态。
  */
+/**
+ * 写一个 Provider 的 API Key 列表。
+ *
+ * 目前只有 MiniMax 开放平台需要：它一把 key 一个租户，key 列表就是租户列表。
+ * 环境变量里的 key 优先（那是在 .env 里轮换的，必须立刻生效），所以这里写的
+ * 只是数据库那份 —— 环境变量撤掉之后才轮到它。
+ */
+export function setProviderKeys(
+  upstreamId: string,
+  keys: string[],
+): { ok: boolean; message: string; count: number } {
+  if (upstreamId !== "minimax-api") {
+    return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
+  }
+  const cleaned = keys.map((k) => String(k).trim()).filter((k) => k.length > 0);
+  if (cleaned.length > MAX_MINIMAX_API_TENANTS) {
+    return { ok: false, message: `最多 ${MAX_MINIMAX_API_TENANTS} 把 key`, count: 0 };
+  }
+  for (let index = 1; index <= MAX_MINIMAX_API_TENANTS; index++) {
+    const key = cleaned[index - 1] ?? "";
+    if (key) setSecret(miniMaxApiTenantSecretId(index), "key", { key });
+    else deleteSecret(miniMaxApiTenantSecretId(index));
+  }
+  return { ok: true, message: `写了 ${cleaned.length} 把 key`, count: cleaned.length };
+}
+
 export function credentialState(status: string): CredentialState {
   switch (status) {
     case "authenticated":

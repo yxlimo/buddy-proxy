@@ -281,7 +281,7 @@ async function raw(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 
 console.log("");
-console.log("契约：二十六个方法");
+console.log("契约：二十七个方法");
 
 // 每个方法配一个像样的请求。
 // 登录那六个：挑不会碰到网络的上游（密码流与回填流），不真的登录。
@@ -313,9 +313,10 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "LoginWithPassword", request: { upstreamId: "qoder", username: "x", password: "y" } },
   { method: "ExchangeLoginCode", request: { upstreamId: "intern-ai", code: "" } },
   { method: "ImportLoginToken", request: { upstreamId: "intern-ai", token: "" } },
+  { method: "SetProviderKeys", request: { upstreamId: "minimax-api", keys: [] } },
 ];
 
-check("契约里有二十六个方法", contract.methods.size === 26, String(contract.methods.size));
+check("契约里有二十七个方法", contract.methods.size === 27, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",

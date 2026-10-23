@@ -19,6 +19,14 @@ import { fetchMiniMaxTokenPlan, minimaxApiHost, type MiniMaxRegion } from "./cre
 /** 最多读几个租户。 */
 const MAX_TENANTS = 10;
 
+/** 最多几把 key（也就是几个租户）。 */
+export const MAX_MINIMAX_API_TENANTS = MAX_TENANTS;
+
+/** 某个租户的 key 存在数据库里的 id。 */
+export function miniMaxApiTenantSecretId(index: number): string {
+  return tenantSecretId(index);
+}
+
 /** 一个租户：一把 key。 */
 export interface MiniMaxApiTenant {
   index: number;
@@ -39,10 +47,13 @@ export function miniMaxApiTenants(): MiniMaxApiTenant[] {
   const out: MiniMaxApiTenant[] = [];
   for (let index = 1; index <= MAX_TENANTS; index++) {
     const fromEnv = readEnvValue(`MINIMAX_API_${index}_KEY`) || "";
-    const stored = getSecret<string>(tenantSecretId(index)) || "";
+    // 存的形状有两种：对象（面板写的）与裸字符串（早先写的）。都认。
+    const raw = getSecret<unknown>(tenantSecretId(index));
+    const stored =
+      typeof raw === "string" ? raw : raw && typeof raw === "object" && "key" in raw ? String((raw as any).key ?? "") : "";
     const key = fromEnv || stored;
     if (!key) continue;
-    if (fromEnv && fromEnv !== stored) setSecret(tenantSecretId(index), "key", fromEnv);
+    if (fromEnv && fromEnv !== stored) setSecret(tenantSecretId(index), "key", { key: fromEnv });
     out.push({ index, key });
   }
   return out;

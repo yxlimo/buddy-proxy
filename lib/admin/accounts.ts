@@ -8,6 +8,10 @@
 // 敏感的值只写不读：列表里给的是掩码与指纹。
 
 import crypto from "node:crypto";
+import {
+  MAX_MINIMAX_API_TENANTS,
+  miniMaxApiTenantSecretId,
+} from "../minimax/api.ts";
 import { listSecrets } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";

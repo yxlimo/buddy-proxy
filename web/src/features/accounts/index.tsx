@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LogIn, RefreshCw, Stethoscope } from 'lucide-react'
+import { KeyRound, LogIn, RefreshCw, Stethoscope } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
@@ -24,10 +24,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
 import {
   useAccounts,
   useCredentials,
   useRefreshCredential,
+  useSetProviderKeys,
   useTestCredential,
 } from '@/features/accounts/api'
 import { useBeginLogin } from '@/features/login/api'
@@ -51,6 +53,9 @@ export function AccountsPage() {
     label: string
   } | null>(null)
   const beginLogin = useBeginLogin()
+  const setKeys = useSetProviderKeys()
+  /** 正在填 key 的 Provider。 */
+  const [keysFor, setKeysFor] = useState<string | null>(null)
 
   // 正在动的是哪条凭据：看 mutation 的 variables，不用自己存一份状态
   // （两个按钮连点的时候自己那份会串）。
@@ -182,23 +187,38 @@ export function AccountsPage() {
                         {account.detail || '—'}
                       </TableCell>
                       <TableCell className='text-right'>
-                        <Button
-                          variant={withoutCredential ? 'default' : 'outline'}
-                          size='sm'
-                          disabled={beginLogin.isPending}
-                          onClick={(event) => {
-                            // 点登录按钮别顺带把行也选中。
-                            event.stopPropagation()
-                            startLogin({
-                              upstreamId: account.upstreamId,
-                              id: account.id,
-                              label: account.label || account.id,
-                            })
-                          }}
-                        >
-                          <LogIn />
-                          登录
-                        </Button>
+                        <div className='flex justify-end gap-2'>
+                          {account.upstreamId === 'minimax-api' ? (
+                            <Button
+                              variant='outline'
+                              size='sm'
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setKeysFor(account.id)
+                              }}
+                            >
+                              <KeyRound />
+                              API Key
+                            </Button>
+                          ) : null}
+                          <Button
+                            variant={withoutCredential ? 'default' : 'outline'}
+                            size='sm'
+                            disabled={beginLogin.isPending}
+                            onClick={(event) => {
+                              // 点登录按钮别顺带把行也选中。
+                              event.stopPropagation()
+                              startLogin({
+                                upstreamId: account.upstreamId,
+                                id: account.id,
+                                label: account.label || account.id,
+                              })
+                            }}
+                          >
+                            <LogIn />
+                            登录
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )
@@ -344,6 +364,23 @@ export function AccountsPage() {
                 })
             : undefined
         }
+      />
+
+      <ProviderKeysDialog
+        open={keysFor !== null}
+        onOpenChange={(open) => {
+          if (!open) setKeysFor(null)
+        }}
+        existing={[]}
+        pending={setKeys.isPending}
+        onSubmit={(keys) => {
+          setKeys.mutate(
+            { upstreamId: 'minimax-api', keys },
+            {
+              onSuccess: () => setKeysFor(null),
+            }
+          )
+        }}
       />
     </PageShell>
   )

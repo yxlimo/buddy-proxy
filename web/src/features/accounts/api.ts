@@ -5,6 +5,7 @@ import {
   ListAccountsRequestSchema,
   ListCredentialsRequestSchema,
   RefreshCredentialRequestSchema,
+  SetProviderKeysRequestSchema,
   TestCredentialRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
@@ -59,6 +60,37 @@ export function useTestCredential() {
     },
     onSuccess: (result) => {
       toast.success(result.message || '这条凭据还能用')
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+    },
+  })
+}
+
+/**
+ * 写一个 Provider 的 API Key 列表。
+ *
+ * MiniMax 开放平台一把 key 一个租户，所以这里传的是列表。
+ */
+export function useSetProviderKeys() {
+  const client = useAdminClient()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { upstreamId: string; keys: string[] }) => {
+      const result = await client.setProviderKeys(
+        create(SetProviderKeysRequestSchema, {
+          upstreamId: input.upstreamId,
+          keys: input.keys,
+        })
+      )
+      assertOk(result, '写入失败')
+      return result
+    },
+    onError: (error) => {
+      toast.error(describeError(error))
+    },
+    onSuccess: (result) => {
+      toast.success(result.message || '已写入')
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: accountKeys.all })

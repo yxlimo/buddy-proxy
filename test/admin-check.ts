@@ -208,6 +208,16 @@ console.log("上游与配置");
 const upstreams = await call("ListUpstreams", {}, token);
 check("上游列表有九个", list(upstreams.body?.upstreams).length === 9, String(list(upstreams.body?.upstreams).length));
 
+// MiniMax 开放平台的 key 从面板写进去。
+const keys = await call("SetProviderKeys", { upstreamId: "minimax-api", keys: ["sk-cp-test-one", "sk-cp-test-two"] }, token);
+check("key 写进去了", keys.body?.ok === true && Number(keys.body?.count) === 2, JSON.stringify(keys.body));
+const afterKeys = await call("ListUpstreams", {}, token);
+const miniMaxApi = list(afterKeys.body?.upstreams).find((u: any) => u.id === "minimax-api");
+check("MiniMax 开放平台有两个租户", String(miniMaxApi?.credential?.detail ?? "").includes("2"), String(miniMaxApi?.credential?.detail));
+const badKeys = await call("SetProviderKeys", { upstreamId: "qoder", keys: ["x"] }, token);
+check("别的 Provider 不收 key", badKeys.body?.ok === false, JSON.stringify(badKeys.body));
+await call("SetProviderKeys", { upstreamId: "minimax-api", keys: [] }, token);
+
 const config = await call("ListConfig", {}, token);
 check("配置项列出来了", Array.isArray(config.body?.items) && config.body.items.length > 0);
 check(

@@ -332,6 +332,20 @@ message RefreshCredentialResponse {
   int32 generation = 3;
 }
 
+// 写一个 Provider 的 API Key 列表。空的 key 会被丢掉。
+message SetProviderKeysRequest {
+  // 目前只有 minimax-api 需要。
+  string upstream_id = 1;
+  // 按顺序排：第一把 key 是第一个租户。
+  repeated string keys = 2;
+}
+
+message SetProviderKeysResponse {
+  bool ok = 1;
+  string message = 2;
+  int32 count = 3;
+}
+
 // ── 余额 ──────────────────────────────────────────────────────────────────
 
 message GetBalanceRequest {
@@ -678,6 +692,7 @@ service AdminService {
   rpc ListCredentials(ListCredentialsRequest) returns (ListCredentialsResponse);
   rpc TestCredential(TestCredentialRequest) returns (TestCredentialResponse);
   rpc RefreshCredential(RefreshCredentialRequest) returns (RefreshCredentialResponse);
+  rpc SetProviderKeys(SetProviderKeysRequest) returns (SetProviderKeysResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
 
