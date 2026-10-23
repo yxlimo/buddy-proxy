@@ -22,6 +22,10 @@ import {
   miniMaxApiTenantPlans,
   miniMaxApiTenants,
 } from "../minimax/api.ts";
+import { ZCODE_MODELS } from "../zcode/models.ts";
+import { ZCODE_MESSAGES_URL } from "../zcode/transport.ts";
+import { zcodeStatus } from "../zcode/auth.ts";
+import { zcodeQuota } from "../zcode/credits.ts";
 import { credentialStatus, readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
 import { MINIMAX_UPSTREAM } from "../minimax/transport.ts";
@@ -63,6 +67,7 @@ import {
   internAiCatalogModels,
   minimaxCatalogModels,
   miniMaxApiCatalogModels,
+  zcodeCatalogModels,
   qoderCatalogModels,
   senseNovaCatalogModels,
   tokenRhythmCatalogModels,
@@ -74,6 +79,7 @@ import {
 export type UpstreamId =
   | "minimax"
   | "minimax-api"
+  | "zcode"
   | "qoder"
   | "qoder-cn"
   | "workbuddy-cn"
@@ -85,6 +91,7 @@ export type UpstreamId =
 export const UPSTREAM_FLAG_KEYS: Record<UpstreamId, string> = {
   minimax: "MINIMAX_CODE",
   "minimax-api": "MINIMAX_API",
+  zcode: "ZCODE",
   qoder: "QODER_GLOBAL",
   "qoder-cn": "QODER_CN",
   "workbuddy-cn": "WORKBUDDY_CN",
@@ -114,6 +121,7 @@ export function upstreamEnabled(id: UpstreamId): boolean {
 export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
   minimax: "MiniMax Code",
   "minimax-api": "MiniMax 开放平台",
+  zcode: "ZCode",
   qoder: "Qoder（全球区）",
   "qoder-cn": "Qoder（中国区）",
   "workbuddy-cn": "WorkBuddy（中国区）",
@@ -126,6 +134,7 @@ export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
 export const UPSTREAM_IDS: UpstreamId[] = [
   "minimax",
   "minimax-api",
+  "zcode",
   "qoder",
   "qoder-cn",
   "workbuddy-cn",
@@ -178,6 +187,8 @@ export function upstreamBaseUrl(id: UpstreamId): string {
       return MINIMAX_UPSTREAM.replace(/\/messages$/, "");
     case "minimax-api":
       return miniMaxApiBase();
+    case "zcode":
+      return ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, "");
     case "qoder":
       return QODER_ENDPOINTS.global.infer.replace(/\/model\/v1\/chat\/completions$/, "");
     case "qoder-cn":
@@ -204,6 +215,8 @@ export function upstreamRegion(id: UpstreamId): string {
     case "minimax":
       return MINIMAX_REGION;
     case "minimax-api":
+      return "cn";
+    case "zcode":
       return "cn";
     case "qoder":
       return "global";
@@ -310,6 +323,7 @@ export function catalogGroups(): CatalogGroup[] {
   }
   const minimax = minimaxVisible();
   if (minimax.length) groups.push({ group: "minimax", models: minimaxCatalogModels(minimax) });
+  if (upstreamEnabled("zcode")) groups.push({ group: "zcode", models: zcodeCatalogModels(ZCODE_MODELS) });
   if (upstreamEnabled("minimax-api") && miniMaxApiTenants().length) {
     groups.push({ group: "minimax-api", models: miniMaxApiCatalogModels(MINIMAX_API_MODELS) });
   }
@@ -332,6 +346,8 @@ export function upstreamModelCount(id: UpstreamId): number {
       return minimaxVisible().length;
     case "minimax-api":
       return upstreamEnabled("minimax-api") ? MINIMAX_API_MODELS.length : 0;
+    case "zcode":
+      return upstreamEnabled("zcode") ? ZCODE_MODELS.length : 0;
     case "qoder":
       return qoderVisible("global").length;
     case "qoder-cn":
@@ -362,6 +378,8 @@ export interface HealthSnapshot {
   minimax: { balance: unknown; tokenPlan: unknown };
   /** MiniMax 开放平台：每个租户一份套餐额度。 */
   minimaxApi: { tenants: unknown };
+  /** ZCode 的 Start Plan 额度。 */
+  zcode: { quota: unknown };
   workbuddy: { credits: unknown };
   tokenrhythm: { tenants: unknown };
   /** SenseNova 的积分池。 */
@@ -458,6 +476,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
     qoder,
     minimax: { balance: await miniMaxBalance(), tokenPlan: await miniMaxTokenPlan() },
     minimaxApi: { tenants: await miniMaxApiTenantPlans() },
+    zcode: { quota: await zcodeQuota() },
     workbuddy: { credits: await fetchWorkBuddyCredits() },
     tokenrhythm: { tenants: await tokenRhythmStatuses() },
     sensenova: { pools: await senseNovaPools() },
@@ -545,6 +564,8 @@ export function upstreamCredential(id: UpstreamId): CredentialView {
       return minimaxCredential();
     case "minimax-api":
       return miniMaxApiCredential();
+    case "zcode":
+      return zcodeCredential();
     case "qoder":
       return qoderCredential("global");
     case "qoder-cn":
@@ -627,6 +648,13 @@ function miniMaxApiCredential(): CredentialView {
     detail: tenants.length === 1 ? "1 个租户" : `${tenants.length} 个租户`,
     generation: 0,
   };
+}
+
+/** ZCode 的凭据：zcode JWT。它没有刷新通道，过期了只能重登。 */
+function zcodeCredential(): CredentialView {
+  const raw = zcodeStatus();
+  const view = fromUpstreamStatus(raw, "session", "session:zcode");
+  return view;
 }
 
 /** Qoder 的凭据。 */
@@ -840,6 +868,8 @@ export async function upstreamQuotas(id: UpstreamId, fresh = false): Promise<Quo
       return minimaxQuotas(snapshot);
     case "minimax-api":
       return miniMaxApiQuotas(snapshot);
+    case "zcode":
+      return zcodeQuotas(snapshot);
     case "qoder":
       return qoderQuotas(snapshot, "global");
     case "qoder-cn":
@@ -907,6 +937,8 @@ function upstreamQuotasCached(id: UpstreamId): QuotaView[] {
       return minimaxQuotas(snapshot);
     case "minimax-api":
       return miniMaxApiQuotas(snapshot);
+    case "zcode":
+      return zcodeQuotas(snapshot);
     case "qoder":
       return qoderQuotas(snapshot, "global");
     case "qoder-cn":
@@ -934,6 +966,33 @@ function upstreamQuotasCached(id: UpstreamId): QuotaView[] {
  * 一个 key 就是一份套餐，所以每个租户一条：套餐额度是百分比，账户余额不算
  * （那是另一件事）。
  */
+/** ZCode 的额度：Start Plan 的额度桶。 */
+function zcodeQuotas(snapshot: HealthSnapshot): QuotaView[] {
+  const quota = (snapshot.zcode?.quota ?? null) as any;
+  const buckets = (quota?.buckets ?? []) as any[];
+  if (!buckets.length) return [];
+  return [
+    {
+      upstreamId: "zcode",
+      accountId: "zcode",
+      // Start Plan 的额度是 token 桶：它是一份「还剩多少 token」的额度。
+      credits: {
+        total: buckets.reduce((sum, b) => sum + Number(b.total ?? 0), 0),
+        used: buckets.reduce((sum, b) => sum + Number(b.used ?? 0), 0),
+        remaining: buckets.reduce((sum, b) => sum + Number(b.remaining ?? 0), 0),
+        lots: buckets.map((b, i) => ({
+          id: `zcode-bucket-${i}`,
+          sourceLabel: b.showName || "额度桶",
+          remaining: Number(b.remaining ?? 0),
+          expiresAt: b.expiresAt ? Date.parse(String(b.expiresAt)) : 0,
+          status: "有效",
+        })),
+        note: "Start Plan 的额度桶",
+      },
+    },
+  ];
+}
+
 function miniMaxApiQuotas(snapshot: HealthSnapshot): QuotaView[] {
   const tenants = (snapshot.minimaxApi?.tenants ?? []) as any[];
   return tenants.map((t: any) => ({
@@ -1255,6 +1314,12 @@ export function outOfCredits(id: UpstreamId): boolean {
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return false;
   switch (id) {
+    case "zcode": {
+      const quota = (snapshot.zcode?.quota ?? null) as any;
+      const buckets = (quota?.buckets ?? []) as any[];
+      if (!buckets.length) return false;
+      return buckets.every((b: any) => Number(b.remaining ?? 0) <= 0);
+    }
     case "minimax-api": {
       // 开放平台用的也是 coding plan：看窗口，不看账户余额。
       const tenants = (snapshot.minimaxApi?.tenants ?? []) as any[];

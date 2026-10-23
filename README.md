@@ -12,13 +12,14 @@ Point a client at it and it works with either dialect — see
 
 ## What is switched on
 
-There are eight reverse proxies behind this, and each has a switch. All of them
+There are nine reverse proxies behind this, and each has a switch. All of them
 are **off by default**; turn on the ones you actually use.
 
 | Switch | Turns on |
 |--------|----------|
 | `MINIMAX_CODE=true` | the MiniMax Code gateway |
 | `MINIMAX_API=true` | the MiniMax open platform (api.minimax.cn), by API key |
+| `ZCODE=true` | ZCode (zcode.z.ai), the GLM coding client |
 | `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
 | `QODER_CN=true` | the Qoder China account (qoder.cn) |
 | `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
@@ -32,7 +33,7 @@ message saying which switch to flip. The two Qoder regions are separate
 accounts, so they are switched on separately, and WorkBuddy's China account is
 a third one.
 
-One process reads all eight.
+One process reads all nine.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -393,6 +394,35 @@ browser's `localStorage` (key `opencode.global.dat:model`), and a custom
 provider's models are not in there by default. Open the picker → **Manage
 models** → flip the provider's switch (one switch covers all its models). That
 is per-browser.
+
+## ZCode
+
+ZCode is 智谱's (Z.ai / BigModel) coding client. It is the one upstream whose
+credential is a plain browser OAuth: the CLI asks the platform for a flow, the
+user approves it in a browser, and the gateway polls for the token.
+
+| Method | Path | Format |
+|--------|------|--------|
+| `POST` | `/zcode/v1/messages` | Anthropic messages (stream supported) |
+| `POST` | `/zcode/v1/chat/completions` | OpenAI chat completions |
+| `GET`  | `/zcode/v1/models` | model catalog |
+
+The upstream speaks the Anthropic dialect, so an Anthropic request passes
+through; the gateway adds the headers the client sends (`authorization` and
+`x-api-key` both carry the token, plus the client's own identity headers).
+
+**The token cannot be refreshed.** The Z.ai and BigModel adapters do not
+implement `refreshToken`, so when it expires the only way back is a new login
+in the panel. The panel says so instead of failing quietly.
+
+The models are the built-in table — ZCode keeps them in a static JSON, not
+behind an endpoint: `GLM-5.3-Flash`, `GLM-5.2`, `GLM-5-Turbo`.
+
+The quota is the Start Plan's balance: one endpoint returns the buckets, and
+each bucket says which models it covers.
+
+The reverse engineering is written up in `docs/zcode/FINDINGS.md` (local, not in
+the repository).
 
 ## MiniMax open platform
 

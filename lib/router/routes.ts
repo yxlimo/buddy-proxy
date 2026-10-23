@@ -8,6 +8,7 @@
 
 import { AuthError } from "../credential.ts";
 import { GROUP_PREFIX, UPSTREAM_GROUPS, type UpstreamGroup } from "./catalog.ts";
+import { matchZcodeModel } from "../zcode/models.ts";
 
 export { GROUP_PREFIX, UPSTREAM_GROUPS };
 export type { UpstreamGroup };
@@ -17,6 +18,7 @@ export interface Route {
     | "qoder"
     | "minimax"
     | "minimax-api"
+    | "zcode"
     | "workbuddy"
     | "tokenrhythm"
     | "sensenova"
@@ -39,6 +41,7 @@ export interface RoutingContext {
   enabled: {
     minimax: boolean;
     minimaxApi: boolean;
+    zcode: boolean;
     qoderGlobal: boolean;
     qoderCn: boolean;
     workbuddyCn: boolean;
@@ -53,6 +56,7 @@ export interface RoutingContext {
     qoderHidden: Set<string>;
     minimax: Set<string>;
     minimaxApi: Set<string>;
+    zcode: Set<string>;
     workbuddy: Set<string>;
     tokenrhythm: Set<string>;
     sensenova: Set<string>;
@@ -94,6 +98,10 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
   if (raw.startsWith("minimax-api/")) {
     if (!ctx.enabled.minimaxApi) throw disabledUpstream("minimax-api");
     return { upstream: "minimax-api", model: raw };
+  }
+  if (raw.startsWith("zcode/")) {
+    if (!ctx.enabled.zcode) throw disabledUpstream("zcode");
+    return { upstream: "zcode", model: raw };
   }
   if (ctx.ids.tokenrhythm.has(raw)) {
     if (!ctx.enabled.tokenrhythm) throw disabledUpstream("tokenrhythm");
@@ -172,6 +180,18 @@ export function routeInGroup(group: UpstreamGroup, id: string, ctx: RoutingConte
         );
       }
       return { upstream: "minimax-api", model: `minimax-api/${canonical}` };
+    }
+    case "zcode": {
+      if (!ctx.enabled.zcode) throw disabledUpstream("zcode");
+      const canonical = matchZcodeModel(id);
+      if (!canonical) {
+        throw new AuthError(
+          `unknown model "${id}"`,
+          `ZCode 没有这个模型。可用：${[...ctx.ids.zcode].join("、")}。`,
+          400,
+        );
+      }
+      return { upstream: "zcode", model: `zcode/${canonical.id}` };
     }
     case "sensenova":
       return senseNovaRoute(id, ctx);
@@ -253,6 +273,7 @@ export function disabledUpstream(
   which:
     | "minimax"
     | "minimax-api"
+    | "zcode"
     | "qoder-global"
     | "qoder-cn"
     | "workbuddy-cn"
@@ -265,6 +286,8 @@ export function disabledUpstream(
       ? "MINIMAX_CODE"
       : which === "minimax-api"
         ? "MINIMAX_API"
+        : which === "zcode"
+          ? "ZCODE"
         : which === "qoder-cn"
         ? "QODER_CN"
         : which === "workbuddy-cn"
@@ -281,6 +304,8 @@ export function disabledUpstream(
       ? "MiniMax Code"
       : which === "minimax-api"
         ? "MiniMax 开放平台"
+        : which === "zcode"
+          ? "ZCode"
         : which === "qoder-cn"
         ? "Qoder 中国区"
         : which === "workbuddy-cn"

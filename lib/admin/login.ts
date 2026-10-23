@@ -28,6 +28,13 @@ import {
   type QoderRegion,
 } from "../qoder/auth.ts";
 import {
+  ZCODE_POLL_INTERVAL_MS,
+  ZCODE_POLL_TIMEOUT_MS,
+  beginLogin as beginZcodeLogin,
+  pollLogin as pollZcodeLogin,
+  type ZcodeLogin,
+} from "../zcode/auth.ts";
+import {
   pollLogin as pollWorkBuddyLogin,
   saveSession as saveWorkBuddySession,
   startLogin as startWorkBuddyLogin,
@@ -161,6 +168,19 @@ async function startQoder(region: QoderRegion): Promise<Started> {
   };
 }
 
+/** ZCode：浏览器 OAuth，CLI 那一套（init 拿链接，poll 拿 JWT）。 */
+async function startZcode(): Promise<Started> {
+  const login = await beginZcodeLogin();
+  return {
+    method: "browser",
+    authorizationUrl: login.authorizeUrl,
+    userCode: "",
+    expiresAt: login.expiresAtMs,
+    message: "请在浏览器中打开上方链接并完成登录，之后此处会自动显示为已登录。",
+    poll: { kind: "zcode", login: login as unknown as Record<string, unknown> },
+  };
+}
+
 /** WorkBuddy：浏览器流，state 在服务端。 */
 async function startWorkBuddy(): Promise<Started> {
   const start = await startWorkBuddyLogin("cn");
@@ -222,6 +242,8 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
         return startQoder("global");
       case "qoder-cn":
         return startQoder("cn");
+      case "zcode":
+        return startZcode();
       case "workbuddy-cn":
         return startWorkBuddy();
       case "tokenrhythm":
@@ -303,6 +325,19 @@ async function runPoll(session: StoredLogin): Promise<string> {
       const result = await pollWorkBuddyLogin("cn", state, session.expiresAt);
       saveWorkBuddySession(result);
       return "session:workbuddy:cn";
+    }
+    case "zcode": {
+      const login = poll.login as unknown as ZcodeLogin;
+      const deadline = Date.now() + ZCODE_POLL_TIMEOUT_MS;
+      while (Date.now() < deadline && Date.now() < session.expiresAt) {
+        const result = await pollZcodeLogin(login);
+        if (result.state === "approved") return "session:zcode";
+        if (result.state === "failed" || result.state === "expired") {
+          throw new AuthError("zcode login failed", result.message ?? "登录未成功。", 401);
+        }
+        await new Promise((r) => setTimeout(r, ZCODE_POLL_INTERVAL_MS));
+      }
+      throw new AuthError("zcode login timed out", "登录窗口过期了，请重新发起登录。", 401);
     }
     default:
       throw new AuthError("unknown poll", "该登录会话没有可轮询的内容。", 400);

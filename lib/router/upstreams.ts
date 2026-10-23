@@ -22,6 +22,8 @@ import { workbuddyChat, aggregateStream, conversationIdFor } from "../workbuddy/
 import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
 import { markTenantOutOfMoney, pickTenants, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
+import { zcodeChat } from "../zcode/transport.ts";
+import { zcodeMaxOutput } from "../zcode/models.ts";
 import {
   MAX_ATTEMPTS,
   MiniMaxApiTenantError,
@@ -501,6 +503,51 @@ export async function toMiniMaxApi(
 
   const message = lastError instanceof Error ? lastError.message : "没有能用的租户";
   throw new AuthError("no minimax api tenant can serve the request", message, 503, "api_error");
+}
+
+/**
+ * ZCode（智谱）。
+ *
+ * 上游说的是 Anthropic 方言，所以 Anthropic 的请求原样过去，OpenAI 的转成
+ * Anthropic 再转回来 —— 跟别的上游一个做法。
+ */
+export async function toZcode(
+  ctx: UpstreamContext,
+  body: Record<string, any>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  out: Koa.Context,
+): Promise<void> {
+  const model = upstreamModel(route);
+  const anthropicBody =
+    dialect === "anthropic" ? { ...body } : openaiToAnthropic(body, zcodeMaxOutput(model));
+  anthropicBody.model = model;
+  anthropicBody.stream = stream;
+
+  const { response } = await zcodeChat(anthropicBody, { effort: zcodeEffort(body) });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new AuthError(
+      `upstream HTTP ${response.status}`,
+      `ZCode 上游返回 ${response.status}：${text.slice(0, 300)}`,
+      502,
+    );
+  }
+
+  if (!stream) {
+    const json = await response.json();
+    deliverJson(out, dialect, "anthropic", json, route.label ?? model, ctx.onUsage);
+    return;
+  }
+  await deliverAnthropicStream(out, response.body!, dialect, route.label ?? model, 0, ctx.onUsage);
+}
+
+/** 客户端说的思考档位。 */
+function zcodeEffort(body: Record<string, any>): string | undefined {
+  const level = body?.thinking?.budget_tokens ?? body?.reasoning_effort;
+  if (typeof level === "string" && level) return level;
+  return undefined;
 }
 
 /**

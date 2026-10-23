@@ -1,0 +1,92 @@
+// lib/zcode/credits.ts — ZCode 的额度。
+//
+// Start Plan 的额度是一个接口：
+//
+//   GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=<版本>
+//
+// 头是 Authorization: Bearer <zcode JWT>。
+//
+// 答复的信封是 {code, msg, data:{server_time, plans[], balances[]}}，
+// balances[] 每项是一个额度桶：meter、unit_type、capabilities（哪些模型能用
+// 这个桶）、total_units、used_units、remaining_units、period_start/end。
+//
+// 依据：docs/zcode/FINDINGS.md §9。
+
+import { ZCODE_BASE, ZCODE_VERSION, loadSession } from "./auth.ts";
+
+export interface ZcodeBucket {
+  /** 桶的名字。 */
+  showName: string;
+  /** 计量方式：token 之类。 */
+  meter: string;
+  /** 单位类型。 */
+  unitType: string;
+  /** 这个桶适用哪些模型（`model:GLM-5.3-Flash` 这样）。 */
+  capabilities: string[];
+  total: number;
+  used: number;
+  remaining: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+  expiresAt: string | null;
+}
+
+export interface ZcodeQuota {
+  /** 额度桶。 */
+  buckets: ZcodeBucket[];
+  /** 平台说的服务器时间。 */
+  serverTime: string | null;
+}
+
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** 读额度。没有登录态就没有额度。 */
+export async function fetchZcodeQuota(): Promise<ZcodeQuota | null> {
+  const session = loadSession();
+  if (!session) return null;
+  try {
+    const r = await fetch(
+      `${ZCODE_BASE}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(ZCODE_VERSION)}`,
+      {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${session.token}`,
+          "user-agent": `ZCode/${ZCODE_VERSION}`,
+        },
+        signal: AbortSignal.timeout(20_000),
+      },
+    );
+    if (!r.ok) return null;
+    const body: any = await r.json().catch(() => null);
+    if (!body || body?.code !== 0) return null;
+    const data = body?.data ?? {};
+    const buckets = (Array.isArray(data.balances) ? data.balances : []).map((row: any) => ({
+      showName: String(row?.show_name ?? ""),
+      meter: String(row?.meter ?? ""),
+      unitType: String(row?.unit_type ?? ""),
+      capabilities: (Array.isArray(row?.capabilities) ? row.capabilities : []).map((c: any) => String(c)),
+      total: num(row?.total_units),
+      used: num(row?.used_units),
+      remaining: num(row?.remaining_units ?? row?.available_units),
+      periodStart: row?.period_start ?? null,
+      periodEnd: row?.period_end ?? null,
+      expiresAt: row?.expires_at ?? null,
+    }));
+    return { buckets, serverTime: data?.server_time ?? null };
+  } catch {
+    return null;
+  }
+}
+
+let cache: { at: number; quota: ZcodeQuota | null } | null = null;
+
+/** 额度，问一次就缓存几分钟 —— 面板不该把平台问烦了。 */
+export async function zcodeQuota(maxAgeMs = 300_000): Promise<ZcodeQuota | null> {
+  if (cache && Date.now() - cache.at < maxAgeMs) return cache.quota;
+  const quota = await fetchZcodeQuota();
+  cache = { at: Date.now(), quota };
+  return quota;
+}

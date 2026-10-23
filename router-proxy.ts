@@ -28,6 +28,9 @@ import { LimitError } from "./lib/qoder/transport.ts";
 import { QODER_MODELS } from "./lib/qoder/models.ts";
 import { MINIMAX_MODELS } from "./lib/minimax/models.ts";
 import { MINIMAX_API_MODELS, miniMaxApiBase, miniMaxApiTenants } from "./lib/minimax/api.ts";
+import { ZCODE_MODELS } from "./lib/zcode/models.ts";
+import { ZCODE_MESSAGES_URL } from "./lib/zcode/transport.ts";
+import { zcodeStatus } from "./lib/zcode/auth.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
@@ -60,6 +63,7 @@ import { INTERN_AI_DISCOVERY_API_BASE } from "./lib/intern-ai/config.ts";
 import {
   toMinimax,
   toMiniMaxApi,
+  toZcode,
   toQoder,
   toTokenRhythm,
   toWorkBuddy,
@@ -128,6 +132,8 @@ type Dialect = "anthropic" | "openai";
 const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
 // The open platform's models. The same two, under their own names.
 const MINIMAX_API_MODEL_IDS = new Set(MINIMAX_API_MODELS.map((m) => m.id));
+// ZCode's models: the built-in table, three of them.
+const ZCODE_MODEL_IDS = new Set(ZCODE_MODELS.map((m) => m.id));
 // The models a region can serve, whether the region is on or not.
 const GLOBAL_QODER_IDS = new Set(QODER_GLOBAL_ALL.map((m) => m.id));
 const CN_QODER_IDS = new Set(QODER_CN_ALL.map((m) => m.id));
@@ -255,6 +261,7 @@ router.get("/health", async (ctx) => {
     enabled: {
       minimax: upstreamEnabled("minimax"),
       minimaxApi: upstreamEnabled("minimax-api"),
+      zcode: upstreamEnabled("zcode"),
       qoderGlobal: upstreamEnabled("qoder"),
       qoderCn: upstreamEnabled("qoder-cn"),
       workbuddyCn: upstreamEnabled("workbuddy-cn"),
@@ -273,6 +280,14 @@ router.get("/health", async (ctx) => {
             // the plan's own windows.
             balance: snapshot.data?.minimax?.balance ?? null,
             tokenPlan: snapshot.data?.minimax?.tokenPlan ?? null,
+          }
+        : { enabled: false },
+      zcode: upstreamEnabled("zcode")
+        ? {
+            base: ZCODE_MESSAGES_URL,
+            models: ZCODE_MODELS.length,
+            credential: zcodeStatus(),
+            quota: snapshot.data?.zcode?.quota ?? null,
           }
         : { enabled: false },
       "minimax-api": upstreamEnabled("minimax-api")
@@ -369,6 +384,7 @@ function routingContext(): RoutingContext {
     enabled: {
       minimax: upstreamEnabled("minimax"),
       minimaxApi: upstreamEnabled("minimax-api"),
+      zcode: upstreamEnabled("zcode"),
       qoderGlobal: upstreamEnabled("qoder"),
       qoderCn: upstreamEnabled("qoder-cn"),
       workbuddyCn: upstreamEnabled("workbuddy-cn"),
@@ -382,6 +398,7 @@ function routingContext(): RoutingContext {
       qoderHidden: qoderHiddenIds(),
       minimax: MINIMAX_MODEL_IDS,
       minimaxApi: MINIMAX_API_MODEL_IDS,
+      zcode: ZCODE_MODEL_IDS,
       workbuddy: workbuddyModelIds(),
       tokenrhythm: TOKENRHYTHM_MODEL_IDS,
       sensenova: senseNovaModelIds(),
@@ -621,6 +638,8 @@ async function callUpstream(
       await toInternAi(uctx, body, route, dialect, stream, ctx);
     } else if (route.upstream === "minimax-api") {
       await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
+    } else if (route.upstream === "zcode") {
+      await toZcode(uctx, body, route, dialect, stream, ctx);
     } else {
       await toMinimax(uctx, body, route, dialect, stream, ctx);
     }

@@ -65,6 +65,7 @@ const FIXED_ACCOUNTS: { id: string; upstream: string; label: string }[] = [
   { id: "qoder", upstream: "qoder", label: "Qoder（全球区）" },
   { id: "qoder-cn", upstream: "qoder-cn", label: "Qoder（中国区）" },
   { id: "workbuddy-cn", upstream: "workbuddy-cn", label: "WorkBuddy（中国区）" },
+  { id: "zcode", upstream: "zcode", label: "ZCode" },
   { id: "sensenova", upstream: "sensenova", label: "SenseNova" },
   { id: "intern-ai", upstream: "intern-ai", label: "书生·端砚" },
 ];
@@ -101,7 +102,8 @@ function sessionCredential(id: string, accountId: string, upstreamId: string, la
       updatedAt: 0,
     };
   }
-  const token = String(raw.accessToken ?? raw.cookie ?? "");
+  // ZCode 的会话里令牌叫 token（zcode JWT），别的那几个叫 accessToken。
+  const token = String(raw.accessToken ?? raw.cookie ?? raw.token ?? "");
   const expiresAt = Number(raw.expiresAtMs ?? 0);
   const expired = expiresAt > 0 && expiresAt <= Date.now();
   return {
@@ -161,6 +163,9 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       return out;
     case "workbuddy-cn":
       out.push(sessionCredential("session:workbuddy:cn", "workbuddy-cn", "workbuddy-cn", "登录会话"));
+      return out;
+    case "zcode":
+      out.push(sessionCredential("session:zcode", "zcode", "zcode", "登录会话"));
       return out;
     case "sensenova": {
       out.push(sessionCredential("session:sensenova", accountId, "sensenova", "登录会话"));

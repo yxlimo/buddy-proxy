@@ -19,6 +19,7 @@ export type AggregateGroup =
   | "workbuddy-cn"
   | "minimax"
   | "minimax-api"
+  | "zcode"
   | "tokenrhythm"
   | "sensenova"
   | "intern-ai";

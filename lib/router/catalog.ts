@@ -13,6 +13,7 @@ import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "../qod
 import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy/models.ts";
 import type { MiniMaxModel } from "../minimax/models.ts";
 import type { MiniMaxApiModel } from "../minimax/api.ts";
+import type { ZcodeModel } from "../zcode/models.ts";
 import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
 import type { SenseNovaModel } from "../sensenova/models.ts";
 import type { InternAiCatalogModel } from "../intern-ai/models.ts";
@@ -24,6 +25,7 @@ export type UpstreamGroup =
   | "workbuddy-cn"
   | "minimax"
   | "minimax-api"
+  | "zcode"
   | "tokenrhythm"
   | "sensenova"
   | "intern-ai";
@@ -34,6 +36,7 @@ export const UPSTREAM_GROUPS: UpstreamGroup[] = [
   "workbuddy-cn",
   "minimax",
   "minimax-api",
+  "zcode",
   "tokenrhythm",
   "sensenova",
   "intern-ai",
@@ -46,6 +49,7 @@ export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
   "workbuddy-cn": "workbuddy-cn/",
   minimax: "minimax/",
   "minimax-api": "minimax-api/",
+  zcode: "zcode/",
   tokenrhythm: "tokenrhythm/",
   sensenova: "sensenova/",
   "intern-ai": "intern-ai/",
@@ -129,6 +133,19 @@ export function miniMaxApiCatalogModels(models: MiniMaxApiModel[]): CatalogModel
     toolCall: m.toolCall,
     contextWindow: m.context,
     maxOutputTokens: m.output,
+  }));
+}
+
+/** ZCode 的模型目录（内置的静态表）。 */
+export function zcodeCatalogModels(models: ZcodeModel[]): CatalogModel[] {
+  return models.map((m) => ({
+    id: m.id,
+    displayName: m.displayName,
+    reasoning: m.reasoning,
+    toolCall: m.toolCall,
+    contextWindow: m.context,
+    maxOutputTokens: m.output,
+    ...(m.efforts.length ? { effortOptions: [...m.efforts] } : {}),
   }));
 }
 
