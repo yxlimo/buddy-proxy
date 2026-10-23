@@ -83,6 +83,24 @@ function busyDetail(body: any): { code: string; traceId: string } {
   };
 }
 
+/**
+ * The account has no money left.
+ *
+ * Unlike "the service is busy", this does not get better by waiting: the
+ * tenant cannot serve anything until it is recharged. The caller switches to
+ * another tenant.
+ */
+export class TokenRhythmNoBalanceError extends Error {
+  status = 402;
+  traceId: string;
+
+  constructor(message: string, traceId: string) {
+    super(message);
+    this.name = "TokenRhythmNoBalanceError";
+    this.traceId = traceId;
+  }
+}
+
 export async function tokenRhythmChat(
   index: number,
   body: Record<string, any>,
@@ -104,6 +122,20 @@ export async function tokenRhythmChat(
       "tokenrhythm rejected the key",
       `TokenRhythm 拒绝了第 ${index} 个租户的 key（HTTP 401）。`,
       502,
+    );
+  }
+  if (!response.ok && response.status === 402) {
+    const text = await response.text().catch(() => "");
+    let parsed: any = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      /* not JSON */
+    }
+    const detail = busyDetail(parsed);
+    throw new TokenRhythmNoBalanceError(
+      parsed?.message ?? "账户余额不足，请充值后重试",
+      detail.traceId,
     );
   }
   if (!response.ok && (response.status === 429 || response.status === 503)) {

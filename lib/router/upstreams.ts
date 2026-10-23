@@ -21,8 +21,12 @@ import { legacyChatCompletion, readLegacyFrames } from "../qoder/legacy.ts";
 import { workbuddyChat, aggregateStream, conversationIdFor } from "../workbuddy/transport.ts";
 import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
-import { pickTenant, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
-import { tokenRhythmChat, TokenRhythmBusyError } from "../tokenrhythm/transport.ts";
+import { markTenantOutOfMoney, pickTenants, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
+import {
+  tokenRhythmChat,
+  TokenRhythmBusyError,
+  TokenRhythmNoBalanceError,
+} from "../tokenrhythm/transport.ts";
 import { senseNovaChat } from "../sensenova/transport.ts";
 import { internAiChat } from "../intern-ai/transport.ts";
 import { gatewayErrorMessage, minimaxChat, PING_MS } from "../minimax/transport.ts";
@@ -456,43 +460,78 @@ export async function toTokenRhythm(
   openaiBody.stream = stream;
 
   const statuses = await tokenRhythmStatuses();
-  const tenant = pickTenant(statuses);
-  if (!tenant) {
+  const tenants = pickTenants(statuses);
+  if (!tenants.length) {
     throw new AuthError(
       "no tokenrhythm account has credit left",
       "TokenRhythm 的账号都没有可用的余额了。",
-      503,
-    );
-  }
-  if (ctx.logRoute) {
-    console.log(`[ROUTE] tokenrhythm model=${route.model} tenant=${tenant.index} stream=${stream}`);
-  }
-
-  const { response } = await tokenRhythmChatWithRetry(
-    tenant.index,
-    openaiBody,
-    ctx.tokenRhythmMaxAttempts,
-  );
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new AuthError(
-      `upstream HTTP ${response.status}`,
-      `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
-      502,
+      402,
     );
   }
 
-  if (!stream) {
-    const json = await response.json();
-    const reason = json?.choices?.[0]?.finish_reason;
-    if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+  // Which account pays for it is decided by the gift money: the gift that
+  // runs out first is spent first, and the money that was paid for is the
+  // last resort. A tenant that says it has no money left cannot serve the
+  // request at all, so the next one takes it — the busy case is different:
+  // there the request is retried on the same account, so the prompt cache
+  // stays warm and the balance is not eaten by a cold cache.
+  let lastError: unknown = null;
+  for (const tenant of tenants) {
+    if (ctx.logRoute) {
+      console.log(`[ROUTE] tokenrhythm model=${route.model} tenant=${tenant.index} stream=${stream}`);
+    }
+
+    let response: Response;
+    try {
+      const call = await tokenRhythmChatWithRetry(
+        tenant.index,
+        openaiBody,
+        ctx.tokenRhythmMaxAttempts,
+      );
+      response = call.response;
+    } catch (e) {
+      if (e instanceof TokenRhythmNoBalanceError) {
+        markTenantOutOfMoney(tenant.index);
+        console.log(
+          `[ROUTE] tokenrhythm tenant ${tenant.index} has no balance ` +
+            `(${e.traceId || e.message}), trying the next one`,
+        );
+        lastError = e;
+        continue;
+      }
+      throw e;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new AuthError(
+        `upstream HTTP ${response.status}`,
+        `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
+        502,
+      );
+    }
+
+    if (!stream) {
+      const json = await response.json();
+      const reason = json?.choices?.[0]?.finish_reason;
+      if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
+      deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+      return;
+    }
+
+    await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, (reason) => {
+      if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
+    }, ctx.onUsage);
     return;
   }
 
-  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, (reason) => {
-    if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-  }, ctx.onUsage);
+  // Every tenant said it has no money left.
+  const trace = lastError instanceof TokenRhythmNoBalanceError ? lastError.traceId : "";
+  throw new AuthError(
+    "no tokenrhythm account has credit left",
+    `TokenRhythm 的账号都没有余额了（402 余额不足）。充值后恢复。${trace ? `traceId=${trace}` : ""}`,
+    402,
+  );
 }
 
 /**

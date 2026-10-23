@@ -159,8 +159,22 @@ export async function tenantStatuses(): Promise<TokenRhythmTenantStatus[]> {
  * A tenant with neither is skipped.
  */
 export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus | null {
-  const usable = statuses.filter((s) => !s.error && s.hasKey && (s.wallet?.availableCny ?? 0) > 0);
-  if (!usable.length) return null;
+  return pickTenants(statuses)[0] ?? null;
+}
+
+/**
+ * The tenants a request may go to, in the order they should be tried.
+ *
+ * The order is the same as pickTenant's: the gift that runs out first is
+ * spent first. Tenants that ran out of money are left out — the platform's
+ * cached wallet still says there is money on them for a few minutes, and a
+ * request that goes there fails with "insufficient balance".
+ */
+export function pickTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
+  const usable = statuses.filter(
+    (s) => !s.error && s.hasKey && (s.wallet?.availableCny ?? 0) > 0 && !outOfMoney.has(s.index),
+  );
+  if (!usable.length) return [];
 
   const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
   const pool = withGift.length ? withGift : usable;
@@ -173,7 +187,32 @@ export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTena
     const t = Date.parse(at);
     return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
   };
-  return pool.sort((a, b) => expiry(a) - expiry(b))[0] ?? null;
+  return pool.sort((a, b) => expiry(a) - expiry(b));
+}
+
+/**
+ * Tenants that answered "insufficient balance".
+ *
+ * They are left out for a while — the wallet the gateway has cached still
+ * says there is money on them, and that answer is a few minutes old. After
+ * that the platform's own numbers decide again.
+ */
+const outOfMoney = new Map<number, number>();
+
+/** How long a tenant stays out after it says it has no money. */
+const OUT_OF_MONEY_TTL_MS = 10 * 60 * 1000;
+
+/** Remember that a tenant has no money left. */
+export function markTenantOutOfMoney(index: number): void {
+  outOfMoney.set(index, Date.now());
+}
+
+/** Forget the tenants that ran out of money — the check is stale by now. */
+function pruneOutOfMoney(): void {
+  const cutoff = Date.now() - OUT_OF_MONEY_TTL_MS;
+  for (const [index, at] of outOfMoney) {
+    if (at < cutoff) outOfMoney.delete(index);
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -190,6 +229,7 @@ let cache: { at: number; statuses: TokenRhythmTenantStatus[] } | null = null;
  * use asks for the cached view.
  */
 export async function tokenRhythmStatuses(maxAgeMs = 300_000): Promise<TokenRhythmTenantStatus[]> {
+  pruneOutOfMoney();
   if (cache && Date.now() - cache.at < maxAgeMs) return cache.statuses;
   const statuses = await tenantStatuses();
   cache = { at: Date.now(), statuses };
