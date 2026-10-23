@@ -20,7 +20,7 @@ import { renderWithClient } from '@/test/render'
  */
 describe('配置页的敏感项', () => {
   it('输入框里是空的，保存时不发请求', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const sent: string[] = []
 
     const client = mockAdminClient({
@@ -70,7 +70,7 @@ describe('配置页的敏感项', () => {
   })
 
   it('填了新值才发请求，发出去的是新值', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const sent: string[] = []
 
     const client = mockAdminClient({
@@ -112,7 +112,7 @@ describe('配置页的敏感项', () => {
   })
 
   it('服务端回 ok:false 的时候报失败，不当成功', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     const client = mockAdminClient({
       ListConfig: () =>
@@ -151,7 +151,7 @@ describe('配置页的敏感项', () => {
   })
 
   it('默认值只在和当前值不一样的时候露出来', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {

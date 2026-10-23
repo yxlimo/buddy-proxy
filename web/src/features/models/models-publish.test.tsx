@@ -67,7 +67,7 @@ describe('主路由模型的发布与停用', () => {
   })
 
   it('点「发布」把模型原样存一遍，enabled 变成 true', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const saved: PublishedModel[] = []
     const client = mockAdminClient({
       ListPublishedModels: () =>
@@ -103,7 +103,7 @@ describe('主路由模型的发布与停用', () => {
   })
 
   it('停用要先确认', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const saved: PublishedModel[] = []
     const client = mockAdminClient({
       ListPublishedModels: () =>
@@ -137,7 +137,7 @@ describe('主路由模型的发布与停用', () => {
   })
 
   it('取消确认就不动', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const saved: PublishedModel[] = []
     const client = mockAdminClient({
       ListPublishedModels: () =>

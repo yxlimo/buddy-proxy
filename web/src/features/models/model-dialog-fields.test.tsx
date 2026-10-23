@@ -66,7 +66,7 @@ async function pickGroup(user: ReturnType<typeof userEvent.setup>, name: RegExp)
 
 describe('模型编辑弹窗', () => {
   it('必填项没填的时候，所在的分组标题上标红', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
       children: (
@@ -91,7 +91,7 @@ describe('模型编辑弹窗', () => {
   })
 
   it('切到有问题的分组，给行内提示', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
       children: (
@@ -107,7 +107,7 @@ describe('模型编辑弹窗', () => {
   })
 
   it('选了上游组之后，上游模型 id 变成目录里的下拉', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
       children: (
@@ -134,7 +134,7 @@ describe('模型编辑弹窗', () => {
   })
 
   it('目录拉不到的时候退回手填，并且说清楚为什么', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
@@ -163,7 +163,7 @@ describe('模型编辑弹窗', () => {
   })
 
   it('single 策略下没有权重输入框，fallback 才有', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
       children: (
@@ -190,7 +190,7 @@ describe('模型编辑弹窗', () => {
   })
 
   it('没有「顺序」那个输入框', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
       children: (

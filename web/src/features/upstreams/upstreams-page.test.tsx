@@ -90,7 +90,7 @@ describe('上游的开关', () => {
   })
 
   it('拨开关之后重新取列表，状态以服务端的答复为准', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     let enabled = false
 
     const client = mockAdminClient({

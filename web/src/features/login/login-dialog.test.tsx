@@ -286,7 +286,7 @@ describe('登录对话框', () => {
   })
 
   it('同一个会话重新打开的时候还是会关掉（只是不说第二遍）', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const onOpenChange = vi.fn()
     const client = clientWith(
       session({ status: 'approved', message: '登录好了。' })
@@ -363,7 +363,7 @@ describe('登录对话框', () => {
   })
 
   it('密码型：提交中按钮禁用并转圈', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     let resolveLogin: (value: LoginWithPasswordResponse) => void = () => {}
     const client = mockAdminClient({
       GetLoginStatus: () =>
@@ -414,7 +414,7 @@ describe('登录对话框', () => {
   })
 
   it('密码型：失败的时候只说中文，不说机器码', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     toastError.mockClear()
     const client = mockAdminClient({
       GetLoginStatus: () =>
@@ -461,7 +461,7 @@ describe('登录对话框', () => {
   })
 
   it('token 型：贴回去之后调导入', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const imported: string[] = []
     const client = mockAdminClient({
       GetLoginStatus: () =>

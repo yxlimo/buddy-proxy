@@ -138,7 +138,7 @@ describe('配置页的分组', () => {
   })
 
   it('切到别的组，那一组的设置就出来了', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {

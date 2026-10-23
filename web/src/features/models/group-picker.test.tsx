@@ -44,7 +44,7 @@ function upstream(
  */
 describe('上游组下拉', () => {
   it('只列 state 是 READY 的上游', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
@@ -163,7 +163,7 @@ describe('上游组下拉', () => {
   })
 
   it('选了之后把组名给出去', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const picked: string[] = []
     const client = mockAdminClient({
       ListUpstreams: () =>

@@ -59,6 +59,10 @@ export default defineConfig(({ mode }) => {
       setupFiles: ['./src/test/setup.ts'],
       include: ['src/**/*.test.{ts,tsx}'],
       css: false,
+      // 默认 5 秒一个用例太紧：面板那几个用例本身就要 4~5 秒（jsdom 里的
+      // userEvent 一步一个宏任务），整套一起跑的时候机器一忙就超。
+      testTimeout: 30000,
+      hookTimeout: 30000,
     },
   }
 })

@@ -11,7 +11,7 @@ import { ThemeToggle } from '@/components/layout/theme-toggle'
  */
 describe('主题切换', () => {
   it('三个选项都在，选了深色就加上 dark 的 class', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     window.localStorage.removeItem(THEME_STORAGE_KEY)
 
     render(
@@ -36,7 +36,7 @@ describe('主题切换', () => {
   })
 
   it('选回浅色就把 dark 去掉', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     window.localStorage.setItem(THEME_STORAGE_KEY, 'dark')
 
     render(

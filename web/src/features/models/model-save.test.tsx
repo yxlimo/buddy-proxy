@@ -66,7 +66,7 @@ async function pickGroup(user: ReturnType<typeof userEvent.setup>) {
 
 describe('模型保存失败的时候', () => {
   it('报的是失败，不是成功，弹窗也不关', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     toastError.mockClear()
     toastSuccess.mockClear()
 
@@ -107,7 +107,7 @@ describe('模型保存失败的时候', () => {
   })
 
   it('目标没填全的时候保存按钮是灰的', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     // 弹窗里的模型下拉要查目录，组下拉要查上游，都得有客户端。
     const client = mockAdminClient(upstreamHandlers())

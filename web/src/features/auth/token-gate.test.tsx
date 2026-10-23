@@ -40,7 +40,7 @@ describe('令牌闸门', () => {
   })
 
   it('令牌不对的时候说清楚原因，而且不把它存下来', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       GetSystemStatus: () => {
         throw new ConnectError('面板令牌不对。', Code.Unauthenticated)
@@ -69,7 +69,7 @@ describe('令牌闸门', () => {
   })
 
   it('令牌对了才存下来，然后进面板', async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       GetSystemStatus: () => create(GetSystemStatusResponseSchema, {}),
     })
