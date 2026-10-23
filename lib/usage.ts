@@ -190,6 +190,57 @@ export function listUsage(filter: UsageFilter = {}): UsageEvent[] {
 }
 
 /**
+ * 上游报的 usage，换成一个形状：总输入、总输出、推理。
+ *
+ * 两种方言的算法不一样：
+ *
+ *   OpenAI     prompt_tokens 就是全部输入（cached_tokens 是它的一部分）。
+ *   Anthropic  input_tokens 只算没命中缓存的，缓存读到的和缓存写进去的
+ *              另外两个字段里，要加起来才是全部输入。
+ *
+ * 少了这一步，MiniMax 的流式请求会记成 7 个输入令牌，而同一请求的非流式
+ * 记成 204 —— 上游把输入拆成了两处报。
+ */
+export function usageTotals(usage: any): TokenTotals {
+  const empty = { promptTokens: 0, completionTokens: 0, reasoningTokens: 0 };
+  if (!usage || typeof usage !== "object") return empty;
+  const promptTokens =
+    typeof usage.prompt_tokens === "number"
+      ? usage.prompt_tokens
+      : num(usage.input_tokens) +
+        num(usage.cache_read_input_tokens) +
+        num(usage.cache_creation_input_tokens);
+  const completionTokens =
+    typeof usage.completion_tokens === "number" ? usage.completion_tokens : num(usage.output_tokens);
+  const reasoningTokens = num(
+    usage.completion_tokens_details?.reasoning_tokens ??
+      usage.output_tokens_details?.thinking_tokens ??
+      usage.reasoning_tokens,
+  );
+  return { promptTokens, completionTokens, reasoningTokens };
+}
+
+/** 一个数，不是数就当 0。 */
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * 两份 usage 取大的那个。
+ *
+ * Anthropic 的流分几次报：输入在 message_start、输出在 message_delta。每份
+ * 各自算成总数再取大的 —— 不能把两份的字段加起来，那会把同一批输入算两遍
+ * （MiniMax 的 message_start 报 0、message_delta 报 7+197，两种口径）。
+ */
+export function maxTotals(a: TokenTotals | null, b: TokenTotals): TokenTotals {
+  return {
+    promptTokens: Math.max(a?.promptTokens ?? 0, b.promptTokens),
+    completionTokens: Math.max(a?.completionTokens ?? 0, b.completionTokens),
+    reasoningTokens: Math.max(a?.reasoningTokens ?? 0, b.reasoningTokens),
+  };
+}
+
+/**
  * 丢掉太老的记录。
  *
  * 表是每条请求一行，不删就会一直长。默认留 90 天。
@@ -216,6 +267,13 @@ export interface UsageTotals {
   completionTokens: number;
   reasoningTokens: number;
   latencyMsSum: number;
+}
+
+/** 只算令牌的合计（上游报的那些数）。 */
+export interface TokenTotals {
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
 }
 
 /** 空的合计。 */

@@ -65,13 +65,15 @@ export interface UpstreamContext {
   /** Told what the upstream charged for the answer, if anyone is keeping score. */
   onUsage?: (usage: any) => void;
   /**
-   * The usage the last upstream call reported.
+   * The usage the last upstream call reported, already counted.
    *
    * The delivery layer calls `onUsage` with the upstream's own usage object;
-   * whoever built the context keeps the last one here so the caller can
-   * record it after the call.
+   * whoever built the context keeps the largest one seen here so the caller
+   * can record it after the call. The Anthropic stream reports it in two
+   * pieces (the input in message_start, the output in message_delta), so
+   * each piece is counted on its own.
    */
-  lastUsage?: any;
+  lastUsage?: { promptTokens: number; completionTokens: number; reasoningTokens: number };
 }
 
 /**

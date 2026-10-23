@@ -14,9 +14,15 @@ import path from "node:path";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "usage-check-"));
 process.env.BUDDY_DATA_DIR = tmp;
 
-const { listUsage, pruneUsage, recordUsage, localDay, clearUsage } = await import(
-  "../lib/usage.ts"
-);
+const {
+  listUsage,
+  pruneUsage,
+  recordUsage,
+  localDay,
+  clearUsage,
+  maxTotals,
+  usageTotals,
+} = await import("../lib/usage.ts");
 const { usageEvents, usageSummary } = await import("../lib/admin/usage.ts");
 
 let pass = 0;
@@ -35,6 +41,61 @@ function check(name: string, ok: boolean, detail = ""): void {
 function clear(): void {
   clearUsage();
 }
+
+console.log("");
+console.log("上游报的 usage 怎么算成令牌");
+
+const openai = usageTotals({ prompt_tokens: 100, completion_tokens: 20 });
+check("OpenAI 的输入就是 prompt_tokens", openai.promptTokens === 100, String(openai.promptTokens));
+check("OpenAI 的输出是 completion_tokens", openai.completionTokens === 20, String(openai.completionTokens));
+
+// Anthropic 把输入拆成三处：没命中缓存的、缓存读到的、缓存写进去的。
+const anthropic = usageTotals({
+  input_tokens: 7,
+  output_tokens: 22,
+  cache_read_input_tokens: 197,
+  cache_creation_input_tokens: 0,
+  output_tokens_details: { thinking_tokens: 18 },
+});
+check("Anthropic 的输入要加上缓存读到的", anthropic.promptTokens === 204, String(anthropic.promptTokens));
+check("Anthropic 的输出是 output_tokens", anthropic.completionTokens === 22, String(anthropic.completionTokens));
+check("推理令牌在 output_tokens_details 里", anthropic.reasoningTokens === 18, String(anthropic.reasoningTokens));
+
+const openaiDetails = usageTotals({
+  prompt_tokens: 100,
+  completion_tokens: 20,
+  completion_tokens_details: { reasoning_tokens: 5 },
+});
+check("OpenAI 的推理令牌在 completion_tokens_details 里", openaiDetails.reasoningTokens === 5);
+
+check("没有 usage 是 0", usageTotals(null).promptTokens === 0);
+check("什么都没有是 0", usageTotals({}).completionTokens === 0);
+
+console.log("");
+console.log("分几次报的 usage 要合起来");
+
+// Anthropic 的流：message_start 报 0，message_delta 报 7 + 缓存读到的 197。
+let merged = maxTotals(null, usageTotals({ input_tokens: 0, output_tokens: 0 }));
+merged = maxTotals(
+  merged,
+  usageTotals({ input_tokens: 7, output_tokens: 22, cache_read_input_tokens: 197 }),
+);
+check("输入合起来是 204", merged.promptTokens === 204, String(merged.promptTokens));
+check("输出合起来是 22", merged.completionTokens === 22, String(merged.completionTokens));
+
+// 两种口径不能重复算：message_start 报 204，message_delta 报 7+197。
+const twoWays = maxTotals(
+  maxTotals(null, usageTotals({ input_tokens: 204, output_tokens: 0 })),
+  usageTotals({ input_tokens: 7, output_tokens: 22, cache_read_input_tokens: 197 }),
+);
+check("两种口径不重复算", twoWays.promptTokens === 204, String(twoWays.promptTokens));
+
+// 累计上报的：取大的那个。
+const cumulative = maxTotals(
+  usageTotals({ prompt_tokens: 50 }),
+  usageTotals({ prompt_tokens: 120 }),
+);
+check("累计上报取大的", cumulative.promptTokens === 120, String(cumulative.promptTokens));
 
 console.log("");
 console.log("记一条请求");

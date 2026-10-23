@@ -77,7 +77,7 @@ import {
   type AggregateEntry,
 } from "./lib/router/catalog.ts";
 import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
-import { recordUsage, pruneUsage } from "./lib/usage.ts";
+import { recordUsage, pruneUsage, maxTotals, usageTotals } from "./lib/usage.ts";
 import { detectAgent } from "./lib/agent.ts";
 // The panel: the Connect routes, the token, the static files.
 import { adminToken } from "./lib/admin/token.ts";
@@ -336,10 +336,12 @@ function upstreamContext(): UpstreamContext {
     workbuddyMaxOutput: (model: string) => workbuddyCatalog().find((m) => m.id === model)?.maxOutput ?? 64000,
     workbuddyModel: (model: string) => workbuddyCatalog().find((m) => m.id === model) ?? null,
   };
-  // Keep the last usage the upstream reported, so the caller can write it down
-  // once the call is over.
+  // Keep the usage the upstream reported, so the caller can write it down once
+  // the call is over. The upstream may report it in pieces — the Anthropic
+  // stream puts the input in message_start and the output in message_delta —
+  // so each piece is counted on its own and the largest wins.
   uctx.onUsage = (u) => {
-    uctx.lastUsage = u;
+    uctx.lastUsage = maxTotals(uctx.lastUsage ?? null, usageTotals(u));
   };
   return uctx;
 }
@@ -435,8 +437,8 @@ async function handleAggregate(
         group: target.group,
         upstreamModel: target.upstreamModel,
         ok: true,
-        promptTokens: usage?.prompt_tokens ?? usage?.input_tokens,
-        completionTokens: usage?.completion_tokens ?? usage?.output_tokens,
+        promptTokens: usage?.promptTokens,
+        completionTokens: usage?.completionTokens,
       });
       return;
     } catch (e) {
@@ -625,7 +627,7 @@ function recordRequestUsage(
   started: number,
   error: string,
 ): void {
-  const usage = uctx.lastUsage ?? {};
+  const totals = uctx.lastUsage ?? { promptTokens: 0, completionTokens: 0, reasoningTokens: 0 };
   const upstreamModel = route.model.includes("/")
     ? route.model.slice(route.model.indexOf("/") + 1)
     : route.model;
@@ -637,11 +639,9 @@ function recordRequestUsage(
     client: route.upstream,
     ok: !error && status < 400,
     status,
-    promptTokens: Number(usage.prompt_tokens ?? usage.input_tokens ?? 0),
-    completionTokens: Number(usage.completion_tokens ?? usage.output_tokens ?? 0),
-    reasoningTokens: Number(
-      usage.completion_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens ?? 0,
-    ),
+    promptTokens: totals.promptTokens,
+    completionTokens: totals.completionTokens,
+    reasoningTokens: totals.reasoningTokens,
     latencyMs: Date.now() - started,
     error,
   });

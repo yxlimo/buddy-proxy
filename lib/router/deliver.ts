@@ -10,7 +10,7 @@ import type Koa from "koa";
 import { AuthError } from "../credential.ts";
 import { anthropicStreamToOpenAI, openaiStreamToAnthropic } from "../dialect/stream.ts";
 import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect/response.ts";
-import { readOpenAIChunks, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
+import { parseLooseJson, readOpenAIChunks, readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
 
 export type Dialect = "anthropic" | "openai";
 
@@ -198,6 +198,25 @@ export async function deliverAnthropicStream(
   takeOver(ctx);
   sseHead(ctx);
   if (dialect === "anthropic") {
+    // The bytes go to the client untouched. A copy is parsed on the side for
+    // the usage: the upstream puts the input tokens in message_start and the
+    // output tokens in message_delta, and nobody reads those unless someone
+    // parses them.
+    if (onUsage) {
+      const [toClient, toParser] = body.tee();
+      void (async () => {
+        try {
+          for await (const event of readSseEvents(toParser)) {
+            const json = parseLooseJson(event.data);
+            if (json?.usage) onUsage(json.usage);
+          }
+        } catch {
+          // The usage is a nice-to-have; the answer itself is what matters.
+        }
+      })();
+      await pipeStream(toClient, ctx, pingMs);
+      return;
+    }
     await pipeStream(body, ctx, pingMs);
     return;
   }
