@@ -30,24 +30,29 @@ export function qoderClaimHeaders(session: QoderSession): Record<string, string>
     // Without this one the server answers with an empty list of campaigns.
     "Cosy-ClientType": "10",
   };
-  // No machine identity on purpose.
+  // No machine identity on purpose -- and the reason is not what it looks
+  // like.
   //
-  // The activity service checks the machine headers against the risk service,
-  // and a device it cannot place does not get the daily campaign: the list
-  // comes back without it. Measured on 2026-10-24, same account, same
-  // request, three header sets:
+  // Measured on 2026-10-24, same account, same request, 15 header sets:
   //
-  //   with the registered machine id   -> the daily campaign is missing
-  //   with a made-up machine id         -> the daily campaign is missing
-  //   with no machine headers at all    -> the daily campaign is there
+  //   the registered machine id, a made-up one, a real sgsdk blob, no
+  //   machine headers at all, the full official shape
+  //     -> the daily campaign is there in every one of them
+  //   Cosy-ClientType 5 (the value the official CLI sends)
+  //     -> the list comes back empty
+  //   no Cosy-ClientType
+  //     -> the list comes back empty
   //
-  // So the headers hide the campaign, not the quota: the account had credit
-  // left, and the campaign showed up as soon as the headers were gone. The
-  // official client on Linux sends no machine headers either -- the native
-  // module does not exist there.
+  // So the client type is the switch, not the machine identity: the daily
+  // campaign is a desktop-app promotion, and the desktop client type is the
+  // one that gets it. The official CLI does not claim it through this API --
+  // it shows the promotion in its own growth page instead.
   //
-  // A half-finished set of machine headers is worse than none: that is what
-  // the risk service looks at hardest.
+  // The machine identity is not sent because it makes no difference here and
+  // a half-finished set of machine headers is what the risk service looks at
+  // hardest. The identity itself is available if it is ever needed:
+  // lib/qoder/sgsdk.ts can produce a real one (the official component, run
+  // on this machine), it is just not used on this path.
   return headers;
 }
 
