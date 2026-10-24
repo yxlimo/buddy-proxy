@@ -71,6 +71,8 @@ export function usageSummary(
   byAgent: UsageBucketView[];
   bySession: UsageBucketView[];
   byParentSession: UsageBucketView[];
+  byAgentName: UsageBucketView[];
+  bySubagent: UsageBucketView[];
 } {
   const key = String(window ?? "").trim().toLowerCase();
   const filter: { upstreamId?: string; since?: number; until?: number } = {};
@@ -93,6 +95,8 @@ export function usageSummary(
   const agents = new Map<string, UsageTotals>();
   const sessions = new Map<string, UsageTotals>();
   const parentSessions = new Map<string, UsageTotals>();
+  const agentNames = new Map<string, UsageTotals>();
+  const subagents = new Map<string, UsageTotals>();
 
   for (const event of events) {
     addToTotals(total, event);
@@ -120,6 +124,20 @@ export function usageSummary(
     const parent = parentSessions.get(parentKey) ?? emptyTotals();
     addToTotals(parent, event);
     parentSessions.set(parentKey, parent);
+    // agent 名：子代理的种类（be-match、reviewer……）。子代理的会话 id 每次
+    // 运行都不同，所以这一维才是跨运行能比的。
+    const agentKey = event.agentName || "未知";
+    const agentName = agentNames.get(agentKey) ?? emptyTotals();
+    addToTotals(agentName, event);
+    agentNames.set(agentKey, agentName);
+    // 子代理：父会话 + agent 名。agent 名跨项目可能重名（两个项目都有
+    // researcher），父会话是项目内的，所以这一维才说得清是谁的哪个 agent。
+    const subagentKey = event.parentSessionId
+      ? `${event.agentName || "未知"} @ ${event.parentSessionId}`
+      : agentKey;
+    const subagent = subagents.get(subagentKey) ?? emptyTotals();
+    addToTotals(subagent, event);
+    subagents.set(subagentKey, subagent);
   }
 
   // 从大到小：令牌多的排前面。天数那一份按日期排 —— 它是一条时间线。
@@ -147,7 +165,23 @@ export function usageSummary(
   const byParentSession = [...parentSessions.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort(byTokens);
-  return { total, byUpstream, byModel, byDay, byAgent, bySession, byParentSession };
+  const byAgentName = [...agentNames.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
+  const bySubagent = [...subagents.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
+  return {
+    total,
+    byUpstream,
+    byModel,
+    byDay,
+    byAgent,
+    bySession,
+    byParentSession,
+    byAgentName,
+    bySubagent,
+  };
 }
 
 /** 用量的明细：每条请求一行。 */

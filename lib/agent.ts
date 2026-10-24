@@ -84,6 +84,13 @@ export interface SessionInfo {
   sessionId: string;
   /** 父会话 id。只有 opencode 的子代理有。 */
   parentSessionId: string;
+  /**
+   * 子代理的 agent 名（be-match、reviewer……）。
+   *
+   * 子代理的会话 id 每次运行都不同（`defaultContext: fresh` 的子代理每次
+   * 都是全新会话），所以 agent 名才是跨运行能聚合的那一维。
+   */
+  agentName: string;
 }
 
 /**
@@ -105,9 +112,12 @@ export function detectSession(headers: HeaderBag): SessionInfo {
     "";
   const parentSessionId =
     header(headers, "x-opencode-parent-session-id") || header(headers, "x-parent-session-id") || "";
+  // agent 名是子代理那侧给的（pi 的会话头扩展写这个头）。
+  const agentName = header(headers, "x-agent-name") || "";
   return {
     sessionId: sessionId.slice(0, 128),
     parentSessionId: parentSessionId.slice(0, 128),
+    agentName: agentName.slice(0, 64),
   };
 }
 
@@ -131,6 +141,7 @@ export function clientSessionHeaders(headers: HeaderBag): Record<string, string>
     "x-opencode-session-id",
     "x-opencode-parent-session-id",
     "x-parent-session-id",
+    "x-agent-name",
   ]) {
     const value = header(headers, name);
     if (value) out[name] = value.slice(0, 200);

@@ -41,6 +41,18 @@ const oc = lower({
 check("认出会话", detectSession(oc).sessionId === "ses_abc123", detectSession(oc).sessionId);
 check("认出父会话", detectSession(oc).parentSessionId === "ses_parent", detectSession(oc).parentSessionId);
 
+console.log("");
+console.log("子代理的 agent 名");
+
+const sub = lower({
+  "x-opencode-session-id": "ses_child",
+  "x-opencode-parent-session-id": "ses_parent",
+  "x-agent-name": "be-match",
+});
+check("认出 agent 名", detectSession(sub).agentName === "be-match", detectSession(sub).agentName);
+check("子会话 id 优先于别的拼法", detectSession(sub).sessionId === "ses_child");
+check("没有 agent 名就是空的", detectSession(oc).agentName === "");
+
 const ocMain = lower({
   "x-opencode-client": "cli",
   "x-opencode-session-id": "ses_main",
@@ -72,6 +84,12 @@ console.log("");
 console.log("转给开放平台的头");
 
 const forwarded = clientSessionHeaders(oc);
+const withAgent = clientSessionHeaders(sub);
+check(
+  "agent 名跟着走",
+  withAgent["x-agent-name"] === "be-match",
+  JSON.stringify(withAgent),
+);
 check(
   "会话头跟着走",
   forwarded["x-opencode-session-id"] === "ses_abc123" &&

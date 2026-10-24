@@ -568,6 +568,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       byAgent: summary.byAgent.map((bucket) => usageBucketMessage(bucket)),
       bySession: summary.bySession.map((bucket) => usageBucketMessage(bucket)),
       byParentSession: summary.byParentSession.map((bucket) => usageBucketMessage(bucket)),
+      byAgentName: summary.byAgentName.map((bucket) => usageBucketMessage(bucket)),
+      bySubagent: summary.bySubagent.map((bucket) => usageBucketMessage(bucket)),
     });
   },
 
@@ -590,6 +592,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           agent: event.agent,
           sessionId: event.sessionId,
           parentSessionId: event.parentSessionId,
+          agentName: event.agentName,
           client: event.client,
           promptTokens: BigInt(event.promptTokens),
           completionTokens: BigInt(event.completionTokens),

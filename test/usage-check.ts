@@ -109,6 +109,7 @@ recordUsage({
   agent: "pi",
   sessionId: "ses-1",
   parentSessionId: "",
+  agentName: "be-match",
   client: "qoder",
   ok: true,
   status: 200,
@@ -136,6 +137,7 @@ recordUsage({
   agent: "opencode",
   sessionId: "ses-1",
   parentSessionId: "ses-parent",
+  agentName: "reviewer",
   client: "minimax",
   ok: false,
   status: 429,
@@ -178,6 +180,7 @@ recordUsage({
   agent: "pi",
   sessionId: "ses-1",
   parentSessionId: "",
+  agentName: "be-match",
   client: "qoder",
   ok: true,
   status: 200,
@@ -226,6 +229,7 @@ recordUsage({
   agent: "pi",
   sessionId: "ses-1",
   parentSessionId: "",
+  agentName: "be-match",
   client: "qoder",
   ok: true,
   status: 200,
@@ -251,6 +255,7 @@ recordUsage({
   agent: "curl",
   sessionId: "",
   parentSessionId: "",
+  agentName: "",
   client: "qoder",
   ok: true,
   status: 200,
@@ -280,6 +285,24 @@ check(
   "事件里存着会话与父会话",
   stored.some((e) => e.sessionId === "ses-1" && e.parentSessionId === "ses-parent"),
   JSON.stringify(stored.map((e) => [e.sessionId, e.parentSessionId])),
+);
+check(
+  "事件里存着 agent 名",
+  stored.some((e) => e.agentName === "be-match"),
+  JSON.stringify(stored.map((e) => e.agentName)),
+);
+
+const byAgentName = bySession.byAgentName.map((b) => b.key).sort();
+check(
+  "按 agent 名分组：be-match、reviewer 与未知各一份",
+  byAgentName.length === 3 && byAgentName.includes("be-match") && byAgentName.includes("reviewer"),
+  JSON.stringify(byAgentName),
+);
+const bySubagent = bySession.bySubagent.map((b) => b.key).sort();
+check(
+  "按子代理分组是「agent 名 @ 父会话」",
+  bySubagent.some((k) => k === "reviewer @ ses-parent"),
+  JSON.stringify(bySubagent),
 );
 
 fs.rmSync(tmp, { recursive: true, force: true });

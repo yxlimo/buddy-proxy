@@ -226,11 +226,21 @@ one place.
 
 Every request that reaches an upstream is written down, one row each: when,
 which upstream, which model, what the client asked for, which agent sent it
-(pi, opencode, dsh — read from the request headers), which desktop client we
+(pi, opencode, dsh — read from the request headers), which session it belongs
+to, which parent session, which sub-agent, which desktop client we
 impersonated, whether it worked, and how many tokens it used. The 用量 tab
-shows the totals (per upstream, per model, per agent, per day), the detail
-rows, and a `今日` window that means "since local midnight" rather than "the
-last 24 hours".
+shows the totals (per upstream, per model, per agent, per session, per parent
+session, per agent name, per day), the detail rows, and a `今日` window that
+means "since local midnight" rather than "the last 24 hours".
+
+The session comes from the request headers: opencode sends
+`x-opencode-session-id` (and `x-opencode-parent-session-id` for a sub-agent),
+pi sends `x-session-affinity`. A pi sub-agent's own id does not travel — the
+sub-agent plugin rewrites that header to the parent's id so the prompt cache
+still hits — so a separate `pi-session-headers` extension sends the child's id
+as `x-opencode-session-id` and the parent's as `x-parent-session-id`, plus the
+agent's name as `x-agent-name`. The agent name is the only dimension that
+survives across runs: a sub-agent gets a fresh session every time.
 
 Requests that never leave the gateway — a model name nobody has, an upstream
 that is switched off — are not usage and are not counted. They show up in the

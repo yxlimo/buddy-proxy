@@ -149,6 +149,14 @@ export function UsageTable({
         ),
       },
       {
+        id: 'agentName',
+        accessorKey: 'agentName',
+        header: 'agent 名',
+        cell: ({ row }) => (
+          <span className='text-xs'>{row.original.agentName || '—'}</span>
+        ),
+      },
+      {
         id: 'client',
         accessorKey: 'client',
         header: '模拟客户端',

@@ -701,6 +701,7 @@ function recordRequestUsage(
     agent,
     sessionId: session.sessionId,
     parentSessionId: session.parentSessionId,
+    agentName: session.agentName,
     client: route.provider,
     ok: !error && status < 400,
     status,

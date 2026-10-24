@@ -400,10 +400,11 @@ await chat(
     "x-opencode-client": "cli",
     "x-opencode-session-id": "ses-e2e-1",
     "x-opencode-parent-session-id": "ses-e2e-parent",
+    "x-agent-name": "be-match",
   },
 );
 const sessionRows = query(
-  "SELECT agent, session_id, parent_session_id FROM usage_event " +
+  "SELECT agent, session_id, parent_session_id, agent_name FROM usage_event " +
     "WHERE session_id = 'ses-e2e-1' ORDER BY id DESC LIMIT 1",
 );
 check(
@@ -411,6 +412,11 @@ check(
   sessionRows.length === 1 &&
     sessionRows[0].agent === "opencode" &&
     sessionRows[0].parent_session_id === "ses-e2e-parent",
+  JSON.stringify(sessionRows),
+);
+check(
+  "用量日志里认出了 agent 名",
+  sessionRows.length === 1 && sessionRows[0].agent_name === "be-match",
   JSON.stringify(sessionRows),
 );
 
@@ -426,6 +432,18 @@ check(
   "面板的用量摘要里按父会话分了组",
   byParent.some((b: any) => b.key === "ses-e2e-parent"),
   JSON.stringify(byParent.map((b: any) => b.key)),
+);
+const byAgentName = (summary as any).byAgentName ?? [];
+const bySubagent = (summary as any).bySubagent ?? [];
+check(
+  "面板的用量摘要里按 agent 名分了组",
+  byAgentName.some((b: any) => b.key === "be-match"),
+  JSON.stringify(byAgentName.map((b: any) => b.key)),
+);
+check(
+  "面板的用量摘要里按子代理分了组",
+  bySubagent.some((b: any) => b.key === "be-match @ ses-e2e-parent"),
+  JSON.stringify(bySubagent.map((b: any) => b.key)),
 );
 
 section("fallback：两个都失败");

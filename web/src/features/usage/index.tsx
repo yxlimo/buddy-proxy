@@ -160,6 +160,11 @@ export function UsagePage() {
             <BreakdownCard title='按会话' buckets={summary.data?.bySession ?? []} />
             <BreakdownCard title='按父会话' buckets={summary.data?.byParentSession ?? []} />
           </div>
+
+          <div className='grid gap-4 lg:grid-cols-2'>
+            <BreakdownCard title='按 agent 名' buckets={summary.data?.byAgentName ?? []} />
+            <BreakdownCard title='按子代理' buckets={summary.data?.bySubagent ?? []} />
+          </div>
         </>
       )}
 
