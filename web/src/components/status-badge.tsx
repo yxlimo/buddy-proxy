@@ -21,13 +21,21 @@ const LABELS: Record<string, string> = {
   used_up: '已用完',
 }
 
-/** 状态字符串 → 徽章。认不出来的就原样显示。 */
+/**
+ * 状态字符串 → 徽章。认不出来的就原样显示。
+ *
+ * `labels` 覆盖文案：同一个状态词在账号和凭据上意思不一样（账号的 usable
+ * 是「已登录」，凭据的 usable 是「可用」），各说各的。
+ */
 export function StatusBadge({
   status,
   className,
+  labels,
 }: {
   status: string | undefined | null
   className?: string
+  /** 覆盖默认文案。 */
+  labels?: Record<string, string>
 }) {
   const key = (status ?? '').trim().toLowerCase()
   if (!key) {
@@ -41,7 +49,7 @@ export function StatusBadge({
   const variant = variantFor(key)
   return (
     <Badge variant={variant} className={className}>
-      {LABELS[key] ?? status}
+      {labels?.[key] ?? LABELS[key] ?? status}
     </Badge>
   )
 }

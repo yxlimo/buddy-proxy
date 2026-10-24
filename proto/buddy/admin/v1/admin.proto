@@ -387,6 +387,18 @@ message UpdateProviderResponse {
 }
 
 // 删一个 Provider。
+message LogoutAccountRequest {
+  // 账号的 id：provider 自己的 id，或者是「provider:租户号」那种。
+  string account_id = 1;
+}
+
+message LogoutAccountResponse {
+  bool ok = 1;
+  string message = 2;
+  // 删掉了几条凭据。
+  int32 removed = 3;
+}
+
 message DeleteProviderRequest {
   string id = 1;
 }
@@ -792,6 +804,9 @@ service AdminService {
   rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
   rpc ListCredentials(ListCredentialsRequest) returns (ListCredentialsResponse);
   rpc TestCredential(TestCredentialRequest) returns (TestCredentialResponse);
+  // 注销：把一个账号的凭据全删掉。下一次请求就是这个账号没有登录态，
+  // 面板上会重新出现「登录」按钮。
+  rpc LogoutAccount(LogoutAccountRequest) returns (LogoutAccountResponse);
   rpc RefreshCredential(RefreshCredentialRequest) returns (RefreshCredentialResponse);
   rpc SetProviderKeys(SetProviderKeysRequest) returns (SetProviderKeysResponse);
   rpc AddProvider(AddProviderRequest) returns (AddProviderResponse);

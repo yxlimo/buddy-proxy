@@ -60,6 +60,7 @@ import {
   SetUpstreamEnabledResponseSchema,
   TailLogResponseSchema,
   TestCredentialResponseSchema,
+  LogoutAccountResponseSchema,
   UpdateProviderResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
@@ -86,7 +87,13 @@ import {
   type UpstreamId,
   type UpstreamSwitch,
 } from "./upstreams.ts";
-import { listAccounts, listCredentials, refreshCredential, testCredential } from "./accounts.ts";
+import {
+  listAccounts,
+  listCredentials,
+  logoutAccount,
+  refreshCredential,
+  testCredential,
+} from "./accounts.ts";
 import { credentialStateText, setProviderKeys } from "./credentials.ts";
 import {
   beginLogin,
@@ -521,6 +528,16 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       ok: result.ok,
       message: result.message,
       checkedAt: BigInt(Date.now()),
+    });
+  },
+
+  async logoutAccount(request) {
+    const accountId = String(request.accountId ?? "");
+    const result = logoutAccount(accountId);
+    return create(LogoutAccountResponseSchema, {
+      ok: result.ok,
+      message: result.message,
+      removed: result.removed,
     });
   },
 

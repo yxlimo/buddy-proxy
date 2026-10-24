@@ -34,7 +34,7 @@ import { zcodeStatus } from "./lib/zcode/auth.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
-import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
+import { tokenRhythmStatus, tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
 import { qoderStatus } from "./lib/qoder/auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
@@ -333,6 +333,10 @@ router.get("/health", async (ctx) => {
         ? {
             models: TOKENRHYTHM_MODELS.length,
             tenants: snapshot.data?.tokenrhythm?.tenants ?? null,
+            // The relay station has one account per tenant, so the credential
+            // of the provider is the sum of theirs: without this the panel
+            // said "no credential" while the balances were right there.
+            credential: tokenRhythmStatus("tokenrhythm"),
           }
         : { enabled: false },
       sensenova: upstreamEnabled("sensenova")

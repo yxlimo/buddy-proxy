@@ -34,11 +34,6 @@ export const sidebarData: SidebarData = {
           icon: Settings2,
         },
         {
-          title: '账号与凭据',
-          url: '/accounts',
-          icon: Layers,
-        },
-        {
           title: '额度',
           url: '/balance',
           icon: Wallet,

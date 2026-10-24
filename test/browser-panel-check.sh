@@ -3,7 +3,7 @@
 #
 #   test/browser-panel-check.sh <base-url> <admin-token>
 #
-# 用 agent-browser（Chromium）开面板：令牌闸门、七个页面、配置页的 tab、
+# 用 agent-browser（Chromium）开面板：令牌闸门、六个页面、配置页的 tab、
 # 深链接、控制台有没有报错。网关那边上游全关，不花 token。
 set -uo pipefail
 
@@ -89,7 +89,7 @@ check "令牌对的时候进得去面板" "$(echo "$IN" | jq_get 'd["hasNav"]')"
 check "进面板之后令牌存进了 localStorage" "$(echo "$IN" | jq_get 'd["stored"]')" "True"
 check "URL 里还是没有令牌" "$(echo "$IN" | jq_get 'd["urlHasToken"]')" "False"
 
-# ── 七个页面 ────────────────────────────────────────────────────────────
+# ── 页面 ────────────────────────────────────────────────────────────────
 # 每一页都是整页加载（等于顺带测了深链接）。
 check_page() {
   local path="$1" heading="$2" name="$3"
@@ -117,7 +117,7 @@ EOF
 check_page "/admin/" "总览" "总览页"
 check_page "/admin/upstreams" "上游" "上游页"
 check_page "/admin/config" "配置" "配置页"
-check_page "/admin/accounts" "账号与凭据" "账号页"
+# 账号与凭据那一页并进了 Provider 页：账号与凭据在展开的行里。
 check_page "/admin/balance" "余额" "余额页"
 check_page "/admin/usage" "用量" "用量页"
 check_page "/admin/models" "主路由模型" "主路由模型页"

@@ -193,6 +193,57 @@ function frames(text: string): string[] {
 }
 
 console.log("");
+console.log("增删 Provider");
+
+// 加一个 provider，删掉它，然后确认它真的没了 —— 而且再刷一次也没回来。
+const added = await call("AddProvider", { id: "regression-provider", kind: "minimax-api", alias: "回归用" });
+check("加了一个 Provider", added.body?.ok === true, JSON.stringify(added.body));
+
+const afterAdd = await call("ListUpstreams", {});
+const afterAddRows = (afterAdd.body?.upstreams ?? []) as any[];
+check(
+  "列表里有它",
+  afterAddRows.some((u: any) => u.id === "regression-provider"),
+  JSON.stringify(afterAddRows.map((u: any) => u.id)),
+);
+
+// 注销一个没有凭据的账号：说清楚，不报错。
+const loggedOut = await call("LogoutAccount", { accountId: "regression-provider" });
+check("注销了一个账号", loggedOut.body?.ok === true, JSON.stringify(loggedOut.body));
+
+const deleted = await call("DeleteProvider", { id: "regression-provider" });
+check("删掉了", deleted.body?.ok === true, JSON.stringify(deleted.body));
+
+const afterDelete = await call("ListUpstreams", {});
+const afterDeleteRows = (afterDelete.body?.upstreams ?? []) as any[];
+check(
+  "列表里没有它了",
+  !afterDeleteRows.some((u: any) => u.id === "regression-provider"),
+  JSON.stringify(afterDeleteRows.map((u: any) => u.id)),
+);
+
+const afterDeleteAgain = await call("ListUpstreams", {});
+check(
+  "再刷一次它也没回来",
+  !((afterDeleteAgain.body?.upstreams ?? []) as any[]).some(
+    (u: any) => u.id === "regression-provider",
+  ),
+  JSON.stringify((afterDeleteAgain.body?.upstreams ?? []).map((u: any) => u.id)),
+);
+
+// 删一个内置的：它也不能在刷新之后自己回来。
+const builtin = await call("DeleteProvider", { id: "zcode" });
+check("删掉一个内置的", builtin.body?.ok === true, JSON.stringify(builtin.body));
+const afterBuiltin = await call("ListUpstreams", {});
+check(
+  "内置的那个删掉之后也没回来",
+  !((afterBuiltin.body?.upstreams ?? []) as any[]).some((u: any) => u.id === "zcode"),
+  JSON.stringify((afterBuiltin.body?.upstreams ?? []).map((u: any) => u.id)),
+);
+// 放回去，后面的测试还要用它。
+await call("AddProvider", { id: "zcode", kind: "zcode", alias: "ZCode" });
+
+console.log("");
 console.log("代理的路");
 
 const health = await fetch(`${base}/health`);

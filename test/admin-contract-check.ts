@@ -357,9 +357,10 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "AddProvider", request: { id: "contract-provider", kind: "minimax-api" } },
   { method: "UpdateProvider", request: { id: "contract-provider", alias: "契约" } },
   { method: "DeleteProvider", request: { id: "contract-provider" } },
+  { method: "LogoutAccount", request: { accountId: "contract-provider" } },
 ];
 
-check("契约里有三十一个方法", contract.methods.size === 31, String(contract.methods.size));
+check("契约里有三十二个方法", contract.methods.size === 32, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",

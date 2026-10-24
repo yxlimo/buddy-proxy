@@ -4,11 +4,13 @@ import { toast } from 'sonner'
 import {
   ListAccountsRequestSchema,
   ListCredentialsRequestSchema,
+  LogoutAccountRequestSchema,
   RefreshCredentialRequestSchema,
   SetProviderKeysRequestSchema,
   TestCredentialRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
+import { upstreamKeys } from '@/features/upstreams/api'
 import { assertOk, describeError } from '@/lib/errors'
 
 export const accountKeys = {
@@ -120,6 +122,37 @@ export function useRefreshCredential() {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+    },
+  })
+}
+
+/**
+ * 注销一个账号：把它名下的凭据全删掉。
+ *
+ * 删完这个账号就回到「没有凭据」的状态，面板上「登录」按钮重新出现。
+ */
+export function useLogoutAccount() {
+  const client = useAdminClient()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { accountId: string }) => {
+      const result = await client.logoutAccount(
+        create(LogoutAccountRequestSchema, { accountId: input.accountId })
+      )
+      assertOk(result, '没注销掉')
+      return result
+    },
+    onError: (error) => {
+      toast.error(describeError(error))
+    },
+    onSuccess: (result) => {
+      toast.success(result.message || '已注销')
+    },
+    onSettled: () => {
+      // ['accounts'] 是所有账号与凭据查询的前缀，所以这一句把凭据列表也刷了。
+      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      // 上游那行的凭据摘要也是后端算的，跟着变。
+      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
     },
   })
 }

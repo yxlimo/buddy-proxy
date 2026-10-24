@@ -12,7 +12,7 @@
 // The behaviour lives in a registry (see lib/provider-kinds.ts) instead of a
 // switch on the kind: adding a kind is one entry, not seven case branches.
 
-import { store } from "./store.ts";
+import { markProviderDeleted, providerDeleted, store } from "./store.ts";
 import { configFlag } from "./config.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
 
@@ -92,6 +92,8 @@ export function ensureBuiltinProviders(): void {
   );
   const fix = store().prepare("UPDATE provider SET kind = ?, region = ?, updated_at = ? WHERE id = ?");
   for (const row of BUILT_IN) {
+    // The operator deleted it: it stays deleted.
+    if (providerDeleted(row.id)) continue;
     const key = BUILT_IN_SWITCHES[row.id];
     const on = key ? configFlag(key, false) : true;
     insert.run(row.id, row.kind, row.alias, row.region, on ? 1 : 0, now, now);
@@ -183,11 +185,36 @@ export function addProvider(input: {
 }
 
 /** 删一个 provider。它名下的凭据也一起删 —— 留着就没人认领了。 */
+/**
+ * Forget the credentials of a provider.
+ *
+ * The ids follow the pattern `session:provider:<id>`,
+ * `key:provider:<id>…` and `account:<id>…`, so the prefixes are enough.
+ */
+export function deleteProviderCredentials(id: string): number {
+  const db = store();
+  const patterns = [`session:provider:${id}`, `key:provider:${id}`, `account:${id}`];
+  let dropped = 0;
+  for (const pattern of patterns) {
+    const result = db
+      .prepare("DELETE FROM secrets WHERE id = ? OR id LIKE ?")
+      .run(pattern, `${pattern.replace(/[%_]/g, "")}%`);
+    dropped += Number(result.changes ?? 0);
+  }
+  return dropped;
+}
+
 export function deleteProvider(id: string): { ok: boolean; message: string } {
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个 Provider：${id}` };
   store().prepare("DELETE FROM provider WHERE id = ?").run(id);
-  return { ok: true, message: "删掉了" };
+  // The built-in ones are put back on every start, so the deletion has to be
+  // remembered -- otherwise the panel said it was gone and the next refresh
+  // showed it again.
+  markProviderDeleted(id);
+  // The credentials go with it: nobody would claim them any more.
+  const dropped = deleteProviderCredentials(id);
+  return { ok: true, message: dropped > 0 ? `删掉了，连 ${dropped} 条凭据一起` : "删掉了" };
 }
 
 /** 开关。 */

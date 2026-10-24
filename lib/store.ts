@@ -106,6 +106,16 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
+  // A provider the operator deleted stays deleted. The built-in ones are put
+  // back on every start, so a deletion has to be remembered somewhere --
+  // without this the provider came back right after the panel said it was
+  // gone.
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS deleted_provider (
+      id         TEXT PRIMARY KEY,
+      deleted_at INTEGER NOT NULL
+    )`,
+  );
   return db;
 }
 
@@ -142,6 +152,23 @@ export function setSecret(id: string, kind: SecretKind, data: unknown): void {
 /** Forget a secret — the way back to a fresh login. */
 export function deleteSecret(id: string): void {
   store().prepare("DELETE FROM secrets WHERE id = ?").run(id);
+}
+
+/* ------------------------------------------------------------------ *
+ * The deleted providers
+ * ------------------------------------------------------------------ */
+
+/** A provider the operator deleted: it stays deleted. */
+export function markProviderDeleted(id: string): void {
+  store()
+    .prepare("INSERT INTO deleted_provider (id, deleted_at) VALUES (?, ?) ON CONFLICT(id) DO NOTHING")
+    .run(id, Date.now());
+}
+
+/** Was this provider deleted? */
+export function providerDeleted(id: string): boolean {
+  const row = store().prepare("SELECT id FROM deleted_provider WHERE id = ?").get(id);
+  return row !== undefined;
 }
 
 /** Every secret whose id starts with the prefix. */

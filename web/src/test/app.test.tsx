@@ -112,9 +112,10 @@ describe('面板', () => {
     expect(screen.getByText('网关管理面板')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Provider' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '配置' })).toBeInTheDocument()
+    // 账号与凭据并进了 Provider 页，侧边栏不再单列。
     expect(
-      screen.getByRole('link', { name: '账号与凭据' })
-    ).toBeInTheDocument()
+      screen.queryByRole('link', { name: '账号与凭据' })
+    ).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: '额度' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '用量' })).toBeInTheDocument()
     expect(

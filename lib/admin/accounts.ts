@@ -15,6 +15,7 @@ import {
 } from "../minimax/api.ts";
 import { listProviders, provider } from "../providers.ts";
 import { listSecrets } from "../store.ts";
+import { deleteProviderCredentials } from "../providers.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential, AUTH_MODE } from "../minimax/auth.ts";
@@ -337,13 +338,20 @@ export function listAccounts(): AccountView[] {
         const accountId = `${row.id}:${tenant.index}`;
         const credentials = credentialsOf(accountId);
         const session = credentials.find((c) => c.kind === "session");
+        const usable = credentials.filter(
+          (c) => c.status === CredentialState.USABLE || c.status === CredentialState.AUTHENTICATED,
+        );
         out.push({
           id: accountId,
           upstreamId: row.id,
           label: `${row.alias} 租户 ${tenant.index}`,
-          status: session ? session.status : CredentialState.MISSING,
+          status: session ? session.status : usable.length ? CredentialState.USABLE : CredentialState.MISSING,
           credentialCount: credentials.length,
-          detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无登录态",
+          detail: session
+            ? `会话 ${credentialStateText(session.status)}`
+            : usable.length
+              ? "有可用的 key"
+              : "暂无登录态",
         });
       }
       continue;
@@ -351,13 +359,25 @@ export function listAccounts(): AccountView[] {
     const credentials = credentialsOf(row.id);
     const sessions = credentials.filter((c) => c.kind === "session");
     const session = sessions[0];
+    // 账号的状态：有一条能用的凭据就算登录了。
+    //
+    // 开放平台的凭据是租户的 key（不是会话），只认会话的话，那个账号明明有
+    // 两把 key 却一直说「没有凭据」。
+    const usable = credentials.filter(
+      (c) => c.status === CredentialState.USABLE || c.status === CredentialState.AUTHENTICATED,
+    );
+    const status = session
+      ? session.status
+      : usable.length
+        ? CredentialState.USABLE
+        : CredentialState.MISSING;
     out.push({
       id: row.id,
       upstreamId: row.id,
       label: row.alias,
-      status: session ? session.status : CredentialState.MISSING,
+      status,
       credentialCount: credentials.length,
-      detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无凭据",
+      detail: session ? `会话 ${credentialStateText(session.status)}` : usable.length ? "有可用的 key" : "暂无凭据",
     });
   }
   return out;
@@ -381,6 +401,29 @@ export function credentialExists(id: string): boolean {
  * ------------------------------------------------------------------ */
 
 /** 试一条凭据还能不能用。 */
+/**
+ * 注销：把一个账号的凭据删掉。
+ *
+ * 账号的 id 是 provider 自己的 id，或者是「provider:租户号」那种。凭据的
+ * id 跟着走：`session:provider:<id>`、`key:provider:<id>…`、
+ * `account:<id>…` —— 前缀对上了就是它的。
+ */
+export function logoutAccount(accountId: string): { ok: boolean; message: string; removed: number } {
+  const id = String(accountId ?? "").trim();
+  if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
+  // 账号是「provider:租户号」的时候，凭据挂在 provider 下面、用租户号区分，
+  // 所以按账号的 id 找得到。
+  const providerId = id.split(":")[0];
+  const row = provider(id) ?? provider(providerId);
+  if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
+  const removed = deleteProviderCredentials(id);
+  if (!removed) {
+    return { ok: true, message: "这个账号本来就没有凭据", removed: 0 };
+  }
+  console.log(`[ADMIN] ${id} 注销了，删掉 ${removed} 条凭据`);
+  return { ok: true, message: `注销了，删掉 ${removed} 条凭据`, removed };
+}
+
 export async function testCredential(id: string): Promise<{ ok: boolean; message: string }> {
   try {
     if (id === "session:minimax") {

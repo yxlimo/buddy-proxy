@@ -48,8 +48,26 @@ jq_get() {
 }
 
 # 点某个账号那一行的「登录」。
+# 账号与凭据在 Provider 页展开的行里：先把那个 Provider 的行展开，再找
+# 「登录」按钮。
 click_login() {
   local label="$1"
+  ab eval --stdin > /dev/null 2>&1 <<EOF
+(() => {
+  const rows = Array.from(document.querySelectorAll('table tbody tr'));
+  const row = rows.find((r) => r.textContent.includes($(printf '%s' "$label" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')));
+  if (!row) return 'no row';
+  // 展开它：点那一行（或者点展开箭头）。
+  const toggle = row.querySelector('button[aria-expanded]');
+  if (toggle && toggle.getAttribute('aria-expanded') !== 'true') {
+    toggle.click();
+  } else if (!row.querySelector('button[aria-expanded]')) {
+    row.click();
+  }
+  return 'expanded';
+})()
+EOF
+  sleep 1
   ab eval --stdin > /dev/null 2>&1 <<EOF
 (() => {
   const rows = Array.from(document.querySelectorAll('table tbody tr'));
@@ -116,7 +134,7 @@ echo ""
 echo "登录对话框的浏览器测试（$BASE）"
 
 # ── 进面板 ──────────────────────────────────────────────────────────────
-ab open "$BASE/admin/accounts" > /dev/null 2>&1
+ab open "$BASE/admin/upstreams" > /dev/null 2>&1
 sleep 2
 ab fill "#admin-token" "$TOKEN" > /dev/null 2>&1
 ab find role button click --name "进入面板" > /dev/null 2>&1
@@ -125,7 +143,7 @@ H1=$(js <<'EOF'
 (() => (document.querySelector('h1')?.textContent ?? ''))()
 EOF
 )
-check "账号页打开了" "$(echo "$H1" | jq_get 'd')" "账号与凭据"
+check "Provider 页打开了" "$(echo "$H1" | jq_get 'd')" "Provider"
 
 # ── device（MiniMax）────────────────────────────────────────────────────
 click_login "MiniMax Code"
