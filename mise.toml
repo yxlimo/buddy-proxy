@@ -75,6 +75,10 @@ run = "node --experimental-strip-types test/intern-ai-check.ts"
 description = "Check the root route end to end (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/route-e2e-check.ts"
 
+[tasks."test:qoder:benefits"]
+description = "Check which Qoder campaigns are worth claiming"
+run = "node --experimental-strip-types test/qoder-benefits-check.ts"
+
 [tasks."test:session"]
 description = "Check that a request's session and parent session are recognised"
 run = "node --experimental-strip-types test/session-check.ts"

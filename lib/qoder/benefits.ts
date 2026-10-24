@@ -3,7 +3,6 @@
 // The activity service is the same service in both regions; only the host
 // differs. The account's own token is enough to claim.
 
-import os from "node:os";
 import {
   ENDPOINTS,
   loadSession as loadQoderSession,
@@ -22,7 +21,7 @@ const QODER_CLAIM_BASE: Record<QoderRegion, string> = {
   global: ENDPOINTS.global.openapi,
 };
 
-function qoderClaimHeaders(session: QoderSession): Record<string, string> {
+export function qoderClaimHeaders(session: QoderSession): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: "application/json",
     Authorization: `Bearer ${session.accessToken}`,
@@ -30,30 +29,24 @@ function qoderClaimHeaders(session: QoderSession): Record<string, string> {
     // Without this one the server answers with an empty list of campaigns.
     "Cosy-ClientType": "10",
   };
-  // The machine identity the account registered with, not the derived one.
+  // No machine identity on purpose.
   //
-  // The token is not checked against anything: the real client generates an
-  // encrypted blob (the Alibaba sgsdk component, 66 bytes starting with
-  // 3f 58 00) and the server never issues one, while the tokens here are
-  // plain UUIDs. So the platform cannot tell a real token from a made-up
-  // one — it can only tell whether the token was uploaded in the device flow
-  // (`/device/selectAccounts?...machine_token=…`), which is the one place a
-  // device is registered. The session holds exactly that, so that is what
-  // goes out.
+  // The activity service checks the machine headers against the risk service,
+  // and a device it cannot place does not get the daily campaign: the list
+  // comes back without it. Measured on 2026-10-24, same account, same
+  // request, three header sets:
   //
-  // Two headers that are always wrong are worth more than a right one: a
-  // half-finished set of machine headers is what the risk service looks at
-  // hardest. When the session has no registered identity, send none of them.
+  //   with the registered machine id   -> the daily campaign is missing
+  //   with a made-up machine id         -> the daily campaign is missing
+  //   with no machine headers at all    -> the daily campaign is there
   //
-  // When the account has no credit left, the daily campaign is left out of
-  // the list and claiming it by id answers 503 RISK_DEPENDENCY_UNAVAILABLE.
-  // That is the account's balance, not the identity: /health says so in the
-  // credits, and the check-in cannot fix it.
-  if (session.machineId) headers["Cosy-MachineId"] = session.machineId;
-  if (session.machineToken) headers["Cosy-MachineToken"] = session.machineToken;
-  if (session.machineType) headers["Cosy-MachineType"] = session.machineType;
-  headers["Cosy-MachineOS"] = `${os.arch()}_linux`;
-  headers["Cosy-MachineHostname"] = os.hostname();
+  // So the headers hide the campaign, not the quota: the account had credit
+  // left, and the campaign showed up as soon as the headers were gone. The
+  // official client on Linux sends no machine headers either -- the native
+  // module does not exist there.
+  //
+  // A half-finished set of machine headers is worse than none: that is what
+  // the risk service looks at hardest.
   return headers;
 }
 
@@ -80,6 +73,30 @@ async function qoderCall(
   } catch (e) {
     return { status: 0, body: { msg: (e as Error).message } };
   }
+}
+
+/**
+ * 哪些活动该领。
+ *
+ * 平台用 claimStatus 说能不能领：CLAIMABLE 就是能领。actionType 说的是活动
+ * 是什么（CLAIM_BENEFIT 是点一下领，VIEW_DETAILS 是打开详情页也发积分）——
+ * 两种都能领，所以不能拿它当过滤器。
+ *
+ * 窗口是秒，不是毫秒。
+ */
+export function claimableCampaigns(rows: any[], nowSeconds: number): any[] {
+  const out: any[] = [];
+  for (const row of rows) {
+    // Not every activity grants something. These two do.
+    if (row.actionType !== "CLAIM_BENEFIT" && row.actionType !== "VIEW_DETAILS") continue;
+    if (row.claimStatus !== "CLAIMABLE") continue;
+    const start = typeof row.startAt === "number" ? row.startAt : 0;
+    const end = typeof row.endAt === "number" ? row.endAt : 0;
+    if (start && nowSeconds < start) continue;
+    if (end && nowSeconds >= end) continue;
+    out.push(row);
+  }
+  return out;
 }
 
 export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<BenefitOutcome> {
@@ -112,19 +129,19 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
     const now = Math.floor(Date.now() / 1000);
     let claimable = 0;
     let creditCampaigns = 0;
+    // One rule for what to claim: the helper has it, the loop asks it.
+    const claimableIds = new Set(
+      claimableCampaigns(rows, now).map((r: any) => String(r.campaignKey ?? r.campaignId)),
+    );
     for (const row of rows) {
-      if (row.actionType !== "CLAIM_BENEFIT") continue;
+      if (row.actionType !== "CLAIM_BENEFIT" && row.actionType !== "VIEW_DETAILS") continue;
       creditCampaigns += 1;
-      // The window is in seconds, not milliseconds.
-      const start = typeof row.startAt === "number" ? row.startAt : 0;
-      const end = typeof row.endAt === "number" ? row.endAt : 0;
-      if (start && now < start) continue;
-      if (end && now >= end) continue;
+      const key = String(row.campaignKey ?? row.campaignId);
       if (row.claimStatus === "CLAIMED") {
-        report.push(`活动「${row.campaignKey ?? row.campaignId}」已领过`);
+        report.push(`活动「${key}」已领过`);
         continue;
       }
-      if (row.claimStatus !== "CLAIMABLE") continue;
+      if (!claimableIds.has(key)) continue;
       claimable += 1;
       const claim = await qoderCall(
         session,
@@ -141,10 +158,16 @@ export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<Bene
         const kind = granted?.kind ?? row.benefit?.kind ?? "";
         if (claim.body?.replayed === true) {
           report.push(`活动「${row.campaignKey ?? row.campaignId}」已经领过了`);
-        } else {
+        } else if (amount > 0) {
           credits += amount;
           report.push(`领活动「${row.campaignKey ?? row.campaignId}」+${amount} ${kind}`);
           console.log(`[BENEFITS] ${upstream}: claimed ${row.campaignKey} +${amount} ${kind}`);
+        } else {
+          // Some campaigns grant nothing (a promo you only have to open).
+          // Claiming them is still correct — the platform says it can be
+          // claimed — but there is no credit to report.
+          report.push(`领活动「${row.campaignKey ?? row.campaignId}」（没有积分）`);
+          console.log(`[BENEFITS] ${upstream}: claimed ${row.campaignKey} (no credits)`);
         }
       } else {
         // The platform says why when it refuses. 503 RISK_DEPENDENCY_UNAVAILABLE
