@@ -28,6 +28,7 @@ import { zcodeStatus } from "../zcode/auth.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { credentialStatus, readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
+import { fetchMiniMaxCredits } from "../minimax/checkin.ts";
 import { MINIMAX_UPSTREAM } from "../minimax/transport.ts";
 import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
 import { ENDPOINTS as QODER_ENDPOINTS, qoderStatus, type QoderRegion } from "../qoder/auth.ts";
@@ -346,6 +347,21 @@ export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
 }
 
 /**
+ * MiniMax Code 账号上的积分。
+ *
+ * 账户余额（query_balance）说的是平台上的钱，Code 账号上是零；签到给的是
+ * 积分，在积分明细里。
+ */
+export async function miniMaxCredits(providerId = "minimax"): Promise<unknown> {
+  try {
+    const cred = await readCredential(false, providerId);
+    return await fetchMiniMaxCredits(cred.accessToken, "", MINIMAX_REGION === "en" ? "global" : "cn");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * SenseNova 的积分池。
  *
  * 问的是控制台（要登录态），没登录就问不了 —— 那是「不知道」，不是「没有」。
@@ -420,6 +436,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
         snapshot.minimax[row.id] = {
           balance: await miniMaxBalance(row.id),
           tokenPlan: await miniMaxTokenPlan(300_000, row.id),
+          credits: await miniMaxCredits(row.id),
         };
         break;
       case "minimax-api":

@@ -111,7 +111,7 @@ export interface QuotaView {
  */
 export interface HealthSnapshot {
   qoder: Record<string, { account: unknown; credits: unknown; quota?: unknown }>;
-  minimax: Record<string, { balance: unknown; tokenPlan: unknown }>;
+  minimax: Record<string, { balance: unknown; tokenPlan: unknown; credits: unknown }>;
   /** MiniMax 开放平台：每个租户一份套餐额度。 */
   minimaxApi: Record<string, { tenants: unknown }>;
   /** ZCode 的 Start Plan 额度。 */

@@ -308,29 +308,29 @@ function zcodeQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView
 function minimaxQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
   const balance = snapshot.minimax?.[provider.id]?.balance as any;
   const plan = minimaxTokenPlan(provider, snapshot);
-  if (!balance && !plan) return [];
-  const remaining = Number(balance?.credit ?? 0);
+  const lots = (snapshot.minimax?.[provider.id]?.credits ?? []) as any[];
+  if (!balance && !plan && !lots.length) return [];
+  // 积分：签到给的那种。账户余额（query_balance）说的是平台上的钱，Code
+  // 账号上是零 —— 积分在明细里。
+  const granted = lots.reduce((sum, lot) => sum + Number(lot?.granted ?? 0), 0);
+  const remaining = lots.reduce((sum, lot) => sum + Number(lot?.remaining ?? 0), 0);
+  const consumed = lots.reduce((sum, lot) => sum + Number(lot?.consumed ?? 0), 0);
   return [
     {
       upstreamId: provider.id,
       accountId: provider.id,
-      // 积分：账户上赠送的那部分。平台不报总额，所以 total 是 0。
       credits: {
-        total: 0,
-        used: 0,
+        total: granted,
+        used: consumed,
         remaining,
-        lots: remaining > 0
-          ? [
-              {
-                id: "minimax-credit",
-                sourceLabel: "账户积分",
-                remaining,
-                expiresAt: 0,
-                status: "有效",
-              },
-            ]
-          : [],
-        note: "账户上的积分",
+        lots: lots.map((lot: any, index: number) => ({
+          id: `minimax-credit-${index}`,
+          sourceLabel: Number(lot?.creditType) === 2 ? "签到积分" : "账户积分",
+          remaining: Number(lot?.remaining ?? 0),
+          expiresAt: Number(lot?.expireAtMs ?? 0),
+          status: Number(lot?.remaining ?? 0) > 0 ? "有效" : "已用完",
+        })),
+        note: "签到给的积分，30 天有效",
       },
       ...(plan ? { tokenPlan: plan } : {}),
     },

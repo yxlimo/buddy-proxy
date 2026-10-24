@@ -260,6 +260,46 @@ export function streak(panel: SigninPanel | null): number {
   return count;
 }
 
+export interface CreditLot {
+  /** How much was given. */
+  granted: number;
+  /** How much of it is left. */
+  remaining: number;
+  /** How much was used. */
+  consumed: number;
+  /** When it was given. */
+  grantedAtMs: number;
+  /** When it runs out. */
+  expireAtMs: number;
+  /** 2 is the sign-in kind; the purchases are another one. */
+  creditType: number;
+}
+
+/**
+ * The credit ledger.
+ *
+ * This is where the sign-in points show up: the account balance
+ * (`query_balance`) is about the money on the platform and reads zero for a
+ * code account, while the ledger holds the points the sign-in gave.
+ */
+export async function fetchMiniMaxCredits(
+  token: string,
+  userId = "",
+  region = REGION,
+): Promise<CreditLot[]> {
+  const res = await call("/minimax-cloud/api/v1/credit/details", "GET", token, userId, region);
+  if (res.status !== 200) return [];
+  const rows: any[] = Array.isArray(res.body?.details) ? res.body.details : [];
+  return rows.map((row) => ({
+    granted: Number(row?.granted_amount ?? 0),
+    remaining: Number(row?.remaining_amount ?? 0),
+    consumed: Number(row?.consumed_amount ?? 0),
+    grantedAtMs: Number(row?.granted_at_ms ?? 0),
+    expireAtMs: Number(row?.expire_at_ms ?? 0),
+    creditType: Number(row?.credit_type ?? 0),
+  }));
+}
+
 /**
  * The daily sign-in of the MiniMax Code account.
  *
