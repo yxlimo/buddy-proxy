@@ -35,10 +35,15 @@ enum UpstreamState {
 }
 
 // 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
+// 一个 Provider：网关后面的一个账号。
 message Upstream {
   string id = 1;
-  // 给人看的名字。
+  // 给人看的名字。别名在面板上改，方便分辨同类的两个账号。
   string label = 2;
+  // 它是哪一类上游（minimax、minimax-api、qoder……）。
+  string kind = 11;
+  // 它的别名。空就是没有设。
+  string alias = 12;
   // 现在在生效的值。开关是热的：面板改完立刻生效，不用重启。
   bool enabled = 3;
   // 这个上游现在能不能接请求。面板照这个判断能不能选它。
@@ -346,6 +351,68 @@ message SetProviderKeysResponse {
   int32 count = 3;
 }
 
+// ── Provider ───────────────────────────────────────────────────────────────
+
+message ListProviderKindsRequest {}
+
+// 加一个 Provider。同一类可以加很多个，它们各有各的凭据。
+message AddProviderRequest {
+  // 路径里就是它，所以要自己起一个好认的。
+  string id = 1;
+  // 它是哪一类上游。
+  string kind = 2;
+  // 别名：面板上显示在名字后面。
+  string alias = 3;
+  // 区域（qoder 有全球区与中国区之分）。
+  string region = 4;
+}
+
+message AddProviderResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+// 改一个 Provider 的别名与开关。
+message UpdateProviderRequest {
+  string id = 1;
+  // 空字符串表示不改。
+  string alias = 2;
+  // 没说就是不改。
+  optional bool enabled = 3;
+}
+
+message UpdateProviderResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+// 删一个 Provider。
+message DeleteProviderRequest {
+  string id = 1;
+}
+
+message DeleteProviderResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+// 面板上能选的一种类型。
+message ProviderKind {
+  string kind = 1;
+  string label = 2;
+  // device / browser / password / code —— 面板照这个画登录的表单。
+  string login = 3;
+  // 这个类要区域吗。
+  bool needs_region = 4;
+  // 有区域的话，都有哪些。
+  repeated string regions = 5;
+}
+
+// 面板上能选的类型。面板不问后端有哪些类，它问。
+message ListProviderKindsResponse {
+  repeated ProviderKind kinds = 1;
+}
+
 // ── 余额 ──────────────────────────────────────────────────────────────────
 
 message GetBalanceRequest {
@@ -455,7 +522,7 @@ message PublishedModel {
   // 根路由现在真的公布它吗？上游全关着的时候，模型在库里但没人能接。
   bool published = 4;
   // 没公布的原因。公布了就是 UNSPECIFIED。
-  UnpublishedReason unpublished_reason = 13;
+  optional UnpublishedReason unpublished_reason = 13;
   // single / fallback
   string strategy = 5;
   // 不给表示继承目标的值。给了就用这个值。
@@ -693,6 +760,10 @@ service AdminService {
   rpc TestCredential(TestCredentialRequest) returns (TestCredentialResponse);
   rpc RefreshCredential(RefreshCredentialRequest) returns (RefreshCredentialResponse);
   rpc SetProviderKeys(SetProviderKeysRequest) returns (SetProviderKeysResponse);
+  rpc AddProvider(AddProviderRequest) returns (AddProviderResponse);
+  rpc UpdateProvider(UpdateProviderRequest) returns (UpdateProviderResponse);
+  rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse);
+  rpc ListProviderKinds(ListProviderKindsRequest) returns (ListProviderKindsResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
 

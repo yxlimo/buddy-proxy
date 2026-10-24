@@ -292,11 +292,15 @@ function qoderSession(expiresInMs: number) {
 function healthSnapshot(qoderCredits: unknown) {
   return {
     qoder: {
-      global: { account: null, credits: qoderCredits },
+      qoder: { account: null, credits: qoderCredits },
     },
-    minimax: { balance: null, tokenPlan: null },
-    workbuddy: { credits: null },
-    tokenrhythm: { tenants: [] },
+    minimax: { minimax: { balance: null, tokenPlan: null } },
+    minimaxApi: {},
+    zcode: {},
+    workbuddy: { "workbuddy-cn": { credits: null } },
+    tokenrhythm: { tokenrhythm: { tenants: [] } },
+    sensenova: {},
+    internAi: {},
   };
 }
 
@@ -322,12 +326,12 @@ check("开关关着 → UPSTREAM_STATE_DISABLED", (await upstreamStateOf("qoder"
 
 // 2. 开着，但没有会话。
 await setEnabled("qoder", true);
-deleteSecret("session:qoder:global");
+deleteSecret("session:provider:qoder");
 deleteCached("login:state-test-pending");
 check("没有会话 → UPSTREAM_STATE_NO_CREDENTIAL", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_NO_CREDENTIAL", await upstreamStateOf("qoder"));
 
 // 3. 会话过期了。
-writeSecret("session:qoder:global", "session", qoderSession(-1000));
+writeSecret("session:provider:qoder", "session", qoderSession(-1000));
 check("会话过期 → UPSTREAM_STATE_CREDENTIAL_EXPIRED", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_CREDENTIAL_EXPIRED", await upstreamStateOf("qoder"));
 
 // 4. 登录被拒了（cache 里有一次失败的登录）。
@@ -369,16 +373,16 @@ check("正在登录 → UPSTREAM_STATE_LOGGING_IN", (await upstreamStateOf("qode
 // 6. 额度用尽。
 deleteCached("login:state-test-pending");
 deleteCached("login:state-test-failed");
-writeSecret("session:qoder:global", "session", qoderSession(3600_000));
+writeSecret("session:provider:qoder", "session", qoderSession(3600_000));
 writeCached(
-  "health:upstreams",
+  "health:upstreams:v2",
   healthSnapshot({ region: "global", plan: { total: 100, used: 100, remaining: 0 }, addOn: { total: 0, used: 0, remaining: 0 }, quotaExceeded: true, resetsAt: null }),
 );
 check("额度用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("qoder"));
 
 // 7. 一切正常。
 writeCached(
-  "health:upstreams",
+  "health:upstreams:v2",
   healthSnapshot({ region: "global", plan: { total: 100, used: 10, remaining: 90 }, addOn: { total: 0, used: 0, remaining: 0 }, quotaExceeded: false, resetsAt: null }),
 );
 check("一切正常 → UPSTREAM_STATE_READY", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_READY", await upstreamStateOf("qoder"));
@@ -470,7 +474,7 @@ await saveModel("r-reload", true, [qoderTarget]); // 存一次 = 重读一次目
 check("上游没这个模型 → UNPUBLISHED_REASON_MODEL_GONE", (await reasonOf("r-gone")) === "UNPUBLISHED_REASON_MODEL_GONE", await reasonOf("r-gone"));
 
 // 5. 上游没登录。
-deleteSecret("session:qoder:global");
+deleteSecret("session:provider:qoder");
 await saveModel("r-no-credential", true, [qoderTarget]);
 check("上游没登录 → UNPUBLISHED_REASON_NO_CREDENTIAL", (await reasonOf("r-no-credential")) === "UNPUBLISHED_REASON_NO_CREDENTIAL", await reasonOf("r-no-credential"));
 
@@ -483,15 +487,16 @@ check("没有目标 → UNPUBLISHED_REASON_NO_TARGET", (await reasonOf("r-no-tar
 
 // 7. 有的目标能用有的不能：公布了，理由留空。
 //    权重大的那个是上游不认的模型，小的那个能用 —— 照样公布。
-writeSecret("session:qoder:global", "session", qoderSession(3600_000));
+writeSecret("session:provider:qoder", "session", qoderSession(3600_000));
 await saveModel("r-mixed", true, [qoderTarget]);
 writeTarget("r-mixed", "qoder", "no-such-model", 10);
 await saveModel("r-reload-2", true, [qoderTarget]); // 存一次 = 重读一次目录
 const mixed = await admin("ListPublishedModels");
 const mixedModel = (mixed.models ?? []).find((m: any) => m.id === "r-mixed");
 check(
+  // 公布了就没有理由：契约里这个字段是 optional，没公布时才有。
   "有一个目标能用就是公布了，理由留空",
-  mixedModel?.published === true && mixedModel?.unpublishedReason === "UNPUBLISHED_REASON_UNSPECIFIED",
+  mixedModel?.published === true && mixedModel?.unpublishedReason === undefined,
   JSON.stringify(mixedModel),
 );
 

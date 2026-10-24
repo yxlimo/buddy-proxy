@@ -19,11 +19,13 @@ export interface WorkBuddyCredits {
   checkedIn: boolean;
 }
 
-export async function fetchWorkBuddyCredits(): Promise<WorkBuddyCredits | null> {
-  const session = loadWorkBuddySession("cn");
+export async function fetchWorkBuddyCredits(providerId = "workbuddy-cn"): Promise<WorkBuddyCredits | null> {
+  const session = loadWorkBuddySession(providerId);
   if (!session) return null;
   try {
     const res = await workbuddyApi(session, "/v2/billing/meter/checkin-activity-status", "POST");
+    // A failed query is "unknown", not "no credits".
+    if (res.status !== 200) return null;
     const data = dataOf(res.body);
     if (!data) return null;
     return {

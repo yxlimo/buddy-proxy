@@ -770,15 +770,17 @@ section("额度");
 function healthSnapshot(): unknown {
   return {
     qoder: {},
-    minimax: { balance: null, tokenPlan: null },
-    workbuddy: { credits: null },
-    tokenrhythm: { tenants: [] },
-    sensenova: { pools: SENSE_POOLS },
-    internAi: { balance: INTERN_BALANCE, packs: INTERN_PACKS },
+    minimax: { minimax: { balance: null, tokenPlan: null } },
+    minimaxApi: {},
+    zcode: {},
+    workbuddy: { "workbuddy-cn": { credits: null } },
+    tokenrhythm: { tokenrhythm: { tenants: [] } },
+    sensenova: { sensenova: { pools: SENSE_POOLS } },
+    internAi: { "intern-ai": { balance: INTERN_BALANCE, packs: INTERN_PACKS } },
   };
 }
 
-writeCached("health:upstreams", healthSnapshot());
+writeCached("health:upstreams:v2", healthSnapshot());
 
 const withQuota = await admin("ListUpstreams");
 const senseUpstream = (withQuota.upstreams ?? []).find((u: any) => u.id === "sensenova");
@@ -856,28 +858,28 @@ check("问平台得来的没有余额", senseBalance?.balance === undefined, JSO
 section("额度用尽");
 
 // 池子里的积分都空了。
-writeCached("health:upstreams", {
+writeCached("health:upstreams:v2", {
   ...(healthSnapshot() as any),
-  sensenova: { pools: SENSE_POOLS_EMPTY },
+  sensenova: { sensenova: { pools: SENSE_POOLS_EMPTY } },
 });
 check("SenseNova 的积分用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("sensenova")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("sensenova"));
 
 // 墨点没了。
-writeCached("health:upstreams", {
+writeCached("health:upstreams:v2", {
   ...(healthSnapshot() as any),
-  internAi: { balance: INTERN_BALANCE_EMPTY, packs: INTERN_PACKS },
+  internAi: { "intern-ai": { balance: INTERN_BALANCE_EMPTY, packs: INTERN_PACKS } },
 });
 check("书生·端砚的墨点用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("intern-ai"));
 
 // 窗口用满了也是用尽了。
-writeCached("health:upstreams", {
+writeCached("health:upstreams:v2", {
   ...(healthSnapshot() as any),
-  internAi: { balance: INTERN_BALANCE_WINDOW, packs: INTERN_PACKS },
+  internAi: { "intern-ai": { balance: INTERN_BALANCE_WINDOW, packs: INTERN_PACKS } },
 });
 check("窗口用尽了也是 OUT_OF_CREDITS", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("intern-ai"));
 
 // 额度回来了就又是 READY。
-writeCached("health:upstreams", healthSnapshot());
+writeCached("health:upstreams:v2", healthSnapshot());
 check("额度回来了 → UPSTREAM_STATE_READY", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_READY", await upstreamStateOf("intern-ai"));
 
 /* ------------------------------------------------------------------ *

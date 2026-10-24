@@ -30,7 +30,14 @@
 import { configString } from "../config.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
-import { ensureCredential, loadSession, deviceIdentity, ENDPOINTS, type QoderRegion } from "./auth.ts";
+import {
+  ensureCredential,
+  loadSession,
+  deviceIdentity,
+  regionOf,
+  ENDPOINTS,
+  type QoderRegion,
+} from "./auth.ts";
 
 /** Qoder's server public key. Fixed; the protocol has never rotated it. */
 const SERVER_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
@@ -90,9 +97,10 @@ export interface LegacySession {
 }
 
 /** The identity the CLI itself stores in `~/.qoder/.auth/user`. */
-export async function buildSession(region: QoderRegion = "global"): Promise<LegacySession> {
-  const cred = await ensureCredential(false, region);
-  const stored = loadSession(region);
+export async function buildSession(providerId = "qoder"): Promise<LegacySession> {
+  const region = regionOf(providerId);
+  const cred = await ensureCredential(false, providerId);
+  const stored = loadSession(providerId);
   const uid = stored?.userId ?? "";
   const identity: LegacyIdentity = {
     name: configString("QODER_ACCOUNT_NAME", ""),
@@ -347,6 +355,8 @@ export function buildLegacyBody(req: LegacyRequestBody): Json {
  * ------------------------------------------------------------------ */
 
 export interface LegacyRequestOptions {
+  /** Which provider (which account) to talk to. */
+  providerId?: string;
   region?: QoderRegion;
   signal?: AbortSignal;
 }
@@ -359,12 +369,13 @@ export async function legacyChatCompletion(
   req: LegacyRequestBody,
   opts: LegacyRequestOptions = {},
 ): Promise<Response> {
-  const region = opts.region ?? "global";
+  const providerId = opts.providerId ?? "qoder";
+  const region = opts.region ?? regionOf(providerId);
   const url =
     `${ENDPOINTS[region].inferLegacy}` +
     `?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`;
 
-  const session = await buildSession(region);
+  const session = await buildSession(providerId);
   const raw = JSON.stringify(buildLegacyBody(req));
   const encoded = qoderBase64Encode(Buffer.from(raw, "utf8"));
   const headers = legacyHeaders(session, url, encoded);

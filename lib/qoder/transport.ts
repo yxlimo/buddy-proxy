@@ -11,7 +11,13 @@
 // headers.
 
 import { randomUUID } from "node:crypto";
-import { ensureCredential, ENDPOINTS, deviceIdentity, type QoderRegion } from "./auth.ts";
+import {
+  ensureCredential,
+  ENDPOINTS,
+  deviceIdentity,
+  regionOf,
+  type QoderRegion,
+} from "./auth.ts";
 import { AuthError } from "../credential.ts";
 
 const USER_AGENT = "qoder/1.1.74";
@@ -70,6 +76,8 @@ export class LimitError extends Error {
 
 export interface QoderRequestOptions {
   stream: boolean;
+  /** Which provider (which account) to talk to. */
+  providerId?: string;
   region?: QoderRegion;
   /** Force a token refresh before the request (used after a 401). */
   force?: boolean;
@@ -99,9 +107,13 @@ export function buildBody(body: Record<string, unknown>, stream: boolean): Recor
   return out;
 }
 
-async function upstreamHeaders(region: QoderRegion, force: boolean): Promise<Record<string, string>> {
-  const cred = await ensureCredential(force, region);
-  const identity = deviceIdentity(region);
+async function upstreamHeaders(
+  providerId: string,
+  region: QoderRegion,
+  force: boolean,
+): Promise<Record<string, string>> {
+  const cred = await ensureCredential(force, providerId);
+  const identity = deviceIdentity(providerId);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${cred.accessToken}`,
     "Content-Type": "application/json",
@@ -130,11 +142,13 @@ export async function qoderChatCompletion(
   body: Record<string, unknown>,
   opts: QoderRequestOptions,
 ): Promise<Response> {
-  const region = opts.region ?? "global";
+  // The provider says which account; the account says which region.
+  const providerId = opts.providerId ?? "qoder";
+  const region = opts.region ?? regionOf(providerId);
   const url = ENDPOINTS[region].infer;
 
   const send = async (force: boolean) => {
-    const headers = await upstreamHeaders(region, force);
+    const headers = await upstreamHeaders(providerId, region, force);
     return fetch(url, {
       method: "POST",
       headers,

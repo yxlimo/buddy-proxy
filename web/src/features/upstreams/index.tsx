@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
+import { Plus, Trash2 } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
@@ -9,6 +11,7 @@ import {
   CredentialStateBadge,
   UpstreamStateBadge,
 } from '@/features/upstreams/state-badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -19,7 +22,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useSetUpstreamEnabled, useUpstreams, upstreamKeys } from '@/features/upstreams/api'
+import {
+  useAddProvider,
+  useDeleteProvider,
+  useProviderKinds,
+  useSetUpstreamEnabled,
+  useUpdateProvider,
+  useUpstreams,
+  upstreamKeys,
+} from '@/features/upstreams/api'
+import { AddProviderDialog } from '@/features/upstreams/add-provider-dialog'
+import { ProviderAliasCell } from '@/features/upstreams/provider-alias'
 import { QuotaSummary } from '@/features/balance/quota'
 import { formatCount } from '@/lib/format'
 
@@ -30,7 +43,12 @@ const REGION_LABELS: Record<string, string> = {
 
 export function UpstreamsPage() {
   const upstreams = useUpstreams()
+  const kinds = useProviderKinds()
   const setEnabled = useSetUpstreamEnabled()
+  const addProvider = useAddProvider()
+  const updateProvider = useUpdateProvider()
+  const deleteProvider = useDeleteProvider()
+  const [adding, setAdding] = useState(false)
 
   // 正在改的是哪一个：用 mutation 的 variables 判断，不用自己存一份
   // busy —— 两个上游一起点的时候，后一个的 finally 会把前一个的 busy
@@ -55,6 +73,12 @@ export function UpstreamsPage() {
     <PageShell
       title='Provider'
       description='每个 Provider 是一路请求的去处。开关修改后立即生效。'
+      actions={
+        <Button size='sm' onClick={() => setAdding(true)}>
+          <Plus />
+          添加
+        </Button>
+      }
     >
 
       <Card>
@@ -83,7 +107,14 @@ export function UpstreamsPage() {
                     <TableCell>
                       <div className='grid gap-0.5'>
                         <span className='font-medium'>
-                          {upstream.label || upstream.id}
+                          {upstream.kind || upstream.label || upstream.id}
+                          {/* The alias is how two accounts of the same kind are
+                              told apart, so it goes right after the name. */}
+                          {upstream.alias ? (
+                            <span className='ml-1 text-xs text-muted-foreground'>
+                              {upstream.alias}
+                            </span>
+                          ) : null}
                         </span>
                         <span className='text-xs text-muted-foreground'>
                           {upstream.id}
@@ -142,17 +173,43 @@ export function UpstreamsPage() {
                       <QuotaSummary quota={upstream.quota} />
                     </TableCell>
                     <TableCell className='text-right'>
-                      <Switch
-                        checked={upstream.enabled}
-                        disabled={busyId === upstream.id || refreshing}
-                        onCheckedChange={(checked) =>
-                          setEnabled.mutate({
-                            upstreamId: upstream.id,
-                            enabled: checked,
-                          })
-                        }
-                        aria-label={`${upstream.label || upstream.id} 的开关`}
-                      />
+                      <div className='flex items-center justify-end gap-2'>
+                        <ProviderAliasCell
+                          providerId={upstream.id}
+                          alias={upstream.alias ?? ''}
+                          onSave={(alias) =>
+                            updateProvider.mutate({ id: upstream.id, alias })
+                          }
+                        />
+                        <Switch
+                          checked={upstream.enabled}
+                          disabled={busyId === upstream.id || refreshing}
+                          onCheckedChange={(checked) =>
+                            setEnabled.mutate({
+                              upstreamId: upstream.id,
+                              enabled: checked,
+                            })
+                          }
+                          aria-label={`${upstream.label || upstream.id} 的开关`}
+                        />
+                        <Button
+                          variant='ghost'
+                          size='icon-sm'
+                          aria-label={`删掉 ${upstream.id}`}
+                          disabled={deleteProvider.isPending}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `删掉 ${upstream.label || upstream.id}？它名下的凭据也会一起删掉。`
+                              )
+                            ) {
+                              deleteProvider.mutate({ id: upstream.id })
+                            }
+                          }}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -161,6 +218,16 @@ export function UpstreamsPage() {
           )}
         </CardContent>
       </Card>
+
+      <AddProviderDialog
+        open={adding}
+        onOpenChange={setAdding}
+        kinds={kinds.data?.kinds ?? []}
+        pending={addProvider.isPending}
+        onSubmit={(input) => {
+          addProvider.mutate(input, { onSuccess: () => setAdding(false) })
+        }}
+      />
     </PageShell>
   )
 }

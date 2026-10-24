@@ -9,73 +9,28 @@
 // the prefixed form (`/qoder-cn/v1/models`) with one upstream, and the model
 // ids are the real ones there — the path already says where the model lives.
 
-import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "../qoder/models.ts";
-import { workbuddyLabel, type WorkBuddyModel } from "../workbuddy/models.ts";
-import type { MiniMaxModel } from "../minimax/models.ts";
-import type { MiniMaxApiModel } from "../minimax/api.ts";
-import type { ZcodeModel } from "../zcode/models.ts";
-import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
-import type { SenseNovaModel } from "../sensenova/models.ts";
-import type { InternAiCatalogModel } from "../intern-ai/models.ts";
 import type { AggregateModel } from "../aggregate.ts";
+import type { CatalogModel } from "../catalog-models.ts";
 
-export type UpstreamGroup =
-  | "qoder"
-  | "qoder-cn"
-  | "workbuddy-cn"
-  | "minimax"
-  | "minimax-api"
-  | "zcode"
-  | "tokenrhythm"
-  | "sensenova"
-  | "intern-ai";
+export type { CatalogModel };
+export {
+  internAiCatalogModels,
+  minimaxCatalogModels,
+  miniMaxApiCatalogModels,
+  qoderCatalogModels,
+  senseNovaCatalogModels,
+  tokenRhythmCatalogModels,
+  workbuddyCatalogModels,
+  zcodeCatalogModels,
+} from "../catalog-models.ts";
 
-export const UPSTREAM_GROUPS: UpstreamGroup[] = [
-  "qoder",
-  "qoder-cn",
-  "workbuddy-cn",
-  "minimax",
-  "minimax-api",
-  "zcode",
-  "tokenrhythm",
-  "sensenova",
-  "intern-ai",
-];
-
-/** The prefix the server puts in front of a model id. */
-export const GROUP_PREFIX: Record<UpstreamGroup, string> = {
-  qoder: "qoder/",
-  "qoder-cn": "qoder-cn/",
-  "workbuddy-cn": "workbuddy-cn/",
-  minimax: "minimax/",
-  "minimax-api": "minimax-api/",
-  zcode: "zcode/",
-  tokenrhythm: "tokenrhythm/",
-  sensenova: "sensenova/",
-  "intern-ai": "intern-ai/",
-};
-
-/** A model, the same whatever the shape the client wants it in. */
-export interface CatalogModel {
-  /** The model id as the upstream knows it. */
-  id: string;
-  /** The name the list shows. */
-  displayName: string;
-  /** Whether the model can think. */
-  reasoning: boolean;
-  /** Whether the model can call tools. */
-  toolCall: boolean;
-  /** Absent when the gateway advertises no context window for the model. */
-  contextWindow?: number;
-  /** Absent when the platform does not say how much the model may answer. */
-  maxOutputTokens?: number;
-  /** The thinking levels the model accepts, if it has a choice. */
-  effortOptions?: string[];
-  /** The model the gateway actually ran, when it is not the one that was asked for. */
-  backend?: string;
-  /** What the account is charged at: 0 is free. Absent when nobody says. */
-  credits?: number;
-}
+/**
+ * A group is a provider: one row of the provider table.
+ *
+ * The prefix the server puts in front of a model id is the provider's id, so
+ * two accounts of the same kind do not collide.
+ */
+export type UpstreamGroup = string;
 
 /** One upstream's models. */
 export interface CatalogGroup {
@@ -83,123 +38,37 @@ export interface CatalogGroup {
   models: CatalogModel[];
 }
 
-export function qoderCatalogModels(models: QoderModel[]): CatalogModel[] {
-  return models.map((m) => ({
+export function groupCatalog(group: UpstreamGroup, groups: CatalogGroup[], openai: boolean): any {
+  const found = groups.find((g) => g.group === group);
+  const models = found?.models ?? [];
+  if (openai) {
+    const created = Math.floor(Date.now() / 1000);
+    return {
+      object: "list",
+      data: models.map((m) => ({ id: m.id, object: "model", created, owned_by: group, name: m.displayName })),
+    };
+  }
+  const created = Math.floor(Date.now() / 1000);
+  const data = models.map((m) => ({
     id: m.id,
-    displayName: qoderLabel(m),
+    type: "model",
+    display_name: m.displayName,
+    created_at: created,
     reasoning: m.reasoning,
-    toolCall: true,
-    contextWindow: m.context,
-    maxOutputTokens: m.maxOutput,
-    // A tier accepts a thinking level; a pinned model either thinks or does not,
-    // and the list says which.
-    ...(m.kind === "tier" ? { effortOptions: [...QODER_EFFORTS] } : {}),
+    tool_call: m.toolCall,
+    ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
+    ...(m.maxOutputTokens ? { max_output_tokens: m.maxOutputTokens } : {}),
+    ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
     ...(m.backend ? { backend: m.backend } : {}),
-    credits: qoderCredits(m.multiplier),
   }));
+  return {
+    data,
+    has_more: false,
+    first_id: data.length ? data[0].id : null,
+    last_id: data.length ? data[data.length - 1].id : null,
+  };
 }
 
-export function workbuddyCatalogModels(models: WorkBuddyModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: workbuddyLabel(m),
-    reasoning: m.reasoning,
-    toolCall: m.tools,
-    contextWindow: m.context,
-    maxOutputTokens: m.maxOutput,
-    ...(m.efforts.length ? { effortOptions: [...m.efforts] } : {}),
-    credits: m.credits,
-  }));
-}
-
-export function minimaxCatalogModels(models: MiniMaxModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: m.display_name,
-    reasoning: m.reasoning,
-    toolCall: m.tool_call,
-    contextWindow: m.context,
-    maxOutputTokens: m.output,
-    effortOptions: m.effortOptions,
-  }));
-}
-
-/** MiniMax 开放平台的模型。 */
-export function miniMaxApiCatalogModels(models: MiniMaxApiModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: m.displayName,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    contextWindow: m.context,
-    maxOutputTokens: m.output,
-  }));
-}
-
-/** ZCode 的模型目录（内置的静态表）。 */
-export function zcodeCatalogModels(models: ZcodeModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: m.displayName,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    contextWindow: m.context,
-    maxOutputTokens: m.output,
-    ...(m.efforts.length ? { effortOptions: [...m.efforts] } : {}),
-  }));
-}
-
-export function tokenRhythmCatalogModels(): CatalogModel[] {
-  return TOKENRHYTHM_MODELS.map((m) => ({
-    id: m.id,
-    displayName: m.name,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    effortOptions: [...m.efforts],
-    contextWindow: m.context,
-    maxOutputTokens: m.maxOutput,
-  }));
-}
-
-/**
- * SenseNova 的模型目录。
- *
- * 能力是平台自己报的（supported_features 里有 tools、reasoning），上下文长度
- * 与输出上限也是（context_length、max_output_length）。平台没报的那一项这里
- * 就没有 —— 不拿别的数来填。
- */
-export function senseNovaCatalogModels(models: SenseNovaModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: m.name || m.id,
-    reasoning: m.features.includes("reasoning"),
-    toolCall: m.features.includes("tools"),
-    ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
-    ...(m.maxOutputLength > 0 ? { maxOutputTokens: m.maxOutputLength } : {}),
-  }));
-}
-
-/**
- * 书生·端砚的模型目录。
- *
- * 上下文长度是平台报的；输出上限平台没报，所以这里也没有 —— 客户端问多少
- * 就发多少。
- */
-export function internAiCatalogModels(models: InternAiCatalogModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: m.name || m.id,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
-  }));
-}
-
-/* ------------------------------------------------------------------ *
- * The aggregate catalog
- * ------------------------------------------------------------------ */
-
-/** One target of an aggregate model. */
 export interface AggregateTargetSpec {
   group: UpstreamGroup;
   upstreamModel: string;
@@ -300,7 +169,7 @@ export function anthropicCatalog(groups: CatalogGroup[]): any {
   for (const { group, models } of groups) {
     for (const m of models) {
       data.push({
-        id: `${GROUP_PREFIX[group]}${m.id}`,
+        id: `${group}/${m.id}`,
         type: "model",
         display_name: m.displayName,
         created_at: created,
@@ -329,7 +198,7 @@ export function openaiCatalog(groups: CatalogGroup[]): any {
   for (const { group, models } of groups) {
     for (const m of models) {
       data.push({
-        id: `${GROUP_PREFIX[group]}${m.id}`,
+        id: `${group}/${m.id}`,
         object: "model",
         created,
         owned_by: group,
@@ -390,33 +259,3 @@ export function aggregateAnthropicCatalog(entries: AggregateEntry[]): any {
  * The model ids are the real ones: the path already says which upstream it is
  * for, so the name does not have to say it again.
  */
-export function groupCatalog(group: UpstreamGroup, groups: CatalogGroup[], openai: boolean): any {
-  const found = groups.find((g) => g.group === group);
-  const models = found?.models ?? [];
-  if (openai) {
-    const created = Math.floor(Date.now() / 1000);
-    return {
-      object: "list",
-      data: models.map((m) => ({ id: m.id, object: "model", created, owned_by: group, name: m.displayName })),
-    };
-  }
-  const created = Math.floor(Date.now() / 1000);
-  const data = models.map((m) => ({
-    id: m.id,
-    type: "model",
-    display_name: m.displayName,
-    created_at: created,
-    reasoning: m.reasoning,
-    tool_call: m.toolCall,
-    ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
-    ...(m.maxOutputTokens ? { max_output_tokens: m.maxOutputTokens } : {}),
-    ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
-    ...(m.backend ? { backend: m.backend } : {}),
-  }));
-  return {
-    data,
-    has_more: false,
-    first_id: data.length ? data[0].id : null,
-    last_id: data.length ? data[data.length - 1].id : null,
-  };
-}

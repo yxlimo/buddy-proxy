@@ -25,6 +25,7 @@ import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
 import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
+import { provider, providerSecretId } from "../providers.ts";
 
 export type QoderRegion = "cn" | "global";
 
@@ -99,9 +100,14 @@ export function dataDir(): string {
   return sharedDataDir();
 }
 
-/** Where the session lives in the database. */
-export function sessionId(region: QoderRegion = REGION): string {
-  return `session:qoder:${region}`;
+/**
+ * Where the session lives in the database.
+ *
+ * The session belongs to the provider, not to the region: two Qoder China
+ * accounts are two providers, each with its own session.
+ */
+export function sessionId(providerId = "qoder"): string {
+  return providerSecretId(providerId);
 }
 
 /** Where the session used to live, while the migration is under way. */
@@ -109,10 +115,11 @@ export function legacySessionPath(region: QoderRegion = REGION): string[] {
   return legacyPaths(`qoder-session.${region}.json`);
 }
 
-export function loginHint(region: QoderRegion = REGION): string {
+export function loginHint(providerId = "qoder"): string {
+  const region = regionOf(providerId);
   return (
     `还没有登录 Qoder（${region} 区域）。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
-    `${clearHint(sessionId(region))}（会打印一个授权链接）。` +
+    `${clearHint(sessionId(providerId))}（会打印一个授权链接）。` +
     `凭据之后自动刷新。`
   );
 }
@@ -128,12 +135,25 @@ export function newMachineIdentity(): { machineId: string; machineToken: string;
   };
 }
 
-export function loadSession(region: QoderRegion = REGION): QoderSession | null {
-  return readSession<QoderSession>(sessionId(region), hasTokens, legacySessionPath(region));
+export function loadSession(providerId = "qoder"): QoderSession | null {
+  const region = regionOf(providerId);
+  return readSession<QoderSession>(sessionId(providerId), hasTokens, legacySessionPath(region));
 }
 
-export function hasSession(region: QoderRegion = REGION): boolean {
-  return loadSession(region) !== null;
+export function hasSession(providerId = "qoder"): boolean {
+  return loadSession(providerId) !== null;
+}
+
+/**
+ * Which region a provider talks to.
+ *
+ * The region picks the endpoints; the provider id picks the credential. Two
+ * providers of the same kind can sit in different regions.
+ */
+export function regionOf(providerId = "qoder"): QoderRegion {
+  const row = provider(providerId);
+  const region = row?.region;
+  return region === "cn" || region === "global" ? region : REGION;
 }
 
 /**
@@ -143,15 +163,15 @@ export function hasSession(region: QoderRegion = REGION): boolean {
  * The identity that was stored at login time is not used — that one was random,
  * and it would drift with every login.
  */
-export function deviceIdentity(region: QoderRegion = REGION): DeviceIdentity | null {
-  const session = loadSession(region);
+export function deviceIdentity(providerId = "qoder"): DeviceIdentity | null {
+  const session = loadSession(providerId);
   if (!session?.userId) return null;
   return deriveDeviceIdentity(session.userId, deviceSalt(dataDir()));
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
-export function saveSession(session: QoderSession): void {
-  writeSession(sessionId(session.region), session);
+export function saveSession(session: QoderSession, providerId = "qoder"): void {
+  writeSession(sessionId(providerId), session);
 }
 
 
@@ -232,9 +252,10 @@ function parseGrant(body: any, previous?: QoderSession | null): QoderSession {
 }
 
 /** Refresh with the stored refresh token. The token rotates, so this must persist. */
-export async function refreshSession(force = false, region: QoderRegion = REGION): Promise<QoderSession> {
-  const session = loadSession(region);
-  if (!session) throw new AuthError("no session", loginHint(region), 503);
+export async function refreshSession(force = false, providerId = "qoder"): Promise<QoderSession> {
+  const session = loadSession(providerId);
+  const region = session?.region ?? regionOf(providerId);
+  if (!session) throw new AuthError("no session", loginHint(providerId), 503);
   if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
   const r = await postJson(
@@ -250,7 +271,7 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
         `refresh rejected (${code})`,
         `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
           `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
-          `把当前那份复制过去，或者${clearHint(sessionId(region))}。`,
+          `把当前那份复制过去，或者${clearHint(sessionId(providerId))}。`,
         503,
       );
     }
@@ -258,7 +279,7 @@ export async function refreshSession(force = false, region: QoderRegion = REGION
   }
 
   const next = parseGrant(r.body, session);
-  saveSession(next);
+  saveSession(next, providerId);
   cache = null;
   authLog(
     dataDir(),
@@ -284,23 +305,23 @@ function toCredential(session: QoderSession): Credential {
 }
 
 /** Credential for the proxy. `force` means the token we sent was rejected. */
-export async function ensureCredential(force = false, region: QoderRegion = REGION): Promise<Credential> {
+export async function ensureCredential(force = false, providerId = "qoder"): Promise<Credential> {
   return ensureCredentialShared({
     cache,
     setCache: (next) => {
       cache = next;
     },
-    key: region,
+    key: providerId,
     cacheMs: CACHE_MS,
     force,
-    lockId: sessionId(region),
-    load: () => loadSession(region),
-    refresh: (f) => refreshSession(f, region),
+    lockId: sessionId(providerId),
+    load: () => loadSession(providerId),
+    refresh: (f) => refreshSession(f, providerId),
     toCredential,
     expired: (session) =>
       new AuthError(
         `access token expired (generation ${session.generation})`,
-        `Qoder token 已过期且刷新没成功。${clearHint(sessionId(region))}。`,
+        `Qoder token 已过期且刷新没成功。${clearHint(sessionId(providerId))}。`,
         503,
       ),
   });
@@ -321,14 +342,15 @@ export interface DeviceAuthorization {
  * Build the authorization URL. There is no server-side device code: the challenge is
  * computed here, exactly as the CLI does it.
  */
-export function buildDeviceAuthorization(region: QoderRegion = REGION): DeviceAuthorization {
+export function buildDeviceAuthorization(providerId = "qoder"): DeviceAuthorization {
+  const region = regionOf(providerId);
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
   const nonce = randomUUID();
   // A login for an account that is already known reuses that account's
   // fingerprint, so the upstream does not see a new device. A first login has
   // no account id to derive from yet, so it gets a fresh one.
-  const machine = deviceIdentity(region) ?? newMachineIdentity();
+  const machine = deviceIdentity(providerId) ?? newMachineIdentity();
   const params = new URLSearchParams({
     challenge,
     challenge_method: "S256",
@@ -348,7 +370,8 @@ export function buildDeviceAuthorization(region: QoderRegion = REGION): DeviceAu
 }
 
 /** Poll until the browser approval lands, then persist the session. */
-export async function pollDeviceToken(auth: DeviceAuthorization, region: QoderRegion = REGION): Promise<QoderSession> {
+export async function pollDeviceToken(auth: DeviceAuthorization, providerId = "qoder"): Promise<QoderSession> {
+  const region = regionOf(providerId);
   const deadline = Math.min(auth.expiresAtMs, Date.now() + POLL_TIMEOUT_MS);
   const url =
     `${ENDPOINTS[region].openapi}/api/v1/deviceToken/poll?` +
@@ -390,17 +413,18 @@ export async function pollDeviceToken(auth: DeviceAuthorization, region: QoderRe
   throw new AuthError("expired_token", "授权超时，请重新发起登录。", 503);
 }
 
-export async function login(region: QoderRegion = REGION): Promise<QoderSession> {
-  const auth = buildDeviceAuthorization(region);
+export async function login(providerId = "qoder"): Promise<QoderSession> {
+  const region = regionOf(providerId);
+  const auth = buildDeviceAuthorization(providerId);
   console.log("");
   console.log(`  region: ${region}  client_id: ${CLIENT_ID}`);
   console.log(`  open in a browser: ${auth.authUrl}`);
   console.log(`  (waiting for approval, up to ${Math.round(POLL_TIMEOUT_MS / 60000)} min)`);
   console.log("");
-  const session = await pollDeviceToken(auth, region);
-  saveSession(session);
+  const session = await pollDeviceToken(auth, providerId);
+  saveSession(session, providerId);
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
-  console.log(`  saved to the database (${sessionId(region)})`);
+  console.log(`  saved to the database (${sessionId(providerId)})`);
   authLog(
     dataDir(),
     `qoder ${region} login ok`,
@@ -413,13 +437,16 @@ export async function login(region: QoderRegion = REGION): Promise<QoderSession>
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */
-export function qoderStatus(region: QoderRegion = REGION): Record<string, unknown> {
-  const session = loadSession(region);
-  if (!session) return { region, source: sessionId(region), status: "anonymous", error: "no session", hint: loginHint(region) };
+export function qoderStatus(providerId = "qoder"): Record<string, unknown> {
+  const region = regionOf(providerId);
+  const session = loadSession(providerId);
+  if (!session) {
+    return { region, source: sessionId(providerId), status: "anonymous", error: "no session", hint: loginHint(providerId) };
+  }
   const remainingMs = session.expiresAtMs - Date.now();
   return {
     region,
-    source: sessionId(region),
+    source: sessionId(providerId),
     status: remainingMs > 0 ? "authenticated" : "expired",
     clientId: session.clientId,
     userId: session.userId,

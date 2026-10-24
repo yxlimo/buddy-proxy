@@ -12,6 +12,7 @@ import {
   loadSession,
   login,
   sessionFor,
+  sessionId,
   tokenRhythmTenant,
   tokenRhythmTenants,
   type TokenRhythmSession,
@@ -117,8 +118,8 @@ const mask = (account: string): string =>
   account.length <= 4 ? "***" : `${account.slice(0, 3)}***${account.slice(-2)}`;
 
 /** What every tenant has, as far as the platform says. */
-export async function tenantStatuses(): Promise<TokenRhythmTenantStatus[]> {
-  const tenants = tokenRhythmTenants();
+export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenRhythmTenantStatus[]> {
+  const tenants = tokenRhythmTenants(providerId);
   const out: TokenRhythmTenantStatus[] = [];
   for (const tenant of tenants) {
     const status: TokenRhythmTenantStatus = {
@@ -131,14 +132,14 @@ export async function tenantStatuses(): Promise<TokenRhythmTenantStatus[]> {
       error: null,
     };
     try {
-      const session = await sessionFor(tenant.index);
+      const session = await sessionFor(tenant.index, providerId);
       status.name = session.name;
       // An account with no key cannot serve a request, and the key is only
       // ever shown in full in the answer to the call that makes it. So the
       // gateway makes one and keeps it — a new account works without anybody
       // putting a key in the environment.
       if (!tenant.apiKey) {
-        const made = await ensureApiKey(session, tenant.index, null);
+        const made = await ensureApiKey(session, tenant.index, null, providerId);
         status.hasKey = Boolean(made);
       }
       status.wallet = await wallet(session);
@@ -219,7 +220,8 @@ function pruneOutOfMoney(): void {
  * The cached view
  * ------------------------------------------------------------------ */
 
-let cache: { at: number; statuses: TokenRhythmTenantStatus[] } | null = null;
+/** The cached view, one per provider. */
+const caches = new Map<string, { at: number; statuses: TokenRhythmTenantStatus[] }>();
 
 /**
  * The tenants' status, from a recent answer.
@@ -228,15 +230,52 @@ let cache: { at: number; statuses: TokenRhythmTenantStatus[] } | null = null;
  * answer is kept for a few minutes. A request that has to know which tenant to
  * use asks for the cached view.
  */
-export async function tokenRhythmStatuses(maxAgeMs = 300_000): Promise<TokenRhythmTenantStatus[]> {
+export async function tokenRhythmStatuses(
+  providerId = "tokenrhythm",
+  maxAgeMs = 300_000,
+): Promise<TokenRhythmTenantStatus[]> {
   pruneOutOfMoney();
-  if (cache && Date.now() - cache.at < maxAgeMs) return cache.statuses;
-  const statuses = await tenantStatuses();
-  cache = { at: Date.now(), statuses };
+  const cached = caches.get(providerId);
+  if (cached && Date.now() - cached.at < maxAgeMs) return cached.statuses;
+  const statuses = await tenantStatuses(providerId);
+  caches.set(providerId, { at: Date.now(), statuses });
   return statuses;
 }
 
 /** Throw the cached view away, so the next question goes to the platform. */
 export function resetTokenRhythmStatusCache(): void {
-  cache = null;
+  caches.clear();
+}
+
+/* ------------------------------------------------------------------ *
+ * The credential
+ * ------------------------------------------------------------------ */
+
+/** 面板上的「快到期」提示线（毫秒）。cookie 只能用三十天。 */
+const WARN_MS = 3 * 24 * 3600 * 1000;
+
+/**
+ * 凭据的状态：这个 provider 有几个租户，其中几个还登着。
+ *
+ * 租户各有各的会话，所以这里报的是这一组会话的整体情况。
+ */
+export function tokenRhythmStatus(providerId = "tokenrhythm"): Record<string, unknown> {
+  const tenants = tokenRhythmTenants(providerId);
+  if (!tenants.length) {
+    return { source: sessionId(providerId), status: "anonymous", error: "no tenant" };
+  }
+  const sessions = tenants
+    .map((t) => loadSession(t.index, providerId))
+    .filter((s): s is TokenRhythmSession => s !== null);
+  const expiresAtMs = sessions.map((s) => s.expiresAtMs).sort((a, b) => a - b)[0] ?? 0;
+  const remainingMs = expiresAtMs ? expiresAtMs - Date.now() : 0;
+  return {
+    source: sessionId(providerId),
+    status: sessions.length ? "authenticated" : "anonymous",
+    tenants: tenants.length,
+    loggedIn: sessions.length,
+    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : "",
+    remainingSec: Math.round(remainingMs / 1000),
+    warning: remainingMs > 0 && remainingMs < WARN_MS,
+  };
 }

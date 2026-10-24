@@ -14,14 +14,12 @@
 // 额度不在这里：墨点是控制台的接口，见 lib/intern-ai/quota.ts。
 
 import { AuthError } from "../credential.ts";
-import { getSecret } from "../store.ts";
 import { INTERN_AI_DISCOVERY_API_BASE, internAiDiscoveryKey } from "./config.ts";
 import {
-  ACCOUNT_ID,
   loadSession,
+  storedAccount,
   tokenFor,
   type InternAiSession,
-  type StoredAccount,
 } from "./auth.ts";
 import { ensureApiKey } from "./keys.ts";
 import {
@@ -41,8 +39,8 @@ const CATALOG_TTL_MS = 30 * 60 * 1000;
 const KEY_SETTLE_MS = 8_000;
 
 /** 账号上现在有的 Discovery 推理 key（环境变量优先，其次数据库）。 */
-export function internAiInferenceKey(): string {
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
+export function internAiInferenceKey(providerId = "intern-ai"): string {
+  const stored = storedAccount(providerId);
   return internAiDiscoveryKey(stored?.discoveryKey);
 }
 
@@ -52,10 +50,10 @@ export function internAiInferenceKey(): string {
  * 平台只把完整的 key 给一次，所以建它的那个函数负责把它存下来。登录之后调
  * 它，账号上就一定有能用的 key。
  */
-export async function ensureInternAiKey(session: InternAiSession): Promise<string> {
+export async function ensureInternAiKey(session: InternAiSession, providerId = "intern-ai"): Promise<string> {
   const token = tokenFor(session, "discovery");
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
-  const key = await ensureApiKey(session, "discovery", token, KEY_NAME, stored?.discoveryKey ?? null);
+  const stored = storedAccount(providerId);
+  const key = await ensureApiKey(session, "discovery", token, KEY_NAME, stored?.discoveryKey ?? null, providerId);
   return key ?? "";
 }
 
@@ -84,9 +82,9 @@ export function internAiModelIds(): Set<string> {
  * 补上上下文长度与能力。控制台那份拿不到就用推理端那份 —— 少几个字段比一个
  * 空目录强。
  */
-export async function refreshInternAiCatalog(force = false): Promise<void> {
+export async function refreshInternAiCatalog(force = false, providerId = "intern-ai"): Promise<void> {
   if (!force && catalog.length && Date.now() - catalogAt < CATALOG_TTL_MS) return;
-  const key = internAiInferenceKey();
+  const key = internAiInferenceKey(providerId);
   if (!key) return;
   // 刚建出来的 key 不是马上就能用的：平台那边要把它放行，刚建完去问会被
   // 说「invalid API key」（HTTP 401）。等一会儿再问。
@@ -97,7 +95,7 @@ export async function refreshInternAiCatalog(force = false): Promise<void> {
       if (!models.length) return;
       let consoleModels: Awaited<ReturnType<typeof listDiscoveryConsoleModels>> = [];
       try {
-        const session = loadSession();
+        const session = loadSession(providerId);
         if (session) {
           consoleModels = await listDiscoveryConsoleModels(session, tokenFor(session, "discovery"));
         }
@@ -128,8 +126,8 @@ export async function refreshInternAiCatalog(force = false): Promise<void> {
  *
  * 请求体是 OpenAI 形状的，原样发过去；答案也是 OpenAI 形状的，原样回来。
  */
-export async function internAiChat(body: Record<string, any>): Promise<Response> {
-  const key = internAiInferenceKey();
+export async function internAiChat(body: Record<string, any>, providerId = "intern-ai"): Promise<Response> {
+  const key = internAiInferenceKey(providerId);
   if (!key) {
     throw new AuthError(
       "intern-ai has no inference key",

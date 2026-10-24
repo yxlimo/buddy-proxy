@@ -34,7 +34,12 @@ import { ENDPOINTS as QODER_ENDPOINTS, qoderStatus, type QoderRegion } from "../
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
 import { ENDPOINTS as WORKBUDDY_ENDPOINTS, workbuddyStatus } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
-import { workBuddyFallbackModels, type WorkBuddyModel } from "../workbuddy/models.ts";
+import {
+  setWorkbuddyModelList,
+  workbuddyModelList,
+  workBuddyFallbackModels,
+  type WorkBuddyModel,
+} from "../workbuddy/models.ts";
 import { tokenRhythmStatuses, type TokenRhythmTenantStatus } from "../tokenrhythm/wallet.ts";
 import { TOKENRHYTHM_API_BASE, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
@@ -59,6 +64,26 @@ import {
 } from "../intern-ai/quota.ts";
 import { internAiCatalog, internAiInferenceKey } from "../intern-ai/transport.ts";
 import { getSecret, peekCached, setCached } from "../store.ts";
+import {
+  listProviders,
+  provider,
+  providerEnabled,
+  setProviderEnabled,
+  type ProviderRow,
+} from "../providers.ts";
+// The kinds register themselves; importing the file is what makes them known.
+import "../kinds.ts";
+import { kindOf } from "../provider-kinds.ts";
+import type {
+  BalanceView,
+  CreditView,
+  CredentialView,
+  HealthSnapshot,
+  QuotaView,
+  TokenPlanView,
+} from "../provider-kinds.ts";
+
+export type { BalanceView, CreditView, CredentialView, HealthSnapshot, QuotaView, TokenPlanView };
 import { tokenFingerprint } from "../credential.ts";
 import { CredentialState, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { credentialState, hasUsableCredential } from "./credentials.ts";
@@ -76,7 +101,10 @@ import {
 } from "../router/catalog.ts";
 
 /** 上游的 id。跟聚合路由里的分组名一致。 */
-export type UpstreamId =
+/** A provider's id. The kind is not part of it: the table has the kind. */
+export type UpstreamId = string;
+
+export type LegacyUpstreamId =
   | "minimax"
   | "minimax-api"
   | "zcode"
@@ -87,61 +115,18 @@ export type UpstreamId =
   | "sensenova"
   | "intern-ai";
 
-/** 上游的开关对应的配置键。 */
-export const UPSTREAM_FLAG_KEYS: Record<UpstreamId, string> = {
-  minimax: "MINIMAX_CODE",
-  "minimax-api": "MINIMAX_API",
-  zcode: "ZCODE",
-  qoder: "QODER_GLOBAL",
-  "qoder-cn": "QODER_CN",
-  "workbuddy-cn": "WORKBUDDY_CN",
-  tokenrhythm: "TOKENRHYTHM",
-  sensenova: "SENSENOVA",
-  "intern-ai": "INTERN_AI",
-};
-
-// The switches are read on every request, so the panel can change one and the
-// next request sees it — no restart.
-for (const key of Object.values(UPSTREAM_FLAG_KEYS)) markHotSetting(key);
 
 /**
- * 这个上游开着吗？问的是现在在生效的值。
+ * 这个 Provider 开着吗？
  *
- * 面板改开关之后写进数据库，配置重新读一遍，下一个请求就是新的了 —— 所以这里
- * 不需要「待重启」那一套。
+ * The switch lives in the database, next to the provider it belongs to: two
+ * accounts of the same kind are switched separately.
  */
-export function upstreamEnabled(id: UpstreamId): boolean {
-  const key = UPSTREAM_FLAG_KEYS[id];
-  // 不认识的上游：没有开关，就是没开。
-  if (!key) return false;
-  return configFlag(key, false);
+export function upstreamEnabled(id: string): boolean {
+  return providerEnabled(id);
 }
 
-/** 上游的名字，给人看的。 */
-export const UPSTREAM_LABELS: Record<UpstreamId, string> = {
-  minimax: "MiniMax Code",
-  "minimax-api": "MiniMax 开放平台",
-  zcode: "ZCode",
-  qoder: "Qoder（全球区）",
-  "qoder-cn": "Qoder（中国区）",
-  "workbuddy-cn": "WorkBuddy（中国区）",
-  tokenrhythm: "TokenRhythm",
-  sensenova: "SenseNova",
-  "intern-ai": "书生·端砚",
-};
 
-/** 所有上游，顺序就是面板里显示的顺序。 */
-export const UPSTREAM_IDS: UpstreamId[] = [
-  "minimax",
-  "minimax-api",
-  "zcode",
-  "qoder",
-  "qoder-cn",
-  "workbuddy-cn",
-  "tokenrhythm",
-  "sensenova",
-  "intern-ai",
-];
 
 /** 一个上游的开关状态。 */
 export interface UpstreamSwitch {
@@ -154,12 +139,14 @@ export interface UpstreamSwitch {
  *
  * 开关是热的：写进数据库之后重新读一遍，下一个请求就是新的 —— 不用重启。
  */
-export function setUpstreamEnabled(id: UpstreamId, enabled: boolean): { ok: boolean; message: string } {
-  const key = UPSTREAM_FLAG_KEYS[id];
-  if (!key) return { ok: false, message: `不认识的上游：${id}` };
-  configOverride(key, enabled ? "true" : "false");
-  reloadConfig();
-  return { ok: true, message: `${UPSTREAM_LABELS[id]} ${enabled ? "开着" : "关了"}，已经生效` };
+export function setUpstreamEnabled(id: string, enabled: boolean): { ok: boolean; message: string } {
+  const result = setProviderEnabled(id, enabled);
+  if (!result.ok) return result;
+  const row = provider(id);
+  return {
+    ok: true,
+    message: `${row?.alias || id} ${enabled ? "开着" : "关了"}，已经生效`,
+  };
 }
 
 /**
@@ -168,10 +155,10 @@ export function setUpstreamEnabled(id: UpstreamId, enabled: boolean): { ok: bool
  * 开关是热的：面板改了，配置重读一遍，下一个请求就是新的。所以这里只有
  * 「现在在生效的值」—— 没有「改了还没生效」这回事。
  */
-export function upstreamStates(): Record<UpstreamId, UpstreamSwitch> {
-  const out = {} as Record<UpstreamId, UpstreamSwitch>;
-  for (const id of UPSTREAM_IDS) {
-    out[id] = { enabled: upstreamEnabled(id) };
+export function upstreamStates(): Record<string, UpstreamSwitch> {
+  const out: Record<string, UpstreamSwitch> = {};
+  for (const row of listProviders()) {
+    out[row.id] = { enabled: row.enabled };
   }
   return out;
 }
@@ -181,27 +168,10 @@ export function upstreamStates(): Record<UpstreamId, UpstreamSwitch> {
  *
  * 面板上要看得见网关到底在跟谁说话：这个上游的基础地址。
  */
-export function upstreamBaseUrl(id: UpstreamId): string {
-  switch (id) {
-    case "minimax":
-      return MINIMAX_UPSTREAM.replace(/\/messages$/, "");
-    case "minimax-api":
-      return miniMaxApiBase();
-    case "zcode":
-      return ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, "");
-    case "qoder":
-      return QODER_ENDPOINTS.global.infer.replace(/\/model\/v1\/chat\/completions$/, "");
-    case "qoder-cn":
-      return QODER_ENDPOINTS.cn.infer.replace(/\/model\/v1\/chat\/completions$/, "");
-    case "workbuddy-cn":
-      return WORKBUDDY_ENDPOINTS.cn.base;
-    case "tokenrhythm":
-      return TOKENRHYTHM_API_BASE;
-    case "sensenova":
-      return SENSENOVA_INFER_BASE;
-    case "intern-ai":
-      return INTERN_AI_DISCOVERY_API_BASE;
-  }
+export function upstreamBaseUrl(id: string): string {
+  const row = provider(id);
+  const kind = row ? kindOf(row.kind) : null;
+  return kind && row ? kind.baseUrl(row) : "";
 }
 
 /**
@@ -210,27 +180,8 @@ export function upstreamBaseUrl(id: UpstreamId): string {
  * cn / global 是契约里写的两个。MiniMax 用的是 cn / en，TokenRhythm、SenseNova
  * 与书生·端砚没有区域之分（就一个站点）。
  */
-export function upstreamRegion(id: UpstreamId): string {
-  switch (id) {
-    case "minimax":
-      return MINIMAX_REGION;
-    case "minimax-api":
-      return "cn";
-    case "zcode":
-      return "cn";
-    case "qoder":
-      return "global";
-    case "qoder-cn":
-      return "cn";
-    case "workbuddy-cn":
-      return "cn";
-    case "tokenrhythm":
-      return "";
-    case "sensenova":
-      return "";
-    case "intern-ai":
-      return "";
-  }
+export function upstreamRegion(id: string): string {
+  return provider(id)?.region ?? "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -266,6 +217,7 @@ export const QODER_CN_ALL: QoderModel[] = qoderModelsForRegion("cn");
  * 快照一直都在：上游关着的时候不公布它，开着的时候立刻就有模型可公布 ——
  * 不用等上游那份目录下来。
  */
+// The list lives with the transport that refreshes it.
 let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
 
 /** WorkBuddy 现在的模型目录。 */
@@ -340,27 +292,11 @@ export function catalogGroups(): CatalogGroup[] {
 }
 
 /** 一个上游现在公布几个模型。 */
-export function upstreamModelCount(id: UpstreamId): number {
-  switch (id) {
-    case "minimax":
-      return minimaxVisible().length;
-    case "minimax-api":
-      return upstreamEnabled("minimax-api") ? MINIMAX_API_MODELS.length : 0;
-    case "zcode":
-      return upstreamEnabled("zcode") ? ZCODE_MODELS.length : 0;
-    case "qoder":
-      return qoderVisible("global").length;
-    case "qoder-cn":
-      return qoderVisible("cn").length;
-    case "workbuddy-cn":
-      return upstreamEnabled("workbuddy-cn") ? workbuddyModels.length : 0;
-    case "tokenrhythm":
-      return upstreamEnabled("tokenrhythm") ? tokenRhythmCatalogModels().length : 0;
-    case "sensenova":
-      return upstreamEnabled("sensenova") ? senseNovaModels().length : 0;
-    case "intern-ai":
-      return upstreamEnabled("intern-ai") ? internAiModels().length : 0;
-  }
+export function upstreamModelCount(id: string): number {
+  const row = provider(id);
+  const kind = row ? kindOf(row.kind) : null;
+  if (!row || !kind) return 0;
+  return kind.models(row).length;
 }
 
 /* ------------------------------------------------------------------ *
@@ -373,22 +309,15 @@ export function upstreamModelCount(id: UpstreamId): number {
  * 问上游是慢的那一半（十几个请求、五个平台），所以答案放在数据库里，后台
  * 按时刷新。端点回答的是最后已知的状态 —— 健康检查要的也正是这个。
  */
-export interface HealthSnapshot {
-  qoder: Record<string, { account: unknown; credits: unknown }>;
-  minimax: { balance: unknown; tokenPlan: unknown };
-  /** MiniMax 开放平台：每个租户一份套餐额度。 */
-  minimaxApi: { tenants: unknown };
-  /** ZCode 的 Start Plan 额度。 */
-  zcode: { quota: unknown };
-  workbuddy: { credits: unknown };
-  tokenrhythm: { tenants: unknown };
-  /** SenseNova 的积分池。 */
-  sensenova: { pools: unknown };
-  /** 书生·端砚的墨点：余额与批次。 */
-  internAi: { balance: unknown; packs: unknown };
-}
 
-const HEALTH_CACHE_ID = "health:upstreams";
+/**
+ * The health snapshot's cache.
+ *
+ * The version is part of the key: the snapshot's shape changed when the
+ * providers arrived (each provider has its own numbers now), and an old
+ * snapshot read as a new one would say the wrong thing.
+ */
+const HEALTH_CACHE_ID = "health:upstreams:v2";
 
 /** 快照最多放多久。 */
 export const HEALTH_CACHE_MS = configNumber("HEALTH_CACHE_MS", 300_000);
@@ -407,9 +336,9 @@ const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
  *
  * 路由器握着他的会话，所以只有路由器能问平台。
  */
-export async function miniMaxBalance(): Promise<unknown> {
+export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
   try {
-    const cred = await readCredential();
+    const cred = await readCredential(false, providerId);
     return await fetchMiniMaxBalance(cred.accessToken, MINIMAX_REGION === "en" ? "global" : "cn");
   } catch {
     return null;
@@ -421,9 +350,8 @@ export async function miniMaxBalance(): Promise<unknown> {
  *
  * 问的是控制台（要登录态），没登录就问不了 —— 那是「不知道」，不是「没有」。
  */
-async function senseNovaPools(): Promise<unknown> {
-  if (!upstreamEnabled("sensenova")) return null;
-  const session = loadSenseNovaSession();
+async function senseNovaPools(providerId = "sensenova"): Promise<unknown> {
+  const session = loadSenseNovaSession(providerId);
   if (!session) return null;
   try {
     return await senseNovaPoolUsage(session);
@@ -439,9 +367,8 @@ async function senseNovaPools(): Promise<unknown> {
  * 两个接口都要登录态（Discovery 子站的 token）。批次拿不到时余额照样报 ——
  * 余额才是那个最要紧的数。
  */
-async function internAiCredits(): Promise<{ balance: unknown; packs: unknown }> {
-  if (!upstreamEnabled("intern-ai")) return { balance: null, packs: null };
-  const session = loadInternAiSession();
+async function internAiCredits(providerId = "intern-ai"): Promise<{ balance: unknown; packs: unknown }> {
+  const session = loadInternAiSession(providerId);
   if (!session) return { balance: null, packs: null };
   const token = internAiTokenFor(session, "discovery");
   if (!token) return { balance: null, packs: null };
@@ -460,28 +387,61 @@ async function internAiCredits(): Promise<{ balance: unknown; packs: unknown }> 
   }
 }
 
-/** 问一遍上游，把答案记下来。 */
+/**
+ * 问一遍上游，把答案记下来。
+ *
+ * 每家按 provider 分开记：两个同类的账号各有各的数字。
+ */
 export async function refreshHealthSnapshot(): Promise<void> {
-  const qoder: HealthSnapshot["qoder"] = {};
-  for (const region of qoderRegions()) {
-    let account: unknown;
-    try {
-      account = await checkAccountHealth(region);
-    } catch (e) {
-      account = { region, usable: false, reason: (e as Error)?.message };
-    }
-    qoder[region] = { account, credits: await fetchQoderCredits(region) };
-  }
   const snapshot: HealthSnapshot = {
-    qoder,
-    minimax: { balance: await miniMaxBalance(), tokenPlan: await miniMaxTokenPlan() },
-    minimaxApi: { tenants: await miniMaxApiTenantPlans() },
-    zcode: { quota: await zcodeQuota() },
-    workbuddy: { credits: await fetchWorkBuddyCredits() },
-    tokenrhythm: { tenants: await tokenRhythmStatuses() },
-    sensenova: { pools: await senseNovaPools() },
-    internAi: await internAiCredits(),
+    qoder: {},
+    minimax: {},
+    minimaxApi: {},
+    zcode: {},
+    workbuddy: {},
+    tokenrhythm: {},
+    sensenova: {},
+    internAi: {},
   };
+
+  for (const row of listProviders()) {
+    switch (row.kind) {
+      case "qoder": {
+        let account: unknown;
+        try {
+          account = await checkAccountHealth(row.id);
+        } catch (e) {
+          account = { region: row.region, usable: false, reason: (e as Error)?.message };
+        }
+        snapshot.qoder[row.id] = { account, credits: await fetchQoderCredits(row.id) };
+        break;
+      }
+      case "minimax":
+        snapshot.minimax[row.id] = {
+          balance: await miniMaxBalance(row.id),
+          tokenPlan: await miniMaxTokenPlan(300_000, row.id),
+        };
+        break;
+      case "minimax-api":
+        snapshot.minimaxApi[row.id] = { tenants: await miniMaxApiTenantPlans(row.id) };
+        break;
+      case "zcode":
+        snapshot.zcode[row.id] = { quota: await zcodeQuota(300_000, row.id) };
+        break;
+      case "workbuddy":
+        snapshot.workbuddy[row.id] = { credits: await fetchWorkBuddyCredits(row.id) };
+        break;
+      case "tokenrhythm":
+        snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
+        break;
+      case "sensenova":
+        snapshot.sensenova[row.id] = { pools: await senseNovaPools(row.id) };
+        break;
+      case "intern-ai":
+        snapshot.internAi[row.id] = await internAiCredits(row.id);
+        break;
+    }
+  }
   setCached(HEALTH_CACHE_ID, snapshot);
   healthRefreshedAt = Date.now();
 }
@@ -532,21 +492,6 @@ export async function freshHealthSnapshot(): Promise<HealthSnapshot> {
  * ------------------------------------------------------------------ */
 
 /** 凭据的状态摘要。 */
-export interface CredentialView {
-  /** session / api_key / login / plan_key */
-  kind: string;
-  /** authenticated / missing / expired / error / usable / anonymous。 */
-  status: CredentialState;
-  /** 只留前几位。 */
-  fingerprint: string;
-  /** 到期时间（毫秒）。 */
-  expiresAt: number;
-  /** 还剩多少秒。 */
-  remainingSec: number;
-  warning: boolean;
-  detail: string;
-  generation: number;
-}
 
 /** 凭据里的那个 token 的指纹。 */
 function fingerprintOf(token: string): string {
@@ -558,27 +503,22 @@ function fingerprintOf(token: string): string {
  *
  * 各家上游的会话形状不一样，但状态字段是同一套，所以这里把它们抹平。
  */
-export function upstreamCredential(id: UpstreamId): CredentialView {
-  switch (id) {
-    case "minimax":
-      return minimaxCredential();
-    case "minimax-api":
-      return miniMaxApiCredential();
-    case "zcode":
-      return zcodeCredential();
-    case "qoder":
-      return qoderCredential("global");
-    case "qoder-cn":
-      return qoderCredential("cn");
-    case "workbuddy-cn":
-      return workbuddyCredential("cn");
-    case "tokenrhythm":
-      return tokenrhythmCredential();
-    case "sensenova":
-      return senseNovaCredential();
-    case "intern-ai":
-      return internAiCredential();
+export function upstreamCredential(id: string): CredentialView {
+  const row = provider(id);
+  const kind = row ? kindOf(row.kind) : null;
+  if (!row || !kind) {
+    return {
+      kind: "session",
+      status: CredentialState.MISSING,
+      fingerprint: "",
+      expiresAt: 0,
+      remainingSec: 0,
+      warning: false,
+      detail: "没有这个 Provider",
+      generation: 0,
+    };
   }
+  return kind.credential(row);
 }
 
 /** 把上游自己说的状态抹平成面板用的那套。 */
@@ -804,22 +744,12 @@ export interface TokenPlanWindowView {
 }
 
 /** 套餐额度。 */
-export interface TokenPlanView {
-  windows: TokenPlanWindowView[];
-}
 
 /**
  * 余额：钱。
  *
  * 只有中转站这类平台有（TokenRhythm）。它跟积分不是一回事，两者不能相加。
  */
-export interface BalanceView {
-  availableCny: number;
-  currency: string;
-  lots: BalanceLotView[];
-  nextExpiryAt: number;
-  expiringCny: number;
-}
 
 /**
  * 积分：点数。
@@ -827,13 +757,6 @@ export interface BalanceView {
  * Qoder、WorkBuddy 这类平台的额度是这个。`total` 为 0 表示平台没报总额，
  * 前端不要显示「总额」那一项。
  */
-export interface CreditView {
-  total: number;
-  used: number;
-  remaining: number;
-  lots: CreditLotView[];
-  note: string;
-}
 
 /**
  * 一个账号的额度。
@@ -841,15 +764,6 @@ export interface CreditView {
  * 三样东西各是各的，**不能相加**：余额（钱）、积分（点数）、套餐额度
  * （按窗口的百分比）。后端把能拿到的都放上来，前端按有哪个显示哪个。
  */
-export interface QuotaView {
-  /** 这个额度属于哪个上游。 */
-  upstreamId: string;
-  /** 属于哪个账号。同一个上游可能有几个账号（TokenRhythm 一个租户一个）。 */
-  accountId: string;
-  balance?: BalanceView;
-  credits?: CreditView;
-  tokenPlan?: TokenPlanView;
-}
 
 /**
  * 一个上游的额度，每个账号一条。
@@ -858,31 +772,15 @@ export interface QuotaView {
  *
  * `fresh` 的时候先问一遍平台：面板要看现数时才用，不然就用缓存里的。
  */
-export async function upstreamQuotas(id: UpstreamId, fresh = false): Promise<QuotaView[]> {
+export async function upstreamQuotas(id: string, fresh = false): Promise<QuotaView[]> {
+  const row = provider(id);
+  const kind = row ? kindOf(row.kind) : null;
+  if (!row || !kind) return [];
   const snapshot = fresh
     ? await freshHealthSnapshot()
     : peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return [];
-  switch (id) {
-    case "minimax":
-      return minimaxQuotas(snapshot);
-    case "minimax-api":
-      return miniMaxApiQuotas(snapshot);
-    case "zcode":
-      return zcodeQuotas(snapshot);
-    case "qoder":
-      return qoderQuotas(snapshot, "global");
-    case "qoder-cn":
-      return qoderQuotas(snapshot, "cn");
-    case "workbuddy-cn":
-      return workbuddyQuotas(snapshot);
-    case "tokenrhythm":
-      return tokenrhythmQuotas(snapshot);
-    case "sensenova":
-      return senseNovaQuotas(snapshot);
-    case "intern-ai":
-      return internAiQuotas(snapshot);
-  }
+  return kind.quotas(row, snapshot);
 }
 
 /**
@@ -928,30 +826,14 @@ export function upstreamQuota(id: UpstreamId): QuotaView | null {
   return mergeQuotas(upstreamQuotasCached(id));
 }
 
-/** 从快照里取一个上游的额度，不问上游。 */
-function upstreamQuotasCached(id: UpstreamId): QuotaView[] {
+/** 从快照里取一个 Provider 的额度，不问上游。 */
+function upstreamQuotasCached(id: string): QuotaView[] {
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return [];
-  switch (id) {
-    case "minimax":
-      return minimaxQuotas(snapshot);
-    case "minimax-api":
-      return miniMaxApiQuotas(snapshot);
-    case "zcode":
-      return zcodeQuotas(snapshot);
-    case "qoder":
-      return qoderQuotas(snapshot, "global");
-    case "qoder-cn":
-      return qoderQuotas(snapshot, "cn");
-    case "workbuddy-cn":
-      return workbuddyQuotas(snapshot);
-    case "tokenrhythm":
-      return tokenrhythmQuotas(snapshot);
-    case "sensenova":
-      return senseNovaQuotas(snapshot);
-    case "intern-ai":
-      return internAiQuotas(snapshot);
-  }
+  const row = provider(id);
+  const kind = row ? kindOf(row.kind) : null;
+  if (!row || !kind) return [];
+  return kind.quotas(row, snapshot);
 }
 
 /**
@@ -967,72 +849,8 @@ function upstreamQuotasCached(id: UpstreamId): QuotaView[] {
  * （那是另一件事）。
  */
 /** ZCode 的额度：Start Plan 的额度桶。 */
-function zcodeQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const quota = (snapshot.zcode?.quota ?? null) as any;
-  const buckets = (quota?.buckets ?? []) as any[];
-  if (!buckets.length) return [];
-  return [
-    {
-      upstreamId: "zcode",
-      accountId: "zcode",
-      // Start Plan 的额度是 token 桶：它是一份「还剩多少 token」的额度。
-      credits: {
-        total: buckets.reduce((sum, b) => sum + Number(b.total ?? 0), 0),
-        used: buckets.reduce((sum, b) => sum + Number(b.used ?? 0), 0),
-        remaining: buckets.reduce((sum, b) => sum + Number(b.remaining ?? 0), 0),
-        lots: buckets.map((b, i) => ({
-          id: `zcode-bucket-${i}`,
-          sourceLabel: b.showName || "额度桶",
-          remaining: Number(b.remaining ?? 0),
-          expiresAt: b.expiresAt ? Date.parse(String(b.expiresAt)) : 0,
-          status: "有效",
-        })),
-        note: "Start Plan 的额度桶",
-      },
-    },
-  ];
-}
 
-function miniMaxApiQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const tenants = (snapshot.minimaxApi?.tenants ?? []) as any[];
-  return tenants.map((t: any) => ({
-    upstreamId: "minimax-api",
-    accountId: `minimax-api:${t.index}`,
-    ...(t.plan ? { tokenPlan: t.plan } : {}),
-  }));
-}
 
-function minimaxQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const balance = snapshot.minimax?.balance as any;
-  const plan = minimaxTokenPlan(snapshot);
-  if (!balance && !plan) return [];
-  const remaining = Number(balance?.credit ?? 0);
-  return [
-    {
-      upstreamId: "minimax",
-      accountId: "minimax",
-      // 积分：账户上赠送的那部分。平台不报总额，所以 total 是 0。
-      credits: {
-        total: 0,
-        used: 0,
-        remaining,
-        lots: remaining > 0
-          ? [
-              {
-                id: "minimax-credit",
-                sourceLabel: "账户积分",
-                remaining,
-                expiresAt: 0,
-                status: "有效",
-              },
-            ]
-          : [],
-        note: "账户上的积分",
-      },
-      ...(plan ? { tokenPlan: plan } : {}),
-    },
-  ];
-}
 
 /**
  * MiniMax 的套餐额度。
@@ -1069,45 +887,6 @@ function minimaxTokenPlan(snapshot: HealthSnapshot): TokenPlanView | undefined {
  *
  * 两池：套餐自带的，和加油包买的。平台都报了总额、已用、剩下。
  */
-function qoderQuotas(snapshot: HealthSnapshot, region: QoderRegion): QuotaView[] {
-  const credits = snapshot.qoder?.[region]?.credits as any;
-  if (!credits) return [];
-  const resetsAt = credits.resetsAt ? Date.parse(String(credits.resetsAt)) : 0;
-  const planRemaining = Number(credits.plan?.remaining ?? 0);
-  const lots: CreditLotView[] = [
-    {
-      id: `qoder-${region}-plan`,
-      sourceLabel: "套餐额度",
-      remaining: planRemaining,
-      expiresAt: resetsAt,
-      // 这一池自己说了算：套餐用光了就是用光了。加油包还有多少不影响它。
-      status: planRemaining > 0 ? "可用" : "已用尽",
-    },
-  ];
-  if (Number(credits.addOn?.remaining ?? 0) > 0) {
-    lots.push({
-      id: `qoder-${region}-addon`,
-      sourceLabel: "加油包",
-      remaining: Number(credits.addOn?.remaining ?? 0),
-      expiresAt: 0,
-      status: "可用",
-    });
-  }
-  const upstreamId = region === "global" ? "qoder" : "qoder-cn";
-  return [
-    {
-      upstreamId,
-      accountId: upstreamId,
-      credits: {
-        total: Number(credits.plan?.total ?? 0) + Number(credits.addOn?.total ?? 0),
-        used: Number(credits.plan?.used ?? 0) + Number(credits.addOn?.used ?? 0),
-        remaining: Number(credits.plan?.remaining ?? 0) + Number(credits.addOn?.remaining ?? 0),
-        lots,
-        note: "平台积分",
-      },
-    },
-  ];
-}
 
 /**
  * WorkBuddy 的额度：每日签到给的积分。
@@ -1115,34 +894,6 @@ function qoderQuotas(snapshot: HealthSnapshot, region: QoderRegion): QuotaView[]
  * 平台报的是今天有多少、今天领了多少、累计多少，没报总额，所以 total 是 0
  * （= 不知道，不是不存在）。
  */
-function workbuddyQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const credits = snapshot.workbuddy?.credits as any;
-  if (!credits) return [];
-  const endOfDay = new Date();
-  endOfDay.setHours(23, 59, 59, 999);
-  const daily = Number(credits.daily ?? 0);
-  return [
-    {
-      upstreamId: "workbuddy-cn",
-      accountId: "workbuddy-cn",
-      credits: {
-        total: 0,
-        used: 0,
-        remaining: daily,
-        lots: [
-          {
-            id: "workbuddy-daily",
-            sourceLabel: `每日签到（连签 ${Number(credits.streakDays ?? 0)} 天）`,
-            remaining: daily,
-            expiresAt: endOfDay.getTime(),
-            status: credits.checkedIn ? "已领取" : "未领取",
-          },
-        ],
-        note: `每天 ${daily} 点，连签 ${Number(credits.streakDays ?? 0)} 天`,
-      },
-    },
-  ];
-}
 
 /**
  * TokenRhythm 的额度：余额（钱），每个租户一条。
@@ -1150,41 +901,6 @@ function workbuddyQuotas(snapshot: HealthSnapshot): QuotaView[] {
  * 赠金按批次给，先到期先用。平台把「永不过期」的钱也算成会过期的，所以
  * 到期那笔要自己按批次算，不能信平台那个数。
  */
-function tokenrhythmQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const tenants = (snapshot.tokenrhythm?.tenants ?? []) as TokenRhythmTenantStatus[];
-  const out: QuotaView[] = [];
-  for (const tenant of tenants) {
-    const wallet = tenant.wallet;
-    if (!wallet) continue;
-    const lots: BalanceLotView[] = (tenant.credits?.list ?? []).map((lot) => ({
-      id: lot.id,
-      sourceLabel: lot.sourceLabel || lot.source,
-      remainingCny: Number(lot.remainingCny ?? 0),
-      expiresAt: lot.expiresAt ? Date.parse(String(lot.expiresAt)) : 0,
-      status: lot.status || "",
-    }));
-    const nextExpiryAt = tenant.credits?.summary?.nextExpiryAt
-      ? Date.parse(String(tenant.credits.summary.nextExpiryAt))
-      : 0;
-    // 平台用 2099-12-31 标记「永不过期」，那一批不算会过期。
-    const expiringCny = lots
-      .filter((lot) => lot.expiresAt > 0 && lot.expiresAt < PERMANENT_AT)
-      .reduce((sum, lot) => sum + lot.remainingCny, 0);
-    out.push({
-      upstreamId: "tokenrhythm",
-      // 一个租户一个账号：面板靠这个分清是哪一条余额。
-      accountId: `tokenrhythm:${tenant.index}`,
-      balance: {
-        availableCny: Number(wallet.availableCny ?? 0),
-        currency: wallet.currency || "CNY",
-        lots,
-        nextExpiryAt: Number.isFinite(nextExpiryAt) ? nextExpiryAt : 0,
-        expiringCny,
-      },
-    });
-  }
-  return out;
-}
 
 /** 平台标记「永不过期」的那一天。 */
 const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
@@ -1199,36 +915,6 @@ const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
  * 平台没报「一共给了多少积分」—— 窗口的限额是这段时间里能用多少，不是总
  * 额。所以 total 与 used 都是 0（契约里 0 = 没报），剩下的是权威的数。
  */
-function senseNovaQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const usage = snapshot.sensenova?.pools as SenseNovaPoolUsage | null;
-  if (!usage?.pools?.length) return [];
-  // 能服务模型的池子才算数：没有模型挂在它上面的池子，扣不到。
-  const pools = usage.pools.filter((pool) => pool.modelIds.length > 0);
-  if (!pools.length) return [];
-  const lots: CreditLotView[] = pools.map((pool) => ({
-    id: pool.id,
-    sourceLabel: pool.name || pool.id,
-    remaining: totalRemaining(pool),
-    // 活动积分有到期日；周期积分靠窗口重置，没有到期日。
-    expiresAt: pool.nearestGrantExpiry ? pool.nearestGrantExpiry * 1000 : 0,
-    status: poolEmpty(pool) ? "已用尽" : poolPaused(pool) ? "窗口用尽" : "可用",
-  }));
-  const remaining = lots.reduce((sum, lot) => sum + lot.remaining, 0);
-  const plan = usage.plan?.name ? `${usage.plan.name}：` : "";
-  return [
-    {
-      upstreamId: "sensenova",
-      accountId: "sensenova",
-      credits: {
-        total: 0,
-        used: 0,
-        remaining,
-        lots,
-        note: `${plan}${pools.length} 个积分池，周期积分取 5 小时与 7 天窗口里小的那个`,
-      },
-    },
-  ];
-}
 
 /**
  * 平台的时间是「本地时间（UTC+8），没有时区」。补上时区再解析。
@@ -1255,40 +941,6 @@ function platformTimeMs(value: string): number {
  * 总额取「还在的批次一共给了多少墨点」—— 平台报的是每一批的总量，加起来就是
  * 这一轮发的总额。平台没报「一共发过多少」，那个数是 0（= 不知道）。
  */
-function internAiQuotas(snapshot: HealthSnapshot): QuotaView[] {
-  const balance = snapshot.internAi?.balance as InternAiBalance | null;
-  if (!balance) return [];
-  const packs = (snapshot.internAi?.packs as InternAiCreditPack[] | null) ?? [];
-  // 只有还在的批次算数：过期与作废的不算。
-  const alive = packs.filter((pack) => pack.status === "available" || pack.status === "unused");
-  const lots: CreditLotView[] = alive.map((pack) => ({
-    id: pack.id,
-    sourceLabel: pack.remark || pack.cycleType || pack.id,
-    remaining: pack.remainingCredits,
-    expiresAt: platformTimeMs(pack.expireAt) || platformTimeMs(pack.cycleEndAt),
-    // 一批墨点用完了就是用完了，不管平台还把它算不算「还在」。
-    status:
-      pack.remainingCredits > 0
-        ? pack.status === "unused"
-          ? "未使用"
-          : "可用"
-        : "已用尽",
-  }));
-  const total = alive.reduce((sum, pack) => sum + pack.totalCredits, 0);
-  return [
-    {
-      upstreamId: "intern-ai",
-      accountId: "intern-ai",
-      credits: {
-        total,
-        used: balance.used,
-        remaining: balance.availableCredits,
-        lots,
-        note: `墨点：余额 ${balance.availableCredits}${alive.length ? `，${alive.length} 个批次` : ""}`,
-      },
-    },
-  ];
-}
 
 /* ------------------------------------------------------------------ *
  * 上游现在能不能接
@@ -1310,74 +962,13 @@ function internAiQuotas(snapshot: HealthSnapshot): QuotaView[] {
  *
  * 读不到数据就说「不知道」：null 不算用尽。
  */
-export function outOfCredits(id: UpstreamId): boolean {
+export function outOfCredits(id: string): boolean {
+  const row = provider(id);
+  const kind = row ? kindOf(row.kind) : null;
+  if (!row || !kind) return false;
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return false;
-  switch (id) {
-    case "zcode": {
-      const quota = (snapshot.zcode?.quota ?? null) as any;
-      const buckets = (quota?.buckets ?? []) as any[];
-      if (!buckets.length) return false;
-      return buckets.every((b: any) => Number(b.remaining ?? 0) <= 0);
-    }
-    case "minimax-api": {
-      // 开放平台用的也是 coding plan：看窗口，不看账户余额。
-      const tenants = (snapshot.minimaxApi?.tenants ?? []) as any[];
-      const windows = tenants.flatMap((t: any) => ((t.plan?.windows ?? []) as any[]));
-      if (!windows.length) return false;
-      return windows.some((w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0);
-    }
-    case "minimax": {
-      // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑
-      // （实测过：余额 0，plan 99%，请求正常）。看 plan 的窗口。
-      const plan = snapshot.minimax?.tokenPlan as any;
-      const windows = (plan?.windows ?? []) as any[];
-      if (!windows.length) return false;
-      return windows.some((w) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0);
-    }
-    case "qoder":
-    case "qoder-cn": {
-      const region = id === "qoder-cn" ? "cn" : "global";
-      const credits = snapshot.qoder?.[region]?.credits as any;
-      if (!credits) return false;
-      const plan = Number(credits.plan?.remaining ?? 0);
-      const addOn = Number(credits.addOn?.remaining ?? 0);
-      // 上游自己说的：超了就是超了。
-      if (credits.quotaExceeded === true) return true;
-      // 两池都空才算没。加购那池还在的时候照样能跑（实测过：套餐 300/300，
-      // 加购还有 100，quotaExceeded 是 false，请求正常）。
-      // 套餐用光只是把活动藏起来，不影响请求。
-      return plan <= 0 && addOn <= 0;
-    }
-    case "workbuddy-cn": {
-      const credits = snapshot.workbuddy?.credits as any;
-      if (!credits) return false;
-      return Number(credits.daily ?? 0) <= 0;
-    }
-    case "tokenrhythm": {
-      const tenants = (snapshot.tokenrhythm?.tenants ?? []) as TokenRhythmTenantStatus[];
-      const wallets = tenants.map((t) => t.wallet).filter(Boolean) as any[];
-      if (!wallets.length) return false;
-      return wallets.every((w) => Number(w.availableCny ?? 0) <= 0);
-    }
-    case "sensenova": {
-      const usage = snapshot.sensenova?.pools as SenseNovaPoolUsage | null;
-      const pools = (usage?.pools ?? []).filter((pool) => pool.modelIds.length > 0);
-      if (!pools.length) return false;
-      // 每个能服务模型的池子都空了，才是真的没有积分了。
-      return pools.every((pool) => poolEmpty(pool));
-    }
-    case "intern-ai": {
-      const balance = snapshot.internAi?.balance as InternAiBalance | null;
-      if (!balance) return false;
-      if (balance.availableCredits <= 0) return true;
-      // 窗口用满了也是用完了：这段时间里就是不能再花。
-      for (const window of [balance.window5h, balance.window7d]) {
-        if (window.enabled && window.remainingCredits <= 0) return true;
-      }
-      return false;
-    }
-  }
+  return kind.outOfCredits(row, snapshot);
 }
 
 /**

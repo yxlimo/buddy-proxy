@@ -38,7 +38,12 @@ import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
 import { qoderStatus } from "./lib/qoder/auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
-import { ensureMinimaxSession, ensureQoderSession, ensureWorkBuddySession } from "./lib/login.ts";
+import {
+  ensureMinimaxSession,
+  ensureQoderSession,
+  ensureWorkBuddySession,
+  providersNeedingLogin,
+} from "./lib/login.ts";
 import {
   ensureSenseNovaKey,
   refreshSenseNovaCatalog,
@@ -73,11 +78,11 @@ import {
 } from "./lib/router/upstreams.ts";
 import {
   routeInGroup,
-  UPSTREAM_GROUPS,
   type Route,
   type RoutingContext,
-  type UpstreamGroup,
 } from "./lib/router/routes.ts";
+import { listProviders, providerKindOf } from "./lib/providers.ts";
+import { kindOf } from "./lib/provider-kinds.ts";
 import {
   aggregateAnthropicCatalog,
   aggregateCatalog,
@@ -94,6 +99,7 @@ import { CONNECT_PREFIX, connectMiddleware, hasWebDist, staticMiddleware, webDis
 import { BENEFITS_INTERVAL_MS, benefitUpstreams, benefits } from "./lib/admin/benefits.ts";
 import {
   HEALTH_CACHE_MS,
+  outOfCredits,
   QODER_CN_ALL,
   QODER_GLOBAL_ALL,
   catalogGroups,
@@ -380,31 +386,22 @@ function upstreamContext(): UpstreamContext {
 
 /** What the router is serving, and what it knows about. */
 function routingContext(): RoutingContext {
-  return {
-    enabled: {
-      minimax: upstreamEnabled("minimax"),
-      minimaxApi: upstreamEnabled("minimax-api"),
-      zcode: upstreamEnabled("zcode"),
-      qoderGlobal: upstreamEnabled("qoder"),
-      qoderCn: upstreamEnabled("qoder-cn"),
-      workbuddyCn: upstreamEnabled("workbuddy-cn"),
-      tokenrhythm: upstreamEnabled("tokenrhythm"),
-      sensenova: upstreamEnabled("sensenova"),
-      internAi: upstreamEnabled("intern-ai"),
-    },
-    ids: {
-      qoderGlobal: GLOBAL_QODER_IDS,
-      qoderCn: CN_QODER_IDS,
-      qoderHidden: qoderHiddenIds(),
-      minimax: MINIMAX_MODEL_IDS,
-      minimaxApi: MINIMAX_API_MODEL_IDS,
-      zcode: ZCODE_MODEL_IDS,
-      workbuddy: workbuddyModelIds(),
-      tokenrhythm: TOKENRHYTHM_MODEL_IDS,
-      sensenova: senseNovaModelIds(),
-      internAi: internAiModelIds(),
-    },
-  };
+  const providers = new Map<string, { kind: string; enabled: boolean; ids: Set<string>; hidden: Set<string> }>();
+  for (const row of listProviders()) {
+    const kind = kindOf(row.kind);
+    if (!kind) continue;
+    const all = kind.models(row).map((m) => m.id);
+    // A provider that is off, or has no credits, still knows its models: a
+    // request for one of those gets "not enabled" rather than "no such model".
+    const serving = row.enabled && !outOfCredits(row.id);
+    providers.set(row.id, {
+      kind: row.kind,
+      enabled: row.enabled,
+      ids: new Set(serving ? all : []),
+      hidden: new Set(serving ? [] : all),
+    });
+  }
+  return { providers };
 }
 
 /**
@@ -502,36 +499,41 @@ async function handleAggregate(
  * (`qoder-cn/glm-5.3`); the prefixed form takes it in the path
  * (`/qoder-cn/v1/messages`) and the model name is the real one.
  */
-for (const group of ["", ...UPSTREAM_GROUPS] as (UpstreamGroup | "")[]) {
-  const base = group ? `/${group}` : "";
-
+for (const base of ["", "/:provider"]) {
   router.post(`${base}/v1/messages`, requireKey, parseBody, async (ctx) => {
-    if (!group) {
+    const provider = String(ctx.params.provider ?? "");
+    if (!provider) {
       // The published models are served in the OpenAI dialect only.
       ctx.status = 404;
       ctx.body = {
         error: { type: "invalid_request_error", message: "the root route speaks the OpenAI dialect only" },
-        hint: `用 OpenAI 方言：POST /v1/chat/completions，或者用某个上游自己的路径：${UPSTREAM_GROUPS.map((g) => `/${g}/v1/messages`).join("、")}`,
+        hint: `用 OpenAI 方言：POST /v1/chat/completions，或者用某个 Provider 自己的路径：${listProviders()
+          .map((p) => `/${p.id}/v1/messages`)
+          .join("、")}`,
       };
       return;
     }
-    await handle(ctx, "anthropic", group);
+    await handle(ctx, "anthropic", provider);
   });
 
   router.post(`${base}/v1/chat/completions`, requireKey, parseBody, async (ctx) => {
-    await handle(ctx, "openai", group || undefined);
+    await handle(ctx, "openai", String(ctx.params.provider ?? "") || undefined);
   });
 
   router.get(`${base}/v1/models`, (ctx) => {
     const dialect = String(ctx.query.dialect ?? "").toLowerCase();
     // The upstream's catalogue is the source of truth; fetch it in the background
     // so this answer is never blocked by it.
-    if (upstreamEnabled("workbuddy-cn")) void refreshWorkBuddyCatalog();
-    if (upstreamEnabled("sensenova")) void refreshSenseNovaCatalog();
-    if (upstreamEnabled("intern-ai")) void refreshInternAiCatalog();
+    for (const row of listProviders()) {
+      if (!row.enabled) continue;
+      if (row.kind === "workbuddy") void refreshWorkBuddyCatalog();
+      if (row.kind === "sensenova") void refreshSenseNovaCatalog();
+      if (row.kind === "intern-ai") void refreshInternAiCatalog();
+    }
     const groups = catalogGroups();
-    if (group) {
-      ctx.body = groupCatalog(group, groups, dialect === "openai");
+    const provider = String(ctx.params.provider ?? "");
+    if (provider) {
+      ctx.body = groupCatalog(provider, groups, dialect === "openai");
       return;
     }
     // The root route publishes one list: the models the database says it
@@ -576,13 +578,13 @@ app.use(router.allowedMethods());
 async function handle(
   ctx: Koa.Context,
   dialect: Dialect,
-  group?: UpstreamGroup,
+  providerId?: string,
 ): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, any>;
 
   // The root route serves the published models and nothing else: the database
   // decides which models exist and which upstream serves them.
-  if (!group) {
+  if (!providerId) {
     const wanted = String(body.model ?? "").trim();
     const entry = findAggregate(wanted);
     if (!entry) {
@@ -600,7 +602,7 @@ async function handle(
   let route: Route;
   try {
     const rctx = routingContext();
-    route = routeInGroup(group!, String(body.model ?? "").trim(), rctx);
+    route = routeInGroup(providerId!, String(body.model ?? "").trim(), rctx);
   } catch (e) {
     sendError(ctx, e);
     return;
@@ -626,22 +628,32 @@ async function callUpstream(
   const started = Date.now();
   const agent = detectAgent(ctx.request.headers).name;
   try {
-    if (route.upstream === "qoder") {
-      await toQoder(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "workbuddy") {
-      await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "tokenrhythm") {
-      await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "sensenova") {
-      await toSenseNova(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "intern-ai") {
-      await toInternAi(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "minimax-api") {
-      await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
-    } else if (route.upstream === "zcode") {
-      await toZcode(uctx, body, route, dialect, stream, ctx);
-    } else {
-      await toMinimax(uctx, body, route, dialect, stream, ctx);
+    // The kind says how to talk to it. The provider says which account.
+    switch (providerKindOf(route.provider)?.kind) {
+      case "qoder":
+        await toQoder(uctx, body, route, dialect, stream, ctx);
+        break;
+      case "workbuddy":
+        await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
+        break;
+      case "tokenrhythm":
+        await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
+        break;
+      case "sensenova":
+        await toSenseNova(uctx, body, route, dialect, stream, ctx);
+        break;
+      case "intern-ai":
+        await toInternAi(uctx, body, route, dialect, stream, ctx);
+        break;
+      case "minimax-api":
+        await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
+        break;
+      case "zcode":
+        await toZcode(uctx, body, route, dialect, stream, ctx);
+        break;
+      default:
+        await toMinimax(uctx, body, route, dialect, stream, ctx);
+        break;
     }
     recordRequestUsage(body, route, agent, uctx, ctx.status || 200, started, "");
   } catch (e) {
@@ -676,7 +688,7 @@ function recordRequestUsage(
     upstreamModel,
     agentModel: String(body.model ?? route.label ?? upstreamModel),
     agent,
-    client: route.upstream,
+    client: route.provider,
     ok: !error && status < 400,
     status,
     promptTokens: totals.promptTokens,
@@ -687,11 +699,9 @@ function recordRequestUsage(
   });
 }
 
-/** 面板里的上游 id：Qoder 按区分全球区与中国区。 */
+/** 面板里的 provider id。 */
 function providerId(route: Route): string {
-  if (route.upstream === "qoder") return route.region === "cn" ? "qoder-cn" : "qoder";
-  if (route.upstream === "workbuddy") return "workbuddy-cn";
-  return route.upstream;
+  return route.provider;
 }
 
 /* ---------------- plumbing ---------------- */
@@ -777,12 +787,16 @@ app.listen(PORT, HOST, () => {
   // The server owns the credentials. An enabled region with no session runs the
   // device flow here, in the background: the URL goes to the log and the operator
   // approves it. A region that is off is never looked at.
-  if (upstreamEnabled("minimax")) {
-    void ensureMinimaxSession()
+  for (const provider of providersNeedingLogin("minimax")) {
+    void ensureMinimaxSession(provider)
       .then(async (outcome) => {
-        const c = await readCredential();
+        const c = await readCredential(false, provider);
         const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
-        console.log(outcome === "logged-in" ? `  [AUTH] minimax: logged in: ${state}` : `  [AUTH] minimax: token ok: ${state}`);
+        console.log(
+          outcome === "logged-in"
+            ? `  [AUTH] ${provider}: logged in: ${state}`
+            : `  [AUTH] ${provider}: token ok: ${state}`,
+        );
       })
       .catch((e) => {
         const err = e as AuthError;
@@ -827,29 +841,29 @@ app.listen(PORT, HOST, () => {
     ).unref();
   }
 
-  for (const region of qoderRegions()) {
-    void ensureQoderSession(region)
+  for (const provider of providersNeedingLogin("qoder")) {
+    void ensureQoderSession(provider)
       .then((outcome) => {
-        const s = qoderStatus(region);
+        const s = qoderStatus(provider);
         console.log(
           outcome === "logged-in"
-            ? `  [AUTH] qoder ${region}: logged in`
-            : `  [AUTH] qoder ${region}: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
+            ? `  [AUTH] ${provider}: logged in`
+            : `  [AUTH] ${provider}: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
         );
         // A fresh session is worth a run right away.
         void benefits.runOnce();
       })
-      .catch((e) => console.warn(`  [AUTH] qoder ${region} login failed: ${(e as Error).message}`));
+      .catch((e) => console.warn(`  [AUTH] ${provider} login failed: ${(e as Error).message}`));
   }
 
-  if (upstreamEnabled("workbuddy-cn")) {
-    void ensureWorkBuddySession()
+  for (const provider of providersNeedingLogin("workbuddy")) {
+    void ensureWorkBuddySession(provider)
       .then(async (outcome) => {
-        const s = workbuddyStatus("cn");
+        const s = workbuddyStatus(provider);
         console.log(
           outcome === "logged-in"
-            ? `  [AUTH] workbuddy cn: logged in`
-            : `  [AUTH] workbuddy cn: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
+            ? `  [AUTH] ${provider}: logged in`
+            : `  [AUTH] ${provider}: session ok, expires in ${Math.round(Number(s.remainingSec ?? 0) / 60)} min`,
         );
         // The catalogue needs a token, so it comes after the login.
         await refreshWorkBuddyCatalog(true);
@@ -857,11 +871,11 @@ app.listen(PORT, HOST, () => {
         // A fresh session is worth a run right away.
         void benefits.runOnce();
       })
-      .catch((e) => console.warn(`  [AUTH] workbuddy cn login failed: ${(e as Error).message}`));
+      .catch((e) => console.warn(`  [AUTH] ${provider} login failed: ${(e as Error).message}`));
   }
 
-  if (upstreamEnabled("tokenrhythm")) {
-    void tokenRhythmStatuses()
+  for (const provider of providersNeedingLogin("tokenrhythm")) {
+    void tokenRhythmStatuses(provider)
       .then((tenants) => {
         for (const tenant of tenants) {
           const wallet = tenant.wallet;

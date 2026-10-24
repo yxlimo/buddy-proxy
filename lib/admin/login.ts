@@ -23,10 +23,12 @@ import {
 import {
   buildDeviceAuthorization,
   pollDeviceToken as pollQoderDevice,
+  regionOf as qoderRegionOf,
   saveSession as saveQoderSession,
   type DeviceAuthorization as QoderDeviceAuthorization,
   type QoderRegion,
 } from "../qoder/auth.ts";
+import { provider } from "../providers.ts";
 import {
   ZCODE_POLL_INTERVAL_MS,
   ZCODE_POLL_TIMEOUT_MS,
@@ -156,15 +158,15 @@ async function startMinimax(): Promise<Started> {
 }
 
 /** Qoder：设备流，但没有大字码（挑战是本地算的）。 */
-async function startQoder(region: QoderRegion): Promise<Started> {
-  const auth = buildDeviceAuthorization(region);
+async function startQoder(providerId: string): Promise<Started> {
+  const auth = buildDeviceAuthorization(providerId);
   return {
     method: "device",
     authorizationUrl: auth.authUrl,
     userCode: "",
     expiresAt: auth.expiresAtMs,
     message: "请在浏览器中打开上方链接，选择账号并完成授权，之后此处会自动显示为已登录。",
-    poll: { kind: "qoder", region, auth: auth as unknown as Record<string, unknown> },
+    poll: { kind: "qoder", auth: auth as unknown as Record<string, unknown> },
   };
 }
 
@@ -234,20 +236,22 @@ function startInternAi(): Started {
 export async function beginLogin(upstreamId: string, accountId = ""): Promise<StoredLogin> {
   cleanupLogins();
   const id = crypto.randomUUID();
+  const row = provider(upstreamId);
+  if (!row) {
+    throw new AuthError("unknown provider", `没有这个 Provider：${upstreamId}`, 400);
+  }
   const started = await withLock(`login:${upstreamId}`, async () => {
-    switch (upstreamId) {
+    // The provider says which kind it is; the kind says how to log in.
+    switch (row.kind) {
       case "minimax":
         return startMinimax();
       case "qoder":
-        return startQoder("global");
-      case "qoder-cn":
-        return startQoder("cn");
+        return startQoder(upstreamId);
       case "zcode":
         return startZcode();
-      case "workbuddy-cn":
+      case "workbuddy":
         return startWorkBuddy();
       case "tokenrhythm":
-        return startPassword(upstreamId);
       case "sensenova":
         return startPassword(upstreamId);
       case "intern-ai":
@@ -306,32 +310,32 @@ async function pollLoop(session: StoredLogin): Promise<void> {
 /** 跑上游自己的轮询，成功后把凭据存起来，返回凭据的 id。 */
 async function runPoll(session: StoredLogin): Promise<string> {
   const poll = session.poll ?? {};
+  const providerId = session.upstreamId;
   switch (poll.kind) {
     case "minimax": {
       const auth = poll.auth as unknown as MinimaxDeviceAuthorization;
       const result = await pollMinimaxDevice(auth);
-      saveMinimaxSession(result);
-      return "session:minimax";
+      saveMinimaxSession(result, providerId);
+      return `session:provider:${providerId}`;
     }
     case "qoder": {
-      const region = poll.region as QoderRegion;
       const auth = poll.auth as unknown as QoderDeviceAuthorization;
-      const result = await pollQoderDevice(auth, region);
-      saveQoderSession(result);
-      return `session:qoder:${region}`;
+      const result = await pollQoderDevice(auth, providerId);
+      saveQoderSession(result, providerId);
+      return `session:provider:${providerId}`;
     }
     case "workbuddy": {
       const state = String(poll.state ?? "");
-      const result = await pollWorkBuddyLogin("cn", state, session.expiresAt);
-      saveWorkBuddySession(result);
-      return "session:workbuddy:cn";
+      const result = await pollWorkBuddyLogin(providerId, state, session.expiresAt);
+      saveWorkBuddySession(result, providerId);
+      return `session:provider:${providerId}`;
     }
     case "zcode": {
       const login = poll.login as unknown as ZcodeLogin;
       const deadline = Date.now() + ZCODE_POLL_TIMEOUT_MS;
       while (Date.now() < deadline && Date.now() < session.expiresAt) {
-        const result = await pollZcodeLogin(login);
-        if (result.state === "approved") return "session:zcode";
+        const result = await pollZcodeLogin(login, providerId);
+        if (result.state === "approved") return `session:provider:${providerId}`;
         if (result.state === "failed" || result.state === "expired") {
           throw new AuthError("zcode login failed", result.message ?? "登录未成功。", 401);
         }

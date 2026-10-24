@@ -45,7 +45,7 @@ switch (command) {
     // The two sessions the test's requests need. The mock does not check the
     // token; the router does need one to send a request at all.
     const now = Date.now();
-    setSecret("session:qoder:global", "session", {
+    setSecret("session:provider:qoder", "session", {
       schemaVersion: 1,
       region: "global",
       clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
@@ -61,7 +61,7 @@ switch (command) {
       loginAtMs: now,
       refreshedAtMs: now,
     });
-    setSecret("session:workbuddy:cn", "session", {
+    setSecret("session:provider:workbuddy-cn", "session", {
       accessToken: "wb-test-token",
       refreshToken: "wb-test-refresh",
       uid: "test-user",

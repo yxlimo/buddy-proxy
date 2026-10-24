@@ -14,6 +14,7 @@
 import { configString } from "../config.ts";
 import { readEnvValue } from "../env.ts";
 import { getSecret, setSecret } from "../store.ts";
+import { providerSecretId } from "../providers.ts";
 
 /** The platform hosts. The key decides which one answers. */
 export const MINIMAX_API_HOSTS = {
@@ -145,25 +146,31 @@ export async function fetchMiniMaxTokenPlan(
  * has to take effect. The database holds a copy, so the service still works
  * when the .env file is not there, and the panel can read what is configured.
  */
-export function miniMaxTokenPlanKey(): string | null {
-  const fromEnv = readEnvValue("MINIMAX_TOKEN_PLAN_KEY") || "";
+export function miniMaxTokenPlanKey(providerId = "minimax"): string | null {
+  // The plan key belongs to the provider: two accounts have two plans.
+  const id = providerSecretId(providerId, "plan");
+  const fromEnv = providerId === "minimax" ? readEnvValue("MINIMAX_TOKEN_PLAN_KEY") || "" : "";
   if (fromEnv) {
-    if (getSecret<string>(TOKEN_PLAN_KEY_ID) !== fromEnv) {
-      setSecret(TOKEN_PLAN_KEY_ID, "key", fromEnv);
+    if (getSecret<string>(id) !== fromEnv) {
+      setSecret(id, "key", { key: fromEnv });
     }
     return fromEnv;
   }
-  return getSecret<string>(TOKEN_PLAN_KEY_ID) || null;
+  const stored = getSecret<unknown>(id);
+  if (typeof stored === "string" && stored) return stored;
+  if (stored && typeof stored === "object" && "key" in stored) return String((stored as any).key ?? "");
+  return null;
 }
 
 /** Where the token plan's key is kept. */
+/** The plan key of the built-in provider, for the old id. */
 const TOKEN_PLAN_KEY_ID = "key:minimax-token-plan";
 
 /* ------------------------------------------------------------------ *
  * The cached view
  * ------------------------------------------------------------------ */
 
-let planCache: { at: number; plan: MiniMaxTokenPlan | null } | null = null;
+// The plan of each provider is cached separately: they are different accounts.
 
 /**
  * The token plan's usage, from a recent answer.
@@ -171,11 +178,18 @@ let planCache: { at: number; plan: MiniMaxTokenPlan | null } | null = null;
  * The health endpoint asks for it on every check, and the platform is not
  * asked more often than it needs to be.
  */
-export async function miniMaxTokenPlan(maxAgeMs = 300_000): Promise<MiniMaxTokenPlan | null> {
-  const key = miniMaxTokenPlanKey();
+export async function miniMaxTokenPlan(
+  maxAgeMs = 300_000,
+  providerId = "minimax",
+): Promise<MiniMaxTokenPlan | null> {
+  const key = miniMaxTokenPlanKey(providerId);
   if (!key) return null;
-  if (planCache && Date.now() - planCache.at < maxAgeMs) return planCache.plan;
+  const cached = planCaches.get(providerId);
+  if (cached && Date.now() - cached.at < maxAgeMs) return cached.plan;
   const plan = await fetchMiniMaxTokenPlan(key);
-  planCache = { at: Date.now(), plan };
+  planCaches.set(providerId, { at: Date.now(), plan });
   return plan;
 }
+
+/** The plan of each provider, cached separately: they are different accounts. */
+const planCaches = new Map<string, { at: number; plan: MiniMaxTokenPlan | null }>();

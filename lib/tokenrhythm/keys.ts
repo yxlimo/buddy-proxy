@@ -13,8 +13,13 @@
 // that are in lib/tokenrhythm/accounts.ts.
 
 import { platformApi } from "./platform.ts";
-import { sessionId, writeHeaders, type TokenRhythmSession } from "./accounts.ts";
-import { getSecret, setSecret } from "../store.ts";
+import {
+  storedTenant,
+  tokenRhythmTenantSecretId,
+  writeHeaders,
+  type TokenRhythmSession,
+} from "./accounts.ts";
+import { setSecret } from "../store.ts";
 
 export interface TokenRhythmApiKey {
   id: string;
@@ -84,11 +89,6 @@ export async function enableApiKey(session: TokenRhythmSession, id: string): Pro
   });
 }
 
-/** Where the tenant's key is kept, with the account it belongs to. */
-function tenantId(index: number): string {
-  return `account:tokenrhythm:${index}`;
-}
-
 /**
  * The key of a tenant, and make one when the account has none.
  *
@@ -103,15 +103,17 @@ export async function ensureApiKey(
   session: TokenRhythmSession,
   index: number,
   current: string | null,
+  providerId = "tokenrhythm",
 ): Promise<string | null> {
   if (current) return current;
   const created = await createApiKey(session, `buddy-${index}`);
   if (!created.key) {
     throw new Error("平台没有返回完整的 key");
   }
-  const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(tenantId(index));
+  const id = tokenRhythmTenantSecretId(index, providerId);
+  const stored = storedTenant(index, providerId);
   if (stored) {
-    setSecret(tenantId(index), "account", { ...stored, apiKey: created.key });
+    setSecret(id, "account", { ...stored, apiKey: created.key });
   }
   console.log(`[TOKENRHYTHM] 租户 ${index}: 新建的 key ${created.maskedKey || created.keyPrefix}`);
   return created.key;

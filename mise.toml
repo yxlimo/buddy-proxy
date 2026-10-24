@@ -51,6 +51,10 @@ run = "node --experimental-strip-types test/admin-check.ts"
 description = "Run the tests for the panel's login flows (a fake upstream, no real login)"
 run = "node --experimental-strip-types test/admin-login-check.ts"
 
+[tasks."test:catalog-parity"]
+description = "Check that the panel's published models and the root route publish the same numbers"
+run = "node --experimental-strip-types test/catalog-parity-check.ts"
+
 [tasks."test:config"]
 description = "Check that the settings the panel can change take effect at once (no restart)"
 run = "node --experimental-strip-types test/config-restart-check.ts"

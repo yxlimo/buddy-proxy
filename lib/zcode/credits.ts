@@ -44,8 +44,8 @@ const num = (v: unknown): number => {
 };
 
 /** 读额度。没有登录态就没有额度。 */
-export async function fetchZcodeQuota(): Promise<ZcodeQuota | null> {
-  const session = loadSession();
+export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota | null> {
+  const session = loadSession(providerId);
   if (!session) return null;
   try {
     const r = await fetch(
@@ -84,9 +84,13 @@ export async function fetchZcodeQuota(): Promise<ZcodeQuota | null> {
 let cache: { at: number; quota: ZcodeQuota | null } | null = null;
 
 /** 额度，问一次就缓存几分钟 —— 面板不该把平台问烦了。 */
-export async function zcodeQuota(maxAgeMs = 300_000): Promise<ZcodeQuota | null> {
-  if (cache && Date.now() - cache.at < maxAgeMs) return cache.quota;
-  const quota = await fetchZcodeQuota();
-  cache = { at: Date.now(), quota };
+export async function zcodeQuota(maxAgeMs = 300_000, providerId = "zcode"): Promise<ZcodeQuota | null> {
+  const cached = caches.get(providerId);
+  if (cached && Date.now() - cached.at < maxAgeMs) return cached.quota;
+  const quota = await fetchZcodeQuota(providerId);
+  caches.set(providerId, { at: Date.now(), quota });
   return quota;
 }
+
+/** The quota of each provider, cached separately: they are different accounts. */
+const caches = new Map<string, { at: number; quota: ZcodeQuota | null }>();

@@ -4,6 +4,7 @@
 // 它们的元数据可以留空，留空就是「上游说多少就是多少」—— 两个上游 fronts
 // 同一个模型时，面板给的是两者里较小的那个上下文。
 
+import { provider } from "../providers.ts";
 import {
   deleteAggregateModel,
   getAggregateModel,
@@ -19,7 +20,6 @@ import {
   catalogGroups,
   upstreamCredential,
   upstreamEnabled,
-  UPSTREAM_FLAG_KEYS,
   type UpstreamId,
 } from "./upstreams.ts";
 import { hasUsableCredential } from "./credentials.ts";
@@ -38,8 +38,8 @@ export interface PublishedModelView {
    * 上游全关着的时候，模型在库里但没人能接 —— 面板上要看得见这件事。
    */
   published: boolean;
-  /** 没公布的原因。公布了就是 UNSPECIFIED。 */
-  unpublishedReason: UnpublishedReason;
+  /** 没公布的原因。公布了就没有这个字段。 */
+  unpublishedReason?: UnpublishedReason;
   strategy: string;
   /**
    * 元数据可以不给：不给就是「继承目标的值」。
@@ -104,8 +104,8 @@ function unpublishedReason(model: AggregateModel, groups: CatalogGroup[]): Unpub
 /** 一个目标为什么不能用。空 = 能用。 */
 function targetBlocker(target: AggregateTarget, groups: CatalogGroup[]): UnpublishedReason {
   const group = target.group as UpstreamId;
-  // 不认识的上游：没有开关，也没有目录 —— 当作关着。
-  if (!UPSTREAM_FLAG_KEYS[group]) return UnpublishedReason.UPSTREAM_DISABLED;
+  // 不认识的 Provider：没有开关，也没有目录 —— 当作关着。
+  if (!provider(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   if (!upstreamEnabled(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   const credential = upstreamCredential(group);
   if (!hasUsableCredential(credential.status)) return UnpublishedReason.NO_CREDENTIAL;
@@ -148,13 +148,14 @@ export function publishedModels(): PublishedModelView[] {
       displayName: model.displayName,
       enabled: model.enabled,
       published: reason === UnpublishedReason.UNSPECIFIED,
-      unpublishedReason: reason,
+      // A published model has no reason: the field is absent then.
+      unpublishedReason: reason === UnpublishedReason.UNSPECIFIED ? undefined : reason,
       strategy: model.strategy,
       contextWindow: model.contextWindow ?? inherited?.contextWindow,
       maxOutputTokens: model.maxOutputTokens ?? inherited?.maxOutputTokens,
-      reasoning: model.reasoning ?? undefined,
-      toolCall: model.toolCall ?? undefined,
-      effortOptions: model.effortOptions ?? [],
+      reasoning: model.reasoning ?? inherited?.reasoning,
+      toolCall: model.toolCall ?? inherited?.toolCall,
+      effortOptions: model.effortOptions ?? inherited?.effortOptions ?? [],
       updatedAt: model.updatedAt,
       targets: model.targets.map((target) => {
         const row = usage.find(

@@ -496,3 +496,16 @@ export function clampEffort(requested: string | undefined, supported: string[]):
   }
   return supported[0];
 }
+
+// The catalogue the upstream last reported. It lives here, with the thing that
+// refreshes it, so the registry and the router can both read it.
+let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
+
+export function workbuddyModelList(): WorkBuddyModel[] {
+  return workbuddyModels;
+}
+
+/** Replace the catalogue (the upstream reported a new one). */
+export function setWorkbuddyModelList(models: WorkBuddyModel[]): void {
+  workbuddyModels = models;
+}

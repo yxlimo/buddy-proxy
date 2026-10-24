@@ -351,12 +351,12 @@ check(
   JSON.stringify(approvedStatus.body?.session),
 );
 const secretAppeared = await waitFor(() =>
-  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:minimax") as any)?.data),
+  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:provider:minimax") as any)?.data),
 );
 check("凭据落进了 secrets 表", secretAppeared, JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
 const storedSecret = db
   .prepare("SELECT data FROM secrets WHERE id = ?")
-  .get("session:minimax") as any;
+  .get("session:provider:minimax") as any;
 check(
   "落库的凭据里有 access token",
   String(storedSecret?.data ?? "").includes("at-test"),

@@ -3,7 +3,17 @@
 // The plan's own credits, the ones bought on top of it, and the account's
 // standing (the server says PASS, WAIT, or why it may not be used).
 
-import { ENDPOINTS, REGION, USER_AGENT, ensureCredential, loadSession, loginHint, sessionId, type QoderRegion } from "./auth.ts";
+import {
+  ENDPOINTS,
+  REGION,
+  USER_AGENT,
+  ensureCredential,
+  loadSession,
+  loginHint,
+  regionOf,
+  sessionId,
+  type QoderRegion,
+} from "./auth.ts";
 import { clearHint } from "../session.ts";
 
 export interface QoderAccountHealth {
@@ -40,11 +50,12 @@ export interface QoderCredits {
  * check uses. The answer holds two pots: the plan's own credits and the ones
  * bought on top of it.
  */
-export async function fetchQoderCredits(region: QoderRegion = REGION): Promise<QoderCredits | null> {
-  const session = loadSession(region);
+export async function fetchQoderCredits(providerId = "qoder"): Promise<QoderCredits | null> {
+  const region = regionOf(providerId);
+  const session = loadSession(providerId);
   if (!session) return null;
   try {
-    const cred = await ensureCredential(false, region);
+    const cred = await ensureCredential(false, providerId);
     const r = await fetch(`${ENDPOINTS[region].openapi}/api/v2/quota/usage`, {
       headers: {
         Authorization: `Bearer ${cred.accessToken}`,
@@ -73,12 +84,13 @@ export async function fetchQoderCredits(region: QoderRegion = REGION): Promise<Q
   }
 }
 
-export async function checkAccountHealth(region: QoderRegion = REGION): Promise<QoderAccountHealth> {
-  const session = loadSession(region);
+export async function checkAccountHealth(providerId = "qoder"): Promise<QoderAccountHealth> {
+  const region = regionOf(providerId);
+  const session = loadSession(providerId);
   if (!session) {
-    return { region, authorized: false, usable: false, reason: "no session", hint: loginHint(region) };
+    return { region, authorized: false, usable: false, reason: "no session", hint: loginHint(providerId) };
   }
-  const cred = await ensureCredential(false, region);
+  const cred = await ensureCredential(false, providerId);
   const r = await fetch(`${ENDPOINTS[region].openapi}/api/v3/user/status`, {
     headers: {
       Authorization: `Bearer ${cred.accessToken}`,

@@ -29,6 +29,7 @@ import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT
 import type { Credential } from "../credential.ts";
 import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
+import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
@@ -83,9 +84,14 @@ export function dataDir(): string {
   return sharedDataDir();
 }
 
-/** Where the session lives in the database. */
-export function sessionId(): string {
-  return "session:minimax";
+/**
+ * Where the session lives in the database.
+ *
+ * The session belongs to the provider, not to the kind: two MiniMax Code
+ * accounts are two providers, each with its own session.
+ */
+export function sessionId(providerId = "minimax"): string {
+  return providerSecretId(providerId);
 }
 
 /** Where the session used to live, while the migration is under way. */
@@ -93,24 +99,24 @@ export function legacySessionPath(): string[] {
   return legacyPaths("minimax-session.json");
 }
 
-function loginHint(): string {
+function loginHint(providerId = "minimax"): string {
   return `还没有登录。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
-    `${clearHint(sessionId())}（会打印一个授权链接）。` +
+    `${clearHint(sessionId(providerId))}（会打印一个授权链接）。` +
     `凭据之后每小时自动刷新。`;
 }
 
 /** Read our own session file without throwing. */
-function loadSession(): Session | null {
-  return readSession<Session>(sessionId(), hasTokens, legacySessionPath());
+function loadSession(providerId = "minimax"): Session | null {
+  return readSession<Session>(sessionId(providerId), hasTokens, legacySessionPath());
 }
 
-export function hasSession(): boolean {
-  return loadSession() !== null;
+export function hasSession(providerId = "minimax"): boolean {
+  return loadSession(providerId) !== null;
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
-export function saveSession(session: Session): void {
-  writeSession(sessionId(), session);
+export function saveSession(session: Session, providerId = "minimax"): void {
+  writeSession(sessionId(providerId), session);
 }
 
 /**
@@ -213,11 +219,11 @@ function toCredential(session: Session): Credential {
  * Refresh the session with the stored refresh token. The refresh token rotates on every
  * call, so the write must happen even when the caller only wanted a status.
  */
-export async function refreshSession(force = false): Promise<Session> {
-  const session = loadSession();
+export async function refreshSession(force = false, providerId = "minimax"): Promise<Session> {
+  const session = loadSession(providerId);
   if (!session) {
     cache = null;
-    throw new AuthError("no session", loginHint(), 503);
+    throw new AuthError("no session", loginHint(providerId), 503);
   }
   if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
@@ -246,7 +252,7 @@ export async function refreshSession(force = false): Promise<Session> {
   }
 
   const next = sessionFromGrant(parseGrant(r.body), session);
-  saveSession(next);
+  saveSession(next, providerId);
   cache = null;
   authLog(
     dataDir(),
@@ -262,7 +268,7 @@ export async function refreshSession(force = false): Promise<Session> {
  * Credential for the proxy. Cached for CACHE_MS; `force` means "the token we just sent
  * was rejected, get a new one" and refreshes unconditionally.
  */
-export async function ensureCredential(force = false): Promise<Credential> {
+export async function ensureCredential(force = false, providerId = "minimax"): Promise<Credential> {
   return ensureCredentialShared({
     cache,
     setCache: (next) => {
@@ -270,14 +276,14 @@ export async function ensureCredential(force = false): Promise<Credential> {
     },
     cacheMs: CACHE_MS,
     force,
-    lockId: sessionId(),
-    load: loadSession,
-    refresh: refreshSession,
+    lockId: sessionId(providerId),
+    load: () => loadSession(providerId),
+    refresh: (f) => refreshSession(f, providerId),
     toCredential,
     expired: (session) =>
       new AuthError(
         `access token expired (generation ${session.generation})`,
-        `token 已过期且刷新没成功。${clearHint(sessionId())}。`,
+        `token 已过期且刷新没成功。${clearHint(sessionId(providerId))}。`,
         503,
       ),
   });
@@ -373,7 +379,7 @@ export async function pollDeviceToken(auth: DeviceAuthorization): Promise<Sessio
   throw new AuthError("expired_token", "device code 已超时，请重新发起登录。", 503);
 }
 
-export async function login(): Promise<Session> {
+export async function login(providerId = "minimax"): Promise<Session> {
   const auth = await startDeviceAuthorization();
   const url = auth.verificationUriComplete ?? `${auth.verificationUri}?code=${auth.userCode}`;
   console.log("");
@@ -383,9 +389,9 @@ export async function login(): Promise<Session> {
   console.log(`  (waiting for approval, up to ${Math.round(auth.expiresInSec / 60)} min)`);
   console.log("");
   const session = await pollDeviceToken(auth);
-  saveSession(session);
+  saveSession(session, providerId);
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
-  console.log(`  saved to the database (${sessionId()})`);
+  console.log(`  saved to the database (${sessionId(providerId)})`);
   console.log("  later refreshes are automatic — nothing else to do.");
   authLog(
     dataDir(),
@@ -415,12 +421,14 @@ export async function revoke(): Promise<void> {
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */
-export function oauthStatus(): Record<string, unknown> {
-  const session = loadSession();
-  if (!session) return { source: sessionId(), status: "anonymous", error: "no session", hint: loginHint() };
+export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
+  const session = loadSession(providerId);
+  if (!session) {
+    return { source: sessionId(providerId), status: "anonymous", error: "no session", hint: loginHint(providerId) };
+  }
   const remainingMs = session.expiresAtMs - Date.now();
   return {
-    source: sessionId(),
+    source: sessionId(providerId),
     status: remainingMs > 0 ? "authenticated" : "expired",
     clientId: session.clientId,
     audience: session.audience,

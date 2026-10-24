@@ -11,7 +11,9 @@ import crypto from "node:crypto";
 import {
   MAX_MINIMAX_API_TENANTS,
   miniMaxApiTenantSecretId,
+  miniMaxApiTenants,
 } from "../minimax/api.ts";
+import { listProviders, provider } from "../providers.ts";
 import { listSecrets } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
@@ -58,21 +60,12 @@ export interface CredentialRow {
 }
 
 /**
- * 固定的账号：一个上游一个登录身份。
+ * 账号：provider 表里的一行就是一个账号。
  *
- * SenseNova 与 intern-ai 也在里面：它们的登录是可以做的，面板上要有地方点。
- * 推理用的 key 也列在凭据里 —— 那是这两个上游真正干活的东西（cookie 只是
- * 登录态，读额度用的）。
+ * 账号的 id 就是 provider 的 id —— 面板上的每条凭据都挂在它下面。
+ * 凭据本身是 secrets 表里的行，id 说明了它是谁的
+ * （session:provider:<id>、key:provider:<id>:account）。
  */
-const FIXED_ACCOUNTS: { id: string; upstream: string; label: string }[] = [
-  { id: "minimax", upstream: "minimax", label: "MiniMax Code" },
-  { id: "qoder", upstream: "qoder", label: "Qoder（全球区）" },
-  { id: "qoder-cn", upstream: "qoder-cn", label: "Qoder（中国区）" },
-  { id: "workbuddy-cn", upstream: "workbuddy-cn", label: "WorkBuddy（中国区）" },
-  { id: "zcode", upstream: "zcode", label: "ZCode" },
-  { id: "sensenova", upstream: "sensenova", label: "SenseNova" },
-  { id: "intern-ai", upstream: "intern-ai", label: "书生·端砚" },
-];
 
 /** 指纹：同一个值永远是同一个指纹，换一个值就是另一个。 */
 function fingerprintOf(value: string): string {
@@ -135,137 +128,164 @@ function sessionCredential(id: string, accountId: string, upstreamId: string, la
  */
 export function credentialsOf(accountId: string): CredentialRow[] {
   const out: CredentialRow[] = [];
-  switch (accountId) {
-    case "minimax": {
-      out.push(sessionCredential("session:minimax", "minimax", "minimax", "登录会话"));
-      const key = miniMaxTokenPlanKey();
-      if (key) {
-        const row = listSecrets("key:minimax-token-plan").find((r) => r.id === "key:minimax-token-plan");
+  // The account is a provider: the provider says which kind it is, and the
+  // kind says what its credentials look like.
+  const row = provider(accountId);
+  if (row) {
+    switch (row.kind) {
+      case "minimax": {
+        out.push(sessionCredential(`session:provider:${row.id}`, row.id, row.id, "登录会话"));
+        const key = miniMaxTokenPlanKey();
+        if (key) {
+          const keyId = `key:provider:${row.id}:plan`;
+          const keyRow = listSecrets(keyId).find((r) => r.id === keyId);
+          out.push({
+            id: keyId,
+            accountId: row.id,
+            upstreamId: row.id,
+            kind: "plan_key",
+            label: "Plan key",
+            masked: maskOf(key),
+            fingerprint: fingerprintOf(key),
+            status: CredentialState.USABLE,
+            generation: 0,
+            expiresAt: 0,
+            lastOkAt: 0,
+            lastError: "",
+            updatedAt: Number(keyRow?.updatedAt ?? 0),
+          });
+        }
+        return out;
+      }
+      case "minimax-api": {
+        // 开放平台的租户：每个租户一把 key。
+        for (const tenant of miniMaxApiTenants(row.id)) {
+          const keyId = miniMaxApiTenantSecretId(tenant.index, row.id);
+          const keyRow = listSecrets(keyId).find((r) => r.id === keyId);
+          out.push({
+            id: keyId,
+            accountId: row.id,
+            upstreamId: row.id,
+            kind: "api_key",
+            label: `租户 ${tenant.index} 的 key`,
+            masked: maskOf(tenant.key),
+            fingerprint: fingerprintOf(tenant.key),
+            status: CredentialState.USABLE,
+            generation: 0,
+            expiresAt: 0,
+            lastOkAt: 0,
+            lastError: "",
+            updatedAt: Number(keyRow?.updatedAt ?? 0),
+          });
+        }
+        return out;
+      }
+      case "qoder":
+      case "workbuddy":
+      case "zcode": {
+        out.push(
+          sessionCredential(`session:provider:${row.id}`, row.id, row.id, "登录会话"),
+        );
+        return out;
+      }
+      case "sensenova": {
+        out.push(sessionCredential(`session:provider:${row.id}`, row.id, row.id, "登录会话"));
+        const loginId = `key:provider:${row.id}:account`;
+        const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
+        const login = loginRow?.data as any;
+        if (login?.user) {
+          out.push({
+            id: loginId,
+            accountId: row.id,
+            upstreamId: row.id,
+            kind: "login",
+            label: "登录账号",
+            masked: maskOf(String(login.user)),
+            fingerprint: fingerprintOf(String(login.user)),
+            status: CredentialState.USABLE,
+            generation: 0,
+            expiresAt: 0,
+            lastOkAt: 0,
+            lastError: "",
+            updatedAt: Number(loginRow?.updatedAt ?? 0),
+          });
+        }
+        // 推理用的 key：推理端点要的是它，不是 cookie。
+        const apiKey = String(login?.apiKey ?? "");
+        if (apiKey) {
+          out.push({
+            id: `${loginId}#api_key`,
+            accountId: row.id,
+            upstreamId: row.id,
+            kind: "api_key",
+            label: "推理 key",
+            masked: maskOf(apiKey),
+            fingerprint: fingerprintOf(apiKey),
+            status: CredentialState.USABLE,
+            generation: 0,
+            expiresAt: 0,
+            lastOkAt: 0,
+            lastError: "",
+            updatedAt: Number(loginRow?.updatedAt ?? 0),
+          });
+        }
+        return out;
+      }
+      case "intern-ai": {
+        // 会话里是每个子站一份 token。
+        const id = `session:provider:${row.id}`;
+        const sessionRow = listSecrets(id).find((r) => r.id === id);
+        const session = sessionRow?.data as any;
+        const sites = Array.isArray(session?.sites) ? session.sites : [];
+        const token = String(sites[0]?.token ?? "");
         out.push({
-          id: "key:minimax-token-plan",
-          accountId,
-          upstreamId: "minimax",
-          kind: "plan_key",
-          label: "Plan key",
-          masked: maskOf(key),
-          fingerprint: fingerprintOf(key),
-          status: CredentialState.USABLE,
+          id,
+          accountId: row.id,
+          upstreamId: row.id,
+          kind: "session",
+          label: sites.length ? `子站 token（${sites.map((s: any) => s.name).join(" / ")}）` : "登录会话",
+          masked: maskOf(token),
+          fingerprint: fingerprintOf(token),
+          status: token ? CredentialState.USABLE : CredentialState.MISSING,
           generation: 0,
           expiresAt: 0,
-          lastOkAt: 0,
+          lastOkAt: Number(session?.obtainedAtMs ?? 0),
           lastError: "",
-          updatedAt: Number(row?.updatedAt ?? 0),
+          updatedAt: Number(sessionRow?.updatedAt ?? 0),
         });
+        // 推理用的 key（Discovery 子站那把）：推理端点要的是它。
+        const loginId = `key:provider:${row.id}:account`;
+        const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
+        const login = loginRow?.data as any;
+        const discoveryKey = String(login?.discoveryKey ?? "");
+        if (discoveryKey) {
+          out.push({
+            id: `${loginId}#discovery_key`,
+            accountId: row.id,
+            upstreamId: row.id,
+            kind: "api_key",
+            label: "推理 key（Discovery）",
+            masked: maskOf(discoveryKey),
+            fingerprint: fingerprintOf(discoveryKey),
+            status: CredentialState.USABLE,
+            generation: 0,
+            expiresAt: 0,
+            lastOkAt: 0,
+            lastError: "",
+            updatedAt: Number(loginRow?.updatedAt ?? 0),
+          });
+        }
+        return out;
       }
-      return out;
-    }
-    case "qoder":
-      out.push(sessionCredential("session:qoder:global", "qoder", "qoder", "登录会话（全球区）"));
-      return out;
-    case "qoder-cn":
-      out.push(sessionCredential("session:qoder:cn", "qoder-cn", "qoder-cn", "登录会话（中国区）"));
-      return out;
-    case "workbuddy-cn":
-      out.push(sessionCredential("session:workbuddy:cn", "workbuddy-cn", "workbuddy-cn", "登录会话"));
-      return out;
-    case "zcode":
-      out.push(sessionCredential("session:zcode", "zcode", "zcode", "登录会话"));
-      return out;
-    case "sensenova": {
-      out.push(sessionCredential("session:sensenova", accountId, "sensenova", "登录会话"));
-      const loginId = "account:sensenova";
-      const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
-      const login = loginRow?.data as any;
-      if (login?.user) {
-        out.push({
-          id: loginId,
-          accountId,
-          upstreamId: "sensenova",
-          kind: "login",
-          label: "登录账号",
-          masked: maskOf(String(login.user)),
-          fingerprint: fingerprintOf(String(login.user)),
-          status: CredentialState.USABLE,
-          generation: 0,
-          expiresAt: 0,
-          lastOkAt: 0,
-          lastError: "",
-          updatedAt: Number(loginRow?.updatedAt ?? 0),
-        });
-      }
-      // 推理用的 key：推理端点要的是它，不是 cookie。
-      const apiKey = String(login?.apiKey ?? "");
-      if (apiKey) {
-        out.push({
-          id: `${loginId}#api_key`,
-          accountId,
-          upstreamId: "sensenova",
-          kind: "api_key",
-          label: "推理 key",
-          masked: maskOf(apiKey),
-          fingerprint: fingerprintOf(apiKey),
-          status: CredentialState.USABLE,
-          generation: 0,
-          expiresAt: 0,
-          lastOkAt: 0,
-          lastError: "",
-          updatedAt: Number(loginRow?.updatedAt ?? 0),
-        });
-      }
-      return out;
-    }
-    case "intern-ai": {
-      // 会话里是每个子站一份 token。
-      const id = "session:intern-ai";
-      const row = listSecrets(id).find((r) => r.id === id);
-      const session = row?.data as any;
-      const sites = Array.isArray(session?.sites) ? session.sites : [];
-      const token = String(sites[0]?.token ?? "");
-      out.push({
-        id,
-        accountId,
-        upstreamId: "intern-ai",
-        kind: "session",
-        label: sites.length ? `子站 token（${sites.map((s: any) => s.name).join(" / ")}）` : "登录会话",
-        masked: maskOf(token),
-        fingerprint: fingerprintOf(token),
-        status: token ? CredentialState.USABLE : CredentialState.MISSING,
-        generation: 0,
-        expiresAt: 0,
-        lastOkAt: Number(session?.obtainedAtMs ?? 0),
-        lastError: "",
-        updatedAt: Number(row?.updatedAt ?? 0),
-      });
-      // 推理用的 key（Discovery 子站那把）：推理端点要的是它。
-      const loginId = "account:intern-ai";
-      const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
-      const login = loginRow?.data as any;
-      const discoveryKey = String(login?.discoveryKey ?? "");
-      if (discoveryKey) {
-        out.push({
-          id: `${loginId}#discovery_key`,
-          accountId,
-          upstreamId: "intern-ai",
-          kind: "api_key",
-          label: "推理 key（Discovery）",
-          masked: maskOf(discoveryKey),
-          fingerprint: fingerprintOf(discoveryKey),
-          status: CredentialState.USABLE,
-          generation: 0,
-          expiresAt: 0,
-          lastOkAt: 0,
-          lastError: "",
-          updatedAt: Number(loginRow?.updatedAt ?? 0),
-        });
-      }
-      return out;
+      case "tokenrhythm":
+        break;
     }
   }
   // TokenRhythm：登录账号、推理 key、会话 cookie。
   const match = /^tokenrhythm:(\d+)$/.exec(accountId);
   if (!match) return out;
   const index = Number(match[1]);
-  const loginId = `account:tokenrhythm:${index}`;
+  const loginId = `key:provider:tokenrhythm:tenant-${index}`;
   const loginRow = listSecrets(loginId).find((r) => r.id === loginId);
   const login = loginRow?.data as any;
   if (login) {
@@ -303,37 +323,41 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       });
     }
   }
-  out.push(sessionCredential(`session:tokenrhythm:${index}`, accountId, "tokenrhythm", "会话 cookie"));
+  out.push(sessionCredential(`session:provider:tokenrhythm:${index}`, accountId, "tokenrhythm", "会话 cookie"));
   return out;
 }
 
 /** 所有账号。TokenRhythm 的账号是租户，一个租户一个。 */
 export function listAccounts(): AccountView[] {
   const out: AccountView[] = [];
-  for (const account of FIXED_ACCOUNTS) {
-    const credentials = credentialsOf(account.id);
+  for (const row of listProviders()) {
+    // The relay station has one account per tenant; the others have one.
+    if (row.kind === "tokenrhythm") {
+      for (const tenant of tokenRhythmTenants(row.id)) {
+        const accountId = `${row.id}:${tenant.index}`;
+        const credentials = credentialsOf(accountId);
+        const session = credentials.find((c) => c.kind === "session");
+        out.push({
+          id: accountId,
+          upstreamId: row.id,
+          label: `${row.alias} 租户 ${tenant.index}`,
+          status: session ? session.status : CredentialState.MISSING,
+          credentialCount: credentials.length,
+          detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无登录态",
+        });
+      }
+      continue;
+    }
+    const credentials = credentialsOf(row.id);
     const sessions = credentials.filter((c) => c.kind === "session");
     const session = sessions[0];
     out.push({
-      id: account.id,
-      upstreamId: account.upstream,
-      label: account.label,
+      id: row.id,
+      upstreamId: row.id,
+      label: row.alias,
       status: session ? session.status : CredentialState.MISSING,
       credentialCount: credentials.length,
       detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无凭据",
-    });
-  }
-  for (const tenant of tokenRhythmTenants()) {
-    const accountId = `tokenrhythm:${tenant.index}`;
-    const credentials = credentialsOf(accountId);
-    const session = credentials.find((c) => c.kind === "session");
-    out.push({
-      id: accountId,
-      upstreamId: "tokenrhythm",
-      label: `TokenRhythm 租户 ${tenant.index}`,
-      status: session ? session.status : CredentialState.MISSING,
-      credentialCount: credentials.length,
-      detail: session ? `会话 ${credentialStateText(session.status)}` : "暂无登录态",
     });
   }
   return out;

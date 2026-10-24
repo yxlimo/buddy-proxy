@@ -32,8 +32,8 @@ import {
   internAiDiscoveryKey,
 } from "./config.ts";
 import { consoleApi } from "./platform.ts";
-import { ACCOUNT_ID, type InternAiSession, type StoredAccount } from "./auth.ts";
-import { getSecret, setSecret } from "../store.ts";
+import { accountId, storedAccount, type InternAiSession } from "./auth.ts";
+import { setSecret } from "../store.ts";
 
 /** 两个子站的 key 各是什么。 */
 export type InternAiSiteName = "discovery" | "chat";
@@ -247,8 +247,9 @@ export async function ensureApiKey(
   token: string,
   name: string,
   current?: string | null,
+  providerId = "intern-ai",
 ): Promise<string | null> {
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
+  const stored = storedAccount(providerId);
   const existing =
     current ?? (site === "discovery" ? internAiDiscoveryKey(stored?.discoveryKey) : internAiChatKey(stored?.chatKey));
   if (existing) return existing;
@@ -269,7 +270,7 @@ export async function ensureApiKey(
     plain = created.plainToken;
   }
 
-  setSecret(ACCOUNT_ID, "account", {
+  setSecret(accountId(providerId), "account", {
     ...stored,
     ...(site === "discovery" ? { discoveryKey: plain } : { chatKey: plain }),
   });

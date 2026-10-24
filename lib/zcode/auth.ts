@@ -18,7 +18,8 @@ import crypto from "node:crypto";
 import { configNumber, configString } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { readSession, writeSession } from "../session.ts";
-import { deleteSecret } from "../store.ts";
+import { deleteSecret, getSecret } from "../store.ts";
+import { providerSecretId } from "../providers.ts";
 
 /** ZCode 自己的站点。 */
 export const ZCODE_BASE = configString("ZCODE_BASE_URL", "https://zcode.z.ai").replace(/\/+$/, "");
@@ -33,8 +34,19 @@ export const ZCODE_VERSION = configString("ZCODE_VERSION", "3.16.2");
 export const ZCODE_POLL_INTERVAL_MS = configNumber("ZCODE_POLL_INTERVAL_MS", 3000);
 export const ZCODE_POLL_TIMEOUT_MS = configNumber("ZCODE_POLL_TIMEOUT_MS", 300_000);
 
-/** 会话在数据库里的 id。 */
-const SESSION_ID = "session:zcode";
+/**
+ * 会话在数据库里的 id。
+ *
+ * 会话归 provider 所有：两个 ZCode 账号各有各的会话。
+ */
+export function sessionId(providerId = "zcode"): string {
+  return providerSecretId(providerId);
+}
+
+/** 会话以前放在这里（只有一个 ZCode 账号的时候）。 */
+function legacySessionId(): string {
+  return "session:zcode";
+}
 
 export interface ZcodeSession {
   /** zcode JWT：模型请求用它。 */
@@ -63,10 +75,13 @@ export interface ZcodeLogin {
 /**
  * 发起登录。
  *
+ * `platform` 是用哪家：智谱的 Z.ai（zai）还是 BigModel（bigmodel）。
+ * `providerId` 是网关里的哪个 provider —— 会话按它存，两个账号互不相干。
+ *
  * poll token 是本地随机生成的 32 字节 hex —— 服务端拿它当这次登录的凭据：
  * 轮询的时候要带上同一个。
  */
-export async function beginLogin(provider = ZCODE_PROVIDER): Promise<ZcodeLogin> {
+export async function beginLogin(providerId = "zcode", platform = ZCODE_PROVIDER): Promise<ZcodeLogin> {
   const pollToken = crypto.randomBytes(32).toString("hex");
   const r = await fetch(`${ZCODE_BASE}/api/v1/oauth/cli/init`, {
     method: "POST",
@@ -76,7 +91,7 @@ export async function beginLogin(provider = ZCODE_PROVIDER): Promise<ZcodeLogin>
       authorization: `Bearer ${pollToken}`,
       "user-agent": `ZCode/${ZCODE_VERSION}`,
     },
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider: platform }),
     signal: AbortSignal.timeout(30_000),
   });
   const text = await r.text().catch(() => "");
@@ -119,7 +134,10 @@ export type PollState = "pending" | "approved" | "failed" | "expired";
  *
  * 官方客户端轮询到 ready 时拿到的 `data.token` 就是 zcode JWT。
  */
-export async function pollLogin(login: ZcodeLogin): Promise<{ state: PollState; session?: ZcodeSession; message?: string }> {
+export async function pollLogin(
+  login: ZcodeLogin,
+  providerId = "zcode",
+): Promise<{ state: PollState; session?: ZcodeSession; message?: string }> {
   const r = await fetch(`${ZCODE_BASE}/api/v1/oauth/cli/poll/${encodeURIComponent(login.flowId)}`, {
     headers: {
       accept: "application/json",
@@ -153,7 +171,7 @@ export async function pollLogin(login: ZcodeLogin): Promise<{ state: PollState; 
       // zcode JWT 没有刷新通道，给一个保守的时长：到了就是过期了，重登。
       expiresAtMs: Date.now() + 7 * 24 * 3600 * 1000,
     };
-    saveSession(session);
+    saveSession(session, providerId);
     return { state: "approved", session };
   }
   if (status === "failed" || status === "error") {
@@ -166,8 +184,8 @@ export async function pollLogin(login: ZcodeLogin): Promise<{ state: PollState; 
 }
 
 /** 存会话。 */
-export function saveSession(session: ZcodeSession): void {
-  writeSession(SESSION_ID, session);
+export function saveSession(session: ZcodeSession, providerId = "zcode"): void {
+  writeSession(sessionId(providerId), session);
 }
 
 /**
@@ -175,26 +193,36 @@ export function saveSession(session: ZcodeSession): void {
  *
  * 过期的不算会话 —— zcode JWT 不能刷新，过期了只能重登。
  */
-export function loadSession(): ZcodeSession | null {
-  return readSession<ZcodeSession>(SESSION_ID, (raw) => {
+export function loadSession(providerId = "zcode"): ZcodeSession | null {
+  const valid = (raw: any) => {
     if (!raw?.token) return false;
     if (typeof raw.expiresAtMs === "number" && raw.expiresAtMs < Date.now()) return false;
     return true;
-  });
+  };
+  const session = readSession<ZcodeSession>(sessionId(providerId), valid);
+  if (session) return session;
+  // 会话以前是全局一份：认它一次，搬到这个 provider 名下。
+  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
+  const legacy = providerId === "zcode" ? getSecret<ZcodeSession>(legacySessionId()) : null;
+  if (!legacy || !valid(legacy)) return null;
+  saveSession(legacy, providerId);
+  return legacy;
 }
 
 /** 忘掉会话：下一次调用会重新登录。 */
-export function forgetSession(): void {
-  deleteSecret(SESSION_ID);
+export function forgetSession(providerId = "zcode"): void {
+  deleteSecret(sessionId(providerId));
+  // 旧的那份也清掉：不然清完又会从它那里冒出来。
+  if (providerId === "zcode") deleteSecret(legacySessionId());
 }
 
 /** 面板上用的凭据状态。 */
-export function zcodeStatus(): Record<string, unknown> {
-  const session = loadSession();
-  if (!session) return { source: SESSION_ID, status: "anonymous", error: "no session" };
+export function zcodeStatus(providerId = "zcode"): Record<string, unknown> {
+  const session = loadSession(providerId);
+  if (!session) return { source: sessionId(providerId), status: "anonymous", error: "no session" };
   const remainingMs = session.expiresAtMs - Date.now();
   return {
-    source: SESSION_ID,
+    source: sessionId(providerId),
     status: remainingMs > 0 ? "authenticated" : "expired",
     provider: session.provider,
     userId: session.userId ?? "",

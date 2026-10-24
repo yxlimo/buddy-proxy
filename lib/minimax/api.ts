@@ -14,6 +14,7 @@ import { configNumber, configString } from "../config.ts";
 import { readEnvValue } from "../env.ts";
 import { getSecret, setSecret } from "../store.ts";
 import { AuthError } from "../credential.ts";
+import { providerSecretId } from "../providers.ts";
 import { fetchMiniMaxTokenPlan, minimaxApiHost, type MiniMaxRegion } from "./credits.ts";
 
 /** 最多读几个租户。 */
@@ -22,9 +23,16 @@ const MAX_TENANTS = 10;
 /** 最多几把 key（也就是几个租户）。 */
 export const MAX_MINIMAX_API_TENANTS = MAX_TENANTS;
 
-/** 某个租户的 key 存在数据库里的 id。 */
-export function miniMaxApiTenantSecretId(index: number): string {
-  return tenantSecretId(index);
+/** 内置的那个 provider：环境变量里的那几把 key 是它的。 */
+const BUILT_IN = "minimax-api";
+
+/**
+ * 某个租户的 key 存在数据库里的 id。
+ *
+ * key 归 provider 所有 —— 两个开放平台账号各有各的几把 key。
+ */
+export function miniMaxApiTenantSecretId(index: number, providerId = BUILT_IN): string {
+  return providerSecretId(providerId, `key-${index}`);
 }
 
 /** 一个租户：一把 key。 */
@@ -33,7 +41,8 @@ export interface MiniMaxApiTenant {
   key: string;
 }
 
-function tenantSecretId(index: number): string {
+/** key 以前放在这里（只有一个开放平台账号的时候）。 */
+function legacyTenantSecretId(index: number): string {
   return `key:minimax-api:${index}`;
 }
 
@@ -42,18 +51,25 @@ function tenantSecretId(index: number): string {
  *
  * 凭据是环境优先：key 在 .env 里换过必须立刻生效。数据库存一份副本，这样
  * 没有 .env 也能跑，面板也读得到配了什么。
+ *
+ * 环境变量只属于内置的那个 provider：别的 provider 不该拿它的 key。
  */
-export function miniMaxApiTenants(): MiniMaxApiTenant[] {
+export function miniMaxApiTenants(providerId = BUILT_IN): MiniMaxApiTenant[] {
   const out: MiniMaxApiTenant[] = [];
   for (let index = 1; index <= MAX_TENANTS; index++) {
-    const fromEnv = readEnvValue(`MINIMAX_API_${index}_KEY`) || "";
+    const id = miniMaxApiTenantSecretId(index, providerId);
     // 存的形状有两种：对象（面板写的）与裸字符串（早先写的）。都认。
-    const raw = getSecret<unknown>(tenantSecretId(index));
+    // 旧的那份也认：key 是在 provider 这件事之前存的，搬一次，别让人重新配。
+    // 但旧的那份是全局的，所以只有内置的那个 provider 认它。
+    const raw =
+      getSecret<unknown>(id) ??
+      (providerId === BUILT_IN ? getSecret<unknown>(legacyTenantSecretId(index)) : null);
     const stored =
       typeof raw === "string" ? raw : raw && typeof raw === "object" && "key" in raw ? String((raw as any).key ?? "") : "";
+    const fromEnv = providerId === BUILT_IN ? readEnvValue(`MINIMAX_API_${index}_KEY`) || "" : "";
     const key = fromEnv || stored;
     if (!key) continue;
-    if (fromEnv && fromEnv !== stored) setSecret(tenantSecretId(index), "key", { key: fromEnv });
+    if (fromEnv && fromEnv !== stored) setSecret(id, "key", { key: fromEnv });
     out.push({ index, key });
   }
   return out;
@@ -156,10 +172,11 @@ export async function miniMaxApiChat(
  * 额度要拿 key 去问（那个接口只认 key），所以一把 key 问一次。
  */
 export async function miniMaxApiTenantPlans(
+  providerId = BUILT_IN,
   region: MiniMaxRegion = "cn",
 ): Promise<{ index: number; plan: unknown }[]> {
   const out: { index: number; plan: unknown }[] = [];
-  for (const tenant of miniMaxApiTenants()) {
+  for (const tenant of miniMaxApiTenants(providerId)) {
     const plan = await fetchMiniMaxTokenPlan(tenant.key, region);
     out.push({ index: tenant.index, plan });
   }

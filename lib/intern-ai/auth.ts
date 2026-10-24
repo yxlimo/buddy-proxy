@@ -43,15 +43,46 @@ import {
   INTERN_AI_SSO_BASE,
   INTERN_AI_TOKEN_COOKIE,
   internAiCredentials,
+  internAiDiscoveryKey,
 } from "./config.ts";
 import { readSession, withSessionLock, writeSession } from "../session.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
+import { tokenFingerprint } from "../credential.ts";
+import { providerSecretId } from "../providers.ts";
 
-/** 会话在数据库里的名字。 */
-export const SESSION_ID = "session:intern-ai";
+/**
+ * 会话在数据库里的名字。
+ *
+ * 会话归 provider 所有：两个书生·端砚账号各有各的会话。
+ */
+export function sessionId(providerId = "intern-ai"): string {
+  return providerSecretId(providerId);
+}
 
-/** 账号信息在数据库里的名字。 */
-export const ACCOUNT_ID = "account:intern-ai";
+/**
+ * 账号信息在数据库里的名字。
+ *
+ * 账号（账号密码与那两把推理 key）也归 provider 所有。
+ */
+export function accountId(providerId = "intern-ai"): string {
+  return providerSecretId(providerId, "account");
+}
+
+/** 内置的那个 provider 的会话在数据库里的名字。 */
+export const SESSION_ID = sessionId();
+
+/** 内置的那个 provider 的账号信息在数据库里的名字。 */
+export const ACCOUNT_ID = accountId();
+
+/** 会话以前放在这里（只有一个账号的时候）。 */
+function legacySessionId(): string {
+  return "session:intern-ai";
+}
+
+/** 账号信息以前放在这里（只有一个账号的时候）。 */
+function legacyAccountId(): string {
+  return "account:intern-ai";
+}
 
 /** 数据库里那份账号信息的样子。 */
 export interface StoredAccount {
@@ -60,6 +91,18 @@ export interface StoredAccount {
   /** 两个子站各自的推理 key（新建时存下来，完整的值只出现一次）。 */
   discoveryKey?: string | null;
   chatKey?: string | null;
+}
+
+/**
+ * 读这个 provider 的账号信息。
+ *
+ * 旧的那份也认：账号信息是在 provider 这件事之前存的，搬一次，别让人重新登。
+ */
+export function storedAccount(providerId = "intern-ai"): StoredAccount | null {
+  const stored = getSecret<StoredAccount>(accountId(providerId));
+  if (stored) return stored;
+  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
+  return providerId === "intern-ai" ? getSecret<StoredAccount>(legacyAccountId()) : null;
 }
 
 /** 一个子站的登录结果。 */
@@ -410,8 +453,8 @@ export interface InternAiLoginOptions {
  *
  * 走完三段，把两个子站的 token 存进数据库。
  */
-export async function login(opts: InternAiLoginOptions = {}): Promise<InternAiSession> {
-  const creds = internAiCredentials({ user: opts.user, password: opts.password }, getSecret<StoredAccount>(ACCOUNT_ID));
+export async function login(opts: InternAiLoginOptions = {}, providerId = "intern-ai"): Promise<InternAiSession> {
+  const creds = internAiCredentials({ user: opts.user, password: opts.password }, storedAccount(providerId));
   if (!creds.user || !creds.password) {
     throw new InternAiError("config", "没有配置 intern-ai 的账号密码（INTERN_AI_USER / INTERN_AI_PASSWORD）", 500);
   }
@@ -434,10 +477,10 @@ export async function login(opts: InternAiLoginOptions = {}): Promise<InternAiSe
     obtainedAtMs: Date.now(),
     username: creds.user,
   };
-  saveSession(session);
+  saveSession(session, providerId);
   // 账号密码也存一份：.env 不在了还能登录。
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
-  setSecret(ACCOUNT_ID, "account", {
+  const stored = storedAccount(providerId);
+  setSecret(accountId(providerId), "account", {
     user: creds.user,
     password: creds.password,
     discoveryKey: stored?.discoveryKey ?? null,
@@ -458,8 +501,8 @@ export async function login(opts: InternAiLoginOptions = {}): Promise<InternAiSe
  * 两个子站共用同一个 token —— 登录的是同一个账号，token 也是同一个。所以
  * 这里一次登记两个子站，登录的时候不必问「登哪个子站」。
  */
-export function importToken(token: string): InternAiSession {
-  const stored = loadSession();
+export function importToken(token: string, providerId = "intern-ai"): InternAiSession {
+  const stored = loadSession(providerId);
   const sites = siteTargets().map((target) => ({
     name: target.name,
     token,
@@ -471,7 +514,7 @@ export function importToken(token: string): InternAiSession {
     obtainedAtMs: stored?.obtainedAtMs ?? Date.now(),
     username: stored?.username ?? "",
   };
-  saveSession(session);
+  saveSession(session, providerId);
   return session;
 }
 
@@ -519,22 +562,29 @@ export function sessionValid(session: InternAiSession | null): session is Intern
 }
 
 /** 数据库里的会话。 */
-export function loadSession(): InternAiSession | null {
-  return readSession<InternAiSession>(SESSION_ID, (raw) => {
-    if (!raw?.sites?.length) return false;
-    return raw.sites.every((s: any) => !!s?.token);
-  });
+export function loadSession(providerId = "intern-ai"): InternAiSession | null {
+  const valid = (raw: any) => !!raw?.sites?.length && raw.sites.every((s: any) => !!s?.token);
+  const session = readSession<InternAiSession>(sessionId(providerId), valid);
+  if (session) return session;
+  // 会话以前是全局一份：认它一次，搬到这个 provider 名下。
+  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
+  const legacy = providerId === "intern-ai" ? getSecret<InternAiSession>(legacySessionId()) : null;
+  if (!legacy || !valid(legacy)) return null;
+  saveSession(legacy, providerId);
+  return legacy;
 }
 
 /** 存会话。 */
-export function saveSession(session: InternAiSession): void {
-  writeSession(SESSION_ID, session);
+export function saveSession(session: InternAiSession, providerId = "intern-ai"): void {
+  writeSession(sessionId(providerId), session);
 }
 
 /** 忘掉会话：下一次调用会重新登录。 */
-export function clearSession(): void {
+export function clearSession(providerId = "intern-ai"): void {
   try {
-    deleteSecret(SESSION_ID);
+    deleteSecret(sessionId(providerId));
+    // 旧的那份也清掉：不然清完又会从它那里冒出来。
+    if (providerId === "intern-ai") deleteSecret(legacySessionId());
   } catch {
     /* 没什么可清的了 */
   }
@@ -545,12 +595,51 @@ export function clearSession(): void {
  *
  * 库里没有就登录一次。全程拿着锁：两个进程同时登录会互相搅乱。
  */
-export async function sessionFor(opts: InternAiLoginOptions = {}): Promise<InternAiSession> {
-  return withSessionLock(SESSION_ID, async () => {
-    const stored = loadSession();
+export async function sessionFor(
+  opts: InternAiLoginOptions = {},
+  providerId = "intern-ai",
+): Promise<InternAiSession> {
+  return withSessionLock(sessionId(providerId), async () => {
+    const stored = loadSession(providerId);
     if (sessionValid(stored)) return stored;
-    return login(opts);
+    return login(opts, providerId);
   });
+}
+
+/** 面板上的「快到期」提示线（毫秒）。 */
+const WARN_MS = 24 * 3600 * 1000;
+
+/**
+ * 面板上用的凭据状态。
+ *
+ * 与 SenseNova 一样：推理端点认的是 Discovery 那把 key，不是登录态。所以这里
+ * 报的是 key，会话的情况另放在 sessionStatus 里。
+ */
+export function internAiStatus(providerId = "intern-ai"): Record<string, unknown> {
+  const stored = storedAccount(providerId);
+  const key = internAiDiscoveryKey(stored?.discoveryKey);
+  const session = loadSession(providerId);
+  // The tokens are JWTs; the earliest expiry is the one that matters.
+  const expiresAtMs = session
+    ? (session.sites
+        .map((s) => tokenExpiryMs(s.token))
+        .filter((t) => t > 0)
+        .sort((a, b) => a - b)[0] ?? 0)
+    : 0;
+  const remainingMs = expiresAtMs ? expiresAtMs - Date.now() : 0;
+  return {
+    source: sessionId(providerId),
+    status: key ? "authenticated" : "missing",
+    fingerprint: key ? tokenFingerprint(key) : "",
+    detail: key ? "Discovery 的推理 key" : "账号上没有 Discovery 推理 key，登录后网关会建一把",
+    sessionStatus: !session ? "anonymous" : remainingMs > 0 ? "authenticated" : "expired",
+    username: session?.username ?? stored?.user ?? "",
+    sites: session?.sites.map((s) => s.name).join(", ") ?? "",
+    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : "",
+    remainingSec: Math.round(remainingMs / 1000),
+    warning: remainingMs > 0 && remainingMs < WARN_MS,
+    obtainedAt: session ? new Date(session.obtainedAtMs).toISOString() : "",
+  };
 }
 
 /** 一个子站的 token。 */

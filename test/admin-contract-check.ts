@@ -67,6 +67,8 @@ function parseProto(src: string): {
   const messages = new Map<string, Message>();
 
   const re = /message\s+(\w+)\s*\{/g;
+  // A message can hold another one; the inner one is part of the contract too.
+  const queue: { name: string; body: string }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(clean))) {
     const name = m[1];
@@ -95,7 +97,44 @@ function parseProto(src: string): {
       });
     }
     messages.set(name, { name, fields });
+    queue.push({ name, body });
+    // The inner messages of this one: they were inside the body the scan just
+    // stepped over.
+    const inner = /message\s+(\w+)\s*\{/g;
+    let im: RegExpExecArray | null;
+    while ((im = inner.exec(body))) {
+      const innerName = im[1];
+      const innerStart = inner.lastIndex;
+      let depth = 1;
+      let j = innerStart;
+      while (j < body.length && depth > 0) {
+        const c = body[j];
+        if (c === "{") depth++;
+        else if (c === "}") depth--;
+        j++;
+      }
+      const innerBody = body.slice(innerStart, j - 1);
+      const innerFields: Field[] = [];
+      for (const piece of innerBody.split(";")) {
+        const line = piece.trim();
+        if (!line) continue;
+        const f = /^(repeated\s+|optional\s+)?([\w.]+)\s+(\w+)\s*=\s*\d+$/.exec(line);
+        if (!f) continue;
+        innerFields.push({
+          name: f[3],
+          json: jsonName(f[3]),
+          type: f[2],
+          repeated: Boolean(f[1]?.startsWith("repeated")),
+          optional: Boolean(f[1]?.startsWith("optional")),
+        });
+      }
+      if (!messages.has(innerName)) {
+        messages.set(innerName, { name: innerName, fields: innerFields });
+        queue.push({ name: innerName, body: innerBody });
+      }
+    }
   }
+  void queue;
 
   const methods = new Map<string, { request: string; response: string }>();
   const rpc = /rpc\s+(\w+)\s*\(\s*([\w.]+)\s*\)\s*returns\s*\(\s*([\w.]+)\s*\)/g;
@@ -281,7 +320,7 @@ async function raw(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 
 console.log("");
-console.log("契约：二十七个方法");
+console.log("契约：三十一个方法");
 
 // 每个方法配一个像样的请求。
 // 登录那六个：挑不会碰到网络的上游（密码流与回填流），不真的登录。
@@ -314,9 +353,13 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "ExchangeLoginCode", request: { upstreamId: "intern-ai", code: "" } },
   { method: "ImportLoginToken", request: { upstreamId: "intern-ai", token: "" } },
   { method: "SetProviderKeys", request: { upstreamId: "minimax-api", keys: [] } },
+  { method: "ListProviderKinds", request: {} },
+  { method: "AddProvider", request: { id: "contract-provider", kind: "minimax-api" } },
+  { method: "UpdateProvider", request: { id: "contract-provider", alias: "契约" } },
+  { method: "DeleteProvider", request: { id: "contract-provider" } },
 ];
 
-check("契约里有二十七个方法", contract.methods.size === 27, String(contract.methods.size));
+check("契约里有三十一个方法", contract.methods.size === 31, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",

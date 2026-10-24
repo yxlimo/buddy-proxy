@@ -93,6 +93,19 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
+  // The providers: one row per account a gateway talks to. The kind says how
+  // to talk to it, the alias says how to tell two of the same kind apart.
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS provider (
+      id         TEXT PRIMARY KEY,
+      kind       TEXT NOT NULL,
+      alias      TEXT NOT NULL DEFAULT '',
+      region     TEXT NOT NULL DEFAULT '',
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  );
   return db;
 }
 

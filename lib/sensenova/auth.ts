@@ -26,16 +26,47 @@ import {
   SENSENOVA_CLIENT_ID,
   SENSENOVA_IAM_BASE,
   SENSENOVA_PLATFORM_BASE,
+  senseNovaApiKey,
   senseNovaCredentials,
 } from "./config.ts";
 import { readSession, withSessionLock, writeSession } from "../session.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
+import { tokenFingerprint } from "../credential.ts";
+import { providerSecretId } from "../providers.ts";
 
-/** 会话在数据库里的名字。 */
-export const SESSION_ID = "session:sensenova";
+/**
+ * 会话在数据库里的名字。
+ *
+ * 会话归 provider 所有：两个 SenseNova 账号各有各的会话。
+ */
+export function sessionId(providerId = "sensenova"): string {
+  return providerSecretId(providerId);
+}
 
-/** 账号信息在数据库里的名字。 */
-export const ACCOUNT_ID = "account:sensenova";
+/**
+ * 账号信息在数据库里的名字。
+ *
+ * 账号（账号密码与那把推理 key）也归 provider 所有。
+ */
+export function accountId(providerId = "sensenova"): string {
+  return providerSecretId(providerId, "account");
+}
+
+/** 内置的那个 provider 的会话在数据库里的名字。 */
+export const SESSION_ID = sessionId();
+
+/** 内置的那个 provider 的账号信息在数据库里的名字。 */
+export const ACCOUNT_ID = accountId();
+
+/** 会话以前放在这里（只有一个账号的时候）。 */
+function legacySessionId(): string {
+  return "session:sensenova";
+}
+
+/** 账号信息以前放在这里（只有一个账号的时候）。 */
+function legacyAccountId(): string {
+  return "account:sensenova";
+}
 
 /** 数据库里那份账号信息的样子。 */
 export interface StoredAccount {
@@ -45,8 +76,23 @@ export interface StoredAccount {
   apiKey?: string | null;
 }
 
+/**
+ * 读这个 provider 的账号信息。
+ *
+ * 旧的那份也认：账号信息是在 provider 这件事之前存的，搬一次，别让人重新登。
+ */
+export function storedAccount(providerId = "sensenova"): StoredAccount | null {
+  const stored = getSecret<StoredAccount>(accountId(providerId));
+  if (stored) return stored;
+  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
+  return providerId === "sensenova" ? getSecret<StoredAccount>(legacyAccountId()) : null;
+}
+
 /** 多久算快到期（毫秒）。到了就用刷新换新的。 */
 const REFRESH_SKEW_MS = 60_000;
+
+/** 面板上的「快到期」提示线（毫秒）。 */
+const WARN_MS = 5 * 60 * 1000;
 
 /** 这个会话长什么样。 */
 export interface SenseNovaSession {
@@ -189,8 +235,8 @@ export function classify(status: number, body: any, what: string): SenseNovaErro
 }
 
 /** 登录。用账号密码换一份会话，并把会话存进数据库。 */
-export async function login(user?: string, password?: string): Promise<SenseNovaSession> {
-  const creds = senseNovaCredentials({ user, password }, getSecret<StoredAccount>(ACCOUNT_ID));
+export async function login(user?: string, password?: string, providerId = "sensenova"): Promise<SenseNovaSession> {
+  const creds = senseNovaCredentials({ user, password }, storedAccount(providerId));
   if (!creds.user || !creds.password) {
     throw new SenseNovaError("config", "没有配置 SenseNova 的账号密码（SENSENOVA_USER / SENSENOVA_PASSWORD）", 500);
   }
@@ -252,10 +298,10 @@ export async function login(user?: string, password?: string): Promise<SenseNova
     obtainedAtMs: Date.now(),
     username: creds.user,
   };
-  saveSession(session);
+  saveSession(session, providerId);
   // 账号密码也存一份：.env 不在了还能登录。
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
-  setSecret(ACCOUNT_ID, "account", {
+  const stored = storedAccount(providerId);
+  setSecret(accountId(providerId), "account", {
     user: creds.user,
     password: creds.password,
     apiKey: stored?.apiKey ?? null,
@@ -308,7 +354,7 @@ async function exchangeCode(code: string, codeVerifier: string, state: string): 
 }
 
 /** 用 refresh_token 换一份新会话。 */
-export async function refreshSession(session: SenseNovaSession): Promise<SenseNovaSession> {
+export async function refreshSession(session: SenseNovaSession, providerId = "sensenova"): Promise<SenseNovaSession> {
   const r = await fetch(`${SENSENOVA_PLATFORM_BASE}/oauth2/token`, {
     method: "POST",
     headers: {
@@ -334,7 +380,7 @@ export async function refreshSession(session: SenseNovaSession): Promise<SenseNo
     expiresAtMs: Date.now() + Math.max(60, Number(body.expires_in ?? 3600)) * 1000,
     obtainedAtMs: Date.now(),
   };
-  saveSession(next);
+  saveSession(next, providerId);
   return next;
 }
 
@@ -345,22 +391,29 @@ export function sessionValid(session: SenseNovaSession | null): session is Sense
 }
 
 /** 数据库里的会话。 */
-export function loadSession(): SenseNovaSession | null {
-  return readSession<SenseNovaSession>(SESSION_ID, (raw) => {
-    if (!raw?.accessToken || !raw?.refreshToken) return false;
-    return true;
-  });
+export function loadSession(providerId = "sensenova"): SenseNovaSession | null {
+  const valid = (raw: any) => !!raw?.accessToken && !!raw?.refreshToken;
+  const session = readSession<SenseNovaSession>(sessionId(providerId), valid);
+  if (session) return session;
+  // 会话以前是全局一份：认它一次，搬到这个 provider 名下。
+  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
+  const legacy = providerId === "sensenova" ? getSecret<SenseNovaSession>(legacySessionId()) : null;
+  if (!legacy || !valid(legacy)) return null;
+  saveSession(legacy, providerId);
+  return legacy;
 }
 
 /** 存会话。 */
-export function saveSession(session: SenseNovaSession): void {
-  writeSession(SESSION_ID, session);
+export function saveSession(session: SenseNovaSession, providerId = "sensenova"): void {
+  writeSession(sessionId(providerId), session);
 }
 
 /** 忘掉会话：下一次调用会重新登录。 */
-export function clearSession(): void {
+export function clearSession(providerId = "sensenova"): void {
   try {
-    deleteSecret(SESSION_ID);
+    deleteSecret(sessionId(providerId));
+    // 旧的那份也清掉：不然清完又会从它那里冒出来。
+    if (providerId === "sensenova") deleteSecret(legacySessionId());
   } catch {
     /* 没什么可清的了 */
   }
@@ -372,22 +425,47 @@ export function clearSession(): void {
  * 全程拿着锁：refresh_token 是轮换的，两个进程同时刷新，
  * 后一个拿到的是作废的票。
  */
-export async function sessionFor(): Promise<SenseNovaSession> {
-  return withSessionLock(SESSION_ID, async () => {
-    const stored = loadSession();
+export async function sessionFor(providerId = "sensenova"): Promise<SenseNovaSession> {
+  return withSessionLock(sessionId(providerId), async () => {
+    const stored = loadSession(providerId);
     if (stored && stored.expiresAtMs - REFRESH_SKEW_MS > Date.now()) {
       return stored;
     }
     if (stored) {
       try {
-        return await refreshSession(stored);
+        return await refreshSession(stored, providerId);
       } catch (e) {
         // 刷新失败多半是会话没了，重新登录。
         if (!(e instanceof SenseNovaError) || e.kind !== "auth") throw e;
       }
     }
-    return login();
+    return login(undefined, undefined, providerId);
   });
+}
+
+/**
+ * 面板上用的凭据状态。
+ *
+ * 干活的是那把推理 key：没有它，登录了也一个请求也发不出去。所以这里报的是
+ * key，会话的情况另放在 sessionStatus 里。
+ */
+export function senseNovaStatus(providerId = "sensenova"): Record<string, unknown> {
+  const stored = storedAccount(providerId);
+  const key = senseNovaApiKey(stored?.apiKey);
+  const session = loadSession(providerId);
+  const remainingMs = session ? session.expiresAtMs - Date.now() : 0;
+  return {
+    source: sessionId(providerId),
+    status: key ? "authenticated" : "missing",
+    fingerprint: key ? tokenFingerprint(key) : "",
+    detail: key ? "推理用的 API key" : "账号上没有推理用的 API key，登录后网关会建一把",
+    sessionStatus: !session ? "anonymous" : remainingMs > 0 ? "authenticated" : "expired",
+    username: session?.username ?? stored?.user ?? "",
+    expiresAt: session ? new Date(session.expiresAtMs).toISOString() : "",
+    remainingSec: Math.round(remainingMs / 1000),
+    warning: remainingMs > 0 && remainingMs < WARN_MS,
+    obtainedAt: session ? new Date(session.obtainedAtMs).toISOString() : "",
+  };
 }
 
 /**

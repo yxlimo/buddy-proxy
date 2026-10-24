@@ -13,16 +13,13 @@
 import { store } from "./store.ts";
 
 /** The upstream a target belongs to. Same names the route paths use. */
-export type AggregateGroup =
-  | "qoder"
-  | "qoder-cn"
-  | "workbuddy-cn"
-  | "minimax"
-  | "minimax-api"
-  | "zcode"
-  | "tokenrhythm"
-  | "sensenova"
-  | "intern-ai";
+/**
+ * The group of a published model's target.
+ *
+ * It is a provider id: one row of the provider table, so two accounts of the
+ * same kind can each be a target.
+ */
+export type AggregateGroup = string;
 
 /**
  * How the targets of a model are used.

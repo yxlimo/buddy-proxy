@@ -50,8 +50,9 @@ function workBuddy() {
   };
 }
 
-setSecret("session:qoder:global", "session", qoder("global"));
-setSecret("session:qoder:cn", "session", qoder("cn"));
-setSecret("session:workbuddy:cn", "session", workBuddy());
+// The sessions belong to the provider now: one per provider id.
+setSecret("session:provider:qoder", "session", qoder("global"));
+setSecret("session:provider:qoder-cn", "session", qoder("cn"));
+setSecret("session:provider:workbuddy-cn", "session", workBuddy());
 
 console.log("[test] 假会话写好了（qoder 全球区 / 中国区 / workbuddy 中国区）");

@@ -20,8 +20,8 @@
 import { consoleApi } from "./platform.ts";
 import { listModels } from "./models.ts";
 import { senseNovaApiKey } from "./config.ts";
-import { getSecret, setSecret } from "../store.ts";
-import { ACCOUNT_ID, type SenseNovaSession, type StoredAccount } from "./auth.ts";
+import { setSecret } from "../store.ts";
+import { accountId, storedAccount, type SenseNovaSession } from "./auth.ts";
 
 /** key 的两种计费类型。 */
 export type SenseNovaKeyType = "API_KEY_TYPE_TOKEN_PLAN" | "API_KEY_TYPE_METERED";
@@ -138,15 +138,16 @@ export async function ensureApiKey(
   name: string,
   current?: string | null,
   keyType: SenseNovaKeyType = KEY_TYPE_TOKEN_PLAN,
+  providerId = "sensenova",
 ): Promise<string | null> {
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
+  const stored = storedAccount(providerId);
   const existing = current ?? senseNovaApiKey(stored?.apiKey) ?? "";
   if (existing) return existing;
   const created = await createApiKey(session, name, keyType);
   if (!created.plainKey) {
     throw new Error("平台创建了 key，但没有把完整的 key 交回来");
   }
-  setSecret(ACCOUNT_ID, "account", { ...stored, apiKey: created.plainKey });
+  setSecret(accountId(providerId), "account", { ...stored, apiKey: created.plainKey });
   console.log(`[SENSENOVA] 新建的 key：${created.displayname}（${created.keyType}）`);
   // 存下来了，但推理端点可能还没认它。等一下，省得下一个请求就撞 401。
   const usable = await waitForKeyUsable(created.plainKey);

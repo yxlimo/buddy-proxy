@@ -16,7 +16,15 @@
 
 import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
-import { chatBase, chatHeaders, refreshSession, CONFIG_PATH, type WorkBuddyRegion, type WorkBuddySession } from "./auth.ts";
+import {
+  chatBase,
+  chatHeaders,
+  refreshSession,
+  regionOf,
+  CONFIG_PATH,
+  type WorkBuddyRegion,
+  type WorkBuddySession,
+} from "./auth.ts";
 import { clampEffort, curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./models.ts";
 import { cliFetch } from "../http.ts";
 import { readOpenAIChunks, SSE_DONE } from "../sse-stream.ts";
@@ -26,6 +34,8 @@ export const CHAT_PATH = "/v2/chat/completions";
 
 export interface WorkBuddyChatOptions {
   region?: WorkBuddyRegion;
+  /** Which provider (which account) to talk to. */
+  providerId?: string;
   stream?: boolean;
   conversationId?: string;
   /** The model, so the body can be built the way the official client builds it. */
@@ -149,10 +159,12 @@ export async function workbuddyChat(
   body: Record<string, any>,
   opts: WorkBuddyChatOptions = {},
 ): Promise<WorkBuddyChat> {
-  const region = opts.region ?? "cn";
+  // The provider says which account; the account says which region.
+  const providerId = opts.providerId ?? "workbuddy-cn";
+  const region = opts.region ?? regionOf(providerId);
   // The session, not just the credential: the request needs the account id and
   // the domain the account belongs to as well as the token.
-  let session = await refreshSession(false, region);
+  let session = await refreshSession(false, providerId);
 
   const payload = buildChatBody(body, opts.model ?? null);
   const url = `${chatBase(session)}${CHAT_PATH}`;
@@ -185,7 +197,7 @@ export async function workbuddyChat(
       // and only a 401 says that. A 403 is the account's business, and
       // refreshing for it would turn the token over for nothing.
       if (res.status === 401 && attempt === 1) {
-        session = await refreshSession(true, region);
+        session = await refreshSession(true, providerId);
         continue;
       }
       throw new AuthError(
@@ -241,12 +253,12 @@ const CATALOG_TTL_MS = 48 * 60 * 1000;
  * same is done here: the catalogue is fetched rarely, and a failure answers
  * with the last good one rather than with nothing.
  */
-export async function fetchWorkBuddyCatalog(region: WorkBuddyRegion = "cn"): Promise<WorkBuddyModel[] | null> {
+export async function fetchWorkBuddyCatalog(providerId = "workbuddy-cn"): Promise<WorkBuddyModel[] | null> {
   const cached = peekCached<{ models: WorkBuddyModel[] }>("workbuddy:catalog");
   if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.data.models;
 
   try {
-    const session = await refreshSession(false, region);
+    const session = await refreshSession(false, providerId);
     const res = await cliFetch(`${chatBase(session)}${CONFIG_PATH}`, {
       headers: { ...chatHeaders(session), "Content-Type": "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),

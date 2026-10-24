@@ -30,14 +30,14 @@ export const AUTH_WARN_MS = AUTH_MODE === "file" ? fileStore.FILE_WARN_MS : oaut
  * mode that refreshes unconditionally; in file mode it only bypasses the cache, since
  * this layer cannot refresh — it waits for the desktop app to have done it.
  */
-export async function readCredential(force = false): Promise<Credential> {
+export async function readCredential(force = false, providerId = "minimax"): Promise<Credential> {
   if (AUTH_MODE === "file") return fileStore.readFileCredential(force);
-  return oauth.ensureCredential(force);
+  return oauth.ensureCredential(force, providerId);
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */
-export function credentialStatus(): Record<string, unknown> {
-  const status = AUTH_MODE === "file" ? fileStore.fileCredentialStatus() : oauth.oauthStatus();
+export function credentialStatus(providerId = "minimax"): Record<string, unknown> {
+  const status = AUTH_MODE === "file" ? fileStore.fileCredentialStatus() : oauth.oauthStatus(providerId);
   return { mode: AUTH_MODE, ...status };
 }
 

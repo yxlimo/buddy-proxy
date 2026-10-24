@@ -58,7 +58,7 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 const { setSecret } = await import("../lib/store.ts");
 {
   const now = Date.now();
-  setSecret("session:qoder:global", "session", {
+  setSecret("session:provider:qoder", "session", {
     schemaVersion: 1,
     region: "global",
     clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
@@ -74,7 +74,7 @@ const { setSecret } = await import("../lib/store.ts");
     loginAtMs: now,
     refreshedAtMs: now,
   });
-  setSecret("session:workbuddy:cn", "session", {
+  setSecret("session:provider:workbuddy-cn", "session", {
     accessToken: "wb-test-token",
     refreshToken: "wb-test-refresh",
     uid: "test-user",

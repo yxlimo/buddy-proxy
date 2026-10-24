@@ -16,6 +16,7 @@ import {
   QODER_CLIENT_MAX_TOKENS,
   type QoderModel,
 } from "../qoder/models.ts";
+import { regionOf as qoderRegionOf } from "../qoder/auth.ts";
 import { qoderChatCompletion, LimitError } from "../qoder/transport.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../qoder/legacy.ts";
 import { workbuddyChat, aggregateStream, conversationIdFor } from "../workbuddy/transport.ts";
@@ -124,7 +125,7 @@ export async function toWorkBuddy(
   // that the turns belong together.
   const conversationId = conversationIdFor(openaiBody.messages, openaiBody.conversation_id);
   const { response } = await workbuddyChat(openaiBody, {
-    region: "cn",
+    providerId: route.provider,
     stream,
     conversationId,
     model: ctx.workbuddyModel(model),
@@ -191,13 +192,14 @@ export async function toQoder(
   // Anthropic spelling (`output_config.effort`), and that is where opencode and
   // pi put it.
   const effort = extractEffort(body);
-  const region = route.region ?? ctx.qoderRegions[0] ?? "global";
+  // The provider says which account, the account says which region.
+  const region = qoderRegionOf(route.provider);
   const { model, key } = resolveModelRoute(upstreamModel(route), effort, region);
   if (ctx.logRoute) {
     console.log(`[ROUTE] model=${route.model} region=${region} effort=${effort ?? "-"} -> upstream key=${key}`);
   }
   if (model && qoderProtocolForRegion(model, region) === "legacy") {
-    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, out, region, route.label);
+    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, out, region, route.label, route.provider);
     return;
   }
 
@@ -207,7 +209,7 @@ export async function toQoder(
   // model's real limit.
   openaiBody.max_tokens = QODER_CLIENT_MAX_TOKENS;
   const upstream = await qoderWithRetry(
-    () => qoderChatCompletion(openaiBody, { stream, region }),
+    () => qoderChatCompletion(openaiBody, { stream, providerId: route.provider, region }),
     ctx.qoderMaxAttempts,
   );
 
@@ -237,6 +239,7 @@ export async function toQoderLegacy(
   out: Koa.Context,
   region: QoderRegion,
   label?: string,
+  providerId = "qoder",
 ): Promise<void> {
   const chunks = legacyWithRetry(
     () =>
@@ -251,7 +254,7 @@ export async function toQoderLegacy(
           reasoning: model.reasoning,
           contextWindow: model.context,
         },
-        { region },
+        { providerId, region },
       ),
     ctx.legacyMaxAttempts,
     ctx.legacyRetryMs,
@@ -574,7 +577,7 @@ export async function toTokenRhythm(
   openaiBody.model = model;
   openaiBody.stream = stream;
 
-  const statuses = await tokenRhythmStatuses();
+  const statuses = await tokenRhythmStatuses(route.provider);
   const tenants = pickTenants(statuses);
   if (!tenants.length) {
     throw new AuthError(

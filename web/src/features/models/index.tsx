@@ -42,6 +42,7 @@ import {
   useSavePublishedModel,
 } from '@/features/models/api'
 import { UNPUBLISHED_REASON_LABELS } from '@/features/upstreams/state'
+import { UnpublishedReason } from '@/gen/buddy/admin/v1/admin_pb'
 import { ModelDialog } from '@/features/models/model-dialog'
 import { formatCount, formatDate } from '@/lib/format'
 
@@ -190,7 +191,7 @@ export function PublishedModelsPage() {
                               variant='outline'
                               title='根路由当前未公布该模型。发布操作无法改变这一点，需要先启用并登录对应 Provider。'
                             >
-                              {`未公布：${UNPUBLISHED_REASON_LABELS[model.unpublishedReason] ?? '原因未知'}`}
+                              {`未公布：${UNPUBLISHED_REASON_LABELS[model.unpublishedReason ?? UnpublishedReason.UNSPECIFIED] ?? '原因未知'}`}
                             </Badge>
                           )}
                         </div>

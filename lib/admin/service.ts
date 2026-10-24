@@ -17,6 +17,7 @@ import {
   AccountSchema,
   AdminService,
   BalanceLotSchema,
+  AddProviderResponseSchema,
   BalanceSummarySchema,
   BeginLoginResponseSchema,
   BenefitStatusSchema,
@@ -27,6 +28,7 @@ import {
   CredentialStatusSchema,
   CreditLotSchema,
   CreditSummarySchema,
+  DeleteProviderResponseSchema,
   DeletePublishedModelResponseSchema,
   ExchangeLoginCodeResponseSchema,
   GetBalanceResponseSchema,
@@ -37,6 +39,8 @@ import {
   ImportLoginTokenResponseSchema,
   ListAccountsResponseSchema,
   ListConfigResponseSchema,
+  ListProviderKindsResponseSchema,
+  ProviderKindSchema,
   ListCredentialsResponseSchema,
   ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
@@ -55,6 +59,7 @@ import {
   SetUpstreamEnabledResponseSchema,
   TailLogResponseSchema,
   TestCredentialResponseSchema,
+  UpdateProviderResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
   UpstreamQuotaSchema,
@@ -66,9 +71,6 @@ import {
 import { adminTokenSet } from "./token.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
-  UPSTREAM_FLAG_KEYS,
-  UPSTREAM_IDS,
-  UPSTREAM_LABELS,
   healthSnapshot,
   setUpstreamEnabled,
   upstreamQuota,
@@ -95,6 +97,14 @@ import {
   type StoredLogin,
 } from "./login.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
+import {
+  addProvider,
+  deleteProvider,
+  listProviders,
+  provider,
+  updateProvider,
+} from "../providers.ts";
+import { kindOf, selectableKinds } from "../provider-kinds.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
 import { tailLog } from "./log.ts";
 import { benefitUpstreams, benefits } from "./benefits.ts";
@@ -191,12 +201,17 @@ function quotaMessage(quota: QuotaView) {
 }
 
 /** 一个上游在面板上的样子。 */
-async function upstreamMessage(id: UpstreamId, state: UpstreamSwitch) {
+async function upstreamMessage(id: string, state: UpstreamSwitch) {
+  const row = provider(id);
   const credential = upstreamCredential(id);
   const quota = upstreamQuota(id);
   return create(UpstreamSchema, {
     id,
-    label: UPSTREAM_LABELS[id],
+    // The alias is how two accounts of the same kind are told apart; the kind's
+    // own name is the fallback.
+    label: row?.alias || (row ? kindOf(row.kind)?.label ?? row.kind : id),
+    kind: row?.kind ?? "",
+    alias: row?.alias ?? "",
     // 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。
     enabled: state.enabled,
     // 现在能不能接：额度用尽、正在登录这些面板自己拼不出来的事，后端知道。
@@ -314,7 +329,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     healthSnapshot();
     const states = upstreamStates();
     const upstreams = [];
-    for (const id of UPSTREAM_IDS) upstreams.push(await upstreamMessage(id, states[id]));
+    for (const row of listProviders()) {
+      upstreams.push(await upstreamMessage(row.id, states[row.id] ?? { enabled: row.enabled }));
+    }
     return create(GetSystemStatusResponseSchema, {
       version: serviceVersion(),
       upstreams,
@@ -343,14 +360,58 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async listUpstreams() {
     const states = upstreamStates();
     const upstreams = [];
-    for (const id of UPSTREAM_IDS) upstreams.push(await upstreamMessage(id, states[id]));
+    // The list is the database's, not a fixed one: a provider added in the
+    // panel shows up here without a restart.
+    for (const row of listProviders()) {
+      upstreams.push(await upstreamMessage(row.id, states[row.id] ?? { enabled: row.enabled }));
+    }
     return create(ListUpstreamsResponseSchema, { upstreams });
+  },
+
+  async listProviderKinds() {
+    return create(ListProviderKindsResponseSchema, {
+      kinds: selectableKinds().map((k) =>
+        create(ProviderKindSchema, {
+          kind: k.kind,
+          label: k.label,
+          login: k.login,
+          needsRegion: k.needsRegion,
+          regions: k.regions,
+        }),
+      ),
+    });
+  },
+
+  async addProvider(request) {
+    const result = addProvider({
+      id: String(request.id ?? ""),
+      kind: String(request.kind ?? ""),
+      alias: String(request.alias ?? ""),
+      region: String(request.region ?? ""),
+    });
+    if (result.ok) console.log(`[ADMIN] 加了 Provider ${request.id}（${request.kind}）`);
+    return create(AddProviderResponseSchema, { ok: result.ok, message: result.message });
+  },
+
+  async updateProvider(request) {
+    const patch: { alias?: string; enabled?: boolean } = {};
+    if (request.alias !== undefined) patch.alias = String(request.alias);
+    if (request.enabled !== undefined && request.enabled !== null) patch.enabled = request.enabled === true;
+    const result = updateProvider(String(request.id ?? ""), patch);
+    if (result.ok) console.log(`[ADMIN] Provider ${request.id} 改了`);
+    return create(UpdateProviderResponseSchema, { ok: result.ok, message: result.message });
+  },
+
+  async deleteProvider(request) {
+    const result = deleteProvider(String(request.id ?? ""));
+    if (result.ok) console.log(`[ADMIN] 删了 Provider ${request.id}`);
+    return create(DeleteProviderResponseSchema, { ok: result.ok, message: result.message });
   },
 
   async setUpstreamEnabled(request) {
     const id = String(request.upstreamId ?? "") as UpstreamId;
     const result = setUpstreamEnabled(id, request.enabled === true);
-    console.log(`[ADMIN] ${UPSTREAM_FLAG_KEYS[id] ?? id} 改成 ${request.enabled ? "true" : "false"}（立刻生效）`);
+    console.log(`[ADMIN] Provider ${id} 改成 ${request.enabled ? "true" : "false"}（立刻生效）`);
     return create(SetUpstreamEnabledResponseSchema, {
       ok: result.ok,
       pendingRestart: pendingRestart(),
@@ -407,7 +468,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     const accounts = listAccounts();
     // 每个账号的额度。额度在快照里，这里不现问上游（那是 GetBalance 的事）。
     const quotas = new Map<string, QuotaView>();
-    for (const id of UPSTREAM_IDS) {
+    for (const row of listProviders()) {
+      const id = row.id;
       for (const quota of await upstreamQuotas(id)) {
         quotas.set(quota.accountId, quota);
       }
@@ -486,7 +548,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async getBalance(request) {
     const wanted = String(request.upstreamId ?? "");
-    const ids = (wanted ? [wanted] : UPSTREAM_IDS) as UpstreamId[];
+    const ids = wanted ? [wanted] : listProviders().map((p) => p.id);
     const quotas = [];
     for (const id of ids) {
       for (const quota of await upstreamQuotas(id, true)) quotas.push(quotaMessage(quota));

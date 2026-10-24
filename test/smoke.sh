@@ -11,6 +11,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The test starts from an empty database: whatever an earlier run left behind
+# (a snapshot in the old shape, a session that is gone) would answer with
+# numbers that are not there any more.
+rm -rf "${BUDDY_DATA_DIR:-/tmp/opencode/test-buddy}"
+
 MOCK_PORT="${MOCK_PORT:-6699}"
 ROUTER_PORT="${ROUTER_PORT:-6698}"
 FIXTURES="$ROOT/test/fixtures"

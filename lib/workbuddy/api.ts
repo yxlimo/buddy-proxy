@@ -8,10 +8,10 @@ import { configString } from "../config.ts";
 import { accountHeaders, loadSession, type WorkBuddySession } from "./auth.ts";
 
 /** The host the account's own API is on. */
-export function workBuddyApiBase(): string {
+export function workBuddyApiBase(providerId = "workbuddy-cn"): string {
   const override = configString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
   if (override) return override;
-  const session = loadSession("cn");
+  const session = loadSession(providerId);
   const host = session?.domain || "www.workbuddy.cn";
   return `https://${host}`;
 }
@@ -39,9 +39,10 @@ export async function workbuddyApi(
   path: string,
   method: "GET" | "POST",
   payload?: unknown,
+  providerId = "workbuddy-cn",
 ): Promise<ApiResult> {
   try {
-    const res = await fetch(`${workBuddyApiBase()}${path}`, {
+    const res = await fetch(`${workBuddyApiBase(providerId)}${path}`, {
       method,
       headers: workbuddyHeaders(session),
       body: method === "POST" ? JSON.stringify(payload ?? {}) : undefined,

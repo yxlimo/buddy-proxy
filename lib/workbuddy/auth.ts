@@ -25,6 +25,8 @@ import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
 import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
+import { getSecret } from "../store.ts";
+import { provider, providerSecretId } from "../providers.ts";
 
 export type WorkBuddyRegion = "cn";
 
@@ -98,9 +100,14 @@ export function dataDir(): string {
   return sharedDataDir();
 }
 
-/** Where the session lives in the database. */
-export function sessionId(region: WorkBuddyRegion = "cn"): string {
-  return `session:workbuddy:${region}`;
+/**
+ * Where the session lives in the database.
+ *
+ * The session belongs to the provider, not to the region: two WorkBuddy
+ * accounts are two providers, each with its own session.
+ */
+export function sessionId(providerId = "workbuddy-cn"): string {
+  return providerSecretId(providerId);
 }
 
 /** Where the session used to live, while the migration is under way. */
@@ -108,25 +115,53 @@ export function legacySessionPath(region: WorkBuddyRegion = "cn"): string[] {
   return legacyPaths(`workbuddy-session.${region}.json`);
 }
 
-function loginHint(region: WorkBuddyRegion = "cn"): string {
+/** The session used to live here, one id per region. */
+function legacySessionId(region: WorkBuddyRegion): string {
+  return `session:workbuddy:${region}`;
+}
+
+/**
+ * Which region a provider talks to.
+ *
+ * The region picks the endpoints; the provider id picks the credential. Only
+ * the China region is implemented, so the row has nothing to choose from yet —
+ * but the region is read from the row, so a second one only has to be added
+ * here.
+ */
+export function regionOf(providerId = "workbuddy-cn"): WorkBuddyRegion {
+  const region = provider(providerId)?.region;
+  return region === "cn" ? region : "cn";
+}
+
+function loginHint(providerId = "workbuddy-cn"): string {
+  const region = regionOf(providerId);
   return (
     `还没有登录 WorkBuddy（${region} 区域）。服务启动时会自己发起登录（把授权链接点一下就行），` +
-    `也可以${clearHint(sessionId(region))}。` +
+    `也可以${clearHint(sessionId(providerId))}。` +
     `凭据之后自动刷新。`
   );
 }
 
-export function loadSession(region: WorkBuddyRegion = "cn"): WorkBuddySession | null {
-  return readSession<WorkBuddySession>(sessionId(region), hasTokens, legacySessionPath(region));
+export function loadSession(providerId = "workbuddy-cn"): WorkBuddySession | null {
+  const region = regionOf(providerId);
+  const session = readSession<WorkBuddySession>(sessionId(providerId), hasTokens, legacySessionPath(region));
+  if (session) return session;
+  // The session used to be stored per region: take it over once, so nobody has
+  // to log in again because of the move. That old copy was global, so only the
+  // built-in provider takes it over.
+  const legacy = providerId === "workbuddy-cn" ? getSecret<WorkBuddySession>(legacySessionId(region)) : null;
+  if (!legacy || !hasTokens(legacy)) return null;
+  saveSession(legacy, providerId);
+  return legacy;
 }
 
-export function hasSession(region: WorkBuddyRegion = "cn"): boolean {
-  return loadSession(region) !== null;
+export function hasSession(providerId = "workbuddy-cn"): boolean {
+  return loadSession(providerId) !== null;
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
-export function saveSession(session: WorkBuddySession): void {
-  writeSession(sessionId(session.region), session);
+export function saveSession(session: WorkBuddySession, providerId = "workbuddy-cn"): void {
+  writeSession(sessionId(providerId), session);
 }
 
 /** The `sub` claim of a JWT, without verifying the signature. */
@@ -224,7 +259,8 @@ export interface WorkBuddyLoginStart {
  *
  * 浏览器只管登录，state 在服务端 —— 批准之后服务端拿它换 token。
  */
-export async function startLogin(region: WorkBuddyRegion = "cn"): Promise<WorkBuddyLoginStart> {
+export async function startLogin(providerId = "workbuddy-cn"): Promise<WorkBuddyLoginStart> {
+  const region = regionOf(providerId);
   const base = ENDPOINTS[region];
   const start = await requestJson(`${base.base}${AUTH_STATE_PATH}?platform=${AUTH_PLATFORM}`, {
     method: "POST",
@@ -253,10 +289,11 @@ export async function startLogin(region: WorkBuddyRegion = "cn"): Promise<WorkBu
  * 拿到的是一份会话（没有存库 —— 存不存由调用的人决定）。
  */
 export async function pollLogin(
-  region: WorkBuddyRegion = "cn",
+  providerId = "workbuddy-cn",
   state: string,
   deadlineMs?: number,
 ): Promise<WorkBuddySession> {
+  const region = regionOf(providerId);
   const base = ENDPOINTS[region];
   const deadline = deadlineMs ?? Date.now() + LOGIN_TIMEOUT_MS;
   let token = "";
@@ -324,8 +361,9 @@ export async function pollLogin(
  *
  * 面板上要用的是上面那两半（startLogin / pollLogin），这里是一体的。
  */
-export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySession> {
-  const start = await startLogin(region);
+export async function login(providerId = "workbuddy-cn"): Promise<WorkBuddySession> {
+  const region = regionOf(providerId);
+  const start = await startLogin(providerId);
 
   console.log("");
   console.log(`  region: ${region}  base: ${ENDPOINTS[region].base}`);
@@ -333,12 +371,12 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
   console.log(`  (waiting for approval, up to ${Math.round(LOGIN_TIMEOUT_MS / 60000)} min)`);
   console.log("");
 
-  const session = await pollLogin(region, start.state, start.expiresAtMs);
-  saveSession(session);
+  const session = await pollLogin(providerId, start.state, start.expiresAtMs);
+  saveSession(session, providerId);
   console.log(
     `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`,
   );
-  console.log(`  saved to the database (${sessionId(region)})`);
+  console.log(`  saved to the database (${sessionId(providerId)})`);
   authLog(
     dataDir(),
     `workbuddy ${region} login ok`,
@@ -353,12 +391,13 @@ export async function login(region: WorkBuddyRegion = "cn"): Promise<WorkBuddySe
 /** Refresh the session when it is close to expiry, or when the token was rejected. */
 export async function refreshSession(
   force = false,
-  region: WorkBuddyRegion = "cn",
+  providerId = "workbuddy-cn",
 ): Promise<WorkBuddySession> {
-  const session = loadSession(region);
-  if (!session) throw new AuthError("no session", loginHint(region), 503);
+  const session = loadSession(providerId);
+  if (!session) throw new AuthError("no session", loginHint(providerId), 503);
   if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
+  const region = session.region ?? regionOf(providerId);
   const base = ENDPOINTS[region];
   const res = await requestJson(`${base.base}${REFRESH_PATH}`, {
     method: "POST",
@@ -382,7 +421,7 @@ export async function refreshSession(
         `refresh rejected (${code})`,
         `WorkBuddy 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
           `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
-          `把当前那份复制过去，或者${clearHint(sessionId(region))}。`,
+          `把当前那份复制过去，或者${clearHint(sessionId(providerId))}。`,
         503,
       );
     }
@@ -408,7 +447,7 @@ export async function refreshSession(
     refreshExpiresAtMs: normalizeEpoch(data.refreshExpiresAt) || session.refreshExpiresAtMs,
     refreshedAtMs: now,
   };
-  saveSession(next);
+  saveSession(next, providerId);
   cache = null;
   authLog(
     dataDir(),
@@ -422,9 +461,9 @@ export async function refreshSession(
 
 let cache: CredentialCache | null = null;
 
-function toCredential(session: WorkBuddySession): Credential {
+function toCredential(session: WorkBuddySession, providerId: string): Credential {
   return credentialFromSession(session, {
-    source: sessionId(session.region),
+    source: sessionId(providerId),
     owner: "oauth",
     warnMs: WARN_MS,
     clientId: "workbuddy-cli",
@@ -436,39 +475,40 @@ function toCredential(session: WorkBuddySession): Credential {
 /** Credential for the proxy. `force` means the token we sent was rejected. */
 export async function ensureCredential(
   force = false,
-  region: WorkBuddyRegion = "cn",
+  providerId = "workbuddy-cn",
 ): Promise<Credential> {
   return ensureCredentialShared({
     cache,
     setCache: (next) => {
       cache = next;
     },
-    key: region,
+    key: providerId,
     cacheMs: CACHE_MS,
     force,
-    lockId: sessionId(region),
-    load: () => loadSession(region),
-    refresh: (f) => refreshSession(f, region),
-    toCredential,
+    lockId: sessionId(providerId),
+    load: () => loadSession(providerId),
+    refresh: (f) => refreshSession(f, providerId),
+    toCredential: (session) => toCredential(session, providerId),
     expired: (session) =>
       new AuthError(
         `access token expired (generation ${session.generation})`,
-        `WorkBuddy token 已过期且刷新没成功。${clearHint(sessionId(region))}。`,
+        `WorkBuddy token 已过期且刷新没成功。${clearHint(sessionId(providerId))}。`,
         503,
       ),
   });
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */
-export function workbuddyStatus(region: WorkBuddyRegion = "cn"): Record<string, unknown> {
-  const session = loadSession(region);
+export function workbuddyStatus(providerId = "workbuddy-cn"): Record<string, unknown> {
+  const session = loadSession(providerId);
+  const region = session?.region ?? regionOf(providerId);
   if (!session) {
-    return { region, source: sessionId(region), status: "anonymous", error: "no session", hint: loginHint(region) };
+    return { region, source: sessionId(providerId), status: "anonymous", error: "no session", hint: loginHint(providerId) };
   }
   const remainingMs = session.expiresAtMs - Date.now();
   return {
     region,
-    source: sessionId(region),
+    source: sessionId(providerId),
     status: remainingMs > 0 ? "authenticated" : "expired",
     uid: session.uid,
     nickname: session.nickname,

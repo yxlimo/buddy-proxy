@@ -9,8 +9,13 @@
 // through here: one place that knows the envelope, one place that knows what
 // a dead session looks like.
 
-import { TOKENRHYTHM_API_BASE, TokenRhythmError, sessionId, writeHeaders, type TokenRhythmSession } from "./accounts.ts";
-import { deleteSecret } from "../store.ts";
+import {
+  TOKENRHYTHM_API_BASE,
+  TokenRhythmError,
+  forgetSession as forgetTenantSession,
+  writeHeaders,
+  type TokenRhythmSession,
+} from "./accounts.ts";
 
 /** How to ask: which method, and what to send. */
 export interface PlatformRequest {
@@ -79,7 +84,7 @@ export async function platformApi<T>(
 /** Drop a session that the platform no longer accepts. */
 function forgetSession(session: TokenRhythmSession): void {
   try {
-    deleteSecret(sessionId(session.index));
+    forgetTenantSession(session.index, session.providerId);
   } catch {
     /* nothing to clean up */
   }

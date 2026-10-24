@@ -192,6 +192,16 @@ function configRows(): { key: string; value: string }[] {
   }
 }
 
+/** The provider table: one row per provider, with its switch. */
+function providerRows(): { id: string; enabled: number }[] {
+  const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"), { readOnly: true });
+  try {
+    return db.prepare("SELECT id, enabled FROM provider").all() as any[];
+  } finally {
+    db.close();
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * 一、改之前
  * ------------------------------------------------------------------ */
@@ -244,9 +254,10 @@ const switched = await admin("SetUpstreamEnabled", { upstreamId: "qoder", enable
 check("面板能把上游打开", switched.ok === true, JSON.stringify(switched));
 check("改完没有待重启的东西", switched.pendingRestart === false, JSON.stringify(switched));
 
-const rows = configRows();
-const qoderRow = rows.find((r) => r.key === "QODER_GLOBAL");
-check("值进了数据库", qoderRow?.value === "true", JSON.stringify(rows));
+// The switch lives in the provider table now, not in the config table.
+const rows = providerRows();
+const qoderRow = rows.find((r) => r.id === "qoder");
+check("值进了数据库", qoderRow?.enabled === 1, JSON.stringify(rows));
 
 // 开关不在配置页里（上游那一页管），所以「读回来」问的是上游列表。
 const upstreamList = await admin("ListUpstreams");

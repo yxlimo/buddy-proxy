@@ -12,10 +12,9 @@
 // 额度不在这里：那是控制台的接口，见 lib/sensenova/quota.ts。
 
 import { AuthError } from "../credential.ts";
-import { getSecret } from "../store.ts";
 import { SENSENOVA_INFER_BASE, senseNovaApiKey } from "./config.ts";
-import { ACCOUNT_ID, loadSession, type SenseNovaSession, type StoredAccount } from "./auth.ts";
-import { ensureApiKey } from "./keys.ts";
+import { loadSession, storedAccount, type SenseNovaSession } from "./auth.ts";
+import { ensureApiKey, KEY_TYPE_TOKEN_PLAN } from "./keys.ts";
 import { listModels, type SenseNovaModel } from "./models.ts";
 
 /** 建 key 时用的名字。平台控制台上看得到这个名字。 */
@@ -25,8 +24,8 @@ const KEY_NAME = "buddy";
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
 /** 账号上现在有的推理 key（环境变量优先，其次数据库）。 */
-export function senseNovaInferenceKey(): string {
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
+export function senseNovaInferenceKey(providerId = "sensenova"): string {
+  const stored = storedAccount(providerId);
   return senseNovaApiKey(stored?.apiKey);
 }
 
@@ -36,9 +35,9 @@ export function senseNovaInferenceKey(): string {
  * 平台只把完整的 key 给一次，所以建它的那个函数负责把它存下来。这里只是把
  * 那件事包一层：登录之后调它，账号上就一定有能用的 key。
  */
-export async function ensureSenseNovaKey(session: SenseNovaSession): Promise<string> {
-  const stored = getSecret<StoredAccount>(ACCOUNT_ID);
-  const key = await ensureApiKey(session, KEY_NAME, stored?.apiKey ?? null);
+export async function ensureSenseNovaKey(session: SenseNovaSession, providerId = "sensenova"): Promise<string> {
+  const stored = storedAccount(providerId);
+  const key = await ensureApiKey(session, KEY_NAME, stored?.apiKey ?? null, KEY_TYPE_TOKEN_PLAN, providerId);
   return key ?? "";
 }
 
@@ -66,12 +65,12 @@ export function senseNovaModelIds(): Set<string> {
  * 账号上有会话却没有 key 的那种情况（老版本登录留下的），在这里补一把 ——
  * 免得面板上显示「已登录」但一个请求也发不出去。
  */
-async function keyForCatalog(): Promise<string> {
-  const key = senseNovaInferenceKey();
+async function keyForCatalog(providerId = "sensenova"): Promise<string> {
+  const key = senseNovaInferenceKey(providerId);
   if (key) return key;
-  const session = loadSession();
+  const session = loadSession(providerId);
   if (!session) return "";
-  return ensureSenseNovaKey(session);
+  return ensureSenseNovaKey(session, providerId);
 }
 
 /**
@@ -80,9 +79,9 @@ async function keyForCatalog(): Promise<string> {
  * 问不到就留着上一次的那份：模型清单是给客户端看的，一个空的目录比一个过期
  * 的目录更没用。
  */
-export async function refreshSenseNovaCatalog(force = false): Promise<void> {
+export async function refreshSenseNovaCatalog(force = false, providerId = "sensenova"): Promise<void> {
   if (!force && catalog.length && Date.now() - catalogAt < CATALOG_TTL_MS) return;
-  const key = await keyForCatalog();
+  const key = await keyForCatalog(providerId);
   if (!key) return;
   try {
     const models = await listModels(key);
@@ -104,8 +103,8 @@ export async function refreshSenseNovaCatalog(force = false): Promise<void> {
  * 请求体是 OpenAI 形状的，原样发过去；答案也是 OpenAI 形状的，原样回来。
  * 上游报错了就把它的原话带回去 —— 平台自己的话比「上游失败了」有用。
  */
-export async function senseNovaChat(body: Record<string, any>): Promise<Response> {
-  const key = senseNovaInferenceKey();
+export async function senseNovaChat(body: Record<string, any>, providerId = "sensenova"): Promise<Response> {
+  const key = senseNovaInferenceKey(providerId);
   if (!key) {
     throw new AuthError(
       "sensenova has no inference key",
