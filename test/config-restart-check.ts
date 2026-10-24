@@ -215,7 +215,7 @@ check("Qoder 全球区现在是关着的", before.upstreams?.find((u: any) => u.
 const configBefore = await admin("ListConfig");
 const keys = (configBefore.items ?? []).map((i: any) => i.key);
 // 上游的开关搬到了上游那一页，配置页不再重复一份。
-check("配置项只有网关自己的两个", (configBefore.items ?? []).length === 2, JSON.stringify(keys));
+check("配置项只有网关自己的那几个", (configBefore.items ?? []).length === 3, JSON.stringify(keys));
 check(
   "公布的是网关自己能改的那几个",
   ["REQUIRE_API_KEY", "ADMIN_CORS_ORIGINS"].every((k) => keys.includes(k)),

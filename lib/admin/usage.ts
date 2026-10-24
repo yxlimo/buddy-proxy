@@ -88,6 +88,28 @@ export function usageSummary(
   }
 
   const events = listUsage(filter);
+  // 谁是父会话：每个会话自己的父是谁。
+  //
+  // 子代理可以再派子代理，所以父会话不是直接的那个 —— 得往上溯到根：主代理
+  // 那一层。溯源用的表是这段时间里的记录：一个子代理的父会话的记录不在这一
+  // 段里（早于保留期，被清掉了），那条链就断在这里，根就是那个会话自己。
+  const parentOf = new Map<string, string>();
+  for (const event of events) {
+    if (event.sessionId && event.parentSessionId) {
+      parentOf.set(event.sessionId, event.parentSessionId);
+    }
+  }
+  const rootSession = (sessionId: string): string => {
+    let current = sessionId;
+    // 上限是防环的：一个会话的父要是它自己（或者绕回来了），就停在这儿。
+    for (let hops = 0; hops < 32; hops++) {
+      const parent = parentOf.get(current);
+      if (!parent || parent === current) break;
+      current = parent;
+    }
+    return current;
+  };
+
   const total = emptyTotals();
   const upstreams = new Map<string, UsageTotals>();
   const models = new Map<string, UsageTotals>();
@@ -119,11 +141,11 @@ export function usageSummary(
     const session = sessions.get(sessionKey) ?? emptyTotals();
     addToTotals(session, event);
     sessions.set(sessionKey, session);
-    // 父会话：空的就是主代理。
-    const parentKey = event.parentSessionId || "主代理";
-    const parent = parentSessions.get(parentKey) ?? emptyTotals();
-    addToTotals(parent, event);
-    parentSessions.set(parentKey, parent);
+    // 主会话：子代理的请求并进主代理那一档。没有会话 id 的算一档「未知」。
+    const rootKey = event.sessionId ? rootSession(event.sessionId) : "未知";
+    const root = parentSessions.get(rootKey) ?? emptyTotals();
+    addToTotals(root, event);
+    parentSessions.set(rootKey, root);
     // agent 名：子代理的种类（be-match、reviewer……）。子代理的会话 id 每次
     // 运行都不同，所以这一维才是跨运行能比的。
     const agentKey = event.agentName || "未知";
@@ -162,6 +184,7 @@ export function usageSummary(
   const bySession = [...sessions.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort(byTokens);
+  // 主会话：子代理的已经并进去了。
   const byParentSession = [...parentSessions.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort(byTokens);

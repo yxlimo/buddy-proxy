@@ -157,8 +157,13 @@ export function UsagePage() {
           </div>
 
           <div className='grid gap-4 lg:grid-cols-2'>
-            <BreakdownCard title='按会话' buckets={summary.data?.bySession ?? []} />
-            <BreakdownCard title='按父会话' buckets={summary.data?.byParentSession ?? []} />
+            {/* 会话太多，只列用得最多的那几个。 */}
+            <BreakdownCard
+              title='按会话（用得最多的 10 个）'
+              buckets={(summary.data?.bySession ?? []).slice(0, 10)}
+            />
+            {/* 主会话：子代理的请求并进主代理那一档。 */}
+            <BreakdownCard title='按主会话' buckets={summary.data?.byParentSession ?? []} />
           </div>
 
           <div className='grid gap-4 lg:grid-cols-2'>
@@ -245,7 +250,7 @@ function BreakdownCard({
               className='flex items-center justify-between gap-3 text-sm'
             >
               <span className='truncate font-mono text-xs'>{bucket.key}</span>
-              <span className='whitespace-nowrap font-mono text-xs text-muted-foreground'>
+              <span className='whitespace-nowrap font-mono text-sm text-muted-foreground'>
                 {formatCount(bucket.summary?.requests ?? 0n)} 次 · 入{' '}
                 {formatCompact(bucket.summary?.promptTokens ?? 0n)} / 出{' '}
                 {formatCompact(bucket.summary?.completionTokens ?? 0n)}

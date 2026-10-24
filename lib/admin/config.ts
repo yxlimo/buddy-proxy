@@ -16,6 +16,8 @@ import {
   reloadConfig,
 } from "../config.ts";
 import { listConfig } from "../store.ts";
+import { configNumber } from "../config.ts";
+import { pruneUsage } from "../usage.ts";
 
 /** 一个配置项在面板里的样子。 */
 export interface ConfigItemView {
@@ -100,6 +102,7 @@ const DESCRIPTIONS: Record<string, string> = {
   REQUIRE_API_KEY: "开启后，调用网关的 agent 必须带 API KEY；关闭则任何请求都放行",
   BENEFITS_INTERVAL_MS: "多久签到一次（毫秒）",
   BENEFITS_DISABLED: "把签到整个关掉",
+  USAGE_RETENTION_DAYS: "用量记录保留多少天",
 };
 
 /**
@@ -176,6 +179,7 @@ const LABELS: Record<string, string> = {
   REQUIRE_API_KEY: "是否开启 API KEY 验证",
   BENEFITS_INTERVAL_MS: "签到间隔",
   BENEFITS_DISABLED: "关掉每日签到",
+  USAGE_RETENTION_DAYS: "用量保留天数",
 };
 
 /** 值的结尾像密钥的，就不给人看。 */
@@ -200,6 +204,8 @@ const USER_FACING = new Set([
   // 网关自己
   "REQUIRE_API_KEY",
   "ADMIN_CORS_ORIGINS",
+  // 用量记录留多久
+  "USAGE_RETENTION_DAYS",
 ]);
 
 /** 这个设置是不是敏感值。 */
@@ -271,6 +277,9 @@ export function knownConfigKeys(): Set<string> {
  * 改一个设置。
  *
  * 清掉就是回到环境变量或代码里的默认值。改完不热生效，要重启。
+ *
+ * 面板能改的那几个是热的（下一个请求就是新的值）✓ —— 用量保留天数是其中
+ * 一个：改完立刻按新的天数清一遍 ✓。
  */
 export function setConfigValue(key: string, value: string, clear = false): { ok: boolean; message: string } {
   if (!knownConfigKeys().has(key)) {
@@ -284,6 +293,12 @@ export function setConfigValue(key: string, value: string, clear = false): { ok:
   configOverride(key, value);
   // 改完就重新读一遍：面板能改的那些是热的，下一个请求就是新的值。
   reloadConfig();
+  // 保留天数改了：按新的天数清一遍，不用等下一个小时。
+  if (key === "USAGE_RETENTION_DAYS") {
+    const days = configNumber("USAGE_RETENTION_DAYS", 30);
+    const dropped = pruneUsage(days);
+    if (dropped > 0) console.log(`  [USAGE] 丢掉了 ${dropped} 条超过 ${days} 天的用量记录`);
+  }
   return { ok: true, message: `写了 ${key}` };
 }
 

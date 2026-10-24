@@ -766,7 +766,7 @@ app.listen(PORT, HOST, () => {
   adminToken();
   // The usage log grows one row per request, so old rows go. Ninety days is
   // enough for "today" and the monthly view.
-  const pruned = pruneUsage(90);
+  const pruned = pruneUsage(configNumber("USAGE_RETENTION_DAYS", 30));
   if (pruned > 0) console.log(`  [USAGE] 丢掉了 ${pruned} 条超过 90 天的用量记录`);
   console.log("");
   console.log(`  router listening on ${base}`);
@@ -944,6 +944,18 @@ app.listen(PORT, HOST, () => {
   // The daily benefits of the China accounts: the check-in, the growth centre
   // and the campaigns. The first run waits for the login above.
   benefits.start();
+
+  // The usage log grows one row per request, so the old rows go. The startup
+  // run does the first pass; this one catches the records that age out while
+  // the service runs, and picks up a retention the operator changed.
+  setInterval(
+    () => {
+      const days = configNumber("USAGE_RETENTION_DAYS", 30);
+      const dropped = pruneUsage(days);
+      if (dropped > 0) console.log(`  [USAGE] 丢掉了 ${dropped} 条超过 ${days} 天的用量记录`);
+    },
+    60 * 60 * 1000,
+  ).unref?.();
 
   void PING_MS;
 });

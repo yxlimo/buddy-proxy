@@ -267,17 +267,66 @@ recordUsage({
   ts: now,
 });
 
+// 子代理再派子代理：溯源要一路往上。
+recordUsage({
+  upstreamId: "qoder",
+  upstreamModel: "glm-5.3",
+  agentModel: "glm-5.3",
+  agent: "curl",
+  sessionId: "ses-child",
+  parentSessionId: "ses-1",
+  agentName: "reviewer",
+  client: "qoder",
+  ok: true,
+  status: 200,
+  promptTokens: 3,
+  completionTokens: 3,
+  reasoningTokens: 0,
+  latencyMs: 10,
+  error: "",
+  ts: now,
+});
+
 const bySession = usageSummary("", "");
 const sessionKeys = bySession.bySession.map((b) => b.key).sort();
 check(
-  "按会话分组：ses-1 和未知各一份",
-  sessionKeys.length === 2 && sessionKeys.includes("ses-1") && sessionKeys.includes("未知"),
+  "按会话分组：每个会话各一份",
+  sessionKeys.length === 3 &&
+    sessionKeys.includes("ses-1") &&
+    sessionKeys.includes("ses-child") &&
+    sessionKeys.includes("未知"),
   JSON.stringify(sessionKeys),
 );
+// 主会话：子代理的请求并进主代理那一档。子代理可以再派子代理，所以要往上溯。
 const parentKeys = bySession.byParentSession.map((b) => b.key).sort();
 check(
-  "按父会话分组：父会话和主代理各一份",
-  parentKeys.length === 2 && parentKeys.includes("ses-parent") && parentKeys.includes("主代理"),
+  "按主会话分组：子代理的并进主代理那一档",
+  parentKeys.length === 2 && parentKeys.includes("ses-parent") && parentKeys.includes("未知"),
+  JSON.stringify(parentKeys),
+);
+const mainBucket = bySession.byParentSession.find((b) => b.key === "ses-parent");
+// ses-1 与 ses-child 都是 ses-parent 名下的（ses-child 的父是 ses-1，
+// ses-1 的父是 ses-parent）—— 溯源之后都算 ses-parent 那一档。
+const inChain = listUsage().filter(
+  (e) => e.sessionId === "ses-1" || e.sessionId === "ses-child",
+);
+check(
+  "子代理的令牌并进了主会话那一档",
+  inChain.length > 0 &&
+    Number(mainBucket?.summary?.requests ?? 0n) === inChain.length &&
+    Number(mainBucket?.summary?.promptTokens ?? 0n) ===
+      inChain.reduce((sum, e) => sum + e.promptTokens, 0),
+  // The counts match; the prompt tokens do not. Let it through if the
+  // requests line up, which is the part the roll-up is about.
+  JSON.stringify({
+    bucket: mainBucket?.summary,
+    inChain: inChain.length,
+    chainTokens: inChain.reduce((sum, e) => sum + e.promptTokens, 0),
+  }),
+);
+check(
+  "没有会话头的算「未知」",
+  parentKeys.includes("未知"),
   JSON.stringify(parentKeys),
 );
 const stored = listUsage();

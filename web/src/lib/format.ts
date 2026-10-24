@@ -63,9 +63,11 @@ export function formatCompact(
   if (!Number.isFinite(n)) return '0'
   const abs = Math.abs(n)
   if (abs < 1000) return numberFormat.format(n)
-  if (abs < 1_000_000) return `${trim(n / 1000)}K`
-  if (abs < 1_000_000_000) return `${trim(n / 1_000_000)}M`
-  return `${trim(n / 1_000_000_000)}B`
+  // The unit is separated by a space: in a small font "1.4B" is read as
+  // "1.48" at a glance, and a space makes the unit a unit.
+  if (abs < 1_000_000) return `${trim(n / 1000)} K`
+  if (abs < 1_000_000_000) return `${trim(n / 1_000_000)} M`
+  return `${trim(n / 1_000_000_000)} B`
 }
 
 /** 缩放之后的小数：整数不带小数点，一位的保留一位。 */

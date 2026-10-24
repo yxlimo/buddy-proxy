@@ -22,24 +22,24 @@ describe('大数的写法', () => {
   })
 
   it('上千写成 K', () => {
-    expect(formatCompact(1000)).toBe('1K')
-    expect(formatCompact(1500)).toBe('1.5K')
-    expect(formatCompact(12_345)).toBe('12.3K')
+    expect(formatCompact(1000)).toBe('1 K')
+    expect(formatCompact(1500)).toBe('1.5 K')
+    expect(formatCompact(12_345)).toBe('12.3 K')
   })
 
   it('上百万写成 M', () => {
-    expect(formatCompact(1_000_000)).toBe('1M')
-    expect(formatCompact(2_500_000)).toBe('2.5M')
-    expect(formatCompact(5_187_487)).toBe('5.2M')
+    expect(formatCompact(1_000_000)).toBe('1 M')
+    expect(formatCompact(2_500_000)).toBe('2.5 M')
+    expect(formatCompact(5_187_487)).toBe('5.2 M')
   })
 
   it('上十亿写成 B', () => {
-    expect(formatCompact(1_000_000_000)).toBe('1B')
-    expect(formatCompact(3_200_000_000)).toBe('3.2B')
+    expect(formatCompact(1_000_000_000)).toBe('1 B')
+    expect(formatCompact(3_200_000_000)).toBe('3.2 B')
   })
 
   it('bigint 也一样', () => {
-    expect(formatCompact(5_187_487n)).toBe('5.2M')
+    expect(formatCompact(5_187_487n)).toBe('5.2 M')
   })
 
   it('没有值是 0', () => {

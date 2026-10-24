@@ -141,7 +141,9 @@ export function UsageTable({
       {
         id: 'parentSession',
         accessorKey: 'parentSessionId',
-        header: '父会话',
+        // The direct parent of that request. The card above rolls the whole
+        // chain up into the main session.
+        header: '上级会话',
         cell: ({ row }) => (
           <span className='font-mono text-xs' title={row.original.parentSessionId}>
             {row.original.parentSessionId ? shortSession(row.original.parentSessionId) : '主代理'}

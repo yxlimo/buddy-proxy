@@ -1548,7 +1548,10 @@ export type GetUsageSummaryResponse = Message<"buddy.admin.v1.GetUsageSummaryRes
   bySession: UsageBucket[];
 
   /**
-   * 按父会话分组。空的是主代理，别的键是子代理的父会话。
+   * 按主会话分组：子代理的请求并进主代理那一档。
+   *
+   * 键是主代理的会话 id（子代理可以再派子代理，往上溯到根）。认不出会话
+   * 的算一档「未知」。
    *
    * @generated from field: repeated buddy.admin.v1.UsageBucket by_parent_session = 7;
    */
