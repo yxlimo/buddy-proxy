@@ -597,16 +597,6 @@ function zcodeCredential(): CredentialView {
   return view;
 }
 
-/** Qoder 的凭据。 */
-function qoderCredential(region: QoderRegion): CredentialView {
-  return fromUpstreamStatus(qoderStatus(region), "session", `session:qoder:${region}`);
-}
-
-/** WorkBuddy 的凭据。 */
-function workbuddyCredential(region: "cn"): CredentialView {
-  return fromUpstreamStatus(workbuddyStatus(region), "session", `session:workbuddy:${region}`);
-}
-
 /**
  * TokenRhythm 的凭据。
  *

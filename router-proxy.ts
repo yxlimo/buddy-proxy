@@ -254,9 +254,12 @@ router.get("/health", async (ctx) => {
   const snapshot = healthSnapshot();
   const regions: Record<string, unknown> = {};
   for (const region of qoderRegions()) {
+    // The credential lives under the provider id, not the region: the two
+    // regions are two providers, "qoder" and "qoder-cn".
+    const providerId = region === "cn" ? "qoder-cn" : "qoder";
     regions[region] = {
       models: qoderVisible(region).length,
-      credential: qoderStatus(region),
+      credential: qoderStatus(providerId),
       account: snapshot.data?.qoder?.[region]?.account ?? null,
       credits: snapshot.data?.qoder?.[region]?.credits ?? null,
     };
@@ -310,7 +313,9 @@ router.get("/health", async (ctx) => {
         ? {
             region: "cn",
             models: workbuddyCatalog().length,
-            credential: workbuddyStatus("cn"),
+            // The provider id, not the region: the session lives under
+            // `session:provider:workbuddy-cn`.
+            credential: workbuddyStatus("workbuddy-cn"),
             credits: snapshot.data?.workbuddy?.credits ?? null,
           }
         : { enabled: false },

@@ -21,7 +21,8 @@ export async function runBenefits(upstreams: BenefitUpstream[]): Promise<Benefit
   const out: BenefitOutcome[] = [];
   for (const upstream of upstreams) {
     if (upstream === "workbuddy-cn") out.push(await runWorkBuddyBenefits());
-    else out.push(await runQoderBenefits(upstream === "qoder-cn" ? "cn" : "global"));
+    // The provider id, not the region: that is what the session key is made of.
+    else out.push(await runQoderBenefits(upstream === "qoder-cn" ? "qoder-cn" : "qoder"));
   }
   return out;
 }

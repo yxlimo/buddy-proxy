@@ -6,6 +6,7 @@
 import {
   ENDPOINTS,
   loadSession as loadQoderSession,
+  regionOf,
   type QoderRegion,
   type QoderSession,
 } from "./auth.ts";
@@ -99,10 +100,13 @@ export function claimableCampaigns(rows: any[], nowSeconds: number): any[] {
   return out;
 }
 
-export async function runQoderBenefits(region: QoderRegion = "cn"): Promise<BenefitOutcome> {
-  const upstream = region === "cn" ? "qoder-cn" : "qoder-global";
+export async function runQoderBenefits(providerId = "qoder-cn"): Promise<BenefitOutcome> {
+  // The provider id, not the region: the session lives under
+  // `session:provider:<provider id>`, and the region comes from it.
+  const region = regionOf(providerId);
+  const upstream = providerId;
   const report: string[] = [];
-  const session = loadQoderSession(region);
+  const session = loadQoderSession(providerId);
   if (!session) {
     return { upstream, ok: false, credits: 0, report: ["未找到 Qoder 登录态"], at: new Date().toISOString() };
   }
