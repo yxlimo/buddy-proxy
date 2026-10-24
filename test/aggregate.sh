@@ -151,6 +151,21 @@ after=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completion
   -d '{"model":"from-panel","messages":[{"role":"user","content":"hi"}]}')
 [ "$after" = "200" ] && check "a saved model is live right away" 1 || check "a saved model is live right away" 0
 
+# A published model whose target speaks Anthropic natively (MiniMax Code):
+# the answer must name the published model, not the upstream's own name.
+admin SavePublishedModel '{"model":{"id":"anthropic-native","displayName":"Anthropic native","strategy":"single","enabled":true,"targets":[{"groupName":"minimax","upstreamModel":"MiniMax-M3.1-Flash","weight":1,"position":0,"enabled":true}]}}' > /dev/null
+native=$(curl -s -X POST "$BASE/v1/messages" \
+  -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"anthropic-native","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}')
+named=$(echo "$native" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model"))')
+[ "$named" = "anthropic-native" ] && check "an Anthropic-native upstream answers with the published name" 1 || check "an Anthropic-native upstream answers with the published name" 0
+
+native_stream=$(curl -s -X POST "$BASE/v1/messages" \
+  -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"anthropic-native","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}')
+echo "$native_stream" | grep -q '"model":"anthropic-native"' && check "its stream names the published model too" 1 || check "its stream names the published model too" 0
+admin DeletePublishedModel '{"id":"anthropic-native"}' > /dev/null
+
 deleted=$(admin DeletePublishedModel '{"id":"from-panel"}' | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
 [ "$deleted" = "True" ] && check "the panel can delete a model" 1 || check "the panel can delete a model" 0
 

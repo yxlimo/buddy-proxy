@@ -121,8 +121,9 @@ export function deliverJson(
         : anthropicToOpenAIResponse(json, model);
   // The answer names the model the client asked for. The upstream may know it
   // by another name — a tier key, or the name behind a published model — but
-  // the client asked for this one.
-  if (dialect === "openai" && payload && typeof payload === "object") {
+  // the client asked for this one. Both dialects: an Anthropic answer that
+  // names the upstream's model is as confusing as an OpenAI one.
+  if (payload && typeof payload === "object") {
     payload.model = model;
   }
   onUsage?.(payload?.usage);
@@ -198,26 +199,26 @@ export async function deliverAnthropicStream(
   takeOver(ctx);
   sseHead(ctx);
   if (dialect === "anthropic") {
-    // The bytes go to the client untouched. A copy is parsed on the side for
-    // the usage: the upstream puts the input tokens in message_start and the
-    // output tokens in message_delta, and nobody reads those unless someone
-    // parses them.
-    if (onUsage) {
-      const [toClient, toParser] = body.tee();
-      void (async () => {
-        try {
-          for await (const event of readSseEvents(toParser)) {
-            const json = parseLooseJson(event.data);
-            if (json?.usage) onUsage(json.usage);
-          }
-        } catch {
-          // The usage is a nice-to-have; the answer itself is what matters.
+    // The bytes go to the client as they are, apart from one thing: the
+    // message_start frame names the model, and it has to name the one the
+    // client asked for. The upstream may know it by another name — a tier
+    // key, or the name behind a published model.
+    //
+    // A copy is parsed on the side for the usage: the upstream puts the input
+    // tokens in message_start and the output tokens in message_delta, and
+    // nobody reads those unless someone parses them.
+    const [toClient, toParser] = body.tee();
+    void (async () => {
+      try {
+        for await (const event of readSseEvents(toParser)) {
+          const json = parseLooseJson(event.data);
+          if (onUsage && json?.usage) onUsage(json.usage);
         }
-      })();
-      await pipeStream(toClient, ctx, pingMs);
-      return;
-    }
-    await pipeStream(body, ctx, pingMs);
+      } catch {
+        // The usage is a nice-to-have; the answer itself is what matters.
+      }
+    })();
+    await writeAnthropicFrames(toClient, ctx, model, pingMs);
     return;
   }
   try {
@@ -309,6 +310,49 @@ async function pipeOpenAIChunks(
  *   - only ping on an SSE frame boundary, because writing one in the middle
  *     of an upstream frame would corrupt the client's parse.
  */
+/**
+ * 把上游的 Anthropic 流写给客户端，只改一处：message_start 里的模型名。
+ *
+ * 客户端问的是哪个模型，答复里就该是哪个 —— 上游可能用另一个名字（档位的
+ * key，或者发布模型背后的真名）。别的帧逐字不动。
+ */
+async function writeAnthropicFrames(
+  body: ReadableStream<Uint8Array>,
+  ctx: Koa.Context,
+  model: string,
+  pingMs = 0,
+): Promise<void> {
+  let lastActivity = Date.now();
+  const writePing = () => {
+    if (ctx.res.writableEnded || ctx.res.destroyed) return;
+    if (Date.now() - lastActivity < pingMs) return;
+    if (!writeSafe(ctx, 'event: ping\ndata: {"type":"ping"}\n\n')) return;
+    lastActivity = Date.now();
+  };
+  const pingTimer = pingMs > 0 ? setInterval(writePing, Math.min(pingMs, 5000)) : null;
+  pingTimer?.unref?.();
+  try {
+    for await (const event of readSseEvents(body)) {
+      let data = event.data;
+      if (event.event === "message_start" || (!event.event && data.includes('"message_start"'))) {
+        const json = parseLooseJson(data);
+        if (json?.message && typeof json.message === "object") {
+          json.message.model = model;
+          data = JSON.stringify(json);
+        }
+      }
+      const frame = event.event ? `event: ${event.event}\ndata: ${data}\n\n` : `data: ${data}\n\n`;
+      if (!writeSafe(ctx, frame)) break;
+      lastActivity = Date.now();
+    }
+  } catch (e) {
+    writeSafe(ctx, errorEvent((e as Error)?.message));
+  } finally {
+    if (pingTimer) clearInterval(pingTimer);
+    ctx.res.end();
+  }
+}
+
 async function pipeStream(
   body: ReadableStream<Uint8Array>,
   ctx: Koa.Context,
