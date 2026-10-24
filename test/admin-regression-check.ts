@@ -267,6 +267,23 @@ check(
   JSON.stringify(providerRows?.map((p: any) => p?.id)?.slice(0, 4)),
 );
 
+// The health carries what the snapshot knows. The snapshot is keyed by the
+// provider id, so reading it by the kind silently gives null for everything.
+const healthUpstreams = healthBody?.upstreams ?? {};
+const relay = healthUpstreams?.tokenrhythm ?? {};
+check(
+  "开着的上游那一段有凭据",
+  relay?.enabled === false || relay?.credential?.status !== undefined,
+  JSON.stringify(relay),
+);
+// 快照里那个 Provider 的那一份，health 读的就是它。
+const snapshotRelay = (healthBody?.snapshot?.tokenrhythm ?? {})["tokenrhythm"] ?? {};
+check(
+  "health 里的租户就是快照里那一份",
+  JSON.stringify(relay?.tenants ?? null) === JSON.stringify(snapshotRelay.tenants ?? null),
+  JSON.stringify({ health: relay?.tenants, snapshot: snapshotRelay.tenants }),
+);
+
 const models = await fetch(`${base}/qoder/v1/models`);
 const modelsBody = await models.json().catch(() => null);
 check("GET /qoder/v1/models 答得上来", models.status === 200, String(models.status));

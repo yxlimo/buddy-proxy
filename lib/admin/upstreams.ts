@@ -833,6 +833,24 @@ export function upstreamQuota(id: UpstreamId): QuotaView | null {
   return mergeQuotas(upstreamQuotasCached(id));
 }
 
+/**
+ * 快照里一个 Provider 的那一份。
+ *
+ * 快照是**按 Provider id** 存的（provider.minimax、provider.qoder-cn……），
+ * 所以按 kind 去取会取到 undefined —— 面板上的余额、套餐额度、租户就全是
+ * null，而数据其实就在旁边。
+ */
+export function snapshotEntry(
+  snapshot: HealthSnapshot | null,
+  kind: string,
+  providerId: string,
+): any {
+  if (!snapshot) return null;
+  const bucket = (snapshot as any)[kind];
+  if (!bucket) return null;
+  return bucket[providerId] ?? null;
+}
+
 /** 从快照里取一个 Provider 的额度，不问上游。 */
 function upstreamQuotasCached(id: string): QuotaView[] {
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;

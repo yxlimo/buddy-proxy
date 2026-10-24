@@ -110,6 +110,7 @@ import {
   qoderVisible,
   refreshHealthSnapshot,
   setWorkbuddyCatalog,
+  snapshotEntry,
   upstreamEnabled,
   workbuddyCatalog,
   workbuddyModelIds,
@@ -260,8 +261,8 @@ router.get("/health", async (ctx) => {
     regions[region] = {
       models: qoderVisible(region).length,
       credential: qoderStatus(providerId),
-      account: snapshot.data?.qoder?.[region]?.account ?? null,
-      credits: snapshot.data?.qoder?.[region]?.credits ?? null,
+      account: snapshotEntry(snapshot.data, "qoder", providerId)?.account ?? null,
+      credits: snapshotEntry(snapshot.data, "qoder", providerId)?.credits ?? null,
     };
   }
   ctx.body = {
@@ -297,8 +298,8 @@ router.get("/health", async (ctx) => {
             credential: credentialStatus(),
             // What the account has left: the money on the platform account, and
             // the plan's own windows.
-            balance: snapshot.data?.minimax?.balance ?? null,
-            tokenPlan: snapshot.data?.minimax?.tokenPlan ?? null,
+            balance: snapshotEntry(snapshot.data, "minimax", "minimax")?.balance ?? null,
+            tokenPlan: snapshotEntry(snapshot.data, "minimax", "minimax")?.tokenPlan ?? null,
           }
         : { enabled: false },
       zcode: upstreamEnabled("zcode")
@@ -306,7 +307,7 @@ router.get("/health", async (ctx) => {
             base: ZCODE_MESSAGES_URL,
             models: ZCODE_MODELS.length,
             credential: zcodeStatus(),
-            quota: snapshot.data?.zcode?.quota ?? null,
+            quota: snapshotEntry(snapshot.data, "zcode", "zcode")?.quota ?? null,
           }
         : { enabled: false },
       "minimax-api": upstreamEnabled("minimax-api")
@@ -315,7 +316,7 @@ router.get("/health", async (ctx) => {
             models: MINIMAX_API_MODELS.length,
             // 一把 key 一个租户。
             tenants: miniMaxApiTenants().length,
-            plans: snapshot.data?.minimaxApi?.tenants ?? null,
+            plans: snapshotEntry(snapshot.data, "minimaxApi", "minimax-api")?.tenants ?? null,
           }
         : { enabled: false },
       qoder: { regions },
@@ -326,13 +327,13 @@ router.get("/health", async (ctx) => {
             // The provider id, not the region: the session lives under
             // `session:provider:workbuddy-cn`.
             credential: workbuddyStatus("workbuddy-cn"),
-            credits: snapshot.data?.workbuddy?.credits ?? null,
+            credits: snapshotEntry(snapshot.data, "workbuddy", "workbuddy-cn")?.credits ?? null,
           }
         : { enabled: false },
       tokenrhythm: upstreamEnabled("tokenrhythm")
         ? {
             models: TOKENRHYTHM_MODELS.length,
-            tenants: snapshot.data?.tokenrhythm?.tenants ?? null,
+            tenants: snapshotEntry(snapshot.data, "tokenrhythm", "tokenrhythm")?.tenants ?? null,
             // The relay station has one account per tenant, so the credential
             // of the provider is the sum of theirs: without this the panel
             // said "no credential" while the balances were right there.
@@ -345,7 +346,7 @@ router.get("/health", async (ctx) => {
             models: senseNovaCatalog().length,
             // 推理端点要的是 key，不是 cookie。
             credential: senseNovaInferenceKey() ? "api_key" : "missing",
-            pools: snapshot.data?.sensenova?.pools ?? null,
+            pools: snapshotEntry(snapshot.data, "sensenova", "sensenova")?.pools ?? null,
           }
         : { enabled: false },
       internAi: upstreamEnabled("intern-ai")
@@ -353,8 +354,8 @@ router.get("/health", async (ctx) => {
             base: INTERN_AI_DISCOVERY_API_BASE,
             models: internAiCatalog().length,
             credential: internAiInferenceKey() ? "api_key" : "missing",
-            balance: snapshot.data?.internAi?.balance ?? null,
-            packs: snapshot.data?.internAi?.packs ?? null,
+            balance: snapshotEntry(snapshot.data, "internAi", "intern-ai")?.balance ?? null,
+            packs: snapshotEntry(snapshot.data, "internAi", "intern-ai")?.packs ?? null,
           }
         : { enabled: false },
     },
