@@ -5,8 +5,9 @@
 
 import { runWorkBuddyBenefits } from "./workbuddy/benefits.ts";
 import { runQoderBenefits } from "./qoder/benefits.ts";
+import { runMiniMaxBenefits } from "./minimax/checkin.ts";
 
-export type BenefitUpstream = "workbuddy-cn" | "qoder-cn" | "qoder-global";
+export type BenefitUpstream = "workbuddy-cn" | "qoder-cn" | "qoder-global" | "minimax";
 
 export interface BenefitOutcome {
   upstream: string;
@@ -22,6 +23,7 @@ export async function runBenefits(upstreams: BenefitUpstream[]): Promise<Benefit
   for (const upstream of upstreams) {
     if (upstream === "workbuddy-cn") out.push(await runWorkBuddyBenefits());
     // The provider id, not the region: that is what the session key is made of.
+    else if (upstream === "minimax") out.push(await runMiniMaxBenefits("minimax"));
     else out.push(await runQoderBenefits(upstream === "qoder-cn" ? "qoder-cn" : "qoder"));
   }
   return out;

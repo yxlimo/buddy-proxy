@@ -99,6 +99,10 @@ run = "node --experimental-strip-types test/tokenrhythm-fallback-check.ts"
 description = "Run the tests for telling the agents apart by their headers"
 run = "node --experimental-strip-types test/agent-check.ts"
 
+[tasks."test:minimax:checkin"]
+description = "Run the tests for the MiniMax Code daily sign-in"
+run = "node --experimental-strip-types test/minimax-checkin-check.ts"
+
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract"
 run = "buf generate"

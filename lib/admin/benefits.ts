@@ -20,6 +20,7 @@ export const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", 
 export function benefitUpstreams(): BenefitUpstream[] {
   if (configFlag("BENEFITS_DISABLED", false)) return [];
   const out: BenefitUpstream[] = [];
+  if (upstreamEnabled("minimax")) out.push("minimax");
   if (upstreamEnabled("workbuddy-cn")) out.push("workbuddy-cn");
   if (upstreamEnabled("qoder-cn")) out.push("qoder-cn");
   if (upstreamEnabled("qoder")) out.push("qoder-global");
