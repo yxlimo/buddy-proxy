@@ -162,10 +162,14 @@ async function admin(method: string, body: unknown = {}): Promise<any> {
 }
 
 /** 客户端发一次请求（OpenAI 方言，根路由）。 */
-async function chat(model: string, extra: Record<string, unknown> = {}): Promise<any> {
+async function chat(
+  model: string,
+  extra: Record<string, unknown> = {},
+  headers: Record<string, string> = {},
+): Promise<any> {
   const res = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({
       model,
       messages: [{ role: "user", content: "say ok" }],
@@ -384,6 +388,44 @@ check(
     ?.find((m: any) => m.id === "e2e-fallback")
     ?.targets?.find((t: any) => t.upstreamModel === "glm-5.3")?.requests >= 1,
   JSON.stringify((await admin("ListPublishedModels", {})).models),
+);
+
+section("会话与子代理");
+
+await chat(
+  "e2e-fallback",
+  {},
+  {
+    "user-agent": "opencode/latest/2.1.3/cli",
+    "x-opencode-client": "cli",
+    "x-opencode-session-id": "ses-e2e-1",
+    "x-opencode-parent-session-id": "ses-e2e-parent",
+  },
+);
+const sessionRows = query(
+  "SELECT agent, session_id, parent_session_id FROM usage_event " +
+    "WHERE session_id = 'ses-e2e-1' ORDER BY id DESC LIMIT 1",
+);
+check(
+  "用量日志里认出了会话与父会话",
+  sessionRows.length === 1 &&
+    sessionRows[0].agent === "opencode" &&
+    sessionRows[0].parent_session_id === "ses-e2e-parent",
+  JSON.stringify(sessionRows),
+);
+
+const summary = await admin("GetUsageSummary", {});
+const bySession = (summary as any).bySession ?? [];
+const byParent = (summary as any).byParentSession ?? [];
+check(
+  "面板的用量摘要里按会话分了组",
+  bySession.some((b: any) => b.key === "ses-e2e-1"),
+  JSON.stringify(bySession.map((b: any) => b.key)),
+);
+check(
+  "面板的用量摘要里按父会话分了组",
+  byParent.some((b: any) => b.key === "ses-e2e-parent"),
+  JSON.stringify(byParent.map((b: any) => b.key)),
 );
 
 section("fallback：两个都失败");

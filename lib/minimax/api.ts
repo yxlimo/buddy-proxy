@@ -135,6 +135,7 @@ export async function miniMaxApiChat(
   tenant: MiniMaxApiTenant,
   body: Record<string, any>,
   region: MiniMaxRegion = "cn",
+  extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
   const base = miniMaxApiBase(region);
   const response = await fetch(`${base}/chat/completions`, {
@@ -143,6 +144,7 @@ export async function miniMaxApiChat(
       "content-type": "application/json",
       Accept: body.stream ? "text/event-stream" : "application/json",
       Authorization: `Bearer ${tenant.key}`,
+      ...extraHeaders,
     },
     body: JSON.stringify({ ...body, model: body.model }),
     signal: AbortSignal.timeout(300_000),

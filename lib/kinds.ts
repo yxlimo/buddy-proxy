@@ -491,6 +491,8 @@ registerKind({
 
 registerKind({
   kind: "minimax-api",
+  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
+  openPlatform: true,
   label: "MiniMax 开放平台",
   login: "password",
   baseUrl: () => miniMaxApiBase(),
@@ -558,6 +560,8 @@ registerKind({
 
 registerKind({
   kind: "tokenrhythm",
+  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
+  openPlatform: true,
   label: "TokenRhythm",
   login: "password",
   baseUrl: () => TOKENRHYTHM_API_BASE,
@@ -575,6 +579,8 @@ registerKind({
 
 registerKind({
   kind: "sensenova",
+  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
+  openPlatform: true,
   label: "SenseNova",
   login: "password",
   baseUrl: () => SENSENOVA_INFER_BASE,
@@ -592,6 +598,8 @@ registerKind({
 
 registerKind({
   kind: "intern-ai",
+  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
+  openPlatform: true,
   label: "书生·端砚",
   login: "code",
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,

@@ -29,6 +29,10 @@ export interface UsageEvent {
   agentModel: string;
   /** 谁发来的请求：pi、opencode、dsh……从请求头认出来的。 */
   agent: string;
+  /** 这次请求属于哪个会话（从请求头认出来的）。认不出来就是空的。 */
+  sessionId: string;
+  /** 父会话 id。只有 opencode 的子代理有；空的就是主代理。 */
+  parentSessionId: string;
   /** 这次请求模拟的是哪个桌面客户端。 */
   client: string;
   /** 成没成。 */
@@ -69,6 +73,8 @@ function ensureTable(): void {
       upstream_model    TEXT NOT NULL,
       agent_model       TEXT NOT NULL,
       agent             TEXT NOT NULL,
+      session_id        TEXT NOT NULL DEFAULT '',
+      parent_session_id TEXT NOT NULL DEFAULT '',
       client            TEXT NOT NULL,
       ok                INTEGER NOT NULL,
       status            INTEGER NOT NULL,
@@ -81,6 +87,35 @@ function ensureTable(): void {
   );
   store().exec("CREATE INDEX IF NOT EXISTS usage_event_ts ON usage_event (ts)");
   store().exec("CREATE INDEX IF NOT EXISTS usage_event_upstream ON usage_event (upstream_id)");
+  // 新列要先补上再建它的索引 —— 老库上那一列还没有。
+  addMissingColumns();
+  try {
+    store().exec("CREATE INDEX IF NOT EXISTS usage_event_session ON usage_event (session_id)");
+  } catch {
+    // 索引建不上不影响统计本身。
+  }
+}
+
+/**
+ * 表已经存在的时候补上后加的列。
+ *
+ * SQLite 的 `CREATE TABLE IF NOT EXISTS` 不会动已有的表，所以新列要自己加。
+ */
+function addMissingColumns(): void {
+  const have = new Set(
+    (store().prepare("PRAGMA table_info(usage_event)").all() as any[]).map((c) => String(c.name)),
+  );
+  for (const [name, type] of [
+    ["session_id", "TEXT NOT NULL DEFAULT ''"],
+    ["parent_session_id", "TEXT NOT NULL DEFAULT ''"],
+  ] as const) {
+    if (have.has(name)) continue;
+    try {
+      store().exec(`ALTER TABLE usage_event ADD COLUMN ${name} ${type}`);
+    } catch {
+      // 加不上就算了：这一列没有也不影响别的统计。
+    }
+  }
 }
 
 /** 记一条请求。 */
@@ -91,8 +126,9 @@ export function recordUsage(input: UsageEventInput): void {
     store()
       .prepare(
         "INSERT INTO usage_event (ts, day, hour, upstream_id, upstream_model, agent_model, " +
-          "agent, client, ok, status, prompt_tokens, completion_tokens, reasoning_tokens, " +
-          "latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "agent, session_id, parent_session_id, client, ok, status, prompt_tokens, " +
+          "completion_tokens, reasoning_tokens, latency_ms, error) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         ts,
@@ -102,6 +138,8 @@ export function recordUsage(input: UsageEventInput): void {
         input.upstreamModel,
         input.agentModel,
         input.agent,
+        input.sessionId,
+        input.parentSessionId,
         input.client,
         input.ok ? 1 : 0,
         input.status,
@@ -164,8 +202,9 @@ export function listUsage(filter: UsageFilter = {}): UsageEvent[] {
     args.push(filter.beforeId);
   }
   const sql =
-    "SELECT id, ts, day, hour, upstream_id, upstream_model, agent_model, agent, client, " +
-    "ok, status, prompt_tokens, completion_tokens, reasoning_tokens, latency_ms, error " +
+    "SELECT id, ts, day, hour, upstream_id, upstream_model, agent_model, agent, " +
+    "session_id, parent_session_id, client, ok, status, prompt_tokens, completion_tokens, " +
+    "reasoning_tokens, latency_ms, error " +
     `FROM usage_event${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY id DESC`;
   const rows = store().prepare(sql).all(...args) as any[];
   const capped = filter.limit && filter.limit > 0 ? rows.slice(0, filter.limit) : rows;
@@ -178,6 +217,8 @@ export function listUsage(filter: UsageFilter = {}): UsageEvent[] {
     upstreamModel: String(r.upstream_model),
     agentModel: String(r.agent_model),
     agent: String(r.agent),
+    sessionId: String(r.session_id ?? ""),
+    parentSessionId: String(r.parent_session_id ?? ""),
     client: String(r.client),
     ok: Number(r.ok) !== 0,
     status: Number(r.status),

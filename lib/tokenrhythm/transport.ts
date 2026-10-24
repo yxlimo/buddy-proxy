@@ -104,6 +104,7 @@ export class TokenRhythmNoBalanceError extends Error {
 export async function tokenRhythmChat(
   index: number,
   body: Record<string, any>,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; key: string }> {
   const { tenant, key } = inferenceTenant(index);
   const payload = { ...body, model: body.model };
@@ -114,6 +115,7 @@ export async function tokenRhythmChat(
       "content-type": "application/json",
       Authorization: `Bearer ${key}`,
       Accept: body.stream ? "text/event-stream" : "application/json",
+      ...extraHeaders,
     },
     body: JSON.stringify(payload),
   });

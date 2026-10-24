@@ -453,6 +453,10 @@ message GetUsageSummaryResponse {
   repeated UsageBucket by_day = 4;
   // 按发请求的 agent 分组：pi、opencode、dsh……
   repeated UsageBucket by_agent = 5;
+  // 按会话分组。会话 id 从请求头认出来，认不出来的算「未知」。
+  repeated UsageBucket by_session = 6;
+  // 按父会话分组。空的是主代理，别的键是子代理的父会话。
+  repeated UsageBucket by_parent_session = 7;
 }
 
 message UsageBucket {
@@ -489,6 +493,10 @@ message UsageEvent {
   int64 latency_ms = 11;
   string status = 12;
   string error = 13;
+  // 这次请求属于哪个会话。认不出来就是空的。
+  string session_id = 14;
+  // 父会话。只有子代理有；空的是主代理。
+  string parent_session_id = 15;
 }
 
 message ListUsageEventsResponse {

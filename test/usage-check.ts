@@ -107,6 +107,8 @@ recordUsage({
   upstreamModel: "glm-5.3",
   agentModel: "glm-5.3",
   agent: "pi",
+  sessionId: "ses-1",
+  parentSessionId: "",
   client: "qoder",
   ok: true,
   status: 200,
@@ -132,6 +134,8 @@ recordUsage({
   upstreamModel: "MiniMax-M3.1-Flash",
   agentModel: "MiniMax-M3.1-Flash",
   agent: "opencode",
+  sessionId: "ses-1",
+  parentSessionId: "ses-parent",
   client: "minimax",
   ok: false,
   status: 429,
@@ -172,6 +176,8 @@ recordUsage({
   upstreamModel: "glm-5.3",
   agentModel: "glm-5.3",
   agent: "pi",
+  sessionId: "ses-1",
+  parentSessionId: "",
   client: "qoder",
   ok: true,
   status: 200,
@@ -218,6 +224,8 @@ recordUsage({
   upstreamModel: "old",
   agentModel: "old",
   agent: "pi",
+  sessionId: "ses-1",
+  parentSessionId: "",
   client: "qoder",
   ok: true,
   status: 200,
@@ -231,6 +239,48 @@ recordUsage({
 const removed = pruneUsage(90);
 check("丢掉了那条", removed === 1, String(removed));
 check("剩下的还在", listUsage().length === 3, String(listUsage().length));
+
+console.log("");
+console.log("会话与子代理");
+
+// 一个没有会话头的请求：算「未知」，父会话算「主代理」。
+recordUsage({
+  upstreamId: "qoder",
+  upstreamModel: "glm-5.3",
+  agentModel: "glm-5.3",
+  agent: "curl",
+  sessionId: "",
+  parentSessionId: "",
+  client: "qoder",
+  ok: true,
+  status: 200,
+  promptTokens: 5,
+  completionTokens: 5,
+  reasoningTokens: 0,
+  latencyMs: 10,
+  error: "",
+  ts: now,
+});
+
+const bySession = usageSummary("", "");
+const sessionKeys = bySession.bySession.map((b) => b.key).sort();
+check(
+  "按会话分组：ses-1 和未知各一份",
+  sessionKeys.length === 2 && sessionKeys.includes("ses-1") && sessionKeys.includes("未知"),
+  JSON.stringify(sessionKeys),
+);
+const parentKeys = bySession.byParentSession.map((b) => b.key).sort();
+check(
+  "按父会话分组：父会话和主代理各一份",
+  parentKeys.length === 2 && parentKeys.includes("ses-parent") && parentKeys.includes("主代理"),
+  JSON.stringify(parentKeys),
+);
+const stored = listUsage();
+check(
+  "事件里存着会话与父会话",
+  stored.some((e) => e.sessionId === "ses-1" && e.parentSessionId === "ses-parent"),
+  JSON.stringify(stored.map((e) => [e.sessionId, e.parentSessionId])),
+);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 

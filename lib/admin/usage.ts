@@ -69,6 +69,8 @@ export function usageSummary(
   byModel: UsageBucketView[];
   byDay: UsageBucketView[];
   byAgent: UsageBucketView[];
+  bySession: UsageBucketView[];
+  byParentSession: UsageBucketView[];
 } {
   const key = String(window ?? "").trim().toLowerCase();
   const filter: { upstreamId?: string; since?: number; until?: number } = {};
@@ -89,6 +91,8 @@ export function usageSummary(
   const models = new Map<string, UsageTotals>();
   const days = new Map<string, UsageTotals>();
   const agents = new Map<string, UsageTotals>();
+  const sessions = new Map<string, UsageTotals>();
+  const parentSessions = new Map<string, UsageTotals>();
 
   for (const event of events) {
     addToTotals(total, event);
@@ -106,6 +110,16 @@ export function usageSummary(
     const agent = agents.get(event.agent) ?? emptyTotals();
     addToTotals(agent, event);
     agents.set(event.agent, agent);
+    // 会话：认不出来的算一档「未知」。
+    const sessionKey = event.sessionId || "未知";
+    const session = sessions.get(sessionKey) ?? emptyTotals();
+    addToTotals(session, event);
+    sessions.set(sessionKey, session);
+    // 父会话：空的就是主代理。
+    const parentKey = event.parentSessionId || "主代理";
+    const parent = parentSessions.get(parentKey) ?? emptyTotals();
+    addToTotals(parent, event);
+    parentSessions.set(parentKey, parent);
   }
 
   // 从大到小：令牌多的排前面。天数那一份按日期排 —— 它是一条时间线。
@@ -127,7 +141,13 @@ export function usageSummary(
   const byAgent = [...agents.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort(byTokens);
-  return { total, byUpstream, byModel, byDay, byAgent };
+  const bySession = [...sessions.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
+  const byParentSession = [...parentSessions.entries()]
+    .map(([key, summary]) => ({ key, summary }))
+    .sort(byTokens);
+  return { total, byUpstream, byModel, byDay, byAgent, bySession, byParentSession };
 }
 
 /** 用量的明细：每条请求一行。 */

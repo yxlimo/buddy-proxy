@@ -51,6 +51,13 @@ type UsageTableProps = {
   modelOptions: { label: string; value: string }[]
 }
 
+/** 会话 id 太长，表格里只显示头尾。 */
+function shortSession(id: string | undefined): string {
+  if (!id) return '—'
+  if (id.length <= 12) return id
+  return `${id.slice(0, 6)}…${id.slice(-4)}`
+}
+
 export function UsageTable({
   data,
   isPending,
@@ -119,6 +126,26 @@ export function UsageTable({
         header: '来源',
         cell: ({ row }) => (
           <span className='text-xs'>{row.original.agent || '—'}</span>
+        ),
+      },
+      {
+        id: 'session',
+        accessorKey: 'sessionId',
+        header: '会话',
+        cell: ({ row }) => (
+          <span className='font-mono text-xs' title={row.original.sessionId}>
+            {shortSession(row.original.sessionId)}
+          </span>
+        ),
+      },
+      {
+        id: 'parentSession',
+        accessorKey: 'parentSessionId',
+        header: '父会话',
+        cell: ({ row }) => (
+          <span className='font-mono text-xs' title={row.original.parentSessionId}>
+            {row.original.parentSessionId ? shortSession(row.original.parentSessionId) : '主代理'}
+          </span>
         ),
       },
       {

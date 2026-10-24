@@ -72,6 +72,15 @@ export interface UpstreamContext {
   tokenRhythmMaxAttempts: number;
   /** Whether a request is written to the log. */
   logRoute: boolean;
+  /**
+   * The client's session headers, for the open API platforms.
+   *
+   * The simulated clients (Qoder, WorkBuddy, MiniMax Code, ZCode) rebuild the
+   * request the way the desktop client builds it — only the fields they need,
+   * everything else in the client's headers is ignored. The open platforms get
+   * the request as it is, so the session headers go along.
+   */
+  clientHeaders: Record<string, string>;
   /** The output limit of a WorkBuddy model, as its own catalogue says. */
   workbuddyMaxOutput(model: string): number;
   /** The model itself, so the request can be built the way the client builds it. */
@@ -477,7 +486,7 @@ export async function toMiniMaxApi(
     }
     let response: Response;
     try {
-      response = await miniMaxApiChat(tenant, openaiBody);
+      response = await miniMaxApiChat(tenant, openaiBody, "cn", ctx.clientHeaders);
     } catch (e) {
       if (e instanceof MiniMaxApiTenantError) {
         // 这个租户接不了：套餐用完、key 不对、或者被限流。换一个。
@@ -596,6 +605,7 @@ export async function toTokenRhythm(
         tenant.index,
         openaiBody,
         ctx.tokenRhythmMaxAttempts,
+        ctx.clientHeaders,
       );
       response = call.response;
     } catch (e) {
@@ -672,10 +682,11 @@ async function tokenRhythmChatWithRetry(
   tenant: number,
   body: Record<string, any>,
   maxAttempts: number,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; key: string }> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await tokenRhythmChat(tenant, body);
+      return await tokenRhythmChat(tenant, body, extraHeaders);
     } catch (e) {
       if (e instanceof TokenRhythmBusyError && attempt < maxAttempts) {
         console.log(
@@ -724,7 +735,7 @@ export async function toSenseNova(
     console.log(`[ROUTE] sensenova model=${route.model} stream=${stream}`);
   }
 
-  const response = await senseNovaChat(openaiBody);
+  const response = await senseNovaChat(openaiBody, "sensenova", ctx.clientHeaders);
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new AuthError(
@@ -764,7 +775,7 @@ export async function toInternAi(
     console.log(`[ROUTE] intern-ai model=${route.model} stream=${stream}`);
   }
 
-  const response = await internAiChat(openaiBody);
+  const response = await internAiChat(openaiBody, "intern-ai", ctx.clientHeaders);
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new AuthError(

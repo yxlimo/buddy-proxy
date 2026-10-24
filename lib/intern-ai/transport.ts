@@ -126,7 +126,11 @@ export async function refreshInternAiCatalog(force = false, providerId = "intern
  *
  * 请求体是 OpenAI 形状的，原样发过去；答案也是 OpenAI 形状的，原样回来。
  */
-export async function internAiChat(body: Record<string, any>, providerId = "intern-ai"): Promise<Response> {
+export async function internAiChat(
+  body: Record<string, any>,
+  providerId = "intern-ai",
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
   const key = internAiInferenceKey(providerId);
   if (!key) {
     throw new AuthError(
@@ -142,6 +146,7 @@ export async function internAiChat(body: Record<string, any>, providerId = "inte
       Authorization: `Bearer ${key}`,
       Accept: body.stream ? "text/event-stream" : "application/json",
       "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
+      ...extraHeaders,
     },
     body: JSON.stringify(body),
   });

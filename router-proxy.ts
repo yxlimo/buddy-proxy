@@ -92,7 +92,7 @@ import {
 } from "./lib/router/catalog.ts";
 import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
 import { recordUsage, pruneUsage, maxTotals, usageTotals } from "./lib/usage.ts";
-import { detectAgent } from "./lib/agent.ts";
+import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } from "./lib/agent.ts";
 // The panel: the Connect routes, the token, the static files.
 import { adminToken } from "./lib/admin/token.ts";
 import { CONNECT_PREFIX, connectMiddleware, hasWebDist, staticMiddleware, webDistDir } from "./lib/admin/http.ts";
@@ -371,6 +371,9 @@ function upstreamContext(): UpstreamContext {
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
     tokenRhythmMaxAttempts: TOKENRHYTHM_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
+    // 开放 API 平台直接转发，所以会话相关的头跟着走；模拟客户端的那些
+    // 自己重建请求，这些头不会出网关。
+    clientHeaders: {},
     workbuddyMaxOutput: (model: string) => workbuddyCatalog().find((m) => m.id === model)?.maxOutput ?? 64000,
     workbuddyModel: (model: string) => workbuddyCatalog().find((m) => m.id === model) ?? null,
   };
@@ -627,6 +630,13 @@ async function callUpstream(
 ): Promise<void> {
   const started = Date.now();
   const agent = detectAgent(ctx.request.headers).name;
+  const session = detectSession(ctx.request.headers);
+  // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
+  // 是直接转发的，客户端的会话头跟着过去。模拟客户端的那些（Qoder、
+  // WorkBuddy、MiniMax Code、ZCode）按客户端的样子重建请求，多余的头无视。
+  if (providerKindOf(route.provider)?.openPlatform) {
+    uctx.clientHeaders = clientSessionHeaders(ctx.request.headers);
+  }
   try {
     // The kind says how to talk to it. The provider says which account.
     switch (providerKindOf(route.provider)?.kind) {
@@ -655,11 +665,11 @@ async function callUpstream(
         await toMinimax(uctx, body, route, dialect, stream, ctx);
         break;
     }
-    recordRequestUsage(body, route, agent, uctx, ctx.status || 200, started, "");
+    recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "");
   } catch (e) {
     const err = e as AuthError;
     const status = typeof err?.status === "number" ? err.status : 500;
-    recordRequestUsage(body, route, agent, uctx, status, started, err?.message ?? String(e));
+    recordRequestUsage(body, route, agent, session, uctx, status, started, err?.message ?? String(e));
     throw e;
   }
 }
@@ -674,6 +684,7 @@ function recordRequestUsage(
   body: Record<string, any>,
   route: Route,
   agent: string,
+  session: SessionInfo,
   uctx: UpstreamContext,
   status: number,
   started: number,
@@ -688,6 +699,8 @@ function recordRequestUsage(
     upstreamModel,
     agentModel: String(body.model ?? route.label ?? upstreamModel),
     agent,
+    sessionId: session.sessionId,
+    parentSessionId: session.parentSessionId,
     client: route.provider,
     ok: !error && status < 400,
     status,

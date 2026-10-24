@@ -103,7 +103,11 @@ export async function refreshSenseNovaCatalog(force = false, providerId = "sense
  * 请求体是 OpenAI 形状的，原样发过去；答案也是 OpenAI 形状的，原样回来。
  * 上游报错了就把它的原话带回去 —— 平台自己的话比「上游失败了」有用。
  */
-export async function senseNovaChat(body: Record<string, any>, providerId = "sensenova"): Promise<Response> {
+export async function senseNovaChat(
+  body: Record<string, any>,
+  providerId = "sensenova",
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
   const key = senseNovaInferenceKey(providerId);
   if (!key) {
     throw new AuthError(
@@ -119,6 +123,7 @@ export async function senseNovaChat(body: Record<string, any>, providerId = "sen
       Authorization: `Bearer ${key}`,
       Accept: body.stream ? "text/event-stream" : "application/json",
       "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
+      ...extraHeaders,
     },
     body: JSON.stringify(body),
   });

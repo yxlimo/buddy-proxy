@@ -77,3 +77,63 @@ export function detectAgent(headers: HeaderBag): AgentInfo {
   const first = ua.split(/[\s/]/)[0] || "unknown";
   return { name: first.slice(0, 24), version: versionOf(ua), userAgent: ua };
 }
+
+/** 一次请求属于哪个会话。 */
+export interface SessionInfo {
+  /** 会话 id。认不出来就是空的。 */
+  sessionId: string;
+  /** 父会话 id。只有 opencode 的子代理有。 */
+  parentSessionId: string;
+}
+
+/**
+ * 从头里认出会话。
+ *
+ * opencode 自带这些头：
+ *   x-opencode-session-id        会话
+ *   x-opencode-parent-session-id 父会话（子代理才有）
+ *   x-session-affinity / X-Session-Id  会话（另一套拼法）
+ *
+ * pi 的会话头要开 `compat.sendSessionAffinityHeaders` 才有（x-session-id）。
+ * pi 没有父会话的概念 —— 它的子代理跑在服务端，头上分不出来。
+ */
+export function detectSession(headers: HeaderBag): SessionInfo {
+  const sessionId =
+    header(headers, "x-opencode-session-id") ||
+    header(headers, "x-session-id") ||
+    header(headers, "x-session-affinity") ||
+    "";
+  const parentSessionId =
+    header(headers, "x-opencode-parent-session-id") || header(headers, "x-parent-session-id") || "";
+  return {
+    sessionId: sessionId.slice(0, 128),
+    parentSessionId: parentSessionId.slice(0, 128),
+  };
+}
+
+/**
+ * 开放 API 平台能看到的客户端头。
+ *
+ * 模拟客户端的那几条上游（Qoder、WorkBuddy、MiniMax Code、ZCode）是按客户端
+ * 的样子重建请求的 —— 只取必要的字段，多余的头直接无视，不转发。
+ *
+ * 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）是
+ * 直接转发的，所以会话相关的头可以跟着走：平台自己可能拿它做会话亲和或者
+ * 记账。
+ *
+ * 只带会话这一族：authorization、host、content-length 这些必须是网关自己的。
+ */
+export function clientSessionHeaders(headers: HeaderBag): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of [
+    "x-session-id",
+    "x-session-affinity",
+    "x-opencode-session-id",
+    "x-opencode-parent-session-id",
+    "x-parent-session-id",
+  ]) {
+    const value = header(headers, name);
+    if (value) out[name] = value.slice(0, 200);
+  }
+  return out;
+}
