@@ -115,19 +115,45 @@ export function anthropicToOpenAI(body: Json): Json {
     else if (tc.type === "auto") out.tool_choice = "auto";
     else if (tc.type === "none") out.tool_choice = "none";
   }
-  if (body.thinking?.type === "enabled") {
-    out.reasoning_effort = effortFromBudget(body.thinking.budget_tokens);
+  if (body.thinking?.type === "enabled" || body.thinking?.type === "adaptive") {
+    const effort = effortOf(body);
+    if (effort) out.reasoning_effort = effort;
   }
   if (typeof body.stream === "boolean") out.stream = body.stream;
   return out;
 }
 
+/**
+ * The thinking level a request asks for.
+ *
+ * Several spellings reach the proxy, depending on the client and the dialect:
+ *   `output_config.effort`  — the Anthropic spelling opencode and pi use
+ *   `effort`                — explicit
+ *   `reasoning_effort`      — the OpenAI spelling
+ *   `thinking.budget_tokens` — a budget instead of a level
+ *
+ * The level comes first: a budget cannot say which level it meant (two levels
+ * share a budget), so a request that carries the level keeps it — that is the
+ * only way the top level survives the Anthropic dialect.
+ */
+export function effortOf(body: Json): string | undefined {
+  for (const value of [body.output_config?.effort, body.effort, body.reasoning_effort]) {
+    if (typeof value === "string" && value.trim()) return value.trim().toLowerCase();
+  }
+  const budget = body.thinking?.budget_tokens ?? body.thinking_budget_tokens ?? body.thinking_budget;
+  if (typeof budget === "number" && budget > 0) return effortFromBudget(budget);
+  return undefined;
+}
+
 /** Anthropic thinking budget → OpenAI reasoning effort. */
 export function effortFromBudget(budget: unknown): string {
   const n = typeof budget === "number" ? budget : 0;
-  if (n <= 1024) return "low";
+  // The budgets clients actually use: 1024 (minimal), 2048 (low), 8192
+  // (medium), 16384 (high). Anything above that is the top level.
+  if (n <= 2048) return "low";
   if (n <= 8192) return "medium";
-  return "high";
+  if (n <= 16384) return "high";
+  return "max";
 }
 
 /** OpenAI reasoning effort → Anthropic thinking budget. */
@@ -138,6 +164,8 @@ export function budgetFromEffort(effort: unknown): number {
       return 2048;
     case "high":
       return 16384;
+    case "max":
+      return 32768;
     case "medium":
       return 8192;
     default:
@@ -244,8 +272,9 @@ export function openaiToAnthropic(body: Json, defaultMaxTokens: number): Json {
       out.tool_choice = { type: "tool", name: tc.function.name };
     }
   }
-  if (body.reasoning_effort) {
-    out.thinking = { type: "enabled", budget_tokens: budgetFromEffort(body.reasoning_effort) };
+  const effort = effortOf(body);
+  if (effort) {
+    out.thinking = { type: "enabled", budget_tokens: budgetFromEffort(effort) };
   }
   if (typeof body.stream === "boolean") out.stream = body.stream;
   return out;

@@ -9,7 +9,7 @@
 import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../credential.ts";
-import { anthropicToOpenAI, effortFromBudget, openaiToAnthropic } from "../dialect/request.ts";
+import { anthropicToOpenAI, effortOf, openaiToAnthropic } from "../dialect/request.ts";
 import {
   qoderProtocolForRegion,
   resolveModelRoute,
@@ -165,14 +165,7 @@ export async function toWorkBuddy(
  * switch, so the level is translated into a tier here.
  */
 export function extractEffort(body: Record<string, any>): string | undefined {
-  const candidates = [body.output_config?.effort, body.effort, body.reasoning_effort];
-  for (const value of candidates) {
-    if (typeof value === "string" && value.trim()) return value.trim().toLowerCase();
-  }
-
-  const budget = body.thinking?.budget_tokens ?? body.thinking_budget_tokens ?? body.thinking_budget;
-  if (typeof budget === "number" && budget > 0) return effortFromBudget(budget);
-  return undefined;
+  return effortOf(body);
 }
 
 export async function toQoder(
@@ -548,9 +541,7 @@ export async function toZcode(
 
 /** 客户端说的思考档位。 */
 function zcodeEffort(body: Record<string, any>): string | undefined {
-  const level = body?.thinking?.budget_tokens ?? body?.reasoning_effort;
-  if (typeof level === "string" && level) return level;
-  return undefined;
+  return effortOf(body);
 }
 
 /**
