@@ -332,13 +332,74 @@ check(
 const gone = await chat("e2e-main");
 check("删掉之后客户端再问就是 404", gone.status === 404, `HTTP ${gone.status}`);
 
-// 根路由只说 OpenAI 方言。
+// 根路由也说得 Anthropic 方言。
+await publish({
+  id: "e2e-main",
+  displayName: "E2E 主路由",
+  strategy: "single",
+  targets: [{ groupName: "qoder", upstreamModel: "deepseek-v4-pro", weight: 10 }],
+});
+fake.reset();
 const anthropic = await fetch(`${base}/v1/messages`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ model: "e2e-main", max_tokens: 16, messages: [{ role: "user", content: "hi" }] }),
 });
-check("根路由的 Anthropic 方言还是 404", anthropic.status === 404, `HTTP ${anthropic.status}`);
+const anthropicText = await anthropic.text();
+let anthropicJson: any = null;
+try {
+  anthropicJson = JSON.parse(anthropicText);
+} catch {
+  /* not JSON */
+}
+check("根路由的 Anthropic 方言通", anthropic.status === 200, `HTTP ${anthropic.status} ${anthropicText.slice(0, 200)}`);
+check(
+  "Anthropic 的答复是 Anthropic 形状",
+  anthropicJson?.type === "message" && Array.isArray(anthropicJson?.content),
+  anthropicText.slice(0, 200),
+);
+check(
+  "Anthropic 的答复里 model 是对外 id",
+  anthropicJson?.model === "e2e-main",
+  `model=${anthropicJson?.model}`,
+);
+check(
+  "Anthropic 方言也走到了上游",
+  inferCalls().length === 1 && inferCalls()[0].model === "dmodel",
+  JSON.stringify(inferCalls()),
+);
+check(
+  "Anthropic 方言的请求体是 OpenAI 形状（上游那边是 OpenAI 方言）",
+  inferCalls()[0]?.stream === false,
+  JSON.stringify(inferCalls()),
+);
+
+// Anthropic 方言的流式。
+fake.reset();
+const anthropicStream = await fetch(`${base}/v1/messages`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    model: "e2e-main",
+    max_tokens: 16,
+    messages: [{ role: "user", content: "hi" }],
+    stream: true,
+  }),
+});
+const anthropicStreamText = await anthropicStream.text();
+check("Anthropic 流式的状态码是 200", anthropicStream.status === 200, `HTTP ${anthropicStream.status}`);
+check(
+  "Anthropic 流式是 SSE",
+  (anthropicStream.headers.get("content-type") ?? "").includes("text/event-stream"),
+  anthropicStream.headers.get("content-type") ?? "",
+);
+check("Anthropic 流式有 message_start", anthropicStreamText.includes("message_start"), anthropicStreamText.slice(0, 200));
+check("Anthropic 流式有 message_stop", anthropicStreamText.includes("message_stop"), anthropicStreamText.slice(0, 200));
+check(
+  "Anthropic 流式帧里的 model 是对外 id",
+  anthropicStreamText.includes('"model":"e2e-main"'),
+  anthropicStreamText.slice(0, 300),
+);
 
 /* ------------------------------------------------------------------ *
  * 二、fallback

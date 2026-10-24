@@ -314,12 +314,16 @@ The metadata of a published model comes from its targets, and where the
 targets disagree the smallest value wins — the model can only promise what
 every one of them can do. The panel can override any of it.
 
-The root route's inference is OpenAI only.
+The root route speaks both dialects: a client can ask in the OpenAI shape
+(`/v1/chat/completions`) or in the Anthropic one (`/v1/messages`), and the
+answer comes back in the same dialect it asked in. The published model name is
+the same either way.
 
 | Method | Path | What it does |
 |--------|------|--------------|
 | `GET`  | `/v1/models` | the published models |
-| `POST` | `/v1/chat/completions` | a published model, with the fallback |
+| `POST` | `/v1/chat/completions` | a published model, OpenAI dialect, with the fallback |
+| `POST` | `/v1/messages` | the same model, Anthropic dialect |
 
 The panel's own API is Connect over HTTP: `POST /buddy.admin.v1.AdminService/<方法>`,
 with the contract in `proto/buddy/admin/v1/admin.proto`. It needs the panel's

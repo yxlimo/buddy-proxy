@@ -509,19 +509,10 @@ async function handleAggregate(
  */
 for (const base of ["", "/:provider"]) {
   router.post(`${base}/v1/messages`, requireKey, parseBody, async (ctx) => {
-    const provider = String(ctx.params.provider ?? "");
-    if (!provider) {
-      // The published models are served in the OpenAI dialect only.
-      ctx.status = 404;
-      ctx.body = {
-        error: { type: "invalid_request_error", message: "the root route speaks the OpenAI dialect only" },
-        hint: `用 OpenAI 方言：POST /v1/chat/completions，或者用某个 Provider 自己的路径：${listProviders()
-          .map((p) => `/${p.id}/v1/messages`)
-          .join("、")}`,
-      };
-      return;
-    }
-    await handle(ctx, "anthropic", provider);
+    // The root route serves the published models in both dialects. The model
+    // name in the body is the published one; the path prefix, when there is
+    // one, names the provider.
+    await handle(ctx, "anthropic", String(ctx.params.provider ?? "") || undefined);
   });
 
   router.post(`${base}/v1/chat/completions`, requireKey, parseBody, async (ctx) => {
