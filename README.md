@@ -551,6 +551,9 @@ The gateway does **not** validate model ids either: an unrecognized name (say
   values) and `compat.forceAdaptiveThinking: true`, so pi sends the same
   `thinking: {type: "adaptive"}` + `output_config: {effort: …}` the desktop
   client sends. Pick a level with `pi --model MiniMax-M3.1-Flash:high`.
+  `compat.sendSessionAffinityHeaders: true` puts the session id in the
+  `x-session-affinity` header, which is how the panel tells one session from
+  another.
 - **opencode** — `~/.config/opencode/opencode.jsonc` has a `minimax_code`
   provider (`npm: @ai-sdk/anthropic`, `baseURL: http://<proxy-host>:6450/minimax/v1`)
   with the same two models and limits. The thinking levels are declared as
