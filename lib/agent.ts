@@ -96,22 +96,30 @@ export interface SessionInfo {
 /**
  * 从头里认出会话。
  *
- * opencode 自带这些头：
- *   x-opencode-session-id        会话
- *   x-opencode-parent-session-id 父会话（子代理才有）
- *   x-session-affinity / X-Session-Id  会话（另一套拼法）
+ * 头名按"谁写的"分：
  *
- * pi 的会话头要开 `compat.sendSessionAffinityHeaders` 才有（x-session-id）。
- * pi 没有父会话的概念 —— 它的子代理跑在服务端，头上分不出来。
+ *   x-opencode-session-id         opencode 自己的会话
+ *   x-opencode-parent-session-id  opencode 的父会话（子代理才有）
+ *   x-pi-session-id               pi 扩展写的子会话 id（在 pi 自己的命名空间里，
+ *                                 不占用 opencode 的）
+ *   x-parent-session-id           父会话，中性拼法：opencode 原生也用这个，
+ *                                 语义相同，两边共用
+ *   x-agent-name                  agent 名，中性，两边共用
+ *   x-session-affinity / x-session-id   pi 自己的会话头
+ *
+ * 顺序有讲究：pi 的子代理上，pi-subagents 会把 `x-session-affinity` 改写成
+ * **父**会话的 id（为了让请求继续命中父会话的提示缓存），所以子会话 id 必须
+ * 先从 `x-pi-session-id` 取，否则子代理的会话会被记成父会话。
  */
 export function detectSession(headers: HeaderBag): SessionInfo {
   const sessionId =
     header(headers, "x-opencode-session-id") ||
+    header(headers, "x-pi-session-id") ||
     header(headers, "x-session-id") ||
     header(headers, "x-session-affinity") ||
     "";
   const parentSessionId =
-    header(headers, "x-opencode-parent-session-id") || header(headers, "x-parent-session-id") || "";
+    header(headers, "x-parent-session-id") || header(headers, "x-opencode-parent-session-id") || "";
   // agent 名是子代理那侧给的（pi 的会话头扩展写这个头）。
   const agentName = header(headers, "x-agent-name") || "";
   return {
@@ -140,6 +148,7 @@ export function clientSessionHeaders(headers: HeaderBag): Record<string, string>
     "x-session-affinity",
     "x-opencode-session-id",
     "x-opencode-parent-session-id",
+    "x-pi-session-id",
     "x-parent-session-id",
     "x-agent-name",
   ]) {

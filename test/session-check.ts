@@ -8,8 +8,12 @@
 //             x-opencode-parent-session-id   子代理才有
 //             x-session-affinity / X-Session-Id
 //   pi        x-session-id                  要开 compat.sendSessionAffinityHeaders
+//             x-pi-session-id               扩展写的子会话 id
+//             x-parent-session-id           中性拼法，两边共用
+//             x-agent-name                  中性，两边共用
 //
-// pi 没有父会话的概念：它的子代理跑在服务端，头上分不出来。
+// pi 自己没有父会话的概念：它的子代理跑在服务端，头上分不出来 —— 靠扩展
+// 补上。
 
 import { detectSession, clientSessionHeaders } from "../lib/agent.ts";
 
@@ -40,6 +44,27 @@ const oc = lower({
 });
 check("认出会话", detectSession(oc).sessionId === "ses_abc123", detectSession(oc).sessionId);
 check("认出父会话", detectSession(oc).parentSessionId === "ses_parent", detectSession(oc).parentSessionId);
+
+console.log("");
+console.log("pi 的子代理（扩展写的头）");
+
+// pi-subagents 把 x-session-affinity 改写成父会话的 id（为了命中父会话的
+// 提示缓存），所以子会话 id 必须从 x-pi-session-id 取。
+const piSub = lower({
+  "user-agent": "pi/1.4.0",
+  "x-session-affinity": "ses_parent",
+  "x-pi-session-id": "ses_child",
+  "x-parent-session-id": "ses_parent",
+  "x-agent-name": "be-match",
+});
+check("子会话 id 认 x-pi-session-id", detectSession(piSub).sessionId === "ses_child", detectSession(piSub).sessionId);
+check("父会话认 x-parent-session-id", detectSession(piSub).parentSessionId === "ses_parent", detectSession(piSub).parentSessionId);
+check("agent 名认 x-agent-name", detectSession(piSub).agentName === "be-match", detectSession(piSub).agentName);
+check(
+  "x-pi-session-id 会跟着转发",
+  clientSessionHeaders(piSub)["x-pi-session-id"] === "ses_child",
+  JSON.stringify(clientSessionHeaders(piSub)),
+);
 
 console.log("");
 console.log("子代理的 agent 名");

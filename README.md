@@ -233,14 +233,25 @@ shows the totals (per upstream, per model, per agent, per session, per parent
 session, per agent name, per day), the detail rows, and a `今日` window that
 means "since local midnight" rather than "the last 24 hours".
 
-The session comes from the request headers: opencode sends
-`x-opencode-session-id` (and `x-opencode-parent-session-id` for a sub-agent),
-pi sends `x-session-affinity`. A pi sub-agent's own id does not travel — the
-sub-agent plugin rewrites that header to the parent's id so the prompt cache
-still hits — so a separate `pi-session-headers` extension sends the child's id
-as `x-opencode-session-id` and the parent's as `x-parent-session-id`, plus the
-agent's name as `x-agent-name`. The agent name is the only dimension that
-survives across runs: a sub-agent gets a fresh session every time.
+The session comes from the request headers, and the header names say who sent
+them:
+
+| what | header | who writes it |
+|------|--------|---------------|
+| the session | `x-opencode-session-id` | opencode |
+| the session | `x-pi-session-id` | the `pi-session-headers` extension |
+| the session | `x-session-affinity` | pi itself |
+| the parent session | `x-parent-session-id` | neutral — opencode and the pi extension both use it |
+| the parent session | `x-opencode-parent-session-id` | opencode |
+| the agent's name | `x-agent-name` | neutral — opencode and the pi extension both use it |
+
+A pi sub-agent's own id does not travel by itself: the sub-agent plugin
+rewrites `x-session-affinity` to the parent's id so the request keeps hitting
+the upstream that holds the parent's prompt cache. The `pi-session-headers`
+extension therefore sends the child's id as `x-pi-session-id` (in pi's own
+namespace, so pi never writes into opencode's) and the parent's as
+`x-parent-session-id`. The agent's name is the only dimension that survives
+across runs: a sub-agent gets a fresh session every time.
 
 Requests that never leave the gateway — a model name nobody has, an upstream
 that is switched off — are not usage and are not counted. They show up in the
