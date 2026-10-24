@@ -50,7 +50,7 @@ import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
 import { QuotaSummary } from '@/features/balance/quota'
 import { formatCount } from '@/lib/format'
-import type { Account } from '@/gen/buddy/admin/v1/admin_pb'
+import type { Account, Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 
 const REGION_LABELS: Record<string, string> = {
   cn: '中国区',
@@ -72,6 +72,8 @@ export function UpstreamsPage() {
   const [expanded, setExpanded] = useState<string | null>(null)
   /** 待注销的账号。 */
   const [logoutTarget, setLogoutTarget] = useState<Account | null>(null)
+  /** 要删掉的 Provider：null 是没在删。 */
+  const [deleteTarget, setDeleteTarget] = useState<Upstream | null>(null)
   /** 正在填 key 的 Provider。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
 
@@ -258,15 +260,7 @@ export function UpstreamsPage() {
                               size='icon-sm'
                               aria-label={`删掉 ${upstream.id}`}
                               disabled={deleteProvider.isPending}
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `删掉 ${upstream.label || upstream.id}？它名下的凭据也会一起删掉。`
-                                  )
-                                ) {
-                                  deleteProvider.mutate({ id: upstream.id })
-                                }
-                              }}
+                              onClick={() => setDeleteTarget(upstream)}
                             >
                               <Trash2 />
                             </Button>
@@ -382,6 +376,40 @@ export function UpstreamsPage() {
               }}
             >
               注销
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 删 Provider 也要确认：凭据跟着一起删掉。 */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              删掉 {deleteTarget ? deleteTarget.alias || deleteTarget.label || deleteTarget.id : ''}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              这个 Provider 会被删掉，它名下的凭据也会一起删掉。删掉之后客户端要用新的
+              路径（/{deleteTarget?.id ?? ''}/v1）才能访问它。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              onClick={() => {
+                const target = deleteTarget
+                setDeleteTarget(null)
+                if (!target) return
+                deleteProvider.mutate({ id: target.id })
+              }}
+            >
+              删掉
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

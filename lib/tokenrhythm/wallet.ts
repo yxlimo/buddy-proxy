@@ -109,6 +109,14 @@ export interface TokenRhythmTenantStatus {
   name: string;
   /** Whether the tenant has a key for the inference. */
   hasKey: boolean;
+  /** The tenant's own credential: the session and the key. */
+  credential: {
+    status: string;
+    /** The session's own expiry. */
+    expiresAt: string;
+    remainingSec: number;
+    warning: boolean;
+  } | null;
   wallet: TokenRhythmWallet | null;
   credits: TokenRhythmCredits | null;
   error: string | null;
@@ -127,6 +135,7 @@ export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenR
       account: mask(tenant.account),
       name: "",
       hasKey: Boolean(tenant.apiKey),
+      credential: null,
       wallet: null,
       credits: null,
       error: null,
@@ -134,6 +143,16 @@ export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenR
     try {
       const session = await sessionFor(tenant.index, providerId);
       status.name = session.name;
+      // The tenant's own credential: the session (the cookie) and the key.
+      // Without this the panel could only say "no credential" for the provider
+      // as a whole, while every tenant had its own.
+      const remainingMs = session.expiresAtMs - Date.now();
+      status.credential = {
+        status: remainingMs > 0 ? "authenticated" : "expired",
+        expiresAt: session.expiresAtMs ? new Date(session.expiresAtMs).toISOString() : "",
+        remainingSec: Math.round(remainingMs / 1000),
+        warning: remainingMs > 0 && remainingMs < WARN_MS,
+      };
       // An account with no key cannot serve a request, and the key is only
       // ever shown in full in the answer to the call that makes it. So the
       // gateway makes one and keeps it — a new account works without anybody
