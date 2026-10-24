@@ -759,7 +759,7 @@ function sendError(ctx: Koa.Context, e: unknown): void {
   };
 }
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   const base = `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`;
   // The panel's token: generated once, kept in the data directory. The
   // operator reads it from the file and hands it to the panel.
@@ -959,3 +959,31 @@ app.listen(PORT, HOST, () => {
 
   void PING_MS;
 });
+
+/**
+ * Stop taking new work, let the running requests finish.
+ *
+ * A deployment replaces the container. Without this the requests that are in
+ * flight when the container is stopped die with it -- the client sees a
+ * dropped connection half-way through an answer. So: stop listening, wait for
+ * what is running, and only then leave.
+ */
+let shuttingDown = false;
+const DRAIN_MS = 20_000;
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`  [SHUTDOWN] ${signal}: 不再接新请求，等手上的活干完（最多 ${DRAIN_MS / 1000} 秒）`);
+    server.close(() => {
+      console.log("  [SHUTDOWN] 手上的活干完了");
+      process.exit(0);
+    });
+    // A request that hangs (an upstream that never answers) must not keep the
+    // container alive forever.
+    setTimeout(() => {
+      console.log("  [SHUTDOWN] 等太久了，走了");
+      process.exit(0);
+    }, DRAIN_MS).unref?.();
+  });
+}
