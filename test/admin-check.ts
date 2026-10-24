@@ -396,6 +396,55 @@ check("原样存回去不报错", echo.body?.ok === true, JSON.stringify(echo.bo
 const row2 = db.prepare("SELECT context_window FROM aggregate_model WHERE id = ?").get("inherit-test") as any;
 check("原样存回去库里还是 NULL", row2?.context_window === null, JSON.stringify(row2));
 
+// 上游有目录的时候也一样：继承的字段还是没有，现算的值另放在 effective 里。
+// 这两个混了，面板一存就把「继承」变成写死的数字。
+const inheritedSave = await call(
+  "SavePublishedModel",
+  {
+    model: {
+      id: "inherits-a-catalog",
+      displayName: "继承有目录的上游",
+      strategy: "single",
+      enabled: true,
+      targets: [{ groupName: "qoder-cn", upstreamModel: "glm-5.3", weight: 1, position: 0, enabled: true }],
+    },
+  },
+  token,
+);
+check("继承有目录的上游也存得进去", inheritedSave.body?.ok === true, JSON.stringify(inheritedSave.body));
+
+const withCatalog = await call("ListPublishedModels", {}, token);
+const catalogModel = list(withCatalog.body?.models).find((m: any) => m.id === "inherits-a-catalog");
+check(
+  "有目录的时候，继承的字段还是没有",
+  catalogModel && catalogModel.contextWindow === undefined && catalogModel.maxOutputTokens === undefined,
+  JSON.stringify(catalogModel),
+);
+check(
+  "现算的值在 effective 里",
+  catalogModel && Number(catalogModel.effective?.contextWindow ?? 0) > 0,
+  JSON.stringify(catalogModel?.effective),
+);
+check(
+  "effective 里的值跟根路由公布的是同一个",
+  catalogModel &&
+    Number(catalogModel.effective?.contextWindow) ===
+      Number(list((await call("ListModels", { upstreamId: "qoder-cn" }, token)).body?.models).find((m: any) => m.id === "glm-5.3")?.contextWindow),
+  JSON.stringify(catalogModel?.effective),
+);
+// 原样存回去，继承还在。
+const echoCatalog = await call("SavePublishedModel", { model: catalogModel }, token);
+check("原样存回去不报错", echoCatalog.body?.ok === true, JSON.stringify(echoCatalog.body));
+const rowCatalog = db
+  .prepare("SELECT context_window, max_output_tokens FROM aggregate_model WHERE id = ?")
+  .get("inherits-a-catalog") as any;
+check(
+  "原样存回去库里还是 NULL",
+  rowCatalog?.context_window === null && rowCatalog?.max_output_tokens === null,
+  JSON.stringify(rowCatalog),
+);
+await call("DeletePublishedModel", { id: "inherits-a-catalog" }, token);
+
 // 给了值就是给了值。
 const explicit = await call(
   "SavePublishedModel",

@@ -549,6 +549,22 @@ message PublishedModel {
   repeated string effort_options = 10;
   repeated PublishedTarget targets = 11;
   int64 updated_at = 12;
+  // 继承之后的值（只读）：面板上显示用，保存时忽略。
+  //
+  // 上面那几个字段是**库里存的那个**：空就是继承目标的值，给了就是用这个值。
+  // 继承的那些每次现算（几个目标不一致时取最小的那个），算出来的结果放在
+  // 这里 —— 两个是不同的东西，不能混：把现算的值写回库里，就把「继承」
+  // 变成了写死的数字。
+  ModelMetadata effective = 14;
+}
+
+// 继承之后的元数据。只读。
+message ModelMetadata {
+  optional int32 context_window = 1;
+  optional int32 max_output_tokens = 2;
+  optional bool reasoning = 3;
+  optional bool tool_call = 4;
+  repeated string effort_options = 5;
 }
 
 message PublishedTarget {

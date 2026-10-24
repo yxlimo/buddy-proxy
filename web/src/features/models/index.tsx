@@ -204,15 +204,16 @@ export function PublishedModelsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {/* 后端给的是继承之后的值：没填就是跟着目标走，
-                          目标之间不一致时取最小的那个。 */}
+                      {/* 继承之后的值：没填就是跟着目标走，目标之间不一致
+                          时取最小的那个。库里存的是另一样东西（effective
+                          那个字段是现算的）。 */}
                       <span className='font-mono text-xs'>
-                        {model.contextWindow
-                          ? formatCount(model.contextWindow)
+                        {model.effective?.contextWindow
+                          ? formatCount(model.effective.contextWindow)
                           : '继承'}
                         {' / '}
-                        {model.maxOutputTokens
-                          ? formatCount(model.maxOutputTokens)
+                        {model.effective?.maxOutputTokens
+                          ? formatCount(model.effective.maxOutputTokens)
                           : '继承'}
                       </span>
                     </TableCell>

@@ -49,6 +49,7 @@ import {
   LoginSessionSchema,
   LoginWithPasswordResponseSchema,
   PublishedModelSchema,
+  ModelMetadataSchema,
   PublishedTargetSchema,
   RefreshCredentialResponseSchema,
   SetProviderKeysResponseSchema,
@@ -627,6 +628,14 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           reasoning: model.reasoning,
           toolCall: model.toolCall,
           effortOptions: model.effortOptions,
+          // 现算出来的值：面板上显示用，与「库里存的那个」分开。
+          effective: create(ModelMetadataSchema, {
+            contextWindow: model.effective.contextWindow,
+            maxOutputTokens: model.effective.maxOutputTokens,
+            reasoning: model.effective.reasoning,
+            toolCall: model.effective.toolCall,
+            effortOptions: model.effective.effortOptions,
+          }),
           updatedAt: BigInt(model.updatedAt),
           targets: model.targets.map((target) =>
             create(PublishedTargetSchema, {

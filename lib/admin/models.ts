@@ -44,15 +44,25 @@ export interface PublishedModelView {
   /**
    * 元数据可以不给：不给就是「继承目标的值」。
    *
-   * 库里存的是空（NULL）的时候这里就是没有，客户端原样存回去还是继承 ——
-   * 上游改了才跟着改。真正合出来的值由目录那边算（lib/router/catalog.ts），
-   * 面板要显示的话可以用 ListModels 与目标自己算。
+   * 这里是**库里存的那个**：空（NULL）就是继承，客户端原样存回去还是继承 ——
+   * 上游改了才跟着改。现算出来的值在 `effective` 里，两个是不同的东西。
    */
   contextWindow?: number;
   maxOutputTokens?: number;
   reasoning?: boolean;
   toolCall?: boolean;
   effortOptions: string[];
+  /**
+   * 继承之后的值：现算的，算法跟根路由公布的是同一套（几个目标不一致时
+   * 取最小的那个）。只读 —— 保存时忽略。
+   */
+  effective: {
+    contextWindow?: number;
+    maxOutputTokens?: number;
+    reasoning?: boolean;
+    toolCall?: boolean;
+    effortOptions: string[];
+  };
   targets: PublishedTargetView[];
   updatedAt: number;
 }
@@ -151,11 +161,24 @@ export function publishedModels(): PublishedModelView[] {
       // A published model has no reason: the field is absent then.
       unpublishedReason: reason === UnpublishedReason.UNSPECIFIED ? undefined : reason,
       strategy: model.strategy,
-      contextWindow: model.contextWindow ?? inherited?.contextWindow,
-      maxOutputTokens: model.maxOutputTokens ?? inherited?.maxOutputTokens,
-      reasoning: model.reasoning ?? inherited?.reasoning,
-      toolCall: model.toolCall ?? inherited?.toolCall,
-      effortOptions: model.effortOptions ?? inherited?.effortOptions ?? [],
+      // What the database holds: absent means "inherit from the targets".
+      // The computed value goes into `effective` instead — they are two
+      // different things, and putting the computed one here would make the
+      // panel save it back and turn "inherit" into a fixed number.
+      contextWindow: model.contextWindow ?? undefined,
+      maxOutputTokens: model.maxOutputTokens ?? undefined,
+      reasoning: model.reasoning ?? undefined,
+      toolCall: model.toolCall ?? undefined,
+      effortOptions: model.effortOptions ?? [],
+      // The value in force right now, computed the same way the root route
+      // computes it.
+      effective: {
+        contextWindow: model.contextWindow ?? inherited?.contextWindow,
+        maxOutputTokens: model.maxOutputTokens ?? inherited?.maxOutputTokens,
+        reasoning: model.reasoning ?? inherited?.reasoning,
+        toolCall: model.toolCall ?? inherited?.toolCall,
+        effortOptions: model.effortOptions ?? inherited?.effortOptions ?? [],
+      },
       updatedAt: model.updatedAt,
       targets: model.targets.map((target) => {
         const row = usage.find(

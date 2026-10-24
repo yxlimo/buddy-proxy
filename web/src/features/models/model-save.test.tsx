@@ -162,6 +162,38 @@ describe('元数据的继承', () => {
     expect(saved.toolCall).toBeUndefined()
   })
 
+  it('有现算的值也不改继承开关', () => {
+    // 服务端把「库里存的那个」和「现算出来的」分开报：继承的字段还是没有，
+    // 现算的在 effective 里。面板不能因为有现算的值就把继承变成写死的。
+    const model = create(PublishedModelSchema, {
+      id: 'buddy-max',
+      displayName: 'Buddy Max',
+      strategy: 'fallback',
+      effective: {
+        contextWindow: 180000,
+        maxOutputTokens: 131072,
+        reasoning: true,
+        toolCall: true,
+        effortOptions: ['low', 'high'],
+      },
+    })
+
+    const draft = toDraft(model)
+    expect(draft.contextWindowInherit).toBe(true)
+    expect(draft.maxOutputTokensInherit).toBe(true)
+    expect(draft.reasoning).toBe('inherit')
+    expect(draft.toolCall).toBe('inherit')
+    // 现算的值留着显示用
+    expect(draft.effectiveContextWindow).toBe(180000)
+    expect(draft.effectiveMaxOutputTokens).toBe(131072)
+
+    const saved = fromDraft(draft)
+    expect(saved.contextWindow).toBeUndefined()
+    expect(saved.maxOutputTokens).toBeUndefined()
+    expect(saved.reasoning).toBeUndefined()
+    expect(saved.toolCall).toBeUndefined()
+  })
+
   it('自己指定过的照着写回去', () => {
     const model = create(PublishedModelSchema, {
       id: 'buddy-max',

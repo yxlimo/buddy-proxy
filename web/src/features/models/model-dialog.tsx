@@ -49,6 +49,9 @@ export type ModelDraft = {
   contextWindowInherit: boolean
   maxOutputTokens: string
   maxOutputTokensInherit: boolean
+  /** 现算出来的值：继承时显示它，开关照旧是继承。 */
+  effectiveContextWindow?: number
+  effectiveMaxOutputTokens?: number
   reasoning: TriState
   toolCall: TriState
   effortOptions: string
@@ -97,6 +100,8 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
     enabled: model.enabled,
     strategy: model.strategy || 'single',
     // 服务端回的是库里存的那个：空就是继承。
+    // effective 里是现算的值 —— 继承时界面上要显示它，但开关不能因为它
+    // 变成「不继承」：那会把继承写死成具体数字。
     contextWindow:
       model.contextWindow === undefined ? '' : String(model.contextWindow),
     contextWindowInherit: model.contextWindow === undefined,
@@ -105,6 +110,8 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
         ? ''
         : String(model.maxOutputTokens),
     maxOutputTokensInherit: model.maxOutputTokens === undefined,
+    effectiveContextWindow: model.effective?.contextWindow,
+    effectiveMaxOutputTokens: model.effective?.maxOutputTokens,
     reasoning: toTriState(model.reasoning),
     toolCall: toTriState(model.toolCall),
     effortOptions: model.effortOptions.join(', '),
@@ -115,6 +122,12 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
       enabled: target.enabled,
     })),
   }
+}
+
+/** 继承时把现在实际的值显示出来。 */
+function inheritedHint(value: number | undefined): string {
+  if (value === undefined) return '继承上游'
+  return `继承上游（现在 ${value.toLocaleString()}）`
 }
 
 function toTriState(value: boolean | undefined): TriState {
@@ -294,7 +307,9 @@ export function ModelDialog({
                   inputMode='numeric'
                   disabled={draft.contextWindowInherit}
                   placeholder={
-                    draft.contextWindowInherit ? '继承上游' : '留空 = 继承上游'
+                    draft.contextWindowInherit
+                      ? inheritedHint(draft.effectiveContextWindow)
+                      : '留空 = 继承上游'
                   }
                   value={draft.contextWindow}
                   onChange={(event) =>
@@ -320,7 +335,9 @@ export function ModelDialog({
                   inputMode='numeric'
                   disabled={draft.maxOutputTokensInherit}
                   placeholder={
-                    draft.maxOutputTokensInherit ? '继承上游' : '留空 = 继承上游'
+                    draft.maxOutputTokensInherit
+                      ? inheritedHint(draft.effectiveMaxOutputTokens)
+                      : '留空 = 继承上游'
                   }
                   value={draft.maxOutputTokens}
                   onChange={(event) =>
