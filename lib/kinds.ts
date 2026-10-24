@@ -530,13 +530,20 @@ registerKind({
   models: (provider) => qoderCatalogModels(qoderModelsForRegion(qoderRegionOf(provider.id))),
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
-    // 套餐额度用尽才是那道闸：上游在套餐用尽时会把活动藏起来。加购那池不算。
+    // The platform's own flag decides. The plan (the free part) running out
+    // is not the end: the credits bought on top are a separate pool, and the
+    // platform still serves the account while they are there — it says so
+    // with quotaExceeded: false.
     const mine = (snapshot.qoder?.[provider.id] ?? {}) as any;
     const quota = mine.credits as any;
     if (!quota) return false;
     if (quota.quotaExceeded === true) return true;
+    // No flag: fall back to both pools being empty.
     const plan = quota.plan as any;
-    if (plan && Number(plan.total ?? 0) > 0 && Number(plan.remaining ?? 0) <= 0) return true;
+    const addOn = quota.addOn as any;
+    const planLeft = plan && Number(plan.total ?? 0) > 0 ? Number(plan.remaining ?? 0) : null;
+    const addOnLeft = addOn && Number(addOn.total ?? 0) > 0 ? Number(addOn.remaining ?? 0) : null;
+    if (planLeft !== null && addOnLeft !== null) return planLeft <= 0 && addOnLeft <= 0;
     return false;
   },
 });

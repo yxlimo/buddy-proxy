@@ -380,6 +380,17 @@ writeCached(
 );
 check("额度用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("qoder"));
 
+// 6b. 套餐用完但加购还有 —— 平台说 quotaExceeded: false，那就不算用尽。
+writeCached(
+  "health:upstreams:v2",
+  healthSnapshot({ region: "global", plan: { total: 300, used: 300, remaining: 0 }, addOn: { total: 100, used: 0, remaining: 100 }, quotaExceeded: false, resetsAt: null }),
+);
+check(
+  "套餐用完、加购还有 → 仍然 READY",
+  (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_READY",
+  await upstreamStateOf("qoder"),
+);
+
 // 7. 一切正常。
 writeCached(
   "health:upstreams:v2",
