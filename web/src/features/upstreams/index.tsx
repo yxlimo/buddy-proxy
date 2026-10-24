@@ -106,17 +106,14 @@ export function UpstreamsPage() {
                   <TableRow key={upstream.id}>
                     <TableCell>
                       <div className='grid gap-0.5'>
+                        {/* The name the user gave it. Two accounts of the same
+                            kind are told apart by it. */}
                         <span className='font-medium'>
-                          {upstream.kind || upstream.label || upstream.id}
-                          {/* The alias is how two accounts of the same kind are
-                              told apart, so it goes right after the name. */}
-                          {upstream.alias ? (
-                            <span className='ml-1 text-xs text-muted-foreground'>
-                              {upstream.alias}
-                            </span>
-                          ) : null}
+                          {upstream.alias || upstream.label || upstream.id}
                         </span>
-                        <span className='text-xs text-muted-foreground'>
+                        {/* The unique id: the path segment clients use, and
+                            the key the provider has in the agent clients. */}
+                        <span className='font-mono text-xs text-muted-foreground'>
                           {upstream.id}
                         </span>
                       </div>

@@ -33,7 +33,7 @@ export function ProviderAliasCell({
         }}
       >
         <Pencil className='size-3' />
-        {alias || '加别名'}
+        {alias || '加名称'}
       </Button>
     )
   }

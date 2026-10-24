@@ -74,6 +74,24 @@ export function publicGatewayOrigin(region = REGION): string {
  * constants shared by the first-party clients. They say "this request came
  * from a MiniMax client" — they are not credentials: the authorization is the
  * bearer token on the same request.
+ *
+ * What the desktop client sends, for the record (measured 2026-10-24 by
+ * reading its asar; the desktop is 3.1.3, the CLI this file follows is 5.2.0):
+ *
+ *   client            desktop / mcode       (ours: mcode)
+ *   browser_name      Chrome / mcode        (ours: mcode)
+ *   os_name           Windows / process.platform
+ *   desktop_version   3.1.3 / 5.2.0         (ours: the CLI's)
+ *   device_id         8 random digits       (ours: 0)
+ *   uuid, op_ticket, screen_*   present / absent
+ *   User-Agent        "MiniMaxAgent <Chrome UA>" / "MiniMaxCode"
+ *   Origin, Referer   present / absent
+ *
+ * The signature is byte-for-byte the same on both, and the sign-in endpoint
+ * does not check the attribution: the status and the claim answer the same
+ * for either. The differences only tell the platform which client it is
+ * talking to. If the platform ever starts keying the sign-in off them, the
+ * desktop's values are the ones to copy.
  */
 function buildRequest(
   path: string,

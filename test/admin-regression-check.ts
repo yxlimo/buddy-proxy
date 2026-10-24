@@ -197,6 +197,24 @@ console.log("代理的路");
 
 const health = await fetch(`${base}/health`);
 check("/health 答得上来", health.status === 200, String(health.status));
+const healthBody = await health.json().catch(() => null);
+
+// The provider list: the unique id (the path segment) and the name the user
+// gave it. The client scripts read it from here, so it has to be complete --
+// a provider the user added is in it too.
+const providerRows = healthBody?.providers;
+check("/health 里有 provider 清单", Array.isArray(providerRows) && providerRows.length > 0, String(providerRows?.length));
+check(
+  "每个 provider 都有唯一 id 和名字",
+  Array.isArray(providerRows) &&
+    providerRows.every((p: any) => typeof p?.id === "string" && p.id && typeof p?.name === "string" && p.name),
+  JSON.stringify(providerRows?.slice(0, 2)),
+);
+check(
+  "唯一 id 是路径里能用的那种",
+  Array.isArray(providerRows) && providerRows.every((p: any) => /^[a-z0-9][a-z0-9-]*$/.test(p?.id ?? "")),
+  JSON.stringify(providerRows?.map((p: any) => p?.id)?.slice(0, 4)),
+);
 
 const models = await fetch(`${base}/qoder/v1/models`);
 const modelsBody = await models.json().catch(() => null);
@@ -253,10 +271,14 @@ for (const [name, p] of [
   check(`${name} 流式的帧都是 JSON`, bad === "", bad);
 }
 
-// 根路由的 Anthropic 方言：它只说 OpenAI 方言的话。
+// 根路由的 Anthropic 方言：它说得两种方言了（只有面板发布出来的模型）。
 const rootAnthropic = await proxy("/v1/messages", anthropicBody);
-check("POST /v1/messages 是 404", rootAnthropic.status === 404, String(rootAnthropic.status));
-check("POST /v1/messages 说清楚了", rootAnthropic.text.includes("OpenAI dialect only"), rootAnthropic.text.slice(0, 160));
+check("POST /v1/messages 是 404（没有发布出来的模型）", rootAnthropic.status === 404, String(rootAnthropic.status));
+check(
+  "POST /v1/messages 说清楚了是哪个模型",
+  rootAnthropic.text.includes("unknown model"),
+  rootAnthropic.text.slice(0, 160),
+);
 
 console.log("");
 console.log("公布的模型从根路由走");

@@ -278,6 +278,16 @@ router.get("/health", async (ctx) => {
       sensenova: upstreamEnabled("sensenova"),
       internAi: upstreamEnabled("intern-ai"),
     },
+    // Every provider the database holds, in the two values the panel and the
+    // client scripts need: the unique id (the path segment) and the name the
+    // user gave it. A provider the user added is here too -- the list above
+    // only knows the built-in ones.
+    providers: listProviders().map((row) => ({
+      id: row.id,
+      name: row.alias || providerKindOf(row.id)?.label || row.id,
+      kind: row.kind,
+      enabled: row.enabled,
+    })),
     upstreams: {
       minimax: upstreamEnabled("minimax")
         ? {

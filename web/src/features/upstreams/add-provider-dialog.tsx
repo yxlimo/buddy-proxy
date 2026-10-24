@@ -74,8 +74,9 @@ export function AddProviderDialog({
             添加 Provider
           </DialogTitle>
           <DialogDescription>
-            同一类可以加很多个：它们各有各的凭据、自己的模型和自己的额度。id
-            是客户端用的路径（/{'{id}'}/v1），别名显示在名字后面，方便分辨。
+            同一类可以加很多个：它们各有各的凭据、自己的模型和自己的额度。唯一
+            id 是客户端用的路径（/{'{id}'}/v1），也是客户端里那个 provider 的名字
+            ；Provider 名称是显示给人看的。
           </DialogDescription>
         </DialogHeader>
         <div className='grid gap-3'>
@@ -105,7 +106,7 @@ export function AddProviderDialog({
             </Select>
           </div>
           <div className='grid gap-2'>
-            <Label htmlFor='provider-id'>id（路径里用的）</Label>
+            <Label htmlFor='provider-id'>唯一 id（路径里用的）</Label>
             <Input
               id='provider-id'
               value={id}
@@ -113,9 +114,12 @@ export function AddProviderDialog({
               onChange={(event) => setId(event.target.value)}
               className='font-mono text-xs'
             />
+            <p className='text-xs text-muted-foreground'>
+              客户端里就叫这个：{'{router}'}/{id}/v1
+            </p>
           </div>
           <div className='grid gap-2'>
-            <Label htmlFor='provider-alias'>别名</Label>
+            <Label htmlFor='provider-alias'>Provider 名称</Label>
             <Input
               id='provider-alias'
               value={alias}
