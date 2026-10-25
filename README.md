@@ -5,7 +5,7 @@ dialects, and the model name decides which upstream the request goes to:
 
 | Process | Port | Upstreams | Dialect |
 |---------|------|-----------|---------|
-| `router-proxy.ts` | 6450 | MiniMax Code, Qoder, WorkBuddy, TokenRhythm | OpenAI + Anthropic |
+| `router-proxy.ts` | 6450 | MiniMax Code, MiniMax open platform, Qoder (two regions), WorkBuddy, TokenRhythm, ZCode, SenseNova, 书生·端砚 | OpenAI + Anthropic |
 
 Point a client at it and it works with either dialect — see
 [Router](#router-router-proxyts-port-6450).
@@ -43,11 +43,14 @@ has been removed rather than left to rot.
 ## Setup
 
 ```bash
-npm install
+mise install          # the tool versions this project expects
+pnpm install          # the dependencies
 MINIMAX_CODE=true QODER_GLOBAL=true QODER_CN=true WORKBUDDY_CN=true node router-proxy.ts   # :6450
 ```
 
-API keys live in `api-keys.json` (auto-generated on first run if missing).
+The credentials live in the database (`/data/buddy.db` by default) and the
+settings in the same place. `api-keys.json` is only the fallback for the
+front-door keys of a deployment that predates the database.
 
 ## The settings
 
@@ -89,16 +92,44 @@ config-cli.ts          look at the settings, and change them
 lib/config.ts          the settings, and where they come from
 lib/store.ts           the database: the credentials, the settings, the cache
 lib/paths.ts           the one directory everything lives in
+lib/providers.ts       the providers: the rows, their kind, their secrets
+lib/provider-kinds.ts  what a kind of upstream can do: how to log in, what to ask
+lib/kinds.ts           the registry the panel and the router read
+lib/session.ts          the session: read it, write it, lock it, refresh it
+lib/credential.ts       the shared credential shapes, and the auth log
+lib/usage.ts            the request-level usage log
+lib/agent.ts            who sent the request: pi, opencode, dsh
+lib/aggregate.ts        the published models: the catalog, the targets, the traffic
+lib/benefits.ts         the daily credits of the China accounts
+lib/http.ts             the HTTP client (node:http, so no browser headers)
+lib/api-keys.ts         the front door: the keys the clients use
+lib/device-identity.ts  the fingerprint of an account
+lib/sse.ts              the server-sent events, in and out
+lib/sse-stream.ts       reading an event stream
+lib/env.ts             reading the environment
+lib/ids.ts             the id helpers
 lib/router/            the router's inside
   routes.ts            where a request goes: the model name and the path
   catalog.ts           the model lists, in both dialects
   deliver.ts           how an answer reaches the client
   upstreams.ts         the upstream adapters
-  benefits.ts          the daily check-in
 lib/dialect/           the conversion between the two dialects
   request.ts           the request
   stream.ts            the streaming answer
   response.ts          the whole answer
+lib/admin/             the panel's side: the Connect service
+  service.ts           the twenty-odd methods of the contract
+  accounts.ts          the accounts and their credentials
+  credentials.ts       the credential words, and the key writing
+  config.ts            the settings the panel may change
+  upstreams.ts         what each upstream has: the credential, the quota, the state
+  models.ts            the published models
+  usage.ts             the usage summary
+  benefits.ts          the daily check-in
+  login.ts             the logins: the browser, the password, the code
+  token.ts             the panel's own token
+  log.ts               the tail of the log
+  http.ts              the Connect transport
 lib/qoder/              Qoder: the session, the models, the two protocols
   auth.ts               the device flow, the session, the refresh
   models.ts             the model catalog, in both dialects
@@ -106,6 +137,7 @@ lib/qoder/              Qoder: the session, the models, the two protocols
   legacy.ts             the gateway, in the legacy COSY protocol
   credits.ts            the quota, and whether the account is usable
   benefits.ts           the daily campaign
+  sgsdk.ts              the machine identity (the real one, and how to get it)
 lib/workbuddy/          WorkBuddy: the session, the models, the transport
   auth.ts               the browser login, the session, the refresh
   models.ts             the catalogue, curated the way the client shows it
@@ -120,11 +152,20 @@ lib/minimax/            MiniMax: the session, the models, the gateway call
   models.ts             the model catalog
   transport.ts          the call to the MiniMax Code gateway
   credits.ts            what the accounts have left
+  checkin.ts            the daily sign-in
+  api.ts                the open platform: the tenants, their keys, their plans
+lib/zcode/              ZCode (the GLM coding client)
+  auth.ts               the browser login, the session
+  models.ts             the model catalog
+  transport.ts          the inference endpoint
+  credits.ts            the Start Plan's allowance
 lib/tokenrhythm/        TokenRhythm: the accounts, the wallet, the relay call
   accounts.ts           the tenants, the session, the login
   wallet.ts             what the accounts have left, and which one to use
   models.ts             the model catalog
   transport.ts          the relay call
+  platform.ts           the platform's own API (the cookies, the writes)
+  keys.ts               the API keys of the tenants
 lib/sensenova/          SenseNova: the login, the keys, the pools, the relay call
   auth.ts               the login with a password, the cookie session, the refresh
   keys.ts               the API keys, and the pools they draw from
@@ -137,11 +178,11 @@ lib/intern-ai/          书生·端砚: the login, the keys, the credits, the re
   models.ts             the model catalog, from the inference endpoint and the console
   quota.ts              the credits, and the packs they come in
   transport.ts          the inference endpoint
-lib/aggregate.ts        the published models: the catalog, the targets, the traffic
-lib/benefits.ts         the daily credits of the China accounts
-lib/session.ts          the session: read it, write it, lock it, refresh it
-lib/store.ts            the database: the credentials, the locks, the cache
-lib/device-identity.ts  the fingerprint of an account
+proto/buddy/admin/v1/   the contract the panel and the gateway share
+lib/gen/                the generated code for it (both sides use this copy)
+web/                    the panel: React, Vite, shadcn/ui, Connect
+test/                   the tests, the mock, the recorded fixtures
+tools/                  the scripts of one machine (not in the repository)
 ```
 
 The code runs through Node's type stripping, so there is no build step — and
@@ -163,7 +204,37 @@ mise run test          # the offline self-test
 mise run typecheck
 mise run web:build
 mise run build         # the panel and the image
+mise run proto         # regenerate the contract's code
 ```
+
+The test tasks are separate so a change can be checked on its own:
+
+| Task | What it covers |
+|------|----------------|
+| `test` | the offline self-test (the recorded fixtures) |
+| `test:admin` | the panel's API |
+| `test:admin:contract` | every method of the contract answers |
+| `test:admin:regression` | the panel's API, end to end |
+| `test:admin:login` | the login flows |
+| `test:admin:state` | what the panel says about each upstream |
+| `test:aggregate` | the published models and the fallback behind them |
+| `test:agent` | telling the agents apart by their headers |
+| `test:catalog-parity` | the model lists agree with the upstreams |
+| `test:config` | the settings, and the hot ones |
+| `test:effort` | the thinking levels |
+| `test:intern-ai` | 书生·端砚 |
+| `test:minimax:checkin` | the MiniMax sign-in |
+| `test:qoder:benefits` | the Qoder campaigns |
+| `test:route` | the router, end to end |
+| `test:session` | the session, and the shared base |
+| `test:snapshot` | reading the health snapshot by provider id |
+| `test:tokenrhythm` | the tenants, the wallet, the fallback |
+| `test:tokenrhythm:fallback` | the fallback between the tenants |
+| `test:usage` | the usage log |
+| `test:zcode` | the ZCode login window |
+
+None of them spend anything: they run against the mock or the recorded
+fixtures.
 
 ## Testing
 
@@ -211,8 +282,8 @@ Three different things, and they are never added together:
 | | What it is | Who has it |
 |---|---|---|
 | **余额 (balance)** | money | the relay stations (TokenRhythm) |
-| **积分 (credits)** | points | Qoder, WorkBuddy, SenseNova, InternAI |
-| **套餐额度 (token plan)** | a percentage per window (5 hours, weekly) | MiniMax's coding plan |
+| **积分 (credits)** | points | Qoder, WorkBuddy, SenseNova, InternAI, MiniMax |
+| **套餐额度 (token plan)** | a percentage per window (5 hours, weekly) | MiniMax's coding plan, the open platform |
 
 The upstream list shows the token plan when there is one, the credits
 otherwise, and the balance separately when there is one. A platform that does
@@ -229,9 +300,14 @@ which upstream, which model, what the client asked for, which agent sent it
 (pi, opencode, dsh — read from the request headers), which session it belongs
 to, which parent session, which sub-agent, which desktop client we
 impersonated, whether it worked, and how many tokens it used. The 用量 tab
-shows the totals (per upstream, per model, per agent, per session, per parent
+shows the totals (per upstream, per model, per agent, per session, per main
 session, per agent name, per day), the detail rows, and a `今日` window that
 means "since local midnight" rather than "the last 24 hours".
+
+The main session is the root of the chain: a sub-agent's traffic is rolled
+into the main agent's session, and a sub-agent can spawn a sub-agent, so the
+chain is walked up to the root. The per-session card shows the ten sessions
+with the most traffic.
 
 The session comes from the request headers, and the header names say who sent
 them:
@@ -257,7 +333,8 @@ Requests that never leave the gateway — a model name nobody has, an upstream
 that is switched off — are not usage and are not counted. They show up in the
 request log instead.
 
-The rows older than 90 days are dropped at startup.
+The rows older than `USAGE_RETENTION_DAYS` (30 by default, changeable in the
+panel) are dropped at startup and once an hour while it runs.
 
 ## Endpoints
 
@@ -333,16 +410,21 @@ into `/data/admin-token` (0600). `/health` stays public.
 | Method | What it does |
 |--------|--------------|
 | `GetSystemStatus` | the upstreams, their credentials, the balances |
+| `RestartSystem` | ask the gateway to exit (the container brings it back) |
 | `ListUpstreams` / `SetUpstreamEnabled` | the upstream switches |
 | `ListConfig` / `SetConfig` | the settings and where each value comes from |
 | `ListAccounts` / `ListCredentials` | the accounts and their credentials |
 | `TestCredential` / `RefreshCredential` | try one credential, refresh it |
+| `LogoutAccount` | log out: delete an account's credentials |
 | `GetBalance` | the balances and the credit lots |
 | `GetUsageSummary` / `ListUsageEvents` | the traffic |
 | `ListPublishedModels` / `SavePublishedModel` / `DeletePublishedModel` | the published models |
 | `GetBenefitStatus` / `RunBenefitNow` | the daily check-in |
 | `ListModels` | the catalogues of the upstreams |
-| `TailLog` | the credential log |
+| `ListProviderKinds` / `AddProvider` / `UpdateProvider` / `DeleteProvider` | the providers themselves |
+| `SetProviderKeys` | the API keys of a provider |
+| `BeginLogin` / `GetLoginStatus` / `CancelLogin` / `LoginWithPassword` / `ExchangeLoginCode` / `ImportLoginToken` | the logins |
+| `TailLog` | the log |
 
 A saved published model takes effect right away: the panel saves what it
 changed and the root route serves it from then on.
@@ -352,9 +434,11 @@ targets say" (the smallest context window among them, and so on). The gateway
 stores that as an empty value, so a panel that reads a model and saves it back
 unchanged keeps following the upstreams instead of freezing their numbers.
 
-The settings are read once at startup, so a changed setting waits for a
-restart — the panel says so with `pending_restart`, and `RestartSystem` asks
-the gateway to exit (the container brings it back with the new settings).
+The settings the panel may change are **hot**: the upstream switches, the
+front-door key check and the usage retention take effect on the next request.
+The rest is the service's own business and waits for a restart — the panel
+does not offer those, and `RestartSystem` asks the gateway to exit (the
+container brings it back with the new settings).
 
 The traffic table counts every request against the target that served it, and
 against the ones that failed, with the tokens each one cost.
@@ -364,7 +448,11 @@ against the ones that failed, with the tokens each one cost.
 `reference/qoder/` holds what was needed to read the Qoder client's own model
 catalogue: the script that decrypts it, the decrypted catalogue, and the
 request the client actually sent (decoded). It is what the numbers above are
-based on, and it is what to check again when Qoder changes them.
+based on, and it is what to check again when Qoder changes them. It is
+local, not in the repository.
+
+`docs/` holds the research material for the other upstreams (the platform
+interfaces, the client behaviour, the bug reports). It is local as well.
 
 ## Client model lists
 
@@ -401,6 +489,8 @@ Each upstream is a provider of its own, so the model ids are the real ones:
 | `qoder_cn` | `{router}/qoder-cn/v1` | Qoder, China account |
 | `workbuddy_cn` | `{router}/workbuddy-cn/v1` | WorkBuddy, China account |
 | `minimax_code` | `{router}/minimax/v1` | the MiniMax Code gateway |
+| `minimax_api` | `{router}/minimax-api/v1` | the MiniMax open platform, by API key |
+| `zcode` | `{router}/zcode/v1` | ZCode (the GLM coding client) |
 | `sensenova` | `{router}/sensenova/v1` | SenseNova |
 | `intern_ai` | `{router}/intern-ai/v1` | 书生·端砚 (Discovery) |
 | `tokenrhythm` | `{router}/tokenrhythm/v1` | the TokenRhythm relay station |
@@ -1110,12 +1200,13 @@ it only means a new fingerprint, not a lost login.
 ## Daily benefits
 
 Every account hands out credits for showing up, and the router takes them
-without being asked. It runs when it starts and then every six hours; the day
+without being asked. It runs when it starts and then every hour; the day
 rolls over at midnight in China, and every call is idempotent — asking twice
 answers "already done" rather than doing it again.
 
 | Account | What it takes |
 |---|---|
+| MiniMax Code | the sign-in (`/minimax-cloud/api/v1/signin/status` and `/claim`) — seven days, the first day worth more |
 | WorkBuddy | the daily check-in (`/v2/billing/meter/daily-checkin`), and then the growth centre: the gift the travelling Buddy brings back, the tasks, the make-up cards for a missed day, the streak tier, and the blind box |
 | Qoder (both regions) | the campaigns (`/sash/api/v1/me/campaigns`) that are claimable |
 
@@ -1128,15 +1219,19 @@ accepted, claim the ones that are finished, use a make-up card for a day that
 was missed, redeem the tier the streak unlocked, and open one blind box. A
 draw cannot be undone, so only one is opened per run.
 
-The Qoder campaigns come back **empty** without the `Cosy-ClientType` header,
-so that one is not optional.
+The Qoder campaigns come back **empty** when the request says it is the
+command-line client (`Cosy-ClientType: 5`): the daily credits are the desktop
+client's promotion, so the request has to say it is the desktop client
+(`Cosy-ClientType: 10`). The machine identity makes no difference to this —
+sending a real one, a made-up one, or none at all gives the same list — so
+the gateway sends none of them.
 
 The result of the last run is in `/health` under `benefits`:
 
 ```json
 "benefits": {
   "enabled": true,
-  "intervalMs": 21600000,
+  "intervalMs": 3600000,
   "lastRunAt": "2026-10-21T03:07:50.801Z",
   "running": false,
   "lastOutcome": [
@@ -1156,10 +1251,17 @@ answering:
 
 | Upstream | Where the numbers come from |
 |----------|-----------------------------|
-| MiniMax | the account balance (`/account/query_balance`) and, with a plan key, the plan's own windows (`/v1/token_plan/remains`) |
+| MiniMax | the account balance (`/account/query_balance`), the plan's own windows (`/v1/token_plan/remains`, needs the plan key) and the points (`/minimax-cloud/api/v1/credit/details`) |
 | Qoder | the plan's credits and the ones bought on top (`/api/v2/quota/usage`) |
 | WorkBuddy | the check-in status, which carries the daily and the total |
 | TokenRhythm | the wallet and the gift that expires (`/api/wallet/summary`, `/api/wallet/expiring-credits`) |
+| SenseNova | the pools of the console (`/lite/console/v1/tokenplan/pool-usage`) |
+| ZCode | the Start Plan's buckets |
+| 书生·端砚 | the balance and the packs of the console |
+
+The three kinds of number are never added together: the balance is money, the
+credits are points, and the plan is a percentage per window. A platform that
+does not report a total says so by reporting `0`.
 
 The MiniMax plan runs in two windows — five hours and a week — and what is
 left of each is a percentage. The plan's key is the API key (`sk-cp-…`), not
@@ -1215,15 +1317,18 @@ The service directory holds the compose file and a `./data` directory mounted at
 `/data`, and nothing else.
 
 The login is the only step that needs a human, and the service does it
-itself: a switched-on proxy with no session in `./data` runs the device
-flow at startup and prints the authorization URL and user code to its log.
-Approve it in a browser and the credential lands in `./data`. Every later
-refresh is done by the proxy itself. To log in again, remove the session file
-from `./data` and restart.
+itself: a switched-on proxy with no session runs the device flow at startup
+and prints the authorization URL and user code to its log. Approve it in a
+browser and the credential lands in the database. Every later refresh is done
+by the proxy itself. To log in again, log out in the panel (that deletes the
+credential) and restart.
 
 ```bash
 docker compose logs -f          # the authorization URL shows up here
 ```
 
 `./data` must survive rebuilds — the refresh token rotates on every refresh, so a
-lost file means logging in again.
+lost database means logging in again.
+
+The script that does the whole thing (build, ship, replace, and the credential
+migration) is `tools/deploy-nas.sh`, in the local `tools/` directory.
