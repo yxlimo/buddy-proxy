@@ -101,12 +101,8 @@ function startRouter(): ChildProcess {
       KEYS_FILE,
       ROUTER_PORT: String(port),
       BENEFITS_DISABLED: "1",
-      // 上游全关：这一轮只关心配置。
-      QODER_GLOBAL: "",
-      QODER_CN: "",
-      MINIMAX_CODE: "",
-      WORKBUDDY_CN: "",
-      TOKENRHYTHM: "",
+      // 上游全关：这一轮只关心配置。开关在数据库里（provider.enabled），
+      // 下面用面板的 SetUpstreamEnabled 改它。
       // 万一有请求打出去，也只打到本机。
       QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
       QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
@@ -174,6 +170,17 @@ async function health(): Promise<any> {
   return fetch(`${base}/health`).then((r) => r.json());
 }
 
+/**
+ * 这个上游开着吗。
+ *
+ * 开关只有一份：provider 表里的 enabled。/health 的 providers 段报的就是它
+ * （enabled 段已经删了 —— 那是同一件事的第二份拷贝）。
+ */
+function upstreamOn(body: any, id: string): boolean | undefined {
+  const row = (body?.providers ?? []).find((p: any) => p.id === id);
+  return row ? Boolean(row.enabled) : undefined;
+}
+
 /** 根路由公布的模型。 */
 async function publishedOnRoot(): Promise<string[]> {
   const res = await fetch(`${base}/v1/models`);
@@ -237,7 +244,7 @@ check(
 );
 
 const healthBefore = await health();
-check("Qoder 现在是关着的", healthBefore.enabled?.qoderGlobal === false, JSON.stringify(healthBefore.enabled));
+check("Qoder 现在是关着的", upstreamOn(healthBefore, "qoder") === false, JSON.stringify(healthBefore.providers));
 check(
   "关着的上游不公布模型",
   (await publishedOnRoot()).length === 0,
@@ -275,8 +282,8 @@ check("上游列表里没有待生效的标志", !("pending" in (qoderUpstream ?
 const healthAfter = await health();
 check(
   "不用重启，/health 里的上游已经开着了",
-  healthAfter.enabled?.qoderGlobal === true,
-  JSON.stringify(healthAfter.enabled),
+  upstreamOn(healthAfter, "qoder") === true,
+  JSON.stringify(healthAfter.providers),
 );
 
 const qoderModels = await fetch(`${base}/qoder/v1/models`)
@@ -360,8 +367,8 @@ check("网关又起来了", await waitHealthy());
 const afterRestart = await health();
 check(
   "重启之后新值还在（上游还是开着）",
-  afterRestart.enabled?.qoderGlobal === true,
-  JSON.stringify(afterRestart.enabled),
+  upstreamOn(afterRestart, "qoder") === true,
+  JSON.stringify(afterRestart.providers),
 );
 check(
   "重启之后根路由还公布那个模型",
@@ -501,7 +508,7 @@ await admin("SetConfig", { key: "REQUIRE_API_KEY", value: "false" });
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
 const finalHealth = await health();
 check("收尾之后前门又开着", finalHealth.auth === "public", JSON.stringify(finalHealth.auth));
-check("收尾之后上游又关着", finalHealth.enabled?.qoderGlobal === false, JSON.stringify(finalHealth.enabled));
+check("收尾之后上游又关着", upstreamOn(finalHealth, "qoder") === false, JSON.stringify(finalHealth.providers));
 
 /* ------------------------------------------------------------------ *
  * 结果

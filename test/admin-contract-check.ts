@@ -716,7 +716,13 @@ check(
   Boolean(healthBody?.upstreams?.minimax) && Boolean(healthBody?.upstreams?.qoder) && Boolean(healthBody?.upstreams?.workbuddy),
   JSON.stringify(Object.keys(healthBody?.upstreams ?? {})),
 );
-check("/health 里有开关", typeof healthBody?.enabled?.minimax === "boolean", JSON.stringify(healthBody?.enabled));
+// 开关只有一份：provider 表里的 enabled，/health 的 providers 段报的就是它。
+const healthProviders = healthBody?.providers ?? [];
+check(
+  "/health 里有各上游的开关",
+  healthProviders.length > 0 && healthProviders.every((p: any) => typeof p.enabled === "boolean"),
+  JSON.stringify(healthProviders),
+);
 check("/health 里有快照", Boolean(healthBody?.snapshot?.maxAgeMs), JSON.stringify(healthBody?.snapshot));
 check("/health 里有权益", Boolean(healthBody?.benefits), JSON.stringify(healthBody?.benefits));
 check("/health 里没有令牌", !health.text.includes(token));

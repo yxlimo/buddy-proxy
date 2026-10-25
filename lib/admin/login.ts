@@ -24,10 +24,8 @@ import {
 import {
   buildDeviceAuthorization,
   pollDeviceToken as pollQoderDevice,
-  regionOf as qoderRegionOf,
   saveSession as saveQoderSession,
   type DeviceAuthorization as QoderDeviceAuthorization,
-  type QoderRegion,
 } from "../qoder/auth.ts";
 import { provider } from "../providers.ts";
 import {
@@ -42,7 +40,7 @@ import {
   saveSession as saveWorkBuddySession,
   startLogin as startWorkBuddyLogin,
 } from "../workbuddy/auth.ts";
-import { loginWithCredentials, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
+import { loginWithCredentials, storedTenant, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { ensureApiKey } from "../tokenrhythm/keys.ts";
 import { login as loginSenseNova, ACCOUNT_ID as SENSENOVA_ACCOUNT_ID } from "../sensenova/auth.ts";
 import { ensureSenseNovaKey } from "../sensenova/transport.ts";
@@ -90,7 +88,7 @@ function cacheKey(loginId: string): string {
 }
 
 /** 读一次登录会话。 */
-export function loadLogin(loginId: string): StoredLogin | null {
+function loadLogin(loginId: string): StoredLogin | null {
   if (!loginId) return null;
   const row = peekCached<StoredLogin>(cacheKey(loginId));
   return row?.data ?? null;
@@ -114,7 +112,7 @@ function updateLogin(loginId: string, patch: Partial<StoredLogin>): StoredLogin 
 const SESSION_TTL_MS = 24 * 3600 * 1000;
 
 /** 把过期与已结束的会话清掉。cache 表没有别的清理逻辑。 */
-export function cleanupLogins(): void {
+function cleanupLogins(): void {
   const now = Date.now();
   for (const row of listCached("login:")) {
     if (now - row.at > SESSION_TTL_MS) deleteCached(row.id);
@@ -198,7 +196,7 @@ async function startWorkBuddy(): Promise<Started> {
 }
 
 /** 账号密码型：面板画一个表单。 */
-function startPassword(upstreamId: string): Started {
+function startPassword(): Started {
   return {
     method: "password",
     authorizationUrl: "",
@@ -254,7 +252,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
         return startWorkBuddy();
       case "tokenrhythm":
       case "sensenova":
-        return startPassword(upstreamId);
+        return startPassword();
       case "intern-ai":
         return startInternAi();
       default:
@@ -465,14 +463,13 @@ export async function loginWithPassword(input: {
       const session = await loginWithCredentials(index, input.username, input.password, input.remember);
       // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。
       // 账号上没有就建一把（平台只给一次完整值）。
-      const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(
-        `account:tokenrhythm:${index}`,
-      );
+      const stored = storedTenant(index);
       await ensureApiKey(session, index, stored?.apiKey ?? null);
       return {
         ok: true,
         message: `租户 ${index} 登录完成。`,
-        credentialId: `session:tokenrhythm:${index}`,
+        // 会话是一张表（按租户号存），凭据的 id 后面带租户号。
+        credentialId: `session:provider:tokenrhythm:tenant-${index}`,
         accountId: `tokenrhythm:${index}`,
       };
     }
@@ -494,7 +491,7 @@ export async function loginWithPassword(input: {
         message: keyReady
           ? "SenseNova 登录完成，推理用的 key 已就绪。"
           : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
-        credentialId: "session:sensenova",
+        credentialId: "session:provider:sensenova",
         accountId: "sensenova",
       };
     }
@@ -520,7 +517,7 @@ export async function loginWithPassword(input: {
         message: keyReady
           ? "intern-ai 登录完成，推理用的 key 已就绪。"
           : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
-        credentialId: "session:intern-ai",
+        credentialId: "session:provider:intern-ai",
         accountId: "intern-ai",
       };
     }
@@ -583,7 +580,7 @@ export async function exchangeLoginCode(input: {
   return {
     ok: true,
     message: "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: "session:intern-ai",
+    credentialId: "session:provider:intern-ai",
     accountId: "intern-ai",
   };
 }
@@ -610,7 +607,7 @@ export async function importLoginToken(input: {
   return {
     ok: true,
     message: "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: "session:intern-ai",
+    credentialId: "session:provider:intern-ai",
     accountId: "intern-ai",
   };
 }

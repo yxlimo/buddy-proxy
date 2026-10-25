@@ -8,9 +8,15 @@
 // BUDDY_DATA_DIR, never the real one. The tokens are not real; the mock
 // upstream does not look at them.
 //
+// The upstream switches live in the same database (provider.enabled), and a
+// fresh install has every built-in upstream off. So this script turns on the
+// ones the offline test needs — the same thing the panel's switch does.
+//
 //   node test/fake-sessions.ts
 
 import { setSecret } from "../lib/store.ts";
+import { ensureBuiltinProviders } from "../lib/providers.ts";
+import { store } from "../lib/store.ts";
 
 const now = Date.now();
 const year = now + 365 * 24 * 3600 * 1000;
@@ -55,4 +61,14 @@ setSecret("session:provider:qoder", "session", qoder("global"));
 setSecret("session:provider:qoder-cn", "session", qoder("cn"));
 setSecret("session:provider:workbuddy-cn", "session", workBuddy());
 
-console.log("[test] 假会话写好了（qoder 全球区 / 中国区 / workbuddy 中国区）");
+// The switches too: a fresh install has every built-in upstream off, and the
+// offline test serves qoder (both regions) and workbuddy. TEST_UPSTREAMS says
+// which ones this run needs.
+ensureBuiltinProviders();
+const ON = process.env.TEST_UPSTREAMS ?? "qoder,qoder-cn,workbuddy-cn";
+const on = ON.split(",").map((id) => id.trim()).filter(Boolean);
+for (const id of on) {
+  store().prepare("UPDATE provider SET enabled = 1 WHERE id = ?").run(id);
+}
+
+console.log(`[test] 假会话写好了（qoder 全球区 / 中国区 / workbuddy 中国区），开着：${on.join("、")}`);

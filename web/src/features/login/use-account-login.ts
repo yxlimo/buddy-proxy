@@ -3,7 +3,7 @@ import { useBeginLogin } from '@/features/login/api'
 import { useLoginIdInHash } from '@/features/login/hash'
 
 /** 这次登录是给哪个账号开的。 */
-export type LoginTarget = {
+type LoginTarget = {
   upstreamId: string
   accountId: string
   label: string

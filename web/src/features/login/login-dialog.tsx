@@ -30,7 +30,7 @@ import {
   useLoginWithPassword,
 } from '@/features/login/api'
 import { accountKeys } from '@/features/accounts/api'
-import { upstreamKeys } from '@/features/upstreams/api'
+import { upstreamKeys, useUpstreams } from '@/features/upstreams/api'
 import { humanMessage } from '@/lib/errors'
 import { formatCountdown } from '@/lib/format'
 
@@ -60,6 +60,13 @@ export function LoginDialog({
   const cancel = useCancelLogin()
   const session = status.data?.session
   const queryClient = useQueryClient()
+  // 这个上游是哪一类：登录方式看 kind，不看 id —— id 是用户起的。
+  // 列表在别处已经拿过了，这里只读，不要再发一次请求。
+  const upstreams = useUpstreams({ refetchOnMount: false })
+  const upstreamKind =
+    upstreams.data?.upstreams.find(
+      (u) => u.id === (upstreamId ?? session?.upstreamId ?? '')
+    )?.kind ?? ''
   // 登录成功只说一次。
   const announced = useRef('')
 
@@ -153,6 +160,7 @@ export function LoginDialog({
                 session={session}
                 upstreamId={upstreamId ?? session.upstreamId}
                 accountId={accountId ?? session.accountId}
+                kind={upstreamKind}
                 onCancel={() => cancel.mutate(loginId)}
                 onDone={() => onOpenChange(false)}
                 cancelling={cancel.isPending}
@@ -223,6 +231,7 @@ function LoginBody({
   session,
   upstreamId,
   accountId,
+  kind,
   onCancel,
   onDone,
   cancelling,
@@ -230,6 +239,8 @@ function LoginBody({
   session: Session
   upstreamId: string
   accountId: string
+  /** 这个上游是哪一类（kind）。登录方式按它来。 */
+  kind: string
   onCancel: () => void
   onDone: () => void
   cancelling: boolean
@@ -241,6 +252,7 @@ function LoginBody({
           session={session}
           upstreamId={upstreamId}
           accountId={accountId}
+          kind={kind}
           onDone={onDone}
         />
       )
@@ -347,11 +359,14 @@ function PasswordForm({
   session,
   upstreamId,
   accountId,
+  kind,
   onDone,
 }: {
   session: Session
   upstreamId: string
   accountId: string
+  /** 这个上游是哪一类（kind）。 */
+  kind: string
   onDone: () => void
 }) {
   const [username, setUsername] = useState(session.username ?? '')
@@ -362,7 +377,8 @@ function PasswordForm({
   // SenseNova 的 cookie 就是会话本身：留不留密码都一样用得上，后端那边
   // 登录完总是把存的密码擦掉、只留 cookie。所以这个上游不给「记住密码」
   // 这个选项 —— 给了一个说了也不算的选项。
-  const canRemember = upstreamId !== 'sensenova'
+  // 按 kind 判，不按上游 id：id 是用户起的，会变。
+  const canRemember = kind !== 'sensenova'
 
   return (
     <form

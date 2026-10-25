@@ -26,11 +26,18 @@ export const upstreamKeys = {
   kinds: ['provider-kinds'] as const,
 }
 
-export function useUpstreams() {
+/**
+ * 上游列表。
+ *
+ * refetchOnMount: false 给旁观者用：已经在别处拿过列表的组件只想读一下
+ * 上游的 kind，不该再发一次请求。
+ */
+export function useUpstreams(options?: { refetchOnMount?: boolean }) {
   const client = useAdminClient()
   return useQuery({
     queryKey: upstreamKeys.all,
     queryFn: () => client.listUpstreams(create(ListUpstreamsRequestSchema)),
+    ...options,
   })
 }
 

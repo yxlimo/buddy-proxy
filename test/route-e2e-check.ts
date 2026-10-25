@@ -87,7 +87,7 @@ let router: ChildProcess | null = null;
 let routerLog = "";
 
 /** 起一个网关（或者再起一个）。 */
-function startRouter(qoderGlobal: string): ChildProcess {
+function startRouter(): ChildProcess {
   const child = spawn(process.execPath, ["router-proxy.ts"], {
     cwd: ROOT,
     env: {
@@ -95,12 +95,8 @@ function startRouter(qoderGlobal: string): ChildProcess {
       BUDDY_DATA_DIR: DATA_DIR,
       ROUTER_PORT: String(port),
       BENEFITS_DISABLED: "1",
-      // 只有 Qoder 全球区开着，其余的上游全关。
-      QODER_GLOBAL: qoderGlobal,
-      QODER_CN: "",
-      MINIMAX_CODE: "",
-      WORKBUDDY_CN: "",
-      TOKENRHYTHM: "",
+      // 上游的开关不在环境里了：它在数据库的 provider.enabled 上，重启也
+      // 还在。开头用面板的 SetUpstreamEnabled 把 Qoder 打开。
       // 上游指向假上游：一个字都不出机器。
       QODER_GLOBAL_INFER_BASE: `${upstreamBase}/qoder-global`,
       QODER_GLOBAL_OPENAPI_BASE: `${upstreamBase}/openapi-global`,
@@ -163,7 +159,7 @@ function cleanup(): void {
 }
 process.on("exit", cleanup);
 
-startRouter("true");
+startRouter();
 await waitHealthy();
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
@@ -182,6 +178,9 @@ async function admin(method: string, body: unknown = {}): Promise<any> {
     return { raw: text, httpStatus: res.status };
   }
 }
+
+// 上游的开关在数据库里：只有 Qoder 全球区开着，其余的默认就是关的。
+await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
 
 /** 客户端发一次请求（OpenAI 方言，根路由）。 */
 async function chat(
@@ -635,10 +634,12 @@ section("上游真的关掉之后（重启过）");
 // 把上游开关改成关（写进数据库），再重启：这次上游是真的关着的。
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
 await stopRouter();
-startRouter("");
+startRouter();
 await waitHealthy();
 const offHealth = await fetch(`${base}/health`).then((r) => r.json());
-check("上游真的关着了", offHealth.enabled?.qoderGlobal === false, JSON.stringify(offHealth.enabled));
+// 开关只有一份：provider 表里的 enabled，/health 的 providers 段报的就是它。
+const offQoder = (offHealth.providers ?? []).find((p: any) => p.id === "qoder");
+check("上游真的关着了", offQoder?.enabled === false, JSON.stringify(offHealth.providers));
 const offCatalog = await fetch(`${base}/v1/models`);
 const offBody = await offCatalog.json();
 check(
@@ -658,7 +659,7 @@ check("客户端问一个公布出来的模型，答不上来", offChat.status =
 // 回到上游开着的状态，后面的收尾还要用。
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
 await stopRouter();
-startRouter("true");
+startRouter();
 await waitHealthy();
 
 /* ------------------------------------------------------------------ *

@@ -33,8 +33,8 @@ function item(
 /**
  * 配置页按分组切成 tab。
  *
- * 服务端公布什么就画什么：上游的开关搬去「上游」页之后，配置页剩下的多半
- * 只有网关自己的设置。空的组不画。
+ * 服务端公布什么就画什么：上游的开关在「上游」页，配置页里剩下的只有
+ * 网关自己的设置。空的组不画。
  */
 describe('配置页的分组', () => {
   it('每个分组一个 tab，名字是中文的', async () => {
@@ -44,11 +44,7 @@ describe('配置页的分组', () => {
           items: [
             item('ADMIN_CORS_ORIGINS', 'general', '允许的跨域来源'),
             item('REQUIRE_API_KEY', 'gateway', '是否开启 API KEY 验证'),
-            item('MINIMAX_CODE', 'minimax', 'MiniMax Code 上游'),
-            item('QODER_GLOBAL', 'qoder', 'Qoder 全球区'),
-            item('QODER_CN', 'qoder', 'Qoder 中国区'),
-            item('WORKBUDDY_CN', 'workbuddy', 'WorkBuddy 中国区'),
-            item('TOKENRHYTHM', 'tokenrhythm', 'TokenRhythm 上游'),
+            item('USAGE_RETENTION_DAYS', 'gateway', '用量记录保留多少天'),
           ],
         }),
     })
@@ -58,17 +54,10 @@ describe('配置页的分组', () => {
     await screen.findByRole('tab', { name: /常规/ })
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent)
 
-    expect(tabs).toEqual([
-      '常规(1)',
-      '网关(1)',
-      'MiniMax(1)',
-      'Qoder(2)',
-      'WorkBuddy(1)',
-      'TokenRhythm(1)',
-    ])
+    expect(tabs).toEqual(['常规(1)', '网关(2)'])
     // tab 上写的是中文，不是英文的分组键。
-    expect(tabs.join()).not.toContain('minimax')
-    expect(tabs.join()).not.toContain('tokenrhythm')
+    expect(tabs.join()).not.toContain('general')
+    expect(tabs.join()).not.toContain('gateway')
   })
 
   it('打开时停在「常规」那一组', async () => {
@@ -77,7 +66,7 @@ describe('配置页的分组', () => {
         create(ListConfigResponseSchema, {
           items: [
             item('ADMIN_CORS_ORIGINS', 'general', '允许的跨域来源'),
-            item('MINIMAX_CODE', 'minimax', 'MiniMax Code 上游'),
+            item('REQUIRE_API_KEY', 'gateway', '是否开启 API KEY 验证'),
           ],
         }),
     })
@@ -89,20 +78,20 @@ describe('配置页的分组', () => {
     // 常规那一组的内容在页面上。
     expect(screen.getByText('允许的跨域来源')).toBeInTheDocument()
     // 别的组的内容不在。
-    expect(screen.queryByText('MiniMax Code 上游')).not.toBeInTheDocument()
+    expect(screen.queryByText('是否开启 API KEY 验证')).not.toBeInTheDocument()
   })
 
   it('空的组不画：没有设置项的组连 tab 都没有', async () => {
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {
-          items: [item('MINIMAX_CODE', 'minimax', 'MiniMax Code 上游')],
+          items: [item('REQUIRE_API_KEY', 'gateway', '是否开启 API KEY 验证')],
         }),
     })
 
     renderWithClient({ client, children: <ConfigPage /> })
 
-    await screen.findByRole('tab', { name: /MiniMax/ })
+    await screen.findByRole('tab', { name: /网关/ })
     // 「常规」这一组是空的：不画 tab，也不给空状态。
     expect(screen.queryByRole('tab', { name: /常规/ })).not.toBeInTheDocument()
     expect(
@@ -144,19 +133,19 @@ describe('配置页的分组', () => {
         create(ListConfigResponseSchema, {
           items: [
             item('ADMIN_CORS_ORIGINS', 'general', '允许的跨域来源'),
-            item('QODER_GLOBAL', 'qoder', 'Qoder 全球区'),
-            item('QODER_CN', 'qoder', 'Qoder 中国区'),
+            item('REQUIRE_API_KEY', 'gateway', '是否开启 API KEY 验证'),
+            item('USAGE_RETENTION_DAYS', 'gateway', '用量记录保留多少天'),
           ],
         }),
     })
 
     renderWithClient({ client, children: <ConfigPage /> })
 
-    const qoder = await screen.findByRole('tab', { name: /Qoder/ })
-    await user.click(qoder)
+    const gateway = await screen.findByRole('tab', { name: /网关/ })
+    await user.click(gateway)
 
-    expect(screen.getByText('Qoder 全球区')).toBeInTheDocument()
-    expect(screen.getByText('Qoder 中国区')).toBeInTheDocument()
+    expect(screen.getByText('是否开启 API KEY 验证')).toBeInTheDocument()
+    expect(screen.getByText('用量记录保留多少天')).toBeInTheDocument()
     expect(screen.queryByText('允许的跨域来源')).not.toBeInTheDocument()
   })
 
@@ -164,7 +153,10 @@ describe('配置页的分组', () => {
     const client = mockAdminClient({
       ListConfig: () =>
         create(ListConfigResponseSchema, {
-          items: [item('SOMETHING_NEW', 'weird-group', '某个新设置')],
+          items: [
+            item('ADMIN_CORS_ORIGINS', 'general', '允许的跨域来源'),
+            item('SOMETHING_NEW', 'weird-group', '某个新设置'),
+          ],
         }),
     })
 
@@ -172,5 +164,10 @@ describe('配置页的分组', () => {
 
     const tab = await screen.findByRole('tab', { name: /weird-group/ })
     expect(within(tab).getByText('(1)')).toBeInTheDocument()
+    // 认不出来的组接在已知组后面。
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      '常规(1)',
+      'weird-group(1)',
+    ])
   })
 })

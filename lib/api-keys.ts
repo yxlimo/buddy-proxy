@@ -1,10 +1,12 @@
 // lib/api-keys.ts — the shared front-door API-key check for every proxy here.
 //
-// A flat name→key map in
-// api-keys.json, generated on first startup if empty. Default is public mode
-// (any key, or none, passes) because the upstream free tier is gated by the
-// client's own login, not by a client-supplied key. `REQUIRE_API_KEY=true`
-// turns the front door on for every proxy in the repo.
+// The keys live in the database (the secrets table, under `keys:clients`).
+// api-keys.json is only the fallback: it is read once, when the database has
+// no keys yet, so a fresh install without the file just gets a new pair.
+//
+// Default is public mode (any key, or none, passes) because the upstream free
+// tier is gated by the client's own login, not by a client-supplied key.
+// `REQUIRE_API_KEY=true` turns the front door on for every proxy in the repo.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -19,6 +21,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // The front door is checked on every request, so the switch is hot: the panel
 // turns it on and the next request meets the locked door.
 markHotSetting("REQUIRE_API_KEY");
+
+// Ask for it here, at load time: a setting nobody has asked for is not in the
+// snapshot, so the panel would not show it and config-cli would refuse to
+// write it. The value itself is read again on every request.
+configFlag("REQUIRE_API_KEY", false);
 
 /** Does the front door need a key? The value in use right now. */
 export function requireApiKey(): boolean {

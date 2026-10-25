@@ -10,10 +10,51 @@
 //   node config-cli.ts clear KEY            forget an override
 //   node config-cli.ts secrets              what credentials are configured
 //
+// Only the settings the service actually reads can be written: a key nobody
+// asks for is a line in the database that nothing will ever look at.
+//
 // The value is read the next time the service starts.
 
-import { configClear, configOverride, configOverrides, configSnapshot, groupOf } from "./lib/config.ts";
+import { configClear, configNumber, configOverride, configOverrides, configSnapshot } from "./lib/config.ts";
 import { closeStore, listSecrets } from "./lib/store.ts";
+
+// The modules that ask for settings are imported so the snapshot knows what
+// the service knows about. Without them the list would be empty, because a
+// setting only exists once somebody has asked for it.
+await import("./lib/admin/upstreams.ts");
+await import("./lib/admin/benefits.ts");
+await import("./lib/admin/http.ts");
+await import("./lib/api-keys.ts");
+await import("./lib/benefits.ts");
+
+/**
+ * The settings the entry point asks for.
+ *
+ * router-proxy.ts is not imported here: importing it would start the server.
+ * These are the ones it reads for itself.
+ */
+const ENTRY_SETTINGS = [
+  "ROUTER_PORT",
+  "ROUTER_HOST",
+  "MINIMAX_WATCH_MS",
+  "TOKENRHYTHM_MAX_ATTEMPTS",
+  "QODER_LEGACY_ATTEMPTS",
+  "QODER_LEGACY_RETRY_MS",
+  "QODER_MAX_ATTEMPTS",
+  "QODER_LOG_ROUTE",
+  "WORKBUDDY_CATALOG_TTL_MS",
+  "USAGE_RETENTION_DAYS",
+];
+
+// 用量保留天数是服务自己读的，模块加载时不问，所以这里问一次。
+configNumber("USAGE_RETENTION_DAYS", 30);
+
+/** 服务的哪些设置：问过的那些，加上入口自己读的。 */
+function knownSettings(): Set<string> {
+  const keys = new Set(configSnapshot().map((s) => s.key));
+  for (const key of ENTRY_SETTINGS) keys.add(key);
+  return keys;
+}
 
 /** Print a value without handing out the whole secret. */
 function mask(value: string): string {
@@ -69,11 +110,19 @@ function secrets(): void {
 }
 
 function set(key: string, value: string): void {
+  if (!knownSettings().has(key)) {
+    console.error(`${key} — 服务没有问过这个设置，写了也不会有人读。`);
+    process.exit(1);
+  }
   configOverride(key, value);
   console.log(`${key} = ${value}  (wins over the environment until it is cleared)`);
 }
 
 function clear(key: string): void {
+  if (!knownSettings().has(key)) {
+    console.error(`${key} — 服务没有问过这个设置，写了也不会有人读。`);
+    process.exit(1);
+  }
   configClear(key);
   console.log(`${key} — the environment decides again`);
 }

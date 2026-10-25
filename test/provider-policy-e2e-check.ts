@@ -239,18 +239,10 @@ async function startGateway(): Promise<Gateway> {
       BENEFITS_DISABLED: "1",
       // 路由日志：策略与租户都打出来，断言「为什么换了账号」有据可查。
       QODER_LOG_ROUTE: "true",
-      // 其余上游全关：一条请求也不发出去。
-      MINIMAX_CODE: "0",
-      MINIMAX_API: "0",
-      ZCODE: "0",
-      QODER_GLOBAL: "0",
-      QODER_CN: "0",
-      WORKBUDDY_CN: "0",
-      SENSENOVA: "0",
-      INTERN_AI: "0",
+      // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
+      // 其余上游默认就是关的（一条请求也不发出去），中转站在下面打开。
       // 中转站：两个租户。第三个也配上（.env 里有一个真的），但它没钱，
       // 所以永远轮不到它 —— 测试里也不该有真凭据。
-      TOKENRHYTHM: "1",
       TOKENRHYTHM_API_BASE: platformBase,
       TOKENRHYTHM_INFER_BASE: `${inferenceBase}/v1`,
       TOKEN_RHYTHM_1_ACCOUNT: "19000000001",
@@ -297,7 +289,7 @@ async function startGateway(): Promise<Gateway> {
 
   const tokenFile = path.join(dataDir, "admin-token");
   const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
-  return {
+  const gw: Gateway = {
     base,
     token,
     log: () => log,
@@ -310,6 +302,10 @@ async function startGateway(): Promise<Gateway> {
       fs.rmSync(dataDir, { recursive: true, force: true });
     },
   };
+  // 上游的开关现在在数据库里（provider.enabled），环境变量不再参与。
+  // 新装好的服务默认全关，所以测试自己把中转站打开 —— 面板上做的是同一件事。
+  await call(gw, "SetUpstreamEnabled", { upstreamId: "tokenrhythm", enabled: true });
+  return gw;
 }
 
 /** 打一个面板的方法（Connect over HTTP）。 */

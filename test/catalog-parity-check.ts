@@ -14,7 +14,6 @@
 // 所以比的是 effective 与根路由 —— 拿 contextWindow 去比会以为两边不一致，
 // 其实面板只是把「存着的」与「算出来的」分开报。
 
-import { DatabaseSync } from "node:sqlite";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -77,16 +76,9 @@ const router: ChildProcess = spawn(process.execPath, ["router-proxy.ts"], {
     BUDDY_DATA_DIR: DATA_DIR,
     ROUTER_PORT: String(PORT),
     BENEFITS_DISABLED: "1",
-    // 只开 Qoder：它用自己那份模型目录，参数是现成的。
-    QODER_GLOBAL: "true",
-    QODER_CN: "",
-    MINIMAX_CODE: "",
-    WORKBUDDY_CN: "",
-    TOKENRHYTHM: "",
-    SENSENOVA: "",
-    INTERN_AI: "",
-    MINIMAX_API: "",
-    ZCODE: "",
+    // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
+    // 下面用面板的 SetUpstreamEnabled 把 Qoder 打开（它用自己那份模型目录，
+    // 参数是现成的）。
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -136,6 +128,15 @@ async function rootModel(id: string): Promise<any> {
 }
 
 await waitForRouter();
+
+/**
+ * 上游的开关现在在数据库里（provider.enabled）。
+ *
+ * 新装好的服务默认全关，测试要自己把 Qoder 打开 —— 面板上做的是同一件事
+ * （SetUpstreamEnabled）。
+ */
+const qoderOn = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+check("Qoder 打开了", qoderOn.body?.ok === true, JSON.stringify(qoderOn.body));
 
 /* ------------------------------------------------------------------ *
  * 一、继承来的数

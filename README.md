@@ -13,19 +13,23 @@ Point a client at it and it works with either dialect — see
 ## What is switched on
 
 There are nine upstreams behind this, and each has a switch. All of them
-are **off by default**; turn on the ones you actually use.
+start **off**; turn on the ones you actually use, in the panel.
 
-| Switch | Turns on |
-|--------|----------|
-| `MINIMAX_CODE=true` | the MiniMax Code gateway |
-| `MINIMAX_API=true` | the MiniMax open platform (api.minimax.cn), by API key |
-| `ZCODE=true` | ZCode (zcode.z.ai), the GLM coding client |
-| `QODER_GLOBAL=true` | the Qoder global account (qoder.com) |
-| `QODER_CN=true` | the Qoder China account (qoder.cn) |
-| `WORKBUDDY_CN=true` | the WorkBuddy China account (workbuddy.cn) |
-| `TOKENRHYTHM=true` | the TokenRhythm relay station (tokenrhythm.studio) |
-| `SENSENOVA=true` | SenseNova (token.sensenova.cn) |
-| `INTERN_AI=true` | 书生·端砚 (discovery-api.intern-ai.org.cn) |
+The switch is a row in the gateway's database, not an environment variable:
+the panel's 上游 tab has one switch per upstream, and the next request after
+you flip it is the first one that changes. Nothing in the environment decides
+which upstream runs — that was the old arrangement, and it is gone.
+
+| Upstream | What it is |
+|----------|------------|
+| MiniMax Code | the MiniMax Code gateway (two accounts: the main one and the M plan) |
+| MiniMax open platform | the MiniMax open platform (api.minimax.cn), by API key |
+| ZCode | ZCode (zcode.z.ai), the GLM coding client |
+| Qoder (two regions) | the Qoder global account (qoder.com) and the China one (qoder.cn) |
+| WorkBuddy | the WorkBuddy China account (workbuddy.cn) |
+| TokenRhythm | the TokenRhythm relay station (tokenrhythm.studio) |
+| SenseNova | SenseNova (token.sensenova.cn) |
+| 书生·端砚 | InternAI's open platform (discovery-api.intern-ai.org.cn) |
 
 An upstream that is switched off is not looked at: no credential is read, no
 login is attempted, no models are advertised, and a request for one is refused
@@ -49,8 +53,11 @@ has been removed rather than left to rot.
 ```bash
 mise install          # the tool versions this project expects
 pnpm install          # the dependencies
-MINIMAX_CODE=true QODER_GLOBAL=true QODER_CN=true WORKBUDDY_CN=true node router-proxy.ts   # :6450
+node router-proxy.ts   # :6450
 ```
+
+The upstreams are all off until you switch them on in the panel; the service
+starts with none of them and waits for you to say which ones to serve.
 
 The credentials live in the database (`/data/buddy.db` by default) and the
 settings in the same place. `api-keys.json` is only the fallback for the
@@ -91,7 +98,7 @@ still works when the `.env` file is not there.
 ## Layout
 
 ```
-router-proxy.ts        the entry point: the switches, the routes, the startup
+router-proxy.ts        the entry point: the routes, the startup
 config-cli.ts          look at the settings, and change them
 lib/config.ts          the settings, and where they come from
 lib/store.ts           the database: the credentials, the settings, the cache
@@ -108,7 +115,6 @@ lib/benefits.ts         the daily credits of the China accounts
 lib/http.ts             the HTTP client (node:http, so no browser headers)
 lib/api-keys.ts         the front door: the keys the agents use
 lib/device-identity.ts  the fingerprint of an account
-lib/sse.ts              the server-sent events, in and out
 lib/sse-stream.ts       reading an event stream
 lib/env.ts             reading the environment
 lib/ids.ts             the id helpers
@@ -122,7 +128,7 @@ lib/dialect/           the conversion between the two dialects
   stream.ts            the streaming answer
   response.ts          the whole answer
 lib/admin/             the panel's side: the Connect service
-  service.ts           the twenty-odd methods of the contract
+  service.ts           the thirty-odd methods of the contract
   accounts.ts          the accounts and their credentials
   credentials.ts       the credential words, and the key writing
   config.ts            the settings the panel may change
@@ -312,6 +318,11 @@ The main session is the root of the chain: a sub-agent's traffic is rolled
 into the main agent's session, and a sub-agent can spawn a sub-agent, so the
 chain is walked up to the root. The per-session card shows the ten sessions
 with the most traffic.
+
+The "模拟客户端" column says which simulated client the request went out
+through — the client's name, not the account: Qoder's global region and its
+China region are both "Qoder". Rows written before that column changed meaning
+still hold the account id, so the column has both until the old rows age out.
 
 The session comes from the request headers, and the header names say who sent
 them:
@@ -615,8 +626,8 @@ Two sources, picked by `MINIMAX_AUTH_MODE` (`lib/minimax/auth.ts` dispatches):
   (`~/.minimax-proxy/minimax-session.json`, or `/data/minimax-session.json` in
   the container). The server keeps serving while you approve, so a request in
   the meantime gets a clear 503 rather than a hang.
-- This only happens when the proxy is switched on (`MINIMAX_CODE=true`). A
-  disabled proxy never looks for a credential at all.
+- This only happens when the upstream is switched on (the panel's 上游 tab). A
+  disabled upstream never looks for a credential at all.
 - To log in again, remove the session file and restart — the next start runs the
   device flow.
 - After that the proxy refreshes itself every hour, with PKCE (S256) and a file
@@ -696,12 +707,9 @@ The gateway speaks the Anthropic dialect for reasoning: thinking is
 `thinking: {type: "disabled"}` is rejected with
 `requires adaptive thinking` — while `MiniMax-M3` accepts it.
 
-Set `MINIMAX_LOG_BODY=true` to have the proxy log the thinking / effort fields
-of every request; it is the only way to see what a client actually asked for,
-since the gateway does not echo them back. With it on, the proxy also logs the
-outcome of every streamed response (`[RES] … done 1234ms bytes=… pings=…`, or
-`FAILED after … cause=…`), which is what tells an upstream failure apart from a
-connection dropped by a hop in front of the proxy.
+The gateway logs the outcome of every streamed response (`[RES] … done 1234ms
+bytes=… pings=…`, or `FAILED after … cause=…`), which is what tells an upstream
+failure apart from a connection dropped by a hop in front of the proxy.
 
 ### Heartbeat
 
@@ -732,11 +740,8 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_BASE_URL` | `https://agent.minimax.cn/mavis/api/v1/llm/v1` | gateway base URL |
 | `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
 | `MINIMAX_AUTH_MODE` | `oauth` | `oauth` (proxy's own session) or `file` (read-only app store) |
-| `MINIMAX_CODE` | `false` | switch this reverse proxy on; a disabled one serves nothing and looks for no credential |
-| `MINIMAX_LOG_BODY` | `false` | log the thinking / effort fields of every request |
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
 | `MINIMAX_REFRESH_BUFFER_MS` | `300000` | refresh this far before expiry |
-| `MINIMAX_LOCK_STALE_MS` | `30000` | a lock older than this is taken over |
 | `MINIMAX_API_BASE` | `https://api.minimax.cn` | the platform the balance is read from |
 | `MINIMAX_TOKEN_PLAN_KEY` | — | the token plan's key (`sk-cp-…`); the plan's usage is reported when it is set |
 
@@ -776,7 +781,7 @@ is.
 
 ## Router (`router-proxy.ts`, port 6450)
 
-One entry point, two dialects, seven upstreams. The model name decides the
+One entry point, two dialects, nine upstreams. The model name decides the
 upstream; the dialect decides how much translation happens.
 
 | Method | Path | Format |
@@ -788,6 +793,12 @@ upstream; the dialect decides how much translation happens.
 | `POST` | `/v1/chat/completions` | OpenAI chat (stream supported) |
 | `POST` | `/{upstream}/v1/chat/completions` | the same, addressed to one upstream |
 | `GET`  | `/health` | status of every enabled upstream |
+
+The upstream switches are in the `providers` section — one entry per
+provider, with its id, name, kind and whether it is on. A provider you added
+yourself is in there too; the built-in list of nine is not written out
+anywhere. (This section used to be `enabled.<camelCase>`; the `providers`
+section carries the same facts and the ones you added.)
 
 `{upstream}` is one of `qoder`, `qoder-cn`, `workbuddy-cn`, `minimax`.
 
@@ -949,9 +960,9 @@ token rotates on every refresh, so the file must be persisted.
 
 ```bash
 # The router logs in by itself: an enabled region with no session runs the device
-# flow at startup and prints the URL to approve.
-QODER_GLOBAL=true node router-proxy.ts   # qoder.com
-QODER_CN=true     node router-proxy.ts   # qoder.cn
+# flow at startup and prints the URL to approve. Switch the region on in the
+# panel first (上游 tab).
+node router-proxy.ts   # qoder.com and qoder.cn, whichever is switched on
 ```
 
 The two regions need separate logins; the credentials live in separate files
@@ -969,9 +980,6 @@ used from, a disabled app, a lapsed login).
 |----------|---------|------|
 | `ROUTER_PORT` | `6450` | router port |
 | `MINIMAX_BASE_URL` | the gateway's own address | where the MiniMax gateway is |
-| `MINIMAX_CODE` | `false` | switch the MiniMax Code upstream on |
-| `QODER_GLOBAL` | `false` | switch the Qoder global region on |
-| `QODER_CN` | `false` | switch the Qoder China region on |
 | `QODER_AUTH_CACHE_MS` | `5000` | how long a read of the session is reused |
 | `QODER_AUTH_WARN_MS` | `604800000` | warning window before expiry (a Qoder token lasts ~30 days) |
 | `QODER_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
@@ -1044,7 +1052,7 @@ JWT whose `sub` claim is the account id. The refresh token rotates on every
 refresh, so the session file must survive restarts.
 
 ```bash
-WORKBUDDY_CN=true node router-proxy.ts   # prints the login URL
+node router-proxy.ts   # prints the login URL, once WorkBuddy is switched on
 ```
 
 ### Models
@@ -1062,7 +1070,6 @@ rejected with code 11133, so it is left out.
 
 | Variable | Default | What |
 |----------|---------|------|
-| `WORKBUDDY_CN` | `false` | switch the WorkBuddy China upstream on |
 | `WORKBUDDY_CN_BASE` | `https://www.workbuddy.cn` | the host that serves the account |
 | `WORKBUDDY_CLI_VERSION` | `2.161.0` | the version the identity headers claim (the CLI's own) |
 | `WORKBUDDY_VERSION` | `5.8.3` | the version of the desktop app |
@@ -1111,7 +1118,10 @@ still shows its balance, it just cannot serve a request.
 
 The gift money expires, the money that was paid for does not. So a request
 goes to the account whose gift runs out first, and the account with only paid
-money is the last resort. The balance and the expiry of every account are in
+money is the last resort. That is the upstream's **余额到期优先** policy, and it
+is the one the panel sets by default for this relay station; the other policies
+are 单一 (one account, no switching) and 降级 (try the next account when one
+cannot serve the request). The balance and the expiry of every account are in
 `/health`:
 
 ```json
@@ -1171,7 +1181,6 @@ One model for now: `deepseek-v4.1-flash-1017`, a million tokens of context and
 
 | Variable | Default | What |
 |----------|---------|------|
-| `TOKENRHYTHM` | `false` | switch the relay station on |
 | `TOKEN_RHYTHM_<n>_ACCOUNT` | — | the account of the nth tenant |
 | `TOKEN_RHYTHM_<n>_PASSWORD` | — | its password |
 | `TOKEN_RHYTHM_<n>_API_KEY` | — | the key its inference uses |

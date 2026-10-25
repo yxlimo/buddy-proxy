@@ -1,8 +1,4 @@
-import { create } from '@bufbuild/protobuf'
-import {
-  TokenPlanWindowSchema,
-  type TokenPlanWindow,
-} from '@/gen/buddy/admin/v1/admin_pb'
+import { type TokenPlanWindow } from '@/gen/buddy/admin/v1/admin_pb'
 import { Progress } from '@/components/ui/progress'
 import { formatDateTime } from '@/lib/format'
 
@@ -98,19 +94,4 @@ function QuotaMeter({
       </span>
     </div>
   )
-}
-
-/** 给测试用：造一个窗口。 */
-export function makeWindow(
-  label: string,
-  intervalPercent: number,
-  weeklyPercent: number
-): TokenPlanWindow {
-  return create(TokenPlanWindowSchema, {
-    label,
-    intervalPercent,
-    weeklyPercent,
-    intervalEndsAt: 0n,
-    weeklyEndsAt: 0n,
-  })
 }

@@ -10,7 +10,6 @@ import {
   addToTotals,
   emptyTotals,
   listUsage,
-  localDay,
   type UsageEvent,
   type UsageTotals,
 } from "../usage.ts";
@@ -230,9 +229,4 @@ export function usageEvents(
     if (span) filter.since = Date.now() - span;
   }
   return listUsage(filter);
-}
-
-/** 今天（本地时区）的键。 */
-export function todayKey(): string {
-  return localDay(Date.now());
 }

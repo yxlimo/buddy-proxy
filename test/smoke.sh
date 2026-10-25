@@ -26,8 +26,12 @@ if [ ! -d "$FIXTURES" ] || [ -z "$(ls -A "$FIXTURES" 2>/dev/null)" ]; then
 fi
 
 # The relay station needs an account and a key; without them it stays off.
+# The upstream switch lives in the database now, so the test turns it on there
+# (test/fake-sessions.ts does it) instead of through an environment variable.
 if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
-  export TOKENRHYTHM=true
+  export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax,tokenrhythm"
+else
+  export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax"
 fi
 
 node --experimental-strip-types test/mock-server.ts "$MOCK_PORT" > /tmp/opencode/mock-server.log 2>&1 &

@@ -14,29 +14,16 @@ services:
     ports:
       - "6450:6450"
     environment:
-      # Which upstreams this router serves. Each switch turns on one reverse proxy;
-      # the ones that are off are not looked at — no credential, no models, and a
-      # request for one is refused.
-      MINIMAX_CODE: "true"
-      # MiniMax 开放平台：按 API Key 分租户。key 在 .env 里
-      # （MINIMAX_API_1_KEY、MINIMAX_API_2_KEY……）。
-      MINIMAX_API: "true"
-      # ZCode（智谱）：登录走浏览器 OAuth，令牌没有刷新通道，过期要重登。
-      ZCODE: "true"
-      QODER_GLOBAL: "true"
-      QODER_CN: "true"
-      WORKBUDDY_CN: "true"
-      TOKENRHYTHM: "true"
-      SENSENOVA: "true"
-      INTERN_AI: "true"
+      # Which upstreams this router serves is NOT decided here. The switch of an
+      # upstream is the `enabled` column of the provider table: the panel's
+      # upstream page changes it, and a fresh install starts with every
+      # built-in upstream off.
       # Anthropic and OpenAI dialects, routed per model name.
       ROUTER_PORT: "6450"
       # Everything the service keeps lives in this one directory: the database
       # with the credentials and the settings, the credential log, the salt the
       # device fingerprint is derived from. It has to survive a rebuild.
       BUDDY_DATA_DIR: /data
-      # The image healthcheck reads the port from here.
-      HEALTH_PORT: "6450"
       # The daily check-in of the China accounts. It runs on its own, so this is
       # only how often it looks; the day rolls over at midnight in China.
       BENEFITS_INTERVAL_MS: "21600000"

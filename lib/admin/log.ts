@@ -13,7 +13,7 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_LINES = 2000;
 
 /** 日志文件在哪。 */
-export function logPath(): string {
+function logPath(): string {
   return dataFile("auth.log");
 }
 

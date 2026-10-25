@@ -11,7 +11,7 @@ import {
 import { useAdminClient } from '@/features/auth/client-provider'
 import { assertOk, describeError } from '@/lib/errors'
 
-export const publishedModelKeys = {
+const publishedModelKeys = {
   all: ['published-models'] as const,
 }
 

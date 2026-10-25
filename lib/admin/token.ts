@@ -19,7 +19,7 @@ const TOKEN_FILE = "admin-token";
 const TOKEN_BYTES = 32;
 
 /** 令牌文件在哪。 */
-export function tokenPath(): string {
+function tokenPath(): string {
   return dataFile(TOKEN_FILE);
 }
 

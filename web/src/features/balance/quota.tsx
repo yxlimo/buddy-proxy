@@ -23,7 +23,7 @@ import { formatDate, formatMoney, formatPoints } from '@/lib/format'
  *
  * 显示的规矩：有套餐额度就显示套餐额度，没有才显示积分；余额有就另外显示。
  */
-export const QUOTA_LABELS = {
+const QUOTA_LABELS = {
   tokenPlan: '套餐额度',
   credits: '积分',
   balance: '余额',

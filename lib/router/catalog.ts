@@ -96,7 +96,6 @@ export interface AggregateEntry {
   strategy: "single" | "fallback";
   targets: AggregateTargetSpec[];
 }
-/** The model behind a target, as the upstream currently lists it. */
 /**
  * 目录里找那个模型。
  *
@@ -170,53 +169,6 @@ export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateMo
   return entries;
 }
 
-/** The Anthropic shape, with the extra metadata pi reads. */
-export function anthropicCatalog(groups: CatalogGroup[]): any {
-  const created = Math.floor(Date.now() / 1000);
-  const data: any[] = [];
-  for (const { group, models } of groups) {
-    for (const m of models) {
-      data.push({
-        id: `${group}/${m.id}`,
-        type: "model",
-        display_name: m.displayName,
-        created_at: created,
-        reasoning: m.reasoning,
-        tool_call: m.toolCall,
-        ...(m.contextWindow ? { context_window: m.contextWindow } : {}),
-        ...(m.maxOutputTokens ? { max_output_tokens: m.maxOutputTokens } : {}),
-        ...(m.effortOptions ? { effort_options: [...m.effortOptions] } : {}),
-        ...(m.backend ? { backend: m.backend } : {}),
-      });
-    }
-  }
-  return {
-    data,
-    has_more: false,
-    first_id: data.length ? data[0].id : null,
-    last_id: data.length ? data[data.length - 1].id : null,
-    default_model: "qoder/auto",
-  };
-}
-
-/** The OpenAI shape. */
-export function openaiCatalog(groups: CatalogGroup[]): any {
-  const created = Math.floor(Date.now() / 1000);
-  const data: any[] = [];
-  for (const { group, models } of groups) {
-    for (const m of models) {
-      data.push({
-        id: `${group}/${m.id}`,
-        object: "model",
-        created,
-        owned_by: group,
-        name: m.displayName,
-      });
-    }
-  }
-  return { object: "list", data };
-}
-
 /**
  * The aggregate catalog in the OpenAI shape.
  *
@@ -260,10 +212,3 @@ export function aggregateAnthropicCatalog(entries: AggregateEntry[]): any {
     last_id: data.length ? data[data.length - 1].id : null,
   };
 }
-
-/**
- * One upstream's list.
- *
- * The model ids are the real ones: the path already says which upstream it is
- * for, so the name does not have to say it again.
- */

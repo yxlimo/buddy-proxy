@@ -6,7 +6,7 @@
 // a batch is used up, and the account switches by itself.
 
 import { platformApi } from "./platform.ts";
-import { ensureApiKey } from "./keys.ts";
+import { tokenRhythmKeys } from "./keys.ts";
 import {
   loadSession,
   sessionFor,
@@ -162,7 +162,10 @@ export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenR
       // gateway makes one and keeps it — a new account works without anybody
       // putting a key in the environment.
       if (!tenant.apiKey) {
-        const made = await ensureApiKey(session, tenant.index, null, providerId);
+        const made = await tokenRhythmKeys.ensure(
+          { session, index: tenant.index, providerId },
+          null,
+        );
         status.hasKey = Boolean(made);
       }
       status.wallet = await wallet(session, providerId);

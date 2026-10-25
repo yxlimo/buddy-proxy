@@ -21,9 +21,6 @@
 // to audience `agent-backend`. Only this grant works.
 
 import { configString, configNumber } from "../config.ts";
-import { readEnvValue } from "../env.ts";
-import fs from "node:fs";
-import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";

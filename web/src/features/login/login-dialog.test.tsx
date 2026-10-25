@@ -6,9 +6,12 @@ import userEvent from '@testing-library/user-event'
 import {
   GetLoginStatusResponseSchema,
   ImportLoginTokenResponseSchema,
+  ListUpstreamsResponseSchema,
   LoginSessionSchema,
   LoginWithPasswordResponseSchema,
+  UpstreamSchema,
   type LoginWithPasswordResponse,
+  type Upstream,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { LoginDialog } from '@/features/login/login-dialog'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -54,11 +57,18 @@ function session(
 }
 
 /** 假服务端：GetLoginStatus 回一个固定的会话。 */
-function clientWith(sessionValue = session()) {
+function clientWith(sessionValue = session(), upstreams: Upstream[] = []) {
   return mockAdminClient({
     GetLoginStatus: () =>
       create(GetLoginStatusResponseSchema, { ok: true, session: sessionValue }),
+    // 上游列表：面板按 kind 判上游是哪一类，不按 id 判。
+    ListUpstreams: () => create(ListUpstreamsResponseSchema, { upstreams }),
   })
+}
+
+/** 一个上游：id 是用户起的，kind 才是它属于哪一类。 */
+function upstream(id: string, kind: string): Upstream {
+  return create(UpstreamSchema, { id, kind, label: id })
 }
 
 describe('登录对话框', () => {
@@ -123,7 +133,8 @@ describe('登录对话框', () => {
           authorizationUrl: '',
           userCode: '',
           message: '在面板上填账号与密码，然后点「登录」。',
-        })
+        }),
+        [upstream('tokenrhythm', 'tokenrhythm')]
       ),
       children: (
         <LoginDialog
@@ -154,7 +165,8 @@ describe('登录对话框', () => {
           authorizationUrl: '',
           userCode: '',
           message: '在面板上填账号与密码，然后点「登录」。',
-        })
+        }),
+        [upstream('sensenova', 'sensenova')]
       ),
       children: (
         <LoginDialog
@@ -169,6 +181,35 @@ describe('登录对话框', () => {
 
     expect(await screen.findByLabelText('账号名')).toBeInTheDocument()
     // SenseNova 的 cookie 就是会话本身，密码存不存没有意义。
+    expect(screen.queryByText(/记住密码吗/)).not.toBeInTheDocument()
+  })
+
+  it('上游 id 换了也不影响：按 kind 判，不按 id 判', async () => {
+    renderWithClient({
+      client: clientWith(
+        session({
+          method: 'password',
+          upstreamId: 'my-sense-nova',
+          accountId: 'my-sense-nova',
+          authorizationUrl: '',
+          userCode: '',
+          message: '在面板上填账号与密码，然后点「登录」。',
+        }),
+        [upstream('my-sense-nova', 'sensenova')]
+      ),
+      children: (
+        <LoginDialog
+          open
+          loginId='login-1'
+          upstreamId='my-sense-nova'
+          accountId='my-sense-nova'
+          onOpenChange={() => {}}
+        />
+      ),
+    })
+
+    expect(await screen.findByLabelText('账号名')).toBeInTheDocument()
+    // id 不叫 sensenova，但它就是 sensenova 那一类：一样不给「记住密码」。
     expect(screen.queryByText(/记住密码吗/)).not.toBeInTheDocument()
   })
 

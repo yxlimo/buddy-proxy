@@ -46,7 +46,6 @@ COPY --from=web /build/web/dist/ ./web/dist/
 # mounted at /data, so a container rebuild does not lose the login. Created here with
 # the runtime user's ownership, otherwise a fresh volume is root-owned and unwritable.
 RUN mkdir -p /data && chown node:node /data
-ENV MINIMAX_DATA_DIR=/data
 
 # 契约生成的代码里有 enum（protobuf 的枚举），而 Node 的「只剥类型」不认
 # enum —— enum 要编译，不能只剥。transform-types 走编译那条路，所以能跑。
@@ -57,9 +56,10 @@ ENV NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalW
 EXPOSE 6450
 
 # The check reads the port from the environment, so the same image can serve on
-# whichever port it is given.
+# whichever port it is given. It reads the router's own variable: the health
+# check and the service must not disagree about where the service listens.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD node -e "const p=process.env.HEALTH_PORT||6450;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.ROUTER_PORT||6450;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 USER node
 CMD ["node", "router-proxy.ts"]

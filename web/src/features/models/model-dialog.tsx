@@ -38,9 +38,9 @@ import { cn } from '@/lib/utils'
  * 不给就是继承目标的值，给了就是用这个值。以前面板把它们当普通值处理，
  * 编辑一次就把「继承」写死成了具体数字。
  */
-export type TriState = 'inherit' | 'yes' | 'no'
+type TriState = 'inherit' | 'yes' | 'no'
 
-export type ModelDraft = {
+type ModelDraft = {
   id: string
   displayName: string
   enabled: boolean

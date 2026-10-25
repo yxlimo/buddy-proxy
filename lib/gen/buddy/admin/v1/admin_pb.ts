@@ -682,7 +682,7 @@ export type ConfigItem = Message<"buddy.admin.v1.ConfigItem"> & {
   key: string;
 
   /**
-   * 给人看的名字：「MiniMax Code 上游」这种，不要把 env 的键名甩给人。
+   * 给人看的名字：「是否开启 API KEY 验证」这种，不要把 env 的键名甩给人。
    *
    * @generated from field: string label = 2;
    */

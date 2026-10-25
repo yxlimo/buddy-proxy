@@ -2,11 +2,17 @@
 //
 // Each client keeps its own; this is the part they share: what an outcome
 // looks like, and the runner that asks every enabled upstream.
+//
+// Which kind of upstream hands out credits is in the kind registry
+// (lib/kinds.ts): a kind that does not give anything is simply not asked.
+// Adding a kind is one entry there, not another branch here.
 
-import { runWorkBuddyBenefits } from "./workbuddy/benefits.ts";
-import { runQoderBenefits } from "./qoder/benefits.ts";
-import { runMiniMaxBenefits } from "./minimax/checkin.ts";
+import { kindOf, type BenefitOutcome } from "./provider-kinds.ts";
 import { provider } from "./providers.ts";
+// The kinds register themselves; importing the file is what makes them known.
+import "./kinds.ts";
+
+export type { BenefitOutcome };
 
 /**
  * 参与签到的账号：provider 的 id。
@@ -15,47 +21,52 @@ import { provider } from "./providers.ts";
  */
 export type BenefitUpstream = string;
 
-export interface BenefitOutcome {
-  upstream: string;
-  ok: boolean;
-  credits: number;
-  report: string[];
-  at: string;
-}
+/** 一类上游的签到跑法。 */
+export type BenefitRunner = (providerId: string) => Promise<BenefitOutcome>;
 
 /**
- * 各家怎么签到。
+ * 每类上游的签到跑法。
  *
- * 拆出来是为了能离线测：真跑的时候用的是真的那三个。
+ * 真的那份在 kind 注册表里；这份是给离线自测用的 —— 假的跑法换掉真的，
+ * 一个上游都不碰。
  */
-export interface BenefitRunners {
-  workbuddy: (providerId: string) => Promise<BenefitOutcome>;
-  minimax: (providerId: string) => Promise<BenefitOutcome>;
-  qoder: (providerId: string) => Promise<BenefitOutcome>;
-}
+export type BenefitRunners = Record<string, BenefitRunner>;
 
-const REAL_RUNNERS: BenefitRunners = {
-  workbuddy: (providerId) => runWorkBuddyBenefits(providerId),
-  minimax: (providerId) => runMiniMaxBenefits(providerId),
-  qoder: (providerId) => runQoderBenefits(providerId),
-};
+/**
+ * 注册表里那一类上游的签到跑法。
+ *
+ * 没有登记签到的种类就是没有：它不发积分，问它也是白问。
+ */
+function registeredRunner(kind: string): BenefitRunner | null {
+  const entry = kindOf(kind);
+  if (!entry?.benefits) return null;
+  return (providerId) => {
+    const row = provider(providerId);
+    if (!row) throw new Error(`没有这个 Provider：${providerId}`);
+    return entry.benefits!(row);
+  };
+}
 
 /**
  * Run the benefits of every account given.
  *
  * 一个账号一次：名下的账号都要签到，不因策略而漏签 —— 策略管的是转发时先调
  * 谁，跟签到没关系。
+ *
+ * 给了 runners 就是用那份（离线自测：假的跑法，不碰任何上游）；没给就用注册
+ * 表里登记的那个种类。
  */
 export async function runBenefits(
   upstreams: BenefitUpstream[],
-  runners: BenefitRunners = REAL_RUNNERS,
+  runners?: BenefitRunners,
 ): Promise<BenefitOutcome[]> {
   const out: BenefitOutcome[] = [];
   for (const id of upstreams) {
-    const kind = provider(id)?.kind ?? "";
-    if (kind === "workbuddy") out.push(await runners.workbuddy(id));
-    else if (kind === "minimax") out.push(await runners.minimax(id));
-    else if (kind === "qoder") out.push(await runners.qoder(id));
+    const row = provider(id);
+    if (!row) continue;
+    const runner = runners ? runners[row.kind] : registeredRunner(row.kind);
+    if (!runner) continue;
+    out.push(await runner(id));
   }
   return out;
 }

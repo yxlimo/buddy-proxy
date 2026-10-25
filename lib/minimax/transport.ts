@@ -87,7 +87,6 @@ export function classify(status: number, code?: number): string {
  */
 export async function minimaxChat(
   body: Record<string, any>,
-  stream: boolean,
 ): Promise<Response> {
   let cred;
   try {

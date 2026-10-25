@@ -16,9 +16,7 @@
 
 import { configString, configNumber } from "../config.ts";
 import { cliFetch } from "../http.ts";
-import { readEnvValue } from "../env.ts";
-import path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
@@ -228,7 +226,7 @@ async function requestJson(
  * whoever is logged in elsewhere. The official client sends them, and the
  * server may answer about the wrong account without them.
  */
-function authHeaders(base: WorkBuddyEndpoints): Record<string, string> {
+function authHeaders(): Record<string, string> {
   return {
     "Content-Type": "application/json",
     Accept: "application/json, text/plain, */*",
@@ -264,7 +262,7 @@ export async function startLogin(providerId = "workbuddy-cn"): Promise<WorkBuddy
   const base = ENDPOINTS[region];
   const start = await requestJson(`${base.base}${AUTH_STATE_PATH}?platform=${AUTH_PLATFORM}`, {
     method: "POST",
-    headers: authHeaders(base),
+    headers: authHeaders(),
     body: "{}",
   });
   const state = start.body?.data?.state;
@@ -305,7 +303,7 @@ export async function pollLogin(
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     const poll = await requestJson(`${base.base}${AUTH_TOKEN_PATH}?state=${encodeURIComponent(state)}`, {
       method: "GET",
-      headers: authHeaders(base),
+      headers: authHeaders(),
     });
     const code = poll.body?.code;
     if (code === LOGIN_PENDING) continue;
@@ -333,7 +331,7 @@ export async function pollLogin(
   try {
     const profile = await requestJson(
       `${base.base}${LOGIN_ACCOUNT_PATH}?state=${encodeURIComponent(state)}`,
-      { method: "GET", headers: { ...authHeaders(base), Authorization: `Bearer ${token}` } },
+      { method: "GET", headers: { ...authHeaders(), Authorization: `Bearer ${token}` } },
     );
     nickname = String(profile.body?.data?.nickname ?? "");
   } catch {
@@ -402,7 +400,7 @@ export async function refreshSession(
   const res = await requestJson(`${base.base}${REFRESH_PATH}`, {
     method: "POST",
     headers: {
-      ...authHeaders(base),
+      ...authHeaders(),
       "X-Refresh-Token": session.refreshToken,
       // The official client says where the refresh came from, and the server
       // has a strategy for each source.

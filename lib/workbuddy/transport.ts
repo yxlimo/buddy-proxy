@@ -23,9 +23,7 @@ import {
   chatBase,
   chatHeaders,
   refreshSession,
-  regionOf,
   CONFIG_PATH,
-  type WorkBuddyRegion,
   type WorkBuddySession,
 } from "./auth.ts";
 import { clampEffort, curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./models.ts";
@@ -36,7 +34,6 @@ import { peekCached, setCached } from "../store.ts";
 export const CHAT_PATH = "/v2/chat/completions";
 
 export interface WorkBuddyChatOptions {
-  region?: WorkBuddyRegion;
   /** Which provider (which account) to talk to. */
   providerId?: string;
   stream?: boolean;
@@ -164,7 +161,6 @@ export async function workbuddyChat(
 ): Promise<WorkBuddyChat> {
   // The provider says which account; the account says which region.
   const providerId = opts.providerId ?? "workbuddy-cn";
-  const region = opts.region ?? regionOf(providerId);
   // The session, not just the credential: the request needs the account id and
   // the domain the account belongs to as well as the token.
   let session = await refreshSession(false, providerId);

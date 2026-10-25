@@ -19,20 +19,7 @@
 // switch on the kind: adding a kind is one entry, not seven case branches.
 
 import { markProviderDeleted, providerDeleted, store } from "./store.ts";
-import { configFlag } from "./config.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
-
-/**
- * 一个上游的引用。
- *
- * 认证与传输这些模块只认这三样：它是谁、它是什么种类、它在哪个区域。
- * 传这个而不是整行，是为了让它们不必知道数据库长什么样。
- */
-export interface ProviderRef {
-  id: string;
-  kind: string;
-  region: string;
-}
 
 /** 一行上游。 */
 export interface ProviderRow {
@@ -74,25 +61,6 @@ export function isProviderPolicy(value: unknown): value is ProviderPolicy {
   return typeof value === "string" && (PROVIDER_POLICIES as string[]).includes(value);
 }
 
-/** 建表之后，把内置的那些 provider 放进去。 */
-/**
- * The environment switch of each built-in provider.
- *
- * It is the value the row starts with: the database wins as soon as the panel
- * changes it, so a switch in the environment is a starting point, not a fight.
- */
-const BUILT_IN_SWITCHES: Record<string, string> = {
-  minimax: "MINIMAX_CODE",
-  "minimax-api": "MINIMAX_API",
-  zcode: "ZCODE",
-  qoder: "QODER_GLOBAL",
-  "qoder-cn": "QODER_CN",
-  "workbuddy-cn": "WORKBUDDY_CN",
-  tokenrhythm: "TOKENRHYTHM",
-  sensenova: "SENSENOVA",
-  "intern-ai": "INTERN_AI",
-};
-
 const BUILT_IN: { id: string; kind: string; alias: string; region: string }[] = [
   { id: "minimax", kind: "minimax", alias: "MiniMax Code", region: "cn" },
   { id: "minimax-api", kind: "minimax-api", alias: "MiniMax 开放平台", region: "cn" },
@@ -113,6 +81,12 @@ const BUILT_IN: { id: string; kind: string; alias: string; region: string }[] = 
  * The kind and the region belong to the code, not to the user: a row written by
  * an older version keeps its alias and its switch, but its kind is corrected to
  * the one the registry knows.
+ *
+ * The switch starts off. It used to start from an environment variable, but
+ * that variable was read once — when the row was inserted — and never again,
+ * so the panel and the environment disagreed about who was in charge. The
+ * database is the only authority now: a fresh install has every built-in
+ * upstream off, and the operator turns on the ones they want.
  */
 export function ensureBuiltinProviders(): void {
   const now = Date.now();
@@ -124,9 +98,7 @@ export function ensureBuiltinProviders(): void {
   for (const row of BUILT_IN) {
     // The operator deleted it: it stays deleted.
     if (providerDeleted(row.id)) continue;
-    const key = BUILT_IN_SWITCHES[row.id];
-    const on = key ? configFlag(key, false) : true;
-    insert.run(row.id, row.kind, row.alias, row.region, on ? 1 : 0, now, now);
+    insert.run(row.id, row.kind, row.alias, row.region, 0, now, now);
     const existing = store().prepare("SELECT kind, region FROM provider WHERE id = ?").get(row.id) as
       | { kind?: string; region?: string }
       | undefined;
@@ -152,11 +124,6 @@ export function provider(id: string): ProviderRow | null {
     .prepare("SELECT id, kind, alias, region, enabled, policy, created_at, updated_at FROM provider WHERE id = ?")
     .get(id) as any;
   return row ? toRow(row) : null;
-}
-
-/** 按 kind 找（一个 kind 可以有多个账号）。 */
-export function providersOfKind(kind: string): ProviderRow[] {
-  return listProviders().filter((p) => p.kind === kind);
 }
 
 function toRow(row: any): ProviderRow {
@@ -245,16 +212,20 @@ export function addProvider(input: {
  * Forget the credentials of a provider.
  *
  * The ids follow the pattern `session:provider:<id>`,
- * `key:provider:<id>…` and `account:<id>…`, so the prefixes are enough.
+ * `key:provider:<id>…` and `account:<id>…`. The boundary is the colon: a
+ * provider named `minimax` owns `key:provider:minimax:plan`, but not
+ * `session:provider:minimax-api` nor `session:provider:minimax-code-m-plan`
+ * — those belong to providers of their own.
  */
 export function deleteProviderCredentials(id: string): number {
   const db = store();
-  const patterns = [`session:provider:${id}`, `key:provider:${id}`, `account:${id}`];
+  const prefixes = [`session:provider:${id}`, `key:provider:${id}`, `account:${id}`];
   let dropped = 0;
-  for (const pattern of patterns) {
+  for (const prefix of prefixes) {
+    // The exact id, and the ones below it (`<prefix>:<suffix>`).
     const result = db
       .prepare("DELETE FROM secrets WHERE id = ? OR id LIKE ?")
-      .run(pattern, `${pattern.replace(/[%_]/g, "")}%`);
+      .run(prefix, `${prefix.replace(/[%_]/g, "")}:%`);
     dropped += Number(result.changes ?? 0);
   }
   return dropped;
@@ -292,11 +263,6 @@ export function setProviderEnabled(id: string, enabled: boolean): { ok: boolean;
  */
 export function providerSecretId(providerId: string, suffix = ""): string {
   return suffix ? `key:provider:${providerId}:${suffix}` : `session:provider:${providerId}`;
-}
-
-/** 这个 provider 的 kind 是什么。 */
-export function providerKind(id: string): string {
-  return provider(id)?.kind ?? "";
 }
 
 /** 它的 kind 在注册表里的那一条。 */

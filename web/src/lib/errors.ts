@@ -67,7 +67,7 @@ export function describeError(error: unknown): string {
   return String(error)
 }
 
-export function codeLabel(code: Code): string {
+function codeLabel(code: Code): string {
   switch (code) {
     case Code.Canceled:
       return '已取消'

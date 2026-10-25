@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { GetBalanceRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 
-export const balanceKeys = {
+const balanceKeys = {
   all: (upstreamId: string) => ['balance', upstreamId] as const,
 }
 

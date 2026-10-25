@@ -1,15 +1,16 @@
-// router-proxy.ts — the single entry point in front of both upstreams.
+// router-proxy.ts — the single entry point in front of every upstream.
 //
-// One port, two dialects, two upstreams:
+// One port, two dialects:
 //
 //   POST /v1/messages         Anthropic dialect
 //   POST /v1/chat/completions  OpenAI dialect
-//   GET  /v1/models            model catalog of both upstreams
+//   GET  /v1/models            the published model catalog
 //   GET  /health
 //
-// The model name decides the upstream. A prefix is explicit (`qoder/auto`,
-// `minimax/MiniMax-M3`); without one the catalog is consulted, Qoder first,
-// because it carries far more models.
+// The root route serves the models the panel published: the database decides
+// which models exist and which upstream serves them. A request that names an
+// upstream in the path (`/qoder-cn/v1/messages`) goes to that upstream with
+// the real model name.
 //
 // Each dialect is cheapest on the upstream that speaks it natively:
 //   OpenAI  → Qoder    the Qoder gateway is an OpenAI endpoint, so it passes through
@@ -244,21 +245,11 @@ router.get("/health", async (ctx) => {
   ctx.body = {
     status: "ok",
     dialects: ["anthropic", "openai"],
-    enabled: {
-      minimax: upstreamEnabled("minimax"),
-      minimaxApi: upstreamEnabled("minimax-api"),
-      zcode: upstreamEnabled("zcode"),
-      qoderGlobal: upstreamEnabled("qoder"),
-      qoderCn: upstreamEnabled("qoder-cn"),
-      workbuddyCn: upstreamEnabled("workbuddy-cn"),
-      tokenrhythm: upstreamEnabled("tokenrhythm"),
-      sensenova: upstreamEnabled("sensenova"),
-      internAi: upstreamEnabled("intern-ai"),
-    },
-    // Every provider the database holds, in the two values the panel and the
-    // client scripts need: the unique id (the path segment) and the name the
-    // user gave it. A provider the user added is here too -- the list above
-    // only knows the built-in ones.
+    // Every provider the database holds, in the three values the panel and the
+    // client scripts need: the unique id (the path segment), the name the user
+    // gave it, and whether the upstream is on. A provider the user added is
+    // here too -- this list is driven by the provider table, not by a fixed
+    // set of built-in ones.
     providers: listProviders().map((row) => ({
       id: row.id,
       name: row.alias || providerKindOf(row.id)?.label || row.id,
@@ -361,7 +352,6 @@ router.get("/health", async (ctx) => {
 /** What the adapters need to know about the router they run in. */
 function upstreamContext(): UpstreamContext {
   const uctx: UpstreamContext = {
-    qoderRegions: qoderRegions(),
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
@@ -385,19 +375,18 @@ function upstreamContext(): UpstreamContext {
 
 /** What the router is serving, and what it knows about. */
 function routingContext(): RoutingContext {
-  const providers = new Map<string, { kind: string; enabled: boolean; ids: Set<string>; hidden: Set<string> }>();
+  const providers = new Map<string, { kind: string; enabled: boolean; ids: Set<string> }>();
   for (const row of listProviders()) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
     const all = kind.models(row).map((m) => m.id);
-    // A provider that is off, or has no credits, still knows its models: a
-    // request for one of those gets "not enabled" rather than "no such model".
+    // A provider that is off, or has no credits, serves nothing: a request
+    // for one of its models is refused with "not enabled".
     const serving = row.enabled && !outOfCredits(row.id);
     providers.set(row.id, {
       kind: row.kind,
       enabled: row.enabled,
       ids: new Set(serving ? all : []),
-      hidden: new Set(serving ? [] : all),
     });
   }
   return { providers };
@@ -665,15 +654,16 @@ async function callUpstream(
   const started = Date.now();
   const agent = detectAgent(ctx.request.headers).name;
   const session = detectSession(ctx.request.headers);
+  // The kind says how to talk to it. The provider says which account.
+  const kind = providerKindOf(route.provider);
   // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
   // 是直接转发的，客户端的会话头跟着过去。模拟客户端的那些（Qoder、
   // WorkBuddy、MiniMax Code、ZCode）按客户端的样子重建请求，多余的头无视。
-  if (providerKindOf(route.provider)?.openPlatform) {
+  if (kind?.openPlatform) {
     uctx.clientHeaders = clientSessionHeaders(ctx.request.headers);
   }
   try {
-    // The kind says how to talk to it. The provider says which account.
-    switch (providerKindOf(route.provider)?.kind) {
+    switch (kind?.kind) {
       case "qoder":
         await toQoder(uctx, body, route, dialect, stream, ctx);
         break;
@@ -699,11 +689,21 @@ async function callUpstream(
         await toMinimax(uctx, body, route, dialect, stream, ctx);
         break;
     }
-    recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "");
+    recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "", kind?.label ?? route.provider);
   } catch (e) {
     const err = e as AuthError;
     const status = typeof err?.status === "number" ? err.status : 500;
-    recordRequestUsage(body, route, agent, session, uctx, status, started, err?.message ?? String(e));
+    recordRequestUsage(
+      body,
+      route,
+      agent,
+      session,
+      uctx,
+      status,
+      started,
+      err?.message ?? String(e),
+      kind?.label ?? route.provider,
+    );
     throw e;
   }
 }
@@ -723,6 +723,7 @@ function recordRequestUsage(
   status: number,
   started: number,
   error: string,
+  client: string,
 ): void {
   const totals = uctx.lastUsage ?? { promptTokens: 0, completionTokens: 0, reasoningTokens: 0 };
   const upstreamModel = route.model.includes("/")
@@ -736,7 +737,7 @@ function recordRequestUsage(
     sessionId: session.sessionId,
     parentSessionId: session.parentSessionId,
     agentName: session.agentName,
-    client: route.provider,
+    client,
     ok: !error && status < 400,
     status,
     promptTokens: totals.promptTokens,

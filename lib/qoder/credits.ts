@@ -5,7 +5,6 @@
 
 import {
   ENDPOINTS,
-  REGION,
   USER_AGENT,
   ensureCredential,
   loadSession,

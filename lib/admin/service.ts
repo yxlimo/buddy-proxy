@@ -1,4 +1,4 @@
-// lib/admin/service.ts — 管理接口的 20 个方法。
+// lib/admin/service.ts — 管理接口的 33 个方法。
 //
 // 数据都从已有的地方取：配置在 lib/config.ts，公布的模型在 lib/aggregate.ts，
 // 权益在 lib/benefits.ts，凭据与余额在 lib/admin/accounts.ts 与

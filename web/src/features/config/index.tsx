@@ -49,19 +49,14 @@ const SOURCE_LABELS: Record<string, string> = {
  *
  * 服务端给的 group 是英文的键（general、gateway……），那是给机器看的。
  * 这个表只是「键 → 中文名」的对照，不是对服务端有哪些组的假设：认不出来
- * 的组就原样显示，不猜。上游的开关搬去「上游」页之后，这些组可能就不
- * 出现了，消失了也不影响这个页。
+ * 的组就原样显示，不猜。
+ *
+ * 表里只有网关自己那两个组：上游的开关在「上游」页，不在配置页里，
+ * 所以上游那些组不会再出现。
  */
 const GROUP_LABELS: Record<string, string> = {
   general: '常规',
   gateway: '网关',
-  minimax: 'MiniMax',
-  qoder: 'Qoder',
-  workbuddy: 'WorkBuddy',
-  tokenrhythm: 'TokenRhythm',
-  benefits: '每日权益',
-  sensenova: 'SenseNova',
-  'intern-ai': 'InternAI',
 }
 
 /**
@@ -69,17 +64,7 @@ const GROUP_LABELS: Record<string, string> = {
  *
  * 只是排个先后：服务端没给的组不画，冒出来的新组接在后面。
  */
-const GROUP_ORDER = [
-  'general',
-  'gateway',
-  'minimax',
-  'qoder',
-  'workbuddy',
-  'tokenrhythm',
-  'benefits',
-  'sensenova',
-  'intern-ai',
-]
+const GROUP_ORDER = ['general', 'gateway']
 
 function groupLabel(group: string): string {
   return GROUP_LABELS[group] ?? group
@@ -163,8 +148,9 @@ export function ConfigPage() {
       list.push(item)
       map.set(group, list)
     }
-    // 空的组不画。没有设置项的组对用户没有意义：上游的开关搬去「上游」页
-    // 之后，这一组经常是空的，画出来只是一个点不动的 tab。
+    // 空的组不画。没有设置项的组对用户没有意义：上游的开关在「上游」页，
+    // 配置页里剩下的多半是网关自己的设置，这一组经常是空的，画出来只是
+    // 一个点不动的 tab。
     // 顺序：固定的那些按 GROUP_ORDER 走，数据里冒出来的组按出现的顺序
     // 接在后面。
     const known = GROUP_ORDER.filter((group) => map.has(group))
@@ -188,6 +174,13 @@ export function ConfigPage() {
     return <ErrorState error={config.error} onRetry={() => config.refetch()} />
   }
 
+  // 有改了还没生效的东西时，服务端说要重启。面板照它说，不自己猜：
+  // 面板能改的那几个今天都是热的，但那是服务端的事。
+  const pendingRestart = config.data?.pendingRestart ?? false
+  const effectText = pendingRestart
+    ? '改动会写进数据库，改完要重启才生效。'
+    : '改动会写进数据库，改完立刻生效。'
+
   const save = async (key: string, value: string, clear: boolean) => {
     setBusy(true)
     try {
@@ -203,7 +196,7 @@ export function ConfigPage() {
   return (
     <PageShell
       title='配置'
-      description='各设置项当前生效的值，以及值的来源：数据库覆盖、环境变量或默认值。'
+      description='各设置项当前生效的值，以及值的来源：数据库覆盖、环境变量或默认值。上游的开关在「上游」页。'
     >
 
       {groups.length === 0 ? (
@@ -230,9 +223,7 @@ export function ConfigPage() {
               <Card>
                 <CardHeader>
                   <CardTitle className='text-base'>{group.label}</CardTitle>
-                  <CardDescription>
-                    改动会写进数据库，改完立刻生效。
-                  </CardDescription>
+                  <CardDescription>{effectText}</CardDescription>
                 </CardHeader>
                 <CardContent className='px-0'>
                   <Table>
@@ -364,7 +355,9 @@ export function ConfigPage() {
             <p className='text-xs text-muted-foreground'>
               {editing?.secret
                 ? '该项的值不可读取（只写不读）。留空表示不修改，填写新值即可更新。'
-                : '写入数据库后立即生效。'}
+                : pendingRestart
+                  ? '写入数据库后，重启才生效。'
+                  : '写入数据库后立即生效。'}
             </p>
           </div>
           <DialogFooter>

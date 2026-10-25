@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 
-export type Theme = 'light' | 'dark' | 'system'
+type Theme = 'light' | 'dark' | 'system'
 
 const STORAGE_KEY = 'buddy.admin.theme'
 

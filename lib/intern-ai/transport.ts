@@ -13,7 +13,6 @@
 //
 // 额度不在这里：墨点是控制台的接口，见 lib/intern-ai/quota.ts。
 
-import { AuthError } from "../credential.ts";
 import { INTERN_AI_DISCOVERY_API_BASE, internAiDiscoveryKey } from "./config.ts";
 import {
   loadSession,
@@ -21,16 +20,15 @@ import {
   tokenFor,
   type InternAiSession,
 } from "./auth.ts";
-import { ensureApiKey } from "./keys.ts";
+import { internAiKeys } from "./keys.ts";
 import {
   listDiscoveryConsoleModels,
   listDiscoveryModels,
   mergeCatalogModels,
   type InternAiCatalogModel,
 } from "./models.ts";
-
-/** 建 key 时用的名字。平台控制台上看得到这个名字。 */
-const KEY_NAME = "buddy";
+import { CatalogCache } from "../router/catalog-cache.ts";
+import { openAiPlatformChat } from "../router/openai-platform.ts";
 
 /** 清单最多放多久。模型清单变得不快，半小时问一次够了。 */
 const CATALOG_TTL_MS = 30 * 60 * 1000;
@@ -53,7 +51,8 @@ export function internAiInferenceKey(providerId = "intern-ai"): string {
 export async function ensureInternAiKey(session: InternAiSession, providerId = "intern-ai"): Promise<string> {
   const token = tokenFor(session, "discovery");
   const stored = storedAccount(providerId);
-  const key = await ensureApiKey(session, "discovery", token, KEY_NAME, stored?.discoveryKey ?? null, providerId);
+  const current = stored?.discoveryKey ?? null;
+  const key = await internAiKeys.ensure({ session, token, providerId }, current);
   return key ?? "";
 }
 
@@ -62,17 +61,16 @@ export async function ensureInternAiKey(session: InternAiSession, providerId = "
  * ------------------------------------------------------------------ */
 
 /** 缓存的模型目录。 */
-let catalog: InternAiCatalogModel[] = [];
-let catalogAt = 0;
+const catalog = new CatalogCache<InternAiCatalogModel>(CATALOG_TTL_MS);
 
 /** 现在这份目录。第一次问上游之前是空的。 */
 export function internAiCatalog(): InternAiCatalogModel[] {
-  return catalog;
+  return catalog.list();
 }
 
 /** 目录里的模型 id 集合。目录会变，所以每次现算。 */
 export function internAiModelIds(): Set<string> {
-  return new Set(catalog.map((m) => m.id));
+  return new Set(internAiCatalog().map((m) => m.id));
 }
 
 /**
@@ -83,7 +81,7 @@ export function internAiModelIds(): Set<string> {
  * 空目录强。
  */
 export async function refreshInternAiCatalog(force = false, providerId = "intern-ai"): Promise<void> {
-  if (!force && catalog.length && Date.now() - catalogAt < CATALOG_TTL_MS) return;
+  if (!catalog.stale(force)) return;
   const key = internAiInferenceKey(providerId);
   if (!key) return;
   // 刚建出来的 key 不是马上就能用的：平台那边要把它放行，刚建完去问会被
@@ -102,8 +100,7 @@ export async function refreshInternAiCatalog(force = false, providerId = "intern
       } catch {
         // 控制台那一份拿不到就算了：推理端的清单是准的。
       }
-      catalog = mergeCatalogModels(models, consoleModels);
-      catalogAt = Date.now();
+      catalog.update(mergeCatalogModels(models, consoleModels));
       return;
     } catch (e) {
       const message = (e as Error)?.message ?? String(e);
@@ -127,35 +124,18 @@ export async function refreshInternAiCatalog(force = false, providerId = "intern
  * 请求体是 OpenAI 形状的，原样发过去；答案也是 OpenAI 形状的，原样回来。
  */
 export async function internAiChat(
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   providerId = "intern-ai",
   extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
-  const key = internAiInferenceKey(providerId);
-  if (!key) {
-    throw new AuthError(
-      "intern-ai has no inference key",
-      "书生·端砚的账号上没有推理用的 API key。在面板里重新登录一次，网关会建一把。",
-      500,
-    );
-  }
-  const response = await fetch(`${INTERN_AI_DISCOVERY_API_BASE}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${key}`,
-      Accept: body.stream ? "text/event-stream" : "application/json",
-      "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
-      ...extraHeaders,
+  return openAiPlatformChat(
+    {
+      id: "intern-ai",
+      label: "书生·端砚",
+      base: INTERN_AI_DISCOVERY_API_BASE,
+      key: internAiInferenceKey(providerId),
     },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok && response.status === 401) {
-    throw new AuthError(
-      "intern-ai rejected the key",
-      "书生·端砚拒绝了推理用的 API key（HTTP 401）。重新登录一次，网关会换一把。",
-      502,
-    );
-  }
-  return response;
+    body,
+    extraHeaders,
+  );
 }

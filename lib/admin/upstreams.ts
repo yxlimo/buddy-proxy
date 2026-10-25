@@ -4,74 +4,38 @@
 // 凭据是什么状态、账号上还剩多少。这个模块是唯一知道怎么去问的地方，
 // 两边共用，免得各问各的、答得不一样。
 //
-// 开关是热的：面板改了，配置重新读一遍，下一个请求就是新的 —— 不用重启。
-// 所以这里没有「待重启」那一套。
+// 开关在数据库的 provider.enabled 上，每次现读：面板改了，下一个请求就是新的
+// —— 不用重启，也不用重新读配置。
 
-import {
-  configFlag,
-  configNumber,
-  configOverride,
-  configString,
-  markHotSetting,
-  reloadConfig,
-} from "../config.ts";
+import { configNumber, configString } from "../config.ts";
 import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
-import {
-  MINIMAX_API_MODELS,
-  miniMaxApiBase,
-  miniMaxApiTenantPlans,
-  miniMaxApiTenants,
-} from "../minimax/api.ts";
-import { ZCODE_MODELS } from "../zcode/models.ts";
-import { ZCODE_MESSAGES_URL } from "../zcode/transport.ts";
-import { zcodeStatus } from "../zcode/auth.ts";
+import { miniMaxApiTenantPlans, miniMaxApiTenants } from "../minimax/api.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
-import { credentialStatus, readCredential } from "../minimax/auth.ts";
+import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
 import { fetchMiniMaxCredits } from "../minimax/checkin.ts";
-import { MINIMAX_UPSTREAM } from "../minimax/transport.ts";
 import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
-import { ENDPOINTS as QODER_ENDPOINTS, qoderStatus, type QoderRegion } from "../qoder/auth.ts";
+import { type QoderRegion } from "../qoder/auth.ts";
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
-import { ENDPOINTS as WORKBUDDY_ENDPOINTS, workbuddyStatus } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import {
   setWorkbuddyModelList,
   workbuddyModelList,
-  workBuddyFallbackModels,
   type WorkBuddyModel,
 } from "../workbuddy/models.ts";
-import { tokenRhythmStatuses, type TokenRhythmTenantStatus } from "../tokenrhythm/wallet.ts";
-import { TOKENRHYTHM_API_BASE, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
+import { tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
+import { tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
-import { SENSENOVA_INFER_BASE } from "../sensenova/config.ts";
-import type { SenseNovaModel } from "../sensenova/models.ts";
-import {
-  poolEmpty,
-  poolPaused,
-  poolUsage as senseNovaPoolUsage,
-  totalRemaining,
-  type SenseNovaPoolUsage,
-} from "../sensenova/quota.ts";
-import { senseNovaCatalog, senseNovaInferenceKey } from "../sensenova/transport.ts";
+import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
-import { INTERN_AI_DISCOVERY_API_BASE } from "../intern-ai/config.ts";
-import type { InternAiCatalogModel } from "../intern-ai/models.ts";
-import {
-  balance as internAiBalance,
-  creditPacks as internAiCreditPacks,
-  type InternAiBalance,
-  type InternAiCreditPack,
-} from "../intern-ai/quota.ts";
-import { internAiCatalog, internAiInferenceKey } from "../intern-ai/transport.ts";
-import { getSecret, peekCached, setCached } from "../store.ts";
+import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
+import { peekCached, setCached } from "../store.ts";
 import {
   listProviders,
   policyOf,
   provider,
   providerEnabled,
   setProviderEnabled,
-  type ProviderRow,
 } from "../providers.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds.ts";
@@ -85,39 +49,17 @@ import type {
   TokenPlanView,
 } from "../provider-kinds.ts";
 
+// The panel's own view of these shapes comes from here.
 export type { BalanceView, CreditView, CredentialView, HealthSnapshot, QuotaView, TokenPlanView };
-import { tokenFingerprint } from "../credential.ts";
 import { CredentialState, ProviderPolicy as ContractPolicy, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import { credentialState, hasUsableCredential } from "./credentials.ts";
+import { hasUsableCredential } from "./credentials.ts";
 import { loginActivity } from "./login.ts";
 import { policyEnum } from "./policy.ts";
-import {
-  internAiCatalogModels,
-  minimaxCatalogModels,
-  miniMaxApiCatalogModels,
-  zcodeCatalogModels,
-  qoderCatalogModels,
-  senseNovaCatalogModels,
-  tokenRhythmCatalogModels,
-  workbuddyCatalogModels,
-  type CatalogGroup,
-} from "../router/catalog.ts";
+import { type CatalogGroup } from "../router/catalog.ts";
 
 /** 上游的 id。跟聚合路由里的分组名一致。 */
 /** A provider's id. The kind is not part of it: the table has the kind. */
 export type UpstreamId = string;
-
-export type LegacyUpstreamId =
-  | "minimax"
-  | "minimax-api"
-  | "zcode"
-  | "qoder"
-  | "qoder-cn"
-  | "workbuddy-cn"
-  | "tokenrhythm"
-  | "sensenova"
-  | "intern-ai";
-
 
 /**
  * 这个 Provider 开着吗？
@@ -129,8 +71,6 @@ export function upstreamEnabled(id: string): boolean {
   return providerEnabled(id);
 }
 
-
-
 /** 一个上游的开关状态。 */
 export interface UpstreamSwitch {
   /** 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。 */
@@ -140,7 +80,7 @@ export interface UpstreamSwitch {
 /**
  * 打开或关掉一个上游。
  *
- * 开关是热的：写进数据库之后重新读一遍，下一个请求就是新的 —— 不用重启。
+ * 开关在数据库的 provider.enabled 上，每次现读：写进去，下一个请求就是新的。
  */
 export function setUpstreamEnabled(id: string, enabled: boolean): { ok: boolean; message: string } {
   const result = setProviderEnabled(id, enabled);
@@ -155,8 +95,8 @@ export function setUpstreamEnabled(id: string, enabled: boolean): { ok: boolean;
 /**
  * 每个上游的开关状态。
  *
- * 开关是热的：面板改了，配置重读一遍，下一个请求就是新的。所以这里只有
- * 「现在在生效的值」—— 没有「改了还没生效」这回事。
+ * 开关在数据库的 provider.enabled 上，每次现读：面板改了，下一个请求就是新的。
+ * 所以这里只有「现在在生效的值」—— 没有「改了还没生效」这回事。
  */
 export function upstreamStates(): Record<string, UpstreamSwitch> {
   const out: Record<string, UpstreamSwitch> = {};
@@ -227,39 +167,20 @@ export function qoderVisible(region: QoderRegion): QoderModel[] {
 }
 
 /**
- * 两个区的全部模型，开没开都算。
- *
- * 区域关着的时候，模型目录里没有它，但请求它的人仍然要得到一句清楚的话：
- * 「这个模型没有启用」而不是「没有这个模型」。所以两份都得留着。
- */
-export const QODER_GLOBAL_ALL: QoderModel[] = qoderModelsForRegion("global");
-export const QODER_CN_ALL: QoderModel[] = qoderModelsForRegion("cn");
-
-/**
  * WorkBuddy 的模型目录。
  *
  * 上游自己发布的目录才是准的（它不发客户端版本就换模型），快照只是兜底。
- * 目录放在这里，是因为 /health、面板和路由都要看同一份。
- *
- * 快照一直都在：上游关着的时候不公布它，开着的时候立刻就有模型可公布 ——
- * 不用等上游那份目录下来。
+ * 目录住在 lib/workbuddy/models.ts —— 刷新它的东西也住在那里，注册表与路由
+ * 读的是同一份，不会出现「面板看见的」与「路由得到的」两份目录。
  */
-// The list lives with the transport that refreshes it.
-let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
-
 /** WorkBuddy 现在的模型目录。 */
 export function workbuddyCatalog(): WorkBuddyModel[] {
-  return workbuddyModels;
+  return workbuddyModelList();
 }
 
 /** 换掉 WorkBuddy 的模型目录（上游刷新之后）。 */
 export function setWorkbuddyCatalog(models: WorkBuddyModel[]): void {
-  workbuddyModels = models;
-}
-
-/** WorkBuddy 的模型 id 集合。目录会变，所以每次现算。 */
-export function workbuddyModelIds(): Set<string> {
-  return new Set(workbuddyModels.map((m) => m.id));
+  setWorkbuddyModelList(models);
 }
 
 /** 现在开着的 Qoder 区域。 */
@@ -271,49 +192,24 @@ export function qoderRegions(): QoderRegion[] {
 }
 
 /**
- * SenseNova 现在的模型目录。
- *
- * 目录是问上游要来的（跟着 key 走），缓存在 lib/sensenova/transport.ts 里。
- * 这里只是把它拿出来给面板与 /health 看。
- */
-export function senseNovaModels(): SenseNovaModel[] {
-  return senseNovaCatalog();
-}
-
-/** 书生·端砚现在的模型目录。同样是问上游要来的。 */
-export function internAiModels(): InternAiCatalogModel[] {
-  return internAiCatalog();
-}
-
-/**
  * 每个上游的模型目录，面板与 /v1/models 共用。
+ *
+ * 由 provider 表与 kind 注册表驱动：每一个开着的上游都有一组，模型是它自己
+ * 的 kind 说的。用户自己加的 provider 也在里面 —— 以前这里写死了九个 id，
+ * 于是用户加的上游能被路由到，却不出现在模型列表里。
  *
  * 只收开着的上游：一个关着的上游不公布模型，请求它的时候也给一句清楚的
  * 「没启用」，而不是把它丢给一个不会回答的上游。
  */
 export function catalogGroups(): CatalogGroup[] {
   const groups: CatalogGroup[] = [];
-  const qoderGlobal = qoderVisible("global");
-  const qoderCn = qoderVisible("cn");
-  if (qoderGlobal.length) groups.push({ group: "qoder", models: qoderCatalogModels(qoderGlobal) });
-  if (qoderCn.length) groups.push({ group: "qoder-cn", models: qoderCatalogModels(qoderCn) });
-  if (upstreamEnabled("workbuddy-cn") && workbuddyModels.length) {
-    groups.push({ group: "workbuddy-cn", models: workbuddyCatalogModels(workbuddyModels) });
-  }
-  const minimax = minimaxVisible();
-  if (minimax.length) groups.push({ group: "minimax", models: minimaxCatalogModels(minimax) });
-  if (upstreamEnabled("zcode")) groups.push({ group: "zcode", models: zcodeCatalogModels(ZCODE_MODELS) });
-  if (upstreamEnabled("minimax-api") && miniMaxApiTenants().length) {
-    groups.push({ group: "minimax-api", models: miniMaxApiCatalogModels(MINIMAX_API_MODELS) });
-  }
-  if (upstreamEnabled("tokenrhythm")) groups.push({ group: "tokenrhythm", models: tokenRhythmCatalogModels() });
-  const senseNova = senseNovaModels();
-  if (upstreamEnabled("sensenova") && senseNova.length) {
-    groups.push({ group: "sensenova", models: senseNovaCatalogModels(senseNova) });
-  }
-  const internAi = internAiModels();
-  if (upstreamEnabled("intern-ai") && internAi.length) {
-    groups.push({ group: "intern-ai", models: internAiCatalogModels(internAi) });
+  for (const row of listProviders()) {
+    if (!row.enabled) continue;
+    const kind = kindOf(row.kind);
+    if (!kind) continue;
+    const models = kind.models(row);
+    if (!models.length) continue;
+    groups.push({ group: row.id, models });
   }
   return groups;
 }
@@ -534,13 +430,6 @@ export async function freshHealthSnapshot(): Promise<HealthSnapshot> {
  * 凭据
  * ------------------------------------------------------------------ */
 
-/** 凭据的状态摘要。 */
-
-/** 凭据里的那个 token 的指纹。 */
-function fingerprintOf(token: string): string {
-  return token ? tokenFingerprint(token) : "";
-}
-
 /**
  * 一个上游的凭据状态。
  *
@@ -564,240 +453,17 @@ export function upstreamCredential(id: string): CredentialView {
   return kind.credential(row);
 }
 
-/** 把上游自己说的状态抹平成面板用的那套。 */
-function fromUpstreamStatus(raw: Record<string, unknown>, kind: string, secretId: string): CredentialView {
-  const status = String(raw.status ?? "missing");
-  const session = getSecret<any>(secretId);
-  const token = String(session?.accessToken ?? "");
-  const warning = Boolean(raw.warning);
-  const remainingSec = Number(raw.remainingSec ?? 0);
-  // 告警要说清楚是什么告警。「快到期了」是常态（令牌一小时内就换一次），
-  // 说成「状态异常」会让人以为出了故障。
-  let detail = String(raw.error ?? raw.hint ?? "");
-  if (!detail && warning) {
-    // The warning means the token is gone and the refresh did not replace
-    // it -- that is the one case a person has to act on.
-    detail =
-      remainingSec > 0
-        ? `令牌还有 ${Math.round(remainingSec / 60)} 分钟到期，会自动刷新`
-        : "令牌过期了，刷新没成功，要重新登录";
-  }
-  return {
-    kind,
-    // 上游的 "anonymous" 是「没登录」的意思（qoder、workbuddy、minimax 都
-    // 这么报）—— 没有凭据，所以是 MISSING。
-    status: status === "anonymous" ? CredentialState.MISSING : credentialState(status),
-    fingerprint: fingerprintOf(token),
-    expiresAt: raw.expiresAt ? Date.parse(String(raw.expiresAt)) : 0,
-    remainingSec,
-    warning,
-    detail,
-    generation: Number(raw.generation ?? 0),
-  };
-}
-
-/** MiniMax 的凭据。 */
-function minimaxCredential(): CredentialView {
-  const raw = credentialStatus();
-  const view = fromUpstreamStatus(raw, "session", "session:minimax");
-  if (raw.mode === "file") view.detail = view.detail || "读的是桌面端的 store，刷新由桌面端负责";
-  return view;
-}
-
-/**
- * MiniMax 开放平台的凭据。
- *
- * 它一把 key 就是一个租户：有几把 key 就是几个租户，一个都不剩就是没配。
- */
-function miniMaxApiCredential(): CredentialView {
-  const tenants = miniMaxApiTenants();
-  if (!tenants.length) {
-    return {
-      kind: "api_key",
-      status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "未配置 MiniMax 开放平台的 API Key",
-      generation: 0,
-    };
-  }
-  return {
-    kind: "api_key",
-    status: CredentialState.AUTHENTICATED,
-    fingerprint: tokenFingerprint(tenants[0].key),
-    expiresAt: 0,
-    remainingSec: 0,
-    warning: false,
-    detail: tenants.length === 1 ? "1 个租户" : `${tenants.length} 个租户`,
-    generation: 0,
-  };
-}
-
-/** ZCode 的凭据：zcode JWT。它没有刷新通道，过期了只能重登。 */
-function zcodeCredential(): CredentialView {
-  const raw = zcodeStatus();
-  const view = fromUpstreamStatus(raw, "session", "session:zcode");
-  return view;
-}
-
-/**
- * TokenRhythm 的凭据。
- *
- * 它是转发站：一个账号、一个钱包、一把推理用的 key。账号密码是登录用的，
- * key 是推理用的，两个不是一回事。所以这里说的是「有没有能用的登录态」。
- */
-function tokenrhythmCredential(): CredentialView {
-  const tenants = tokenRhythmTenants();
-  if (!tenants.length) {
-    return {
-      kind: "session",
-      status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "未配置 TokenRhythm 账号",
-      generation: 0,
-    };
-  }
-  let expiresAt = 0;
-  let key = "";
-  for (const tenant of tenants) {
-    const session = getSecret<any>(`session:tokenrhythm:${tenant.index}`);
-    const at = Number(session?.expiresAtMs ?? 0);
-    if (at > expiresAt) expiresAt = at;
-    if (!key && tenant.apiKey) key = tenant.apiKey;
-  }
-  return {
-    kind: "session",
-    status: expiresAt > Date.now() ? CredentialState.ANONYMOUS : CredentialState.MISSING,
-    fingerprint: fingerprintOf(key),
-    expiresAt,
-    remainingSec: expiresAt ? Math.round((expiresAt - Date.now()) / 1000) : 0,
-    warning: expiresAt > 0 && expiresAt - Date.now() < 7 * 24 * 3600 * 1000,
-    detail: `${tenants.length} 个租户`,
-    generation: 0,
-  };
-}
-
-/**
- * SenseNova 的凭据。
- *
- * 推理端点要的是一把 API key，不是 cookie：cookie 是登录态（读额度用的），
- * key 才是干活的东西。所以这里说的是「有没有那把 key」。登录之后网关会建一把
- * 并存下来，所以登录完了这里就是 AUTHENTICATED。
- */
-function senseNovaCredential(): CredentialView {
-  const key = senseNovaInferenceKey();
-  if (!key) {
-    return {
-      kind: "api_key",
-      status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "账号上没有推理用的 API key，登录后网关将自动创建",
-      generation: 0,
-    };
-  }
-  return {
-    kind: "api_key",
-    status: CredentialState.AUTHENTICATED,
-    fingerprint: fingerprintOf(key),
-    expiresAt: 0,
-    remainingSec: 0,
-    warning: false,
-    detail: "推理用的 API key",
-    generation: 0,
-  };
-}
-
-/**
- * 书生·端砚的凭据。
- *
- * 与 SenseNova 一样：推理端点认的是 key（Discovery 子站的那把），不是登录态。
- */
-function internAiCredential(): CredentialView {
-  const key = internAiInferenceKey();
-  if (!key) {
-    return {
-      kind: "api_key",
-      status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "账号上没有 Discovery 推理 key，登录后网关将自动创建",
-      generation: 0,
-    };
-  }
-  return {
-    kind: "api_key",
-    status: CredentialState.AUTHENTICATED,
-    fingerprint: fingerprintOf(key),
-    expiresAt: 0,
-    remainingSec: 0,
-    warning: false,
-    detail: "Discovery 的推理 key",
-    generation: 0,
-  };
-}
-
 /* ------------------------------------------------------------------ *
  * 余额
  * ------------------------------------------------------------------ */
-
-/** 余额里的一笔：赠金、充值本金。 */
-export interface BalanceLotView {
-  id: string;
-  sourceLabel: string;
-  remainingCny: number;
-  expiresAt: number;
-  status: string;
-}
-
-/** 积分里的一笔：套餐额度、加油包、每日签到。 */
-export interface CreditLotView {
-  id: string;
-  sourceLabel: string;
-  remaining: number;
-  expiresAt: number;
-  status: string;
-}
-
-/** 套餐额度的一个窗口。 */
-export interface TokenPlanWindowView {
-  /** general / video。 */
-  label: string;
-  intervalPercent: number;
-  weeklyPercent: number;
-  intervalEndsAt: number;
-  weeklyEndsAt: number;
-}
-
-/** 套餐额度。 */
-
-/**
- * 余额：钱。
- *
- * 只有中转站这类平台有（TokenRhythm）。它跟积分不是一回事，两者不能相加。
- */
-
-/**
- * 积分：点数。
- *
- * Qoder、WorkBuddy 这类平台的额度是这个。`total` 为 0 表示平台没报总额，
- * 前端不要显示「总额」那一项。
- */
 
 /**
  * 一个账号的额度。
  *
  * 三样东西各是各的，**不能相加**：余额（钱）、积分（点数）、套餐额度
  * （按窗口的百分比）。后端把能拿到的都放上来，前端按有哪个显示哪个。
+ *
+ * 哪一样是哪个，由 kind 注册表说（lib/kinds.ts）。
  */
 
 /**
@@ -889,21 +555,6 @@ function upstreamQuotasCached(id: string): QuotaView[] {
   return kind.quotas(row, snapshot);
 }
 
-/**
- * MiniMax 的额度：套餐额度 + 账户积分。
- *
- * 它的账户余额（钱）不在这儿报 —— 这个网关花的是 coding plan，钱和积分是
- * 两回事，混在一起会让人以为套餐能拿钱买。
- */
-/**
- * MiniMax 开放平台的额度。
- *
- * 一个 key 就是一份套餐，所以每个租户一条：套餐额度是百分比，账户余额不算
- * （那是另一件事）。
- */
-/** ZCode 的额度：Start Plan 的额度桶。 */
-
-
 
 /**
  * MiniMax 的套餐额度。
@@ -929,71 +580,6 @@ export function tokenPlanView(plan: unknown): TokenPlanView | undefined {
     })),
   };
 }
-
-/** 从快照里取 MiniMax 的套餐额度。 */
-function minimaxTokenPlan(snapshot: HealthSnapshot): TokenPlanView | undefined {
-  return tokenPlanView(snapshot.minimax?.tokenPlan);
-}
-
-/**
- * Qoder 的额度：积分（点数），不是钱。
- *
- * 两池：套餐自带的，和加油包买的。平台都报了总额、已用、剩下。
- */
-
-/**
- * WorkBuddy 的额度：每日签到给的积分。
- *
- * 平台报的是今天有多少、今天领了多少、累计多少，没报总额，所以 total 是 0
- * （= 不知道，不是不存在）。
- */
-
-/**
- * TokenRhythm 的额度：余额（钱），每个租户一条。
- *
- * 赠金按批次给，先到期先用。平台把「永不过期」的钱也算成会过期的，所以
- * 到期那笔要自己按批次算，不能信平台那个数。
- */
-
-/** 平台标记「永不过期」的那一天。 */
-const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
-
-/**
- * SenseNova 的额度：积分（点数），不是钱。
- *
- * 平台的额度不是一个数，是几个互不相通的池子：通用池与专属池。每个池子里有
- * 周期积分（5 小时与 7 天两个滚动窗口，能用的是小的那个）与活动固定积分
- * （到账后 30 天有效）。
- *
- * 平台没报「一共给了多少积分」—— 窗口的限额是这段时间里能用多少，不是总
- * 额。所以 total 与 used 都是 0（契约里 0 = 没报），剩下的是权威的数。
- */
-
-/**
- * 平台的时间是「本地时间（UTC+8），没有时区」。补上时区再解析。
- *
- * 不补的话，服务器在 UTC 上就会算错八个小时。
- */
-function platformTimeMs(value: string): number {
-  const text = String(value ?? "").trim();
-  if (!text) return 0;
-  const zoned = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text.replace(" ", "T")}+08:00`;
-  const parsed = Date.parse(zoned);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/**
- * 书生·端砚的额度：墨点（点数），不是钱。
- *
- * 两样东西：
- *
- *   余额（available_credits）  账号里还剩多少墨点。这是最要紧的一个数。
- *   批次（credit packs）      平台按「一次性 / 按日 / 按月」发的墨点包：每一
- *                             批有总量、还剩多少、什么时候清空。
- *
- * 总额取「还在的批次一共给了多少墨点」—— 平台报的是每一批的总量，加起来就是
- * 这一轮发的总额。平台没报「一共发过多少」，那个数是 0（= 不知道）。
- */
 
 /* ------------------------------------------------------------------ *
  * 上游现在能不能接

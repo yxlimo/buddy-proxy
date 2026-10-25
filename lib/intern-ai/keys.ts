@@ -34,6 +34,7 @@ import {
 import { consoleApi } from "./platform.ts";
 import { accountId, storedAccount, type InternAiSession } from "./auth.ts";
 import { setSecret } from "../store.ts";
+import type { PlatformKey, PlatformKeys } from "../platform-keys.ts";
 
 /** 两个子站的 key 各是什么。 */
 export type InternAiSiteName = "discovery" | "chat";
@@ -148,7 +149,11 @@ export async function createDiscoveryKey(
   return parseDiscoveryKey({ ...(data?.item ?? {}), ...(data?.id ? data : {}) });
 }
 
-/** 给 Discovery 的 key 改名。 */
+/**
+ * 给 Discovery 的 key 改名。
+ *
+ * 面板还没做 key 管理：这一族接口是前瞻代码，现在只有网关自己与探针在用。
+ */
 export async function renameDiscoveryKey(
   session: InternAiSession,
   token: string,
@@ -194,7 +199,11 @@ export async function deleteDiscoveryKey(session: InternAiSession, token: string
   );
 }
 
-/** Chat 的 API Token 列表。 */
+/**
+ * Chat 的 API Token 列表。
+ *
+ * Chat（浦语）子站还没接进网关，这一族接口是前瞻代码。
+ */
 export async function listChatTokens(
   session: InternAiSession,
   token: string,
@@ -277,3 +286,48 @@ export async function ensureApiKey(
   console.log(`[INTERN-AI] ${site} 子站：新建了一把推理 key`);
   return plain;
 }
+
+/** 一把 key，换成三家平台共同的形状。 */
+function toPlatformKey(key: DiscoveryApiKey): PlatformKey {
+  return {
+    id: key.id,
+    name: key.name,
+    masked: key.maskedKey,
+    plain: key.plainKey,
+    status: key.status,
+  };
+}
+
+/** 建 key 时用的名字。平台控制台上看得到这个名字。 */
+export const INTERN_AI_KEY_NAME = "buddy";
+
+/**
+ * 书生·端砚 Discovery 子站的 key 管理，三家平台统一的形状。
+ *
+ * 平台的接口在实现里（那套 tokenplan api-keys）；这里只是把它包的形状换成
+ * 三家一样的那种。面板还没做这个操作：现在只有网关自己在用 ensure。
+ */
+export const internAiKeys: PlatformKeys<InternAiSession> = {
+  what: "书生·端砚",
+  list: async ({ session, token }) => (await listDiscoveryKeys(session, token ?? "")).map(toPlatformKey),
+  create: async ({ session, token }, name) =>
+    toPlatformKey(await createDiscoveryKey(session, token ?? "", name)),
+  delete: async ({ session, token }, id) => {
+    await deleteDiscoveryKey(session, token ?? "", id);
+  },
+  disable: async ({ session, token }, id) => {
+    await disableDiscoveryKey(session, token ?? "", id);
+  },
+  enable: async ({ session, token }, id) => {
+    await enableDiscoveryKey(session, token ?? "", id);
+  },
+  ensure: async ({ session, token, providerId }, current) =>
+    ensureApiKey(
+      session,
+      "discovery",
+      token ?? "",
+      INTERN_AI_KEY_NAME,
+      current ?? null,
+      providerId ?? "intern-ai",
+    ),
+};

@@ -80,12 +80,11 @@ export interface ZcodeLogin {
  * 发起登录。
  *
  * `platform` 是用哪家：智谱的 Z.ai（zai）还是 BigModel（bigmodel）。
- * `providerId` 是网关里的哪个 provider —— 会话按它存，两个账号互不相干。
  *
  * poll token 是本地随机生成的 32 字节 hex —— 服务端拿它当这次登录的凭据：
  * 轮询的时候要带上同一个。
  */
-export async function beginLogin(providerId = "zcode", platform = ZCODE_PROVIDER): Promise<ZcodeLogin> {
+export async function beginLogin(platform = ZCODE_PROVIDER): Promise<ZcodeLogin> {
   const pollToken = crypto.randomBytes(32).toString("hex");
   const r = await fetch(`${ZCODE_BASE}/api/v1/oauth/cli/init`, {
     method: "POST",

@@ -1,7 +1,7 @@
 // lib/store.ts — where the credentials live: one SQLite file.
 //
-// Everything secret the gateway holds is in here: the sessions of the four
-// clients, the keys the clients authenticate with, the relay station's
+// Everything secret the gateway holds is in here: the sessions of the eight
+// upstreams, the keys the clients authenticate with, the relay station's
 // accounts, the salt the device fingerprint is derived from. The file itself
 // is 0600, the same as the session files it replaces.
 //
@@ -254,7 +254,7 @@ export interface Cached<T> {
 }
 
 /** The cached value, if it is not older than the given age. */
-export function getCached<T>(id: string, maxAgeMs: number): Cached<T> | null {
+function getCached<T>(id: string, maxAgeMs: number): Cached<T> | null {
   const row = store().prepare("SELECT data, at FROM cache WHERE id = ?").get(id) as
     | { data?: string; at?: number }
     | undefined;

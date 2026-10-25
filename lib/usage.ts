@@ -39,7 +39,16 @@ export interface UsageEvent {
    * 子代理的会话 id 每次运行都不同，所以 agent 名是跨运行能聚合的那一维。
    */
   agentName: string;
-  /** 这次请求是由哪个模拟客户端发出的（模拟端）。 */
+  /**
+   * 这次请求是由哪个模拟客户端发出的（模拟端）。
+   *
+   * 填的是 kind 注册表里的 label：Qoder 的全球区与中国区都是「Qoder」，
+   * MiniMax Code 与 MiniMax 开放平台是两个名字。找不到那一条（provider 行
+   * 不在了、kind 没登记）时退回上游 id。
+   *
+   * 这一列改过含义：以前填的是上游 id，所以历史行是 id、新行是名字，
+   * 面板上会新旧混排。
+   */
   client: string;
   /** 成没成。 */
   ok: boolean;

@@ -17,8 +17,6 @@
 // regions — both use the prod one.
 
 import { configString, configNumber } from "../config.ts";
-import { readEnvValue } from "../env.ts";
-import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";

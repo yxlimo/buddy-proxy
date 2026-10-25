@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ListUsageEventsRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 
-export const usageKeys = {
+const usageKeys = {
   events: (
     upstreamId: string,
     model: string,

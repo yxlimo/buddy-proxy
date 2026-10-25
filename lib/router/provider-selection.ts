@@ -17,14 +17,8 @@
 
 import { select, type SelectionCandidate, type SelectionOptions } from "./selection.ts";
 import { AuthError } from "../credential.ts";
-import {
-  businessCodeOf,
-  upstreamStatusOf,
-  withUpstreamStatus,
-} from "../upstream-status.ts";
+import { businessCodeOf, upstreamStatusOf } from "../upstream-status.ts";
 import type { ProviderPolicy } from "../providers.ts";
-
-export { withUpstreamStatus };
 
 /** The policy of an upstream: which of its accounts takes a request. */
 export type { ProviderPolicy };

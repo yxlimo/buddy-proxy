@@ -23,5 +23,3 @@ export function createAppRouter(queryClient: QueryClient) {
     defaultPreloadStaleTime: 0,
   })
 }
-
-export type AppRouter = ReturnType<typeof createAppRouter>

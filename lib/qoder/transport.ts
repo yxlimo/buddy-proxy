@@ -113,7 +113,6 @@ export function buildBody(body: Record<string, unknown>, stream: boolean): Recor
 
 async function upstreamHeaders(
   providerId: string,
-  region: QoderRegion,
   force: boolean,
 ): Promise<Record<string, string>> {
   const cred = await ensureCredential(force, providerId);
@@ -152,7 +151,7 @@ export async function qoderChatCompletion(
   const url = ENDPOINTS[region].infer;
 
   const send = async (force: boolean) => {
-    const headers = await upstreamHeaders(providerId, region, force);
+    const headers = await upstreamHeaders(providerId, force);
     return fetch(url, {
       method: "POST",
       headers,

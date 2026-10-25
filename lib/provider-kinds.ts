@@ -14,9 +14,22 @@
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
 import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import type { CatalogModel } from "./router/catalog.ts";
-
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code";
+
+/** 一次签到的结果。 */
+export interface BenefitOutcome {
+  /** 上游的 id。 */
+  upstream: string;
+  /** 成了没有。 */
+  ok: boolean;
+  /** 拿到的积分数。 */
+  credits: number;
+  /** 给人看的几行话。 */
+  report: string[];
+  /** 什么时候跑的。 */
+  at: string;
+}
 
 /* ------------------------------------------------------------------ *
  * The shapes the panel reads
@@ -164,6 +177,13 @@ export interface ProviderKind {
   quotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[];
   /** 额度用尽了吗（读不到就说不知道）。 */
   outOfCredits(provider: ProviderRow, snapshot: HealthSnapshot): boolean;
+  /**
+   * 这一类上游的每日签到。
+   *
+   * 没有这一项的种类不签到：签到是账号的事，写在种类里，加一个种类就是
+   * 登记一次，而不是在签到那里再写一个 if/else。
+   */
+  benefits?(provider: ProviderRow): Promise<BenefitOutcome>;
 }
 
 const REGISTRY = new Map<string, ProviderKind>();

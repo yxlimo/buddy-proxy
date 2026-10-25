@@ -13,9 +13,8 @@ BASE="${2:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-export WORKBUDDY_CN=true QODER_CN=true QODER_GLOBAL=true MINIMAX_CODE=true
-# The relay station is only served when its accounts are configured.
-export TOKENRHYTHM="${TOKENRHYTHM:-}"
+# The upstream switches live in the database (provider.enabled), not in the
+# environment — test/fake-sessions.ts turns on the ones this test needs.
 export ROUTER_PORT="$PORT"
 
 # Everything the service keeps lives in one directory: the database with the
@@ -23,6 +22,10 @@ export ROUTER_PORT="$PORT"
 # one.
 export BUDDY_DATA_DIR="${BUDDY_DATA_DIR:-/tmp/opencode/test-buddy}"
 mkdir -p "$BUDDY_DATA_DIR"
+
+# The upstreams this run serves. TEST_UPSTREAMS says which ones (the relay
+# station is only served when its accounts are configured).
+export TEST_UPSTREAMS="${TEST_UPSTREAMS:-qoder,qoder-cn,workbuddy-cn,minimax}"
 
 # The router holds the MiniMax credential itself, so it needs one — but the
 # mock never looks at it. A dummy session keeps the test away from the real

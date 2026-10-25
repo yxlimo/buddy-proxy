@@ -1,7 +1,8 @@
 // lib/router/deliver.ts — how an answer reaches the client.
 //
-// The four upstreams answer in two dialects: Qoder and WorkBuddy speak
-// OpenAI, MiniMax speaks Anthropic. The client may ask in either. So an
+// The upstreams answer in two dialects: the OpenAI ones (Qoder, WorkBuddy,
+// TokenRhythm, SenseNova, 书生·端砚, the MiniMax open platform) and the
+// Anthropic ones (MiniMax Code, ZCode). The client may ask in either. So an
 // answer is converted at most once, and the way it is written out — the
 // headers, the frames, the error events — is the same for every upstream.
 
@@ -94,8 +95,13 @@ export async function peekStream(body: ReadableStream<Uint8Array>): Promise<Read
   });
 }
 
-/** The error a failed answer becomes, with the upstream's own message. */
-export function upstreamError(detail: any): AuthError {
+/**
+ * The error a failed answer becomes, with the upstream's own message.
+ *
+ * The answer carries the failure inside the body (an OpenAI `error` object);
+ * this turns it into the error the client sees.
+ */
+export function errorFromUpstreamPayload(detail: any): AuthError {
   return new AuthError(
     `upstream error (${detail?.type ?? detail?.code ?? "unknown"})`,
     typeof detail?.message === "string" ? detail.message : JSON.stringify(detail).slice(0, 300),
@@ -112,7 +118,7 @@ export function deliverJson(
   model: string,
   onUsage?: (usage: any) => void,
 ): void {
-  if (from === "openai" && json?.error) throw upstreamError(json.error);
+  if (from === "openai" && json?.error) throw errorFromUpstreamPayload(json.error);
   const payload =
     dialect === from
       ? json
@@ -295,7 +301,10 @@ async function pipeOpenAIChunks(
 }
 
 /**
- * Forward an Anthropic stream, byte for byte.
+ * 把上游的 Anthropic 流写给客户端，只改一处：message_start 里的模型名。
+ *
+ * 客户端问的是哪个模型，答复里就该是哪个 —— 上游可能用另一个名字（档位的
+ * key，或者发布模型背后的真名）。别的帧逐字不动。
  *
  * With `pingMs` set, a `ping` event goes out whenever the upstream has been
  * quiet for that long. Some hops in front of the gateway (a local HTTP proxy,
@@ -309,12 +318,6 @@ async function pipeOpenAIChunks(
  *     padded with useless events;
  *   - only ping on an SSE frame boundary, because writing one in the middle
  *     of an upstream frame would corrupt the client's parse.
- */
-/**
- * 把上游的 Anthropic 流写给客户端，只改一处：message_start 里的模型名。
- *
- * 客户端问的是哪个模型，答复里就该是哪个 —— 上游可能用另一个名字（档位的
- * key，或者发布模型背后的真名）。别的帧逐字不动。
  */
 async function writeAnthropicFrames(
   body: ReadableStream<Uint8Array>,
@@ -349,40 +352,6 @@ async function writeAnthropicFrames(
     writeSafe(ctx, errorEvent((e as Error)?.message));
   } finally {
     if (pingTimer) clearInterval(pingTimer);
-    ctx.res.end();
-  }
-}
-
-async function pipeStream(
-  body: ReadableStream<Uint8Array>,
-  ctx: Koa.Context,
-  pingMs = 0,
-): Promise<void> {
-  const reader = body.getReader();
-  let tail = Buffer.alloc(0); // last bytes written, used to detect a frame boundary
-  let lastActivity = Date.now();
-  const writePing = () => {
-    if (ctx.res.writableEnded || ctx.res.destroyed) return;
-    if (Date.now() - lastActivity < pingMs) return; // upstream is still talking
-    if (!/\r?\n\r?\n$/.test(tail.toString("latin1"))) return; // mid-frame: wait
-    // Same payload the gateway itself sends, so clients see nothing unusual.
-    if (writeSafe(ctx, 'event: ping\ndata: {"type":"ping"}\n\n')) lastActivity = Date.now();
-  };
-  const pingTimer = pingMs > 0 ? setInterval(writePing, Math.min(pingMs, 5000)) : null;
-  pingTimer?.unref?.();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      // The bytes go out as they came in: this path forwards the upstream's own
-      // SSE, and decoding it would only risk breaking a character across chunks.
-      if (!writeSafe(ctx, value)) break;
-      lastActivity = Date.now();
-      tail = Buffer.concat([tail, Buffer.from(value)]).slice(-4);
-    }
-  } finally {
-    if (pingTimer) clearInterval(pingTimer);
-    reader.releaseLock();
     ctx.res.end();
   }
 }

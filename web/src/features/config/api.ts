@@ -9,7 +9,7 @@ import { useAdminClient } from '@/features/auth/client-provider'
 import { systemKeys } from '@/features/overview/api'
 import { assertOk, describeError } from '@/lib/errors'
 
-export const configKeys = {
+const configKeys = {
   all: ['config'] as const,
 }
 

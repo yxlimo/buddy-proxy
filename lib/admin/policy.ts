@@ -62,7 +62,7 @@ export function policyErrorText(value: unknown): string {
 }
 
 /** 一个策略的两种叫法：面板上给人看的与库里存的。 */
-export function policyText(policy: ProviderPolicy): string {
+function policyText(policy: ProviderPolicy): string {
   return `${POLICY_LABELS[policy]}（${policy}）`;
 }
 

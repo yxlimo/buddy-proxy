@@ -10,7 +10,6 @@
 // output_config（思考档位），还有 metadata.user_id。
 
 import crypto from "node:crypto";
-import { configString } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
 

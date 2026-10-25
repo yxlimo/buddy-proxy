@@ -18,14 +18,14 @@ import { assertOk, describeError, humanMessage } from '@/lib/errors'
  *
  * 后端的话是「中文（机器码）」，机器码是给日志看的，不甩给人。
  */
-export function loginErrorText(error: unknown): string {
+function loginErrorText(error: unknown): string {
   return humanMessage(describeError(error))
 }
 
 /** 轮询的间隔：3 秒。后端在后台轮上游，面板只是问进度。 */
-export const LOGIN_POLL_MS = 3000
+const LOGIN_POLL_MS = 3000
 
-export const loginKeys = {
+const loginKeys = {
   status: (loginId: string) => ['login', loginId] as const,
 }
 
@@ -208,6 +208,3 @@ export function useImportLoginToken() {
     },
   })
 }
-
-/** 后端给的话是「中文（机器码）」，机器码不给人看。 */
-export { humanMessage }

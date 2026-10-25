@@ -16,10 +16,10 @@ import { platformApi } from "./platform.ts";
 import {
   storedTenant,
   tokenRhythmTenantSecretId,
-  writeHeaders,
   type TokenRhythmSession,
 } from "./accounts.ts";
 import { setSecret } from "../store.ts";
+import type { PlatformKey, PlatformKeys } from "../platform-keys.ts";
 
 export interface TokenRhythmApiKey {
   id: string;
@@ -73,7 +73,11 @@ export async function deleteApiKey(session: TokenRhythmSession, id: string): Pro
   });
 }
 
-/** Stop a key from being used, without throwing it away. */
+/**
+ * Stop a key from being used, without throwing it away.
+ *
+ * 面板还没做 key 管理：这一族接口是前瞻代码，现在只有网关自己与探针在用。
+ */
 export async function disableApiKey(session: TokenRhythmSession, id: string): Promise<void> {
   await platformApi<any>(`/api/api-keys/${encodeURIComponent(id)}/disable`, session, {
     method: "POST",
@@ -118,3 +122,36 @@ export async function ensureApiKey(
   console.log(`[TOKENRHYTHM] 租户 ${index}: 新建的 key ${created.maskedKey || created.keyPrefix}`);
   return created.key;
 }
+
+/** 一把 key，换成三家平台共同的形状。 */
+function toPlatformKey(key: TokenRhythmApiKey): PlatformKey {
+  return {
+    id: key.id,
+    name: key.name,
+    masked: key.maskedKey,
+    plain: key.key,
+    status: key.status,
+  };
+}
+
+/**
+ * TokenRhythm 的 key 管理，三家平台统一的形状。
+ *
+ * 平台的接口在实现里（那套 api-keys）；这里只是把它包的形状换成三家一样的
+ * 那种。面板还没做这个操作：现在只有网关自己在用 ensure。
+ */
+export const tokenRhythmKeys: PlatformKeys<TokenRhythmSession> = {
+  what: "TokenRhythm",
+  list: async ({ session }) => (await listApiKeys(session)).map(toPlatformKey),
+  create: async ({ session }, name) => toPlatformKey(await createApiKey(session, name)),
+  delete: async ({ session }, id) => {
+    await deleteApiKey(session, id);
+  },
+  disable: async ({ session }, id) => {
+    await disableApiKey(session, id);
+  },
+  enable: async ({ session }, id) => {
+    await enableApiKey(session, id);
+  },
+  ensure: async ({ session, index, providerId }, current) =>
+    ensureApiKey(session, index ?? 1, current ?? null, providerId ?? "tokenrhythm"),};

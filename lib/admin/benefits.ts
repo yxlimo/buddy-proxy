@@ -7,6 +7,9 @@ import { configFlag, configString } from "../config.ts";
 import { BenefitsRunner } from "../router/benefits.ts";
 import type { BenefitUpstream } from "../benefits.ts";
 import { listProviders } from "../providers.ts";
+import { kindOf } from "../provider-kinds.ts";
+// The kinds register themselves; importing the file is what makes them known.
+import "../kinds.ts";
 
 /**
  * 多久跑一次签到。
@@ -17,19 +20,15 @@ import { listProviders } from "../providers.ts";
 export const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
 
 /**
- * 这些种类的账号每天给积分。
+ * 参与签到的账号，而且得是开着的。
  *
- * 按种类列，不列几个写死的 id：签到是账号的事，一个上游名下的每个账号都要
- * 签到，用户自己加的第二个 Qoder 账号也一样。转发时先调哪个账号是策略的事，
- * 跟签到无关 —— 策略不会让哪个账号漏签。
+ * 哪些种类给积分是种类自己说的（注册表里的 benefits）：没登记的种类不发积分，
+ * 问它也是白问。
  */
-const BENEFIT_KINDS = new Set(["minimax", "workbuddy", "qoder"]);
-
-/** 参与签到的账号，而且得是开着的。 */
 export function benefitUpstreams(): BenefitUpstream[] {
   if (configFlag("BENEFITS_DISABLED", false)) return [];
   return listProviders()
-    .filter((row) => row.enabled && BENEFIT_KINDS.has(row.kind))
+    .filter((row) => row.enabled && Boolean(kindOf(row.kind)?.benefits))
     .map((row) => row.id);
 }
 

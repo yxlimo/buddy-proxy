@@ -81,8 +81,6 @@ export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota 
   }
 }
 
-let cache: { at: number; quota: ZcodeQuota | null } | null = null;
-
 /** 额度，问一次就缓存几分钟 —— 面板不该把平台问烦了。 */
 export async function zcodeQuota(maxAgeMs = 300_000, providerId = "zcode"): Promise<ZcodeQuota | null> {
   const cached = caches.get(providerId);

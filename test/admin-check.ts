@@ -120,7 +120,7 @@ function startRouter(): ReturnType<typeof spawn> {
 }
 
 // 上一次跑留下的库会让「改完要重启才生效」这类断言失去意义：启动时读到的
-// 就是上次的值，���什么可改。所以每次都从空的目录开始。
+// 就是上次的值，没什么可改。所以每次都从空的目录开始。
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
@@ -202,6 +202,13 @@ check(
 );
 check("面板令牌已配置", status.body?.adminTokenSet === true);
 
+// 新装好的服务：内置上游全是关的（开关只有 provider.enabled 一份）。
+check(
+  "内置上游默认全是关的",
+  list(status.body?.upstreams).every((u: any) => u.enabled === false),
+  JSON.stringify(list(status.body?.upstreams).filter((u: any) => u.enabled).map((u: any) => u.id)),
+);
+
 console.log("");
 console.log("上游与配置");
 
@@ -237,6 +244,17 @@ check("改完立刻生效", setConfig.body?.pendingRestart === false, JSON.strin
 
 const setUnknown = await call("SetConfig", { key: "NOT_A_SETTING", value: "1" }, token);
 check("不认识的配置项不收", setUnknown.body?.ok !== true);
+
+// 用量保留天数是热设置：改完立刻生效，面板上不报「待重启」。
+const setRetention = await call("SetConfig", { key: "USAGE_RETENTION_DAYS", value: "45" }, token);
+check("用量保留天数改得掉", setRetention.body?.ok === true, JSON.stringify(setRetention.body));
+const afterRetention = await call("GetSystemStatus", {}, token);
+check(
+  "改完用量保留天数不报待重启",
+  afterRetention.body?.pendingRestart === false,
+  JSON.stringify(afterRetention.body?.pendingRestart),
+);
+await call("SetConfig", { key: "USAGE_RETENTION_DAYS", value: "30" }, token);
 
 const setUpstream = await call("SetUpstreamEnabled", { upstreamId: "qoder-cn", enabled: true }, token);
 check("上游开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
@@ -387,12 +405,103 @@ check(
   oneAccount.body?.credentials?.every((c: any) => c.accountId === "qoder-cn"),
 );
 
+// 中转站的会话是一张表（按租户号存），不是按租户号拼的一个 id。
+// 写一份会话进去，面板上那条会话凭据就不是 missing。
+const rhythmDb = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
+rhythmDb.exec("PRAGMA busy_timeout = 5000");
+rhythmDb
+  .prepare(
+    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+  )
+  .run(
+    "session:provider:tokenrhythm",
+    "session",
+    JSON.stringify({
+      "1": {
+        index: 1,
+        providerId: "tokenrhythm",
+        cookie: "tr_session=test",
+        csrf: "test-csrf",
+        userId: "u-1",
+        name: "测试账号",
+        obtainedAtMs: Date.now(),
+        expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
+      },
+    }),
+    Date.now(),
+);
+rhythmDb.close();
+
+const rhythmCredentials = list((await call("ListCredentials", { accountId: "tokenrhythm:1" }, token)).body?.credentials);
+const rhythmSession = rhythmCredentials.find((c: any) => c.kind === "session");
+check("中转站的会话凭据列出来了", Boolean(rhythmSession), JSON.stringify(rhythmCredentials));
+check(
+  "中转站的会话凭据不是 missing",
+  rhythmSession?.status === "usable",
+  String(rhythmSession?.status),
+);
+check(
+  "中转站的会话凭据的 id 是按租户拼的",
+  rhythmSession?.id === "session:provider:tokenrhythm:tenant-1",
+  String(rhythmSession?.id),
+);
+
 const testCredential = await call("TestCredential", { credentialId: "nope:nope" }, token);
 check("试一条不存在的凭据会失败", testCredential.body?.ok !== true, JSON.stringify(testCredential.body));
 check("试凭据会记下时间", Boolean(testCredential.body?.checkedAt));
 
 const refreshCredential = await call("RefreshCredential", { credentialId: "nope:nope" }, token);
 check("刷一条不存在的凭据会失败", refreshCredential.body?.ok !== true);
+
+console.log("");
+console.log("凭据的 id：现行格式");
+
+// 认得这些 id（形状对不对），但不真的去问上游。
+//
+// 「试一下」会真的去问上游，所以这里的 id 都指向一个不存在的上游：形状对
+// 的话得到的是「没有这个 Provider」，形状不对才是「不认识的凭据」。这样
+// 一个字也不出机器。
+const knownIds = [
+  "session:provider:no-such-upstream",
+  "session:provider:no-such-upstream:tenant-1",
+  "key:provider:no-such-upstream:plan",
+  "key:provider:no-such-upstream:key-1",
+  "key:provider:no-such-upstream:account",
+  "key:provider:no-such-upstream:tenant-1",
+];
+for (const id of knownIds) {
+  const tried = await call("TestCredential", { credentialId: id }, token);
+  const message = String(tried.body?.message ?? "");
+  check(`认得 ${id}`, !message.includes("不认识的凭据"), message);
+}
+for (const id of knownIds) {
+  const refreshed = await call("RefreshCredential", { credentialId: id }, token);
+  const message = String(refreshed.body?.message ?? "");
+  check(`刷新也认得 ${id}`, !message.includes("不认识的凭据"), message);
+}
+// 一个真的存在的上游，但会话不在：识得出这个 id，而「试一下」问的是本地的
+// 会话，读不到就答「没有登录」——一个字也不出机器。
+// （不能用真的 provider id：那边会带着真令牌去问真的 Qoder。）
+const knownKind = await call("TestCredential", { credentialId: "session:provider:no-such-upstream" }, token);
+check(
+  "认得形状对的 id",
+  !String(knownKind.body?.message ?? "").includes("不认识的凭据"),
+  String(knownKind.body?.message),
+);
+const unknownProvider = await call("TestCredential", { credentialId: "session:provider:no-such-upstream" }, token);
+check(
+  "上游不在就说上游不在",
+  String(unknownProvider.body?.message ?? "").includes("没有这个 Provider"),
+  String(unknownProvider.body?.message),
+);
+// 旧格式是迁移回落，不再是现行格式。
+const legacyId = await call("TestCredential", { credentialId: "session:minimax" }, token);
+check(
+  "旧格式不认了",
+  String(legacyId.body?.message ?? "").includes("不认识的凭据"),
+  String(legacyId.body?.message),
+);
 
 console.log("");
 console.log("余额与用量");
@@ -463,6 +572,17 @@ const modelsOne = await call("ListModels", { upstreamId: "qoder-cn" }, token);
 check(
   "模型目录能按上游筛",
   modelsOne.status === 200 && list(modelsOne.body?.models).every((m: any) => m.id !== "hy3"),
+);
+
+// 用户自己加的 provider 也要在目录里：以前写死了九个 id，于是用户加的上游
+// 能被路由到，却不在模型列表里。
+const added = await call("AddProvider", { id: "qoder-cleanup", kind: "qoder", alias: "第二个 Qoder" }, token);
+check("用户加的上游加得进去", added.body?.ok === true, JSON.stringify(added.body));
+const addedModels = await call("ListModels", { upstreamId: "qoder-cleanup" }, token);
+check(
+  "用户加的上游在模型目录里",
+  addedModels.status === 200 && list(addedModels.body?.models).length > 0,
+  JSON.stringify(list(addedModels.body?.models).map((m: any) => m.id)),
 );
 
 const tail = await call("TailLog", { lines: 10 }, token);

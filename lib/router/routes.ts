@@ -31,19 +31,10 @@ export interface RoutingContext {
   /**
    * Every provider, by id.
    *
-   * `ids` is the models that provider can serve; `hidden` are the ones it knows
-   * but is not serving right now (the upstream is off, or the account has no
-   * credits) — a request for one of those gets "not enabled" rather than
-   * "no such model".
+   * `ids` is the models that provider can serve right now: the upstream is
+   * on and the account has something left.
    */
-  providers: Map<string, { kind: string; enabled: boolean; ids: Set<string>; hidden: Set<string> }>;
-}
-
-/** The provider a request path addresses, if any. */
-export function providerFromPath(path: string): string | undefined {
-  const first = (path.split("/")[1] ?? "").toLowerCase();
-  if (!first || first === "v1" || first === "admin" || first === "health") return undefined;
-  return first;
+  providers: Map<string, { kind: string; enabled: boolean; ids: Set<string> }>;
 }
 
 /** The model as the upstream knows it, prefix stripped. */
@@ -54,48 +45,8 @@ export function upstreamModel(route: Route): string {
 }
 
 /** The prefix the server puts in front of a model's name. */
-export function providerPrefix(providerId: string): string {
+function providerPrefix(providerId: string): string {
   return `${providerId}/`;
-}
-
-/** 找出这个模型归哪个 provider —— 第一个开着而且有这个模型的。 */
-function providerForModel(raw: string, ctx: RoutingContext): string | undefined {
-  for (const [id, info] of ctx.providers) {
-    if (info.enabled && info.ids.has(raw)) return id;
-  }
-  return undefined;
-}
-
-/** Decide where a request goes, and what the upstream should call the model. */
-export function resolveRoute(model: string, ctx: RoutingContext): Route {
-  const raw = String(model ?? "").trim();
-  const slash = raw.indexOf("/");
-  if (slash > 0) {
-    const prefix = raw.slice(0, slash);
-    const rest = raw.slice(slash + 1);
-    const info = ctx.providers.get(prefix);
-    if (!info) {
-      throw new AuthError(
-        `unknown provider "${prefix}"`,
-        `没有这个 Provider：${prefix}。可用：${[...ctx.providers.keys()].join("、")}。`,
-        400,
-      );
-    }
-    if (!info.enabled) throw disabledProvider(prefix);
-    return { provider: prefix, model: raw };
-  }
-  // A bare model name: whichever upstream can serve it.
-  const provider = providerForModel(raw, ctx);
-  if (provider) return { provider, model: `${provider}/${raw}` };
-  // Known but not being served: say so.
-  for (const [id, info] of ctx.providers) {
-    if (info.hidden.has(raw)) throw disabledProvider(id);
-  }
-  throw new AuthError(
-    `unknown model "${raw}"`,
-    `没有哪个 Provider 能服务这个模型。已知的：${knownModels(ctx).join("、")}。`,
-    400,
-  );
 }
 
 /**
@@ -136,15 +87,6 @@ function canonicalModel(raw: string, kind: string, ids: Set<string>): string | n
     if (candidate.toLowerCase() === lower) return candidate;
   }
   return null;
-}
-
-/** Every model any provider can serve. */
-export function knownModels(ctx: RoutingContext): string[] {
-  const out = new Set<string>();
-  for (const info of ctx.providers.values()) {
-    for (const id of info.ids) out.add(id);
-  }
-  return [...out];
 }
 
 /** 那个 Provider 没开着。 */

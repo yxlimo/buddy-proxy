@@ -4,7 +4,7 @@ import { ListModelsRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { UpstreamState } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 
-export const catalogKeys = {
+const catalogKeys = {
   /**
    * 目录的缓存键带上了上游的状态。
    *

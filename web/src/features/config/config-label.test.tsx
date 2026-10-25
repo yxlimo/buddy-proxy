@@ -12,7 +12,7 @@ import { renderWithClient } from '@/test/render'
 /**
  * 配置页不该把 env 键名甩给人。
  *
- * 契约里 ConfigItem.label 是自然语言的名字（「MiniMax Code 上游」这种）。
+ * 契约里 ConfigItem.label 是自然语言的名字（「是否开启 API KEY 验证」这种）。
  * 没有 label 就退回 description 的第一句。
  */
 describe('配置页的名字', () => {
@@ -22,13 +22,13 @@ describe('配置页的名字', () => {
         create(ListConfigResponseSchema, {
           items: [
             create(ConfigItemSchema, {
-              key: 'MINIMAX_CODE_ENABLED',
-              label: 'MiniMax Code 上游',
+              key: 'REQUIRE_API_KEY',
+              label: '是否开启 API KEY 验证',
               value: 'true',
               source: 'default',
               fallback: 'true',
-              group: 'general',
-              description: '要不要开 MiniMax Code 这个上游',
+              group: 'gateway',
+              description: '开启后，调用网关的 agent 必须带 API KEY。',
             }),
           ],
         }),
@@ -36,10 +36,10 @@ describe('配置页的名字', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
-    await screen.findByText('MiniMax Code 上游')
+    await screen.findByText('是否开启 API KEY 验证')
     // 键名还在，但在次要位置（更小更灰的那一行）。
-    expect(screen.getByText('MINIMAX_CODE_ENABLED')).toBeInTheDocument()
-    expect(screen.getByText('MINIMAX_CODE_ENABLED').className).toContain(
+    expect(screen.getByText('REQUIRE_API_KEY')).toBeInTheDocument()
+    expect(screen.getByText('REQUIRE_API_KEY').className).toContain(
       'text-muted-foreground'
     )
   })
@@ -50,13 +50,13 @@ describe('配置页的名字', () => {
         create(ListConfigResponseSchema, {
           items: [
             create(ConfigItemSchema, {
-              key: 'MINIMAX_CODE_ENABLED',
+              key: 'REQUIRE_API_KEY',
               label: '',
               value: 'true',
               source: 'default',
               fallback: 'true',
-              group: 'general',
-              description: '要不要开 MiniMax Code 这个上游。改完要重启。',
+              group: 'gateway',
+              description: '开启后，调用网关的 agent 必须带 API KEY。改完立刻生效。',
             }),
           ],
         }),
@@ -64,11 +64,11 @@ describe('配置页的名字', () => {
 
     renderWithClient({ client, children: <ConfigPage /> })
 
-    await screen.findByText('要不要开 MiniMax Code 这个上游')
+    await screen.findByText('开启后，调用网关的 agent 必须带 API KEY')
     // 描述的第一句当了标题，剩下那半句在下面，不重复一遍。
-    expect(screen.getByText('改完要重启。')).toBeInTheDocument()
+    expect(screen.getByText('改完立刻生效。')).toBeInTheDocument()
     expect(
-      screen.queryByText('要不要开 MiniMax Code 这个上游。改完要重启。')
+      screen.queryByText('开启后，调用网关的 agent 必须带 API KEY。改完立刻生效。')
     ).not.toBeInTheDocument()
   })
 

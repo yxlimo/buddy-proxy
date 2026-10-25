@@ -1,4 +1,4 @@
-// lib/router/upstreams.ts — the four upstream adapters.
+// lib/router/upstreams.ts — the upstream adapters, one per kind.
 //
 // Each upstream has its own protocol and its own idea of what a model is
 // called, but the way an answer is written back to the client is the same for
@@ -77,8 +77,6 @@ function minimaxMaxOutput(model: string): number {
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
-  /** The Qoder regions that are on. */
-  qoderRegions: QoderRegion[];
   /** How often a queued legacy request is tried again. */
   legacyMaxAttempts: number;
   legacyRetryMs: number;
@@ -123,7 +121,7 @@ export interface UpstreamContext {
  * (a 402 means this account is out of credit, a 400 means the request is
  * wrong and every account would fail the same way).
  */
-function upstreamError(status: number, text: string, what: string): AuthError {
+function upstreamStatusError(status: number, text: string, what: string): AuthError {
   const error = new AuthError(
     `upstream HTTP ${status}`,
     `${what}上游返回 ${status}：${text.slice(0, 300)}`,
@@ -629,10 +627,12 @@ export async function toMinimax(
 
   let r: Response;
   try {
-    r = await underPolicy(route.provider, () => minimaxChat(anthropicBody, stream));
+    r = await underPolicy(route.provider, () => minimaxChat(anthropicBody));
   } catch (e) {
+    // 换掉错误对象会把上游自己的状态与业务码丢掉，日志与分类器就看不出
+    // 真实发生了什么。
     const err = e as AuthError;
-    throw new AuthError(err.message, err.hint, err.status, err.type);
+    throw keepUpstreamTruth(new AuthError(err.message, err.hint, err.status, err.type), e);
   }
 
   if (!r.ok) {
@@ -763,11 +763,11 @@ export async function toZcode(
   anthropicBody.stream = stream;
 
   const { response } = await underPolicy(route.provider, () =>
-    zcodeChat(anthropicBody, { effort: zcodeEffort(body) }),
+    zcodeChat(anthropicBody, { effort: effortOf(body) }),
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw upstreamError(response.status, text, "ZCode ");
+    throw upstreamStatusError(response.status, text, "ZCode ");
   }
 
   if (!stream) {
@@ -776,11 +776,6 @@ export async function toZcode(
     return;
   }
   await deliverAnthropicStream(out, response.body!, dialect, route.label ?? model, 0, ctx.onUsage);
-}
-
-/** 客户端说的思考档位。 */
-function zcodeEffort(body: Record<string, any>): string | undefined {
-  return effortOf(body);
 }
 
 /**
@@ -864,7 +859,7 @@ export async function toTokenRhythm(
         }
         if (!response.ok) {
           const text = await response.text().catch(() => "");
-          throw upstreamError(response.status, text, "TokenRhythm ");
+          throw upstreamStatusError(response.status, text, "TokenRhythm ");
         }
         return { response, tenant: tenant.index };
       },
@@ -968,6 +963,54 @@ async function tokenRhythmChatWithRetry(
 }
 
 /**
+ * 开放平台的推理（OpenAI 方言）。
+ *
+ * SenseNova 与书生·端砚说的是同一种方言：请求几乎原样发过去，答案也原样回来，
+ * 鉴权是一把账号上的推理 key。两个上游的差别只有三样：路由日志里的名字、
+ * 错误提示里怎么称呼它、以及推理怎么发 —— 所以差别都由调用方传进来。
+ */
+async function toOpenAiPlatform(
+  ctx: UpstreamContext,
+  body: Record<string, unknown>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  out: Koa.Context,
+  opts: {
+    /** 路由日志里的名字。 */
+    log: string;
+    /** 错误提示里怎么称呼它（后面接「上游返回 …」）。 */
+    what: string;
+    /** 推理怎么发。 */
+    chat: (openaiBody: Record<string, unknown>, headers: Record<string, string>) => Promise<Response>;
+  },
+): Promise<void> {
+  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
+  const model = upstreamModel(route);
+  openaiBody.model = model;
+  openaiBody.stream = stream;
+  if (ctx.logRoute) {
+    console.log(`[ROUTE] ${opts.log} model=${route.model} stream=${stream}`);
+  }
+
+  const response = await underPolicy(route.provider, () =>
+    opts.chat(openaiBody, ctx.clientHeaders),
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw upstreamStatusError(response.status, text, opts.what);
+  }
+
+  if (!stream) {
+    const json = await response.json();
+    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+    return;
+  }
+
+  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+}
+
+/**
  * SenseNova。
  *
  * 上游讲 OpenAI 方言，所以请求几乎原样发过去，答案也原样回来。Anthropic 的
@@ -984,29 +1027,11 @@ export async function toSenseNova(
   stream: boolean,
   out: Koa.Context,
 ): Promise<void> {
-  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
-  const model = upstreamModel(route);
-  openaiBody.model = model;
-  openaiBody.stream = stream;
-  if (ctx.logRoute) {
-    console.log(`[ROUTE] sensenova model=${route.model} stream=${stream}`);
-  }
-
-  const response = await underPolicy(route.provider, () =>
-    senseNovaChat(openaiBody, "sensenova", ctx.clientHeaders),
-  );
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw upstreamError(response.status, text, "SenseNova ");
-  }
-
-  if (!stream) {
-    const json = await response.json();
-    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
-    return;
-  }
-
-  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+  await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
+    log: "sensenova",
+    what: "SenseNova ",
+    chat: (openaiBody, headers) => senseNovaChat(openaiBody, "sensenova", headers),
+  });
 }
 
 /**
@@ -1022,27 +1047,9 @@ export async function toInternAi(
   stream: boolean,
   out: Koa.Context,
 ): Promise<void> {
-  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
-  const model = upstreamModel(route);
-  openaiBody.model = model;
-  openaiBody.stream = stream;
-  if (ctx.logRoute) {
-    console.log(`[ROUTE] intern-ai model=${route.model} stream=${stream}`);
-  }
-
-  const response = await underPolicy(route.provider, () =>
-    internAiChat(openaiBody, "intern-ai", ctx.clientHeaders),
-  );
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw upstreamError(response.status, text, "书生·端砚");
-  }
-
-  if (!stream) {
-    const json = await response.json();
-    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
-    return;
-  }
-
-  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+  await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
+    log: "intern-ai",
+    what: "书生·端砚",
+    chat: (openaiBody, headers) => internAiChat(openaiBody, "intern-ai", headers),
+  });
 }

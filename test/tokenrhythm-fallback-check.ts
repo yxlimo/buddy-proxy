@@ -178,7 +178,6 @@ console.log("");
 console.log("余额不足时换租户");
 
 const ctx: any = {
-  qoderRegions: () => ({}),
   legacyMaxAttempts: 1,
   legacyRetryMs: 0,
   qoderMaxAttempts: 1,

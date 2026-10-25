@@ -69,7 +69,6 @@ const setPolicy = (policy: string): void => {
 const { toMiniMaxApi } = await import("../lib/router/upstreams.ts");
 
 const ctx: any = {
-  qoderRegions: () => ({}),
   legacyMaxAttempts: 1,
   legacyRetryMs: 0,
   qoderMaxAttempts: 1,

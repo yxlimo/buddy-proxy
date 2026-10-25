@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
@@ -101,6 +102,11 @@ export function UpstreamsPage() {
 
   const list = upstreams.data.upstreams
   const loginTarget = login.target
+  // 正在填 key 的那个上游。找不到就是没有：key 不能写到别的上游上去，
+  // 所以找不到的时候不开弹窗，也不发请求。
+  const keysTarget = keysFor
+    ? list.find((u) => u.id === keysFor)
+    : undefined
 
   return (
     <PageShell
@@ -289,9 +295,19 @@ export function UpstreamsPage() {
                                 })
                               }
                               onLogout={(account) => setLogoutTarget(account)}
-                              onManageKeys={(account) =>
-                                setKeysFor(account.upstreamId)
-                              }
+                              onManageKeys={(account) => {
+                                const target = list.find(
+                                  (u) => u.id === account.upstreamId
+                                )
+                                if (!target) {
+                                  // 上游不在列表里了：不要把 key 写到别处去。
+                                  toast.error('找不到这个上游', {
+                                    description: `${account.upstreamId} 不在上游列表里`,
+                                  })
+                                  return
+                                }
+                                setKeysFor(target.id)
+                              }}
                             />
                           </TableCell>
                         </TableRow>
@@ -338,18 +354,17 @@ export function UpstreamsPage() {
       />
 
       <ProviderKeysDialog
-        open={keysFor !== null}
-        kind={
-          list.find((u) => u.id === keysFor)?.kind ?? 'minimax-api'
-        }
+        open={keysTarget !== undefined}
+        kind={keysTarget?.kind}
         onOpenChange={(open) => {
           if (!open) setKeysFor(null)
         }}
         existing={[]}
         pending={setKeys.isPending}
         onSubmit={(keys) => {
+          if (!keysTarget) return
           setKeys.mutate(
-            { upstreamId: keysFor ?? 'minimax-api', keys },
+            { upstreamId: keysTarget.id, keys },
             {
               onSuccess: () => setKeysFor(null),
             }

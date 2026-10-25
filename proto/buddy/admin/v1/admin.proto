@@ -247,7 +247,7 @@ message ListConfigRequest {}
 
 message ConfigItem {
   string key = 1;
-  // 给人看的名字：「MiniMax Code 上游」这种，不要把 env 的键名甩给人。
+  // 给人看的名字：「是否开启 API KEY 验证」这种，不要把 env 的键名甩给人。
   string label = 2;
   string value = 3;
   // database / environment / default —— 这个值现在从哪来。

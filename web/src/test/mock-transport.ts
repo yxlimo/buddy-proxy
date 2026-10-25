@@ -19,7 +19,7 @@ type Methods = typeof AdminService['method']
  * 的类型都从契约推出来：形状写错（比如把 upstreams 写成 items）编译不过，
  * 不用等测试红了才发现。
  */
-export type MockHandlers = {
+type MockHandlers = {
   [K in keyof Methods as Capitalize<K>]?: (
     input: MessageInitShape<Methods[K]['input']>
   ) =>
@@ -35,7 +35,7 @@ type AnyHandler = (input: never) => unknown
  * 方法名长这样：buddy.admin.v1.AdminService/ListUpstreams。处理器可以写
  * 全名，也可以只写最后一段。
  */
-export function mockTransport(handlers: MockHandlers): Transport {
+function mockTransport(handlers: MockHandlers): Transport {
   const table = new Map<string, AnyHandler>()
   for (const [key, handler] of Object.entries(handlers)) {
     if (!handler) continue

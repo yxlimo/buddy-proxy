@@ -75,6 +75,11 @@ function unauthorized(ctx: Koa.Context): void {
  */
 markHotSetting("ADMIN_CORS_ORIGINS");
 
+// Ask for it here, at load time: a setting nobody has asked for is not in the
+// snapshot, so the panel would not show it and config-cli would refuse to
+// write it. The value itself is read again on every request.
+configString("ADMIN_CORS_ORIGINS", "");
+
 function corsOrigins(): string[] {
   return configString("ADMIN_CORS_ORIGINS", "")
     .split(",")

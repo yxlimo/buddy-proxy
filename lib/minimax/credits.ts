@@ -162,10 +162,6 @@ export function miniMaxTokenPlanKey(providerId = "minimax"): string | null {
   return null;
 }
 
-/** Where the token plan's key is kept. */
-/** The plan key of the built-in provider, for the old id. */
-const TOKEN_PLAN_KEY_ID = "key:minimax-token-plan";
-
 /* ------------------------------------------------------------------ *
  * The cached view
  * ------------------------------------------------------------------ */

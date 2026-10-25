@@ -24,7 +24,7 @@ import {
   type SenseNovaPoolUsage,
 } from "./sensenova/quota.ts";
 import type { InternAiBalance, InternAiCreditPack } from "./intern-ai/quota.ts";
-import type { ProviderPolicy, ProviderRow } from "./providers.ts";
+import type { ProviderRow } from "./providers.ts";
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
 import { tokenFingerprint } from "./credential.ts";
 import {
@@ -43,6 +43,7 @@ import {
  * ------------------------------------------------------------------ */
 
 import { credentialStatus as minimaxCredentialStatus } from "./minimax/auth.ts";
+import { runMiniMaxBenefits } from "./minimax/checkin.ts";
 import { MINIMAX_MODELS } from "./minimax/models.ts";
 import { MINIMAX_UPSTREAM } from "./minimax/transport.ts";
 
@@ -59,12 +60,14 @@ import { miniMaxApiTenants, MINIMAX_API_MODELS, miniMaxApiBase } from "./minimax
 import { qoderStatus, regionOf as qoderRegionOf } from "./qoder/auth.ts";
 import { qoderModelsForRegion } from "./qoder/models.ts";
 import { ENDPOINTS as QODER_ENDPOINTS } from "./qoder/auth.ts";
+import { runQoderBenefits } from "./qoder/benefits.ts";
 
 /* ------------------------------------------------------------------ *
  * WorkBuddy
  * ------------------------------------------------------------------ */
 
 import { workbuddyStatus } from "./workbuddy/auth.ts";
+import { runWorkBuddyBenefits } from "./workbuddy/benefits.ts";
 
 import { ENDPOINTS as WORKBUDDY_ENDPOINTS } from "./workbuddy/auth.ts";
 
@@ -80,7 +83,6 @@ import { tokenRhythmStatus } from "./tokenrhythm/wallet.ts";
  * ------------------------------------------------------------------ */
 
 import { senseNovaStatus } from "./sensenova/auth.ts";
-import { senseNovaInferenceKey } from "./sensenova/transport.ts";
 import { senseNovaCatalog } from "./sensenova/transport.ts";
 import { SENSENOVA_INFER_BASE } from "./sensenova/config.ts";
 
@@ -89,7 +91,6 @@ import { SENSENOVA_INFER_BASE } from "./sensenova/config.ts";
  * ------------------------------------------------------------------ */
 
 import { internAiStatus } from "./intern-ai/auth.ts";
-import { internAiInferenceKey } from "./intern-ai/transport.ts";
 import { internAiCatalog } from "./intern-ai/transport.ts";
 import { INTERN_AI_DISCOVERY_API_BASE } from "./intern-ai/config.ts";
 
@@ -110,7 +111,6 @@ import { ZCODE_MESSAGES_URL } from "./zcode/transport.ts";
 function fromUpstreamStatus(
   raw: Record<string, unknown>,
   kind: string,
-  secretId: string,
 ): CredentialView {
   const status = String(raw.status ?? "");
   const remainingSec = Number(raw.remainingSec ?? 0);
@@ -473,12 +473,13 @@ registerKind({
   baseUrl: () => MINIMAX_UPSTREAM.replace(/\/messages$/, ""),
   credential: (provider) => {
     const raw = minimaxCredentialStatus(provider.id);
-    const view = fromUpstreamStatus(raw, "session", `session:provider:${provider.id}`);
+    const view = fromUpstreamStatus(raw, "session");
     if (raw.mode === "file") view.detail = view.detail || "读的是桌面端的 store，刷新由桌面端负责";
     return view;
   },
-  models: (provider) => minimaxCatalogModels(MINIMAX_MODELS),
+  models: () => minimaxCatalogModels(MINIMAX_MODELS),
   quotas: (provider, snapshot) => minimaxQuotas(provider, snapshot),
+  benefits: (provider) => runMiniMaxBenefits(provider.id),
   outOfCredits: (provider, snapshot) => {
     // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑。看 plan 的窗口。
     const mine = (snapshot.minimax?.[provider.id] ?? {}) as any;
@@ -506,7 +507,9 @@ registerKind({
       tenants.length === 1 ? "1 个租户" : `${tenants.length} 个租户`,
     );
   },
-  models: () => miniMaxApiCatalogModels(MINIMAX_API_MODELS),
+  models: (provider) =>
+    // 开放平台一把 key 一个租户：没有 key 就没有模型可公布。
+    miniMaxApiTenants(provider.id).length ? miniMaxApiCatalogModels(MINIMAX_API_MODELS) : [],
   quotas: (provider, snapshot) => miniMaxApiQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
     const mine = (snapshot.minimaxApi?.[provider.id] ?? {}) as any;
@@ -531,9 +534,10 @@ registerKind({
     const region = provider.region === "cn" ? "cn" : "global";
     return QODER_ENDPOINTS[region].infer.replace(/\/model\/v1\/chat\/completions$/, "");
   },
-  credential: (provider) => fromUpstreamStatus(qoderStatus(provider.id), "session", `session:provider:${provider.id}`),
+  credential: (provider) => fromUpstreamStatus(qoderStatus(provider.id), "session"),
   models: (provider) => qoderCatalogModels(qoderModelsForRegion(qoderRegionOf(provider.id))),
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),
+  benefits: (provider) => runQoderBenefits(provider.id),
   outOfCredits: (provider, snapshot) => {
     // The platform's own flag decides. The plan (the free part) running out
     // is not the end: the credits bought on top are a separate pool, and the
@@ -559,9 +563,10 @@ registerKind({
   login: "browser",
   policies: ["single"],
   baseUrl: () => WORKBUDDY_ENDPOINTS.cn.base,
-  credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session", `session:provider:${provider.id}`),
+  credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
   models: () => workbuddyCatalogModels(workbuddyModelList()),
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),
+  benefits: (provider) => runWorkBuddyBenefits(provider.id),
   outOfCredits: (provider, snapshot) => {
     // The check-in credits: the platform reports them as "daily".
     const mine = (snapshot.workbuddy?.[provider.id] ?? {}) as any;
@@ -580,7 +585,7 @@ registerKind({
   // 一个账号一个钱包。赠金会过期，所以它还能按到期先后挑。
   policies: ["single", "fallback", "expiry_first"],
   baseUrl: () => TOKENRHYTHM_API_BASE,
-  credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session", `session:provider:${provider.id}`),
+  credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session"),
   models: () => tokenRhythmCatalogModels(),
   quotas: (provider, snapshot) => tokenrhythmQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
@@ -600,7 +605,7 @@ registerKind({
   login: "password",
   policies: ["single"],
   baseUrl: () => SENSENOVA_INFER_BASE,
-  credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key", `key:provider:${provider.id}`),
+  credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
   models: () => senseNovaCatalogModels(senseNovaCatalog()),
   quotas: (provider, snapshot) => senseNovaQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
@@ -620,7 +625,7 @@ registerKind({
   login: "code",
   policies: ["single"],
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
-  credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key", `key:provider:${provider.id}`),
+  credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),
   models: () => internAiCatalogModels(internAiCatalog()),
   quotas: (provider, snapshot) => internAiQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
@@ -642,7 +647,7 @@ registerKind({
   login: "browser",
   policies: ["single"],
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
-  credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session", `session:provider:${provider.id}`),
+  credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session"),
   models: () => zcodeCatalogModels(ZCODE_MODELS),
   quotas: (provider, snapshot) => zcodeQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {

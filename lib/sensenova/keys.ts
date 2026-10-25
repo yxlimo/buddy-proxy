@@ -22,6 +22,7 @@ import { listModels } from "./models.ts";
 import { senseNovaApiKey } from "./config.ts";
 import { setSecret } from "../store.ts";
 import { accountId, storedAccount, type SenseNovaSession } from "./auth.ts";
+import type { PlatformKey, PlatformKeys } from "../platform-keys.ts";
 
 /** key 的两种计费类型。 */
 export type SenseNovaKeyType = "API_KEY_TYPE_TOKEN_PLAN" | "API_KEY_TYPE_METERED";
@@ -64,7 +65,11 @@ export function parseApiKeyRow(row: any): SenseNovaApiKey {
   };
 }
 
-/** 账号现有的 key。 */
+/**
+ * 账号现有的 key。
+ *
+ * 面板还没做 key 管理：这一族接口是前瞻代码，现在只有网关自己与探针在用。
+ */
 export async function listApiKeys(session: SenseNovaSession, pageSize = 20): Promise<SenseNovaApiKey[]> {
   const data = await consoleApi<any>("/console/v1/metered/api-keys", session, {
     query: { page_size: pageSize },
@@ -156,3 +161,44 @@ export async function ensureApiKey(
   }
   return created.plainKey;
 }
+
+/** 一把 key，换成三家平台共同的形状。 */
+function toPlatformKey(key: SenseNovaApiKey): PlatformKey {
+  return {
+    id: key.id,
+    name: key.displayname,
+    masked: key.maskedKey,
+    plain: key.plainKey,
+    status: key.status,
+  };
+}
+
+/** 建 key 时用的名字。平台控制台上看得到这个名字。 */
+export const SENSE_NOVA_KEY_NAME = "buddy";
+
+/**
+ * SenseNova 的 key 管理，三家平台统一的形状。
+ *
+ * 平台的接口在实现里（控制台那套 metered api-keys）；这里只是把它包的形状
+ * 换成三家一样的那种。面板还没做这个操作：现在只有网关自己在用 ensure。
+ */
+export const senseNovaKeys: PlatformKeys<SenseNovaSession> = {
+  what: "SenseNova",
+  list: async ({ session }) => (await listApiKeys(session)).map(toPlatformKey),
+  create: async ({ session, keyType }, name) =>
+    toPlatformKey(
+      await createApiKey(session, name, (keyType as SenseNovaKeyType) ?? KEY_TYPE_TOKEN_PLAN),
+    ),
+  delete: async ({ session }, id) => {
+    await revokeApiKey(session, id);
+  },
+  ensure: async ({ session, keyType, providerId }, current) =>
+    ensureApiKey(
+      session,
+      SENSE_NOVA_KEY_NAME,
+      current ?? null,
+      (keyType as SenseNovaKeyType) ?? KEY_TYPE_TOKEN_PLAN,
+      providerId ?? "sensenova",
+    ),
+};
+

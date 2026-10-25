@@ -12,8 +12,7 @@ import {
   miniMaxApiTenantSecretId,
 } from "../minimax/api.ts";
 import { deleteSecret, setSecret } from "../store.ts";
-import { providerKindOf } from "../providers.ts";
-import { providerSecretId } from "../providers.ts";
+import { providerKindOf, providerSecretId } from "../providers.ts";
 
 /**
  * 上游报的状态 → 契约里的枚举。
@@ -113,4 +112,84 @@ export function hasUsableCredential(state: CredentialState): boolean {
     state === CredentialState.ANONYMOUS ||
     state === CredentialState.USABLE
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * 凭据的 id
+ * ------------------------------------------------------------------ */
+
+/**
+ * 一条凭据 id 的形状。
+ *
+ * 凭据的 id 就是它在数据库里的地址（见 lib/providers.ts 的 providerSecretId）：
+ * 会话是 session:provider:<上游>，钥匙是 key:provider:<上游>:<后缀>。后缀各家
+ * 不同（套餐额度是 plan，开放平台一把 key 一个租户是 key-1，账号密码是 account，
+ * 中转站一个账号一个租户是 tenant-1），所以认出它是哪一种要靠后缀。
+ */
+export interface CredentialRef {
+  /** 它属于哪个上游。 */
+  providerId: string;
+  /** session / plan_key / api_key / login。 */
+  form: string;
+  /** 租户号：开放平台一把 key 一个租户，中转站一个账号一个钱包。 */
+  tenant: number | null;
+  /** 从登录账号里派生出来的那把推理 key：api_key、discovery_key。 */
+  derived: string;
+}
+
+/**
+ * 把凭据的 id 读成它指向的东西。
+ *
+ * 面板把凭据的 id 原样交回来（「试一下」「刷新一下」），所以这里是唯一的算法：
+ * 认不出来的 id 就是不认识的凭据，不会去猜。
+ *
+ * 中转站的会话是一张表（session:provider:tokenrhythm 里按租户号存），所以它的
+ * 会话 id 后面带一个租户号：session:provider:tokenrhythm:tenant-1。
+ */
+export function parseCredentialId(id: string): CredentialRef | null {
+  const raw = String(id ?? "").trim();
+  if (!raw) return null;
+  // 派生出来的推理 key 用 # 记：账号是它来的地方，key 是从账号里取的那把。
+  const hash = raw.indexOf("#");
+  const derived = hash >= 0 ? raw.slice(hash + 1) : "";
+  const base = hash >= 0 ? raw.slice(0, hash) : raw;
+  const parts = base.split(":");
+  if (parts[0] === "session" && parts[1] === "provider" && parts.length >= 3) {
+    const providerId = parts[2];
+    if (!providerId) return null;
+    if (parts.length === 3) return { providerId, form: "session", tenant: null, derived };
+    if (parts.length === 4 && parts[3].startsWith("tenant-")) {
+      const tenant = Number(parts[3].slice("tenant-".length));
+      if (Number.isInteger(tenant)) return { providerId, form: "session", tenant, derived };
+    }
+    return null;
+  }
+  if (parts[0] === "key" && parts[1] === "provider" && parts.length === 4) {
+    const providerId = parts[2];
+    const suffix = parts[3];
+    if (!providerId) return null;
+    if (suffix === "plan") return { providerId, form: "plan_key", tenant: null, derived };
+    if (suffix === "account") return { providerId, form: "login", tenant: null, derived };
+    const key = /^key-(\d+)$/.exec(suffix);
+    if (key) return { providerId, form: "api_key", tenant: Number(key[1]), derived };
+    const tenant = /^tenant-(\d+)$/.exec(suffix);
+    if (tenant) return { providerId, form: "login", tenant: Number(tenant[1]), derived };
+    return null;
+  }
+  return null;
+}
+
+/**
+ * 账号的 id 拆成上游与租户。
+ *
+ * 账号的 id 是上游自己的 id，或者是「上游:租户号」那种（中转站一个租户一个
+ * 账号）。上游的 id 里没有冒号，所以从后面拆就分得清。
+ */
+export function splitAccountId(accountId: string): { providerId: string; tenant: number | null } {
+  const raw = String(accountId ?? "").trim();
+  const cut = raw.lastIndexOf(":");
+  if (cut <= 0) return { providerId: raw, tenant: null };
+  const tenant = Number(raw.slice(cut + 1));
+  if (!Number.isInteger(tenant)) return { providerId: raw, tenant: null };
+  return { providerId: raw.slice(0, cut), tenant };
 }

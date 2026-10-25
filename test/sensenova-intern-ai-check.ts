@@ -441,14 +441,8 @@ function startRouter(): ChildProcess {
       BUDDY_DATA_DIR: DATA_DIR,
       ROUTER_PORT: String(port),
       BENEFITS_DISABLED: "1",
-      // 只有这两个新上游开着，其余全关。
-      QODER_GLOBAL: "",
-      QODER_CN: "",
-      MINIMAX_CODE: "",
-      WORKBUDDY_CN: "",
-      TOKENRHYTHM: "",
-      SENSENOVA: "true",
-      INTERN_AI: "true",
+      // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
+      // 下面用面板的 SetUpstreamEnabled 把这两个新上游打开，其余默认就是关的。
       // 推理端点与控制台都指向假上游：一个字都不出机器。
       SENSENOVA_BASE: `${fakeBase}/sensenova/v1`,
       SENSENOVA_PLATFORM_BASE: `${fakeBase}/sensenova`,
@@ -532,6 +526,20 @@ async function admin(method: string, body: unknown = {}): Promise<any> {
 function db(): DatabaseSync {
   return new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
 }
+
+/**
+ * 把上游打开。
+ *
+ * 上游的开关在数据库的 provider.enabled 上，环境变量不再参与。新装好的
+ * 服务默认全关，所以测试自己打开这两个 —— 面板上做的是同一件事。
+ */
+async function enableUpstream(id: string): Promise<void> {
+  const res = await admin("SetUpstreamEnabled", { upstreamId: id, enabled: true });
+  if (!res?.ok) throw new Error(`the upstream ${id} did not turn on: ${JSON.stringify(res)}`);
+}
+
+await enableUpstream("sensenova");
+await enableUpstream("intern-ai");
 
 function writeSecret(id: string, kind: string, data: unknown): void {
   const conn = db();

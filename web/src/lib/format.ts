@@ -113,11 +113,6 @@ export function formatPoints(value: number | undefined | null): string {
   return Number.isInteger(value) ? numberFormat.format(value) : value.toFixed(2)
 }
 
-/** token 数。缩写成 K / M / B 那种。 */
-export function formatTokens(value: bigint | number | undefined | null): string {
-  return formatCompact(value)
-}
-
 /** 时长（毫秒）。 */
 export function formatMillis(value: bigint | number | undefined | null): string {
   if (value === undefined || value === null) return '—'

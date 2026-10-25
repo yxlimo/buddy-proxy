@@ -12,7 +12,6 @@
 
 import { store } from "./store.ts";
 
-/** The upstream a target belongs to. Same names the route paths use. */
 /**
  * The group of a published model's target.
  *
