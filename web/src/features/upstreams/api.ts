@@ -6,15 +6,24 @@ import {
   DeleteProviderRequestSchema,
   ListProviderKindsRequestSchema,
   ListUpstreamsRequestSchema,
+  SetProviderPolicyRequestSchema,
   SetUpstreamEnabledRequestSchema,
   UpdateProviderRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
+import type { ProviderPolicy } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { systemKeys } from '@/features/overview/api'
 import { assertOk, describeError } from '@/lib/errors'
 
 export const upstreamKeys = {
   all: ['upstreams'] as const,
+  /**
+   * 种类与它支持的策略是一份注册表，不随上游列表变。
+   *
+   * 键跟上游列表不共享前缀：失效上游列表的时候（前缀匹配）不要连带把
+   * 它也重取一遍 —— 改一次策略不该多发一次 ListProviderKinds。
+   */
+  kinds: ['provider-kinds'] as const,
 }
 
 export function useUpstreams() {
@@ -62,7 +71,7 @@ export function useSetUpstreamEnabled() {
 export function useProviderKinds() {
   const client = useAdminClient()
   return useQuery({
-    queryKey: [...upstreamKeys.all, 'kinds'],
+    queryKey: upstreamKeys.kinds,
     queryFn: () =>
       client.listProviderKinds(create(ListProviderKindsRequestSchema)),
   })
@@ -102,17 +111,22 @@ export function useAddProvider() {
   })
 }
 
-/** 改一个 Provider 的别名。 */
+/**
+ * 改一个 Provider 的别名。
+ *
+ * 契约里「没说的字段就是不改」，所以只有带了的字段才进请求体。
+ * 生效策略不在这里：策略有自己一个方法（见 useSetProviderPolicy）。
+ * 开关也不在这里：开关走 useSetUpstreamEnabled。
+ */
 export function useUpdateProvider() {
   const client = useAdminClient()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { id: string; alias?: string; enabled?: boolean }) => {
+    mutationFn: async (input: { id: string; alias?: string }) => {
       const result = await client.updateProvider(
         create(UpdateProviderRequestSchema, {
           id: input.id,
           alias: input.alias ?? '',
-          ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         })
       )
       assertOk(result, '没改成')
@@ -123,6 +137,41 @@ export function useUpdateProvider() {
     },
     onSuccess: (result) => {
       toast.success(result.message || '改好了')
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+    },
+  })
+}
+
+/**
+ * 改一个上游的生效策略。
+ *
+ * 策略自己一个方法：混在 UpdateProvider 里，改策略会顺手把别名也改掉
+ * （alias 在契约里是普通 string，没有「没给」这一说）。
+ */
+export function useSetProviderPolicy() {
+  const client = useAdminClient()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: {
+      upstreamId: string
+      policy: ProviderPolicy
+    }) => {
+      const result = await client.setProviderPolicy(
+        create(SetProviderPolicyRequestSchema, {
+          upstreamId: input.upstreamId,
+          policy: input.policy,
+        })
+      )
+      assertOk(result, '没改成')
+      return result
+    },
+    onError: (error) => {
+      toast.error(describeError(error))
+    },
+    onSuccess: (result) => {
+      toast.success(result.message || '策略改好了')
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })

@@ -60,16 +60,22 @@ message Upstream {
   string region = 9;
   // 这个上游名下的多个账号怎么选（provider 的生效策略）。
   ProviderPolicy policy = 13;
+  // 这个上游名下有几个账号。
+  //
+  // 面板用它判「策略有没有用」：只有一个账号的时候，换谁都一样。账号数由
+  // 后端数——上游自己的形态不一样（开放平台一把 key 一个租户，中转站一个
+  // 账号一个钱包），面板自己数会数错。
+  int32 account_count = 14;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
 enum ProviderPolicy {
   PROVIDER_POLICY_UNSPECIFIED = 0;
-  // 单调第一个（权重最大的那个）。失败就是失败，不换。
+  // 只调第一个（权重最大的那个）。失败就是失败，不换。
   PROVIDER_POLICY_SINGLE = 1;
   // 按权重依次试，遇到「不可用」降级到下一个。
   PROVIDER_POLICY_FALLBACK = 2;
-  // 单调余额最早到期的那个账户。账户判定变了就切过去。不做降级。
+  // 只调余额最早到期的那个账户。账户判定变了就切过去。不做降级。
   PROVIDER_POLICY_EXPIRY_FIRST = 3;
 }
 
@@ -388,12 +394,29 @@ message AddProviderResponse {
 // 改一个 Provider 的别名与开关。
 message UpdateProviderRequest {
   string id = 1;
-  // 空字符串表示不改。
+  // 别名。面板每次都带上现在这一栏的值，空串表示清掉名字。
+  //
+  // 普通 proto3 的 string 没有 presence 位，所以这个字段总是有值：没给与给了
+  // 空串读起来一样。想改策略不要用这个方法。
   string alias = 2;
   // 没说就是不改。
   optional bool enabled = 3;
-  // 生效策略。没说就是不改。
-  optional ProviderPolicy policy = 4;
+}
+
+// 改一个上游的生效策略。
+//
+// 策略跟别名、开关不是一回事，所以它自己一个方法：混在 UpdateProvider 里，
+// 改策略就会把别名顺手改掉。
+message SetProviderPolicyRequest {
+  // 哪个上游：provider 表里的 id。
+  string upstream_id = 1;
+  // 改成哪个策略。
+  ProviderPolicy policy = 2;
+}
+
+message SetProviderPolicyResponse {
+  bool ok = 1;
+  string message = 2;
 }
 
 message UpdateProviderResponse {
@@ -828,6 +851,7 @@ service AdminService {
   rpc SetProviderKeys(SetProviderKeysRequest) returns (SetProviderKeysResponse);
   rpc AddProvider(AddProviderRequest) returns (AddProviderResponse);
   rpc UpdateProvider(UpdateProviderRequest) returns (UpdateProviderResponse);
+  rpc SetProviderPolicy(SetProviderPolicyRequest) returns (SetProviderPolicyResponse);
   rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse);
   rpc ListProviderKinds(ListProviderKindsRequest) returns (ListProviderKindsResponse);
 

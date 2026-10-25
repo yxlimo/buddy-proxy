@@ -163,7 +163,16 @@ for (const index of [1, 2]) {
 }
 
 const { toTokenRhythm } = await import("../lib/router/upstreams.ts");
-const { routingContext } = await import("../lib/router/routes.ts");
+const { resetTokenRhythmStatusCache } = await import("../lib/tokenrhythm/wallet.ts");
+
+// 上游自己的策略：这个测试要的是「余额不足就换一个」，所以策略是降级。
+const { ensureBuiltinProviders } = await import("../lib/providers.ts");
+const { store } = await import("../lib/store.ts");
+ensureBuiltinProviders();
+const setPolicy = (policy: string): void => {
+  store().prepare("UPDATE provider SET policy = ? WHERE id = ?").run(policy, "tokenrhythm");
+};
+setPolicy("fallback");
 
 console.log("");
 console.log("余额不足时换租户");
@@ -181,6 +190,7 @@ const ctx: any = {
 
 const route: any = {
   upstream: "tokenrhythm",
+  provider: "tokenrhythm",
   model: "deepseek-v4.1-flash-1017",
   group: "tokenrhythm",
 };
@@ -267,6 +277,66 @@ try {
   check("报的是 402，不是 502", failure === 402, `${failure} ${(e as Error).message}`);
   check("说的是余额不足", (e as any).hint?.includes("余额") ?? false, (e as any).hint);
 }
+
+console.log("");
+console.log("单一策略不换租户");
+
+// Two more accounts, and only the second one can pay. The policy says one
+// account, so the request fails on the first one and stays there.
+process.env.TOKEN_RHYTHM_5_ACCOUNT = "19000000005";
+process.env.TOKEN_RHYTHM_5_PASSWORD = "pw5";
+process.env.TOKEN_RHYTHM_5_API_KEY = "sk_tr_tenant_5";
+process.env.TOKEN_RHYTHM_6_ACCOUNT = "19000000006";
+process.env.TOKEN_RHYTHM_6_PASSWORD = "pw6";
+process.env.TOKEN_RHYTHM_6_API_KEY = "sk_tr_tenant_6";
+for (const index of [5, 6]) {
+  setSecret(`session:tokenrhythm:${index}`, "session", {
+    schemaVersion: 1,
+    account: `1900000000${index}`,
+    password: `pw${index}`,
+    name: `租户 ${index}`,
+    cookie: `tr_session=session-${index}; tr_csrf=csrf-${index}`,
+    generation: 1,
+    loginAtMs: Date.now(),
+  });
+}
+
+// The wallet is read again, so the new accounts are in the picture.
+resetTokenRhythmStatusCache("tokenrhythm");
+setPolicy("single");
+serveKey = "tenant_6";
+inferenceCalls.length = 0;
+
+let singleFailure: any = null;
+const out3: any = {
+  body: null,
+  res: { headersSent: false, end() {} },
+  set status(value: number) {
+    singleFailure = value;
+  },
+  get status() {
+    return singleFailure;
+  },
+};
+try {
+  await toTokenRhythm(
+    ctx,
+    { model: "deepseek-v4.1-flash-1017", stream: false, messages: [{ role: "user", content: "hi" }] },
+    route,
+    "openai",
+    false,
+    out3,
+  );
+} catch (e) {
+  singleFailure = (e as any).status ?? 0;
+  check("报的是 402", singleFailure === 402, `${singleFailure} ${(e as Error).message}`);
+}
+check("只试了一个租户", inferenceCalls.length === 1, JSON.stringify(inferenceCalls));
+check(
+  "没有换到能用的那个租户",
+  !inferenceCalls.some((c) => c.key.includes("tenant_6")),
+  JSON.stringify(inferenceCalls),
+);
 
 platform.close();
 inference.close();

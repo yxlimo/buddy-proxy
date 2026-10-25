@@ -8,12 +8,9 @@
 import { platformApi } from "./platform.ts";
 import { ensureApiKey } from "./keys.ts";
 import {
-  TokenRhythmError,
   loadSession,
-  login,
   sessionFor,
   sessionId,
-  tokenRhythmTenant,
   tokenRhythmTenants,
   type TokenRhythmSession,
 } from "./accounts.ts";
@@ -62,8 +59,15 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export async function wallet(session: TokenRhythmSession): Promise<TokenRhythmWallet> {
+export async function wallet(
+  session: TokenRhythmSession,
+  providerId = "tokenrhythm",
+): Promise<TokenRhythmWallet> {
   const data = await platformApi<any>("/api/wallet/summary", session);
+  // A fresh wallet means the cached view is stale: which account runs out
+  // first may have changed, and the next request has to decide again. Only
+  // this provider's view goes — another provider's accounts did not change.
+  resetTokenRhythmStatusCache(providerId);
   return {
     currency: String(data?.currency ?? "CNY"),
     availableCny: num(data?.availableBalanceCny),
@@ -161,7 +165,7 @@ export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenR
         const made = await ensureApiKey(session, tenant.index, null, providerId);
         status.hasKey = Boolean(made);
       }
-      status.wallet = await wallet(session);
+      status.wallet = await wallet(session, providerId);
       status.credits = await credits(session);
     } catch (e) {
       status.error = (e as Error).message;
@@ -183,6 +187,19 @@ export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTena
 }
 
 /**
+ * The tenants that can serve a request at all.
+ *
+ * They have a key, the platform says they have money, and they have not just
+ * said they have none. The order is the order the accounts were added in —
+ * the one that runs out first is `pickTenants`'s business, not this one's.
+ */
+export function usableTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
+  return statuses.filter(
+    (s) => !s.error && s.hasKey && (s.wallet?.availableCny ?? 0) > 0 && !outOfMoney.has(s.index),
+  );
+}
+
+/**
  * The tenants a request may go to, in the order they should be tried.
  *
  * The order is the same as pickTenant's: the gift that runs out first is
@@ -191,9 +208,7 @@ export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTena
  * request that goes there fails with "insufficient balance".
  */
 export function pickTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
-  const usable = statuses.filter(
-    (s) => !s.error && s.hasKey && (s.wallet?.availableCny ?? 0) > 0 && !outOfMoney.has(s.index),
-  );
+  const usable = usableTenants(statuses);
   if (!usable.length) return [];
 
   const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
@@ -261,9 +276,16 @@ export async function tokenRhythmStatuses(
   return statuses;
 }
 
-/** Throw the cached view away, so the next question goes to the platform. */
-export function resetTokenRhythmStatusCache(): void {
-  caches.clear();
+/**
+ * Throw one provider's cached view away, so the next question goes to the
+ * platform.
+ *
+ * Only that provider's view goes: the other providers' accounts have not
+ * changed, and asking the platform about them again is a call it does not
+ * need to answer.
+ */
+export function resetTokenRhythmStatusCache(providerId: string): void {
+  caches.delete(providerId);
 }
 
 /* ------------------------------------------------------------------ *

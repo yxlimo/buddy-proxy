@@ -6,7 +6,7 @@
 import { configFlag, configString } from "../config.ts";
 import { BenefitsRunner } from "../router/benefits.ts";
 import type { BenefitUpstream } from "../benefits.ts";
-import { upstreamEnabled } from "./upstreams.ts";
+import { listProviders } from "../providers.ts";
 
 /**
  * 多久跑一次签到。
@@ -16,19 +16,27 @@ import { upstreamEnabled } from "./upstreams.ts";
  */
 export const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
 
+/**
+ * 这些种类的账号每天给积分。
+ *
+ * 按种类列，不列几个写死的 id：签到是账号的事，一个上游名下的每个账号都要
+ * 签到，用户自己加的第二个 Qoder 账号也一样。转发时先调哪个账号是策略的事，
+ * 跟签到无关 —— 策略不会让哪个账号漏签。
+ */
+const BENEFIT_KINDS = new Set(["minimax", "workbuddy", "qoder"]);
+
 /** 参与签到的账号，而且得是开着的。 */
 export function benefitUpstreams(): BenefitUpstream[] {
   if (configFlag("BENEFITS_DISABLED", false)) return [];
-  const out: BenefitUpstream[] = [];
-  if (upstreamEnabled("minimax")) out.push("minimax");
-  if (upstreamEnabled("workbuddy-cn")) out.push("workbuddy-cn");
-  if (upstreamEnabled("qoder-cn")) out.push("qoder-cn");
-  if (upstreamEnabled("qoder")) out.push("qoder-global");
-  return out;
+  return listProviders()
+    .filter((row) => row.enabled && BENEFIT_KINDS.has(row.kind))
+    .map((row) => row.id);
 }
 
 /** 跑腿器。整个进程只有一个，面板和 /health 看的是同一份。 */
 export const benefits = new BenefitsRunner({
   intervalMs: BENEFITS_INTERVAL_MS,
-  upstreams: benefitUpstreams(),
+  // 现问：面板上刚加的上游、刚开的开关，下一次跑就能算进去 —— 定时器是一直
+  // 设着的（启动时还没有账号也设），不只是面板上那个「现在签到」按钮。
+  upstreams: benefitUpstreams,
 });

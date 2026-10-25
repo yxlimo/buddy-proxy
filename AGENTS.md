@@ -16,7 +16,5 @@ Upstream 内部可以设置多 provider 的策略（fallback、balance 等）。
 
 ## 排查问题
 优先查日志定位原因，查不到日志再考虑构建请求复现问题。解决问题后要复盘这个问题能不能通过提前加日志解决
+问题修复之后先部署验证，验证完毕没问题才能推送 github
 
-## 本地材料
-TokenRhythm 这条上游的调研材料在 `docs/token-rhythm/`（平台接口、多租户、cc-switch 用量脚本）
-`docs/` 不进版本库，只在本机

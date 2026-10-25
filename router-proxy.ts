@@ -25,15 +25,13 @@ import { authenticate, loadKeys, requireApiKey } from "./lib/api-keys.ts";
 import { deleteSecret, listSecrets } from "./lib/store.ts";
 import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder/transport.ts";
-import { QODER_MODELS } from "./lib/qoder/models.ts";
-import { MINIMAX_MODELS } from "./lib/minimax/models.ts";
 import { MINIMAX_API_MODELS, miniMaxApiBase, miniMaxApiTenants } from "./lib/minimax/api.ts";
 import { ZCODE_MODELS } from "./lib/zcode/models.ts";
 import { ZCODE_MESSAGES_URL } from "./lib/zcode/transport.ts";
 import { zcodeStatus } from "./lib/zcode/auth.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
-import { TOKENRHYTHM_MODEL_IDS, TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
+import { TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
 import { tokenRhythmStatus, tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
 import { qoderStatus } from "./lib/qoder/auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
@@ -49,7 +47,6 @@ import {
   refreshSenseNovaCatalog,
   senseNovaCatalog,
   senseNovaInferenceKey,
-  senseNovaModelIds,
 } from "./lib/sensenova/transport.ts";
 import {
   loadSession as loadSenseNovaSession,
@@ -60,7 +57,6 @@ import {
   ensureInternAiKey,
   internAiCatalog,
   internAiInferenceKey,
-  internAiModelIds,
   refreshInternAiCatalog,
 } from "./lib/intern-ai/transport.ts";
 import { loadSession as loadInternAiSession } from "./lib/intern-ai/auth.ts";
@@ -91,6 +87,8 @@ import {
   type AggregateEntry,
 } from "./lib/router/catalog.ts";
 import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
+import { select, SelectionStop, byWeight } from "./lib/router/selection.ts";
+import { describeUpstreamError } from "./lib/router/provider-selection.ts";
 import { recordUsage, pruneUsage, maxTotals, usageTotals } from "./lib/usage.ts";
 import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } from "./lib/agent.ts";
 // The panel: the Connect routes, the token, the static files.
@@ -100,8 +98,6 @@ import { BENEFITS_INTERVAL_MS, benefitUpstreams, benefits } from "./lib/admin/be
 import {
   HEALTH_CACHE_MS,
   outOfCredits,
-  QODER_CN_ALL,
-  QODER_GLOBAL_ALL,
   catalogGroups,
   healthRefreshing,
   healthSnapshot,
@@ -113,7 +109,6 @@ import {
   snapshotEntry,
   upstreamEnabled,
   workbuddyCatalog,
-  workbuddyModelIds,
 } from "./lib/admin/upstreams.ts";
 
 const PORT = configNumber("ROUTER_PORT", 6450);
@@ -136,25 +131,6 @@ const WORKBUDDY_CATALOG_TTL_MS = configNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 6
 
 type Dialect = "anthropic" | "openai";
 
-const MINIMAX_MODEL_IDS = new Set(MINIMAX_MODELS.map((m) => m.id));
-// The open platform's models. The same two, under their own names.
-const MINIMAX_API_MODEL_IDS = new Set(MINIMAX_API_MODELS.map((m) => m.id));
-// ZCode's models: the built-in table, three of them.
-const ZCODE_MODEL_IDS = new Set(ZCODE_MODELS.map((m) => m.id));
-// The models a region can serve, whether the region is on or not.
-const GLOBAL_QODER_IDS = new Set(QODER_GLOBAL_ALL.map((m) => m.id));
-const CN_QODER_IDS = new Set(QODER_CN_ALL.map((m) => m.id));
-/**
- * The models that are not published right now.
- *
- * The switches are hot, so this is computed per request: a region that is
- * turned off has its models hidden, and the answer says "that region is off"
- * rather than "no such model".
- */
-function qoderHiddenIds(): Set<string> {
-  const visible = new Set([...qoderVisible("global"), ...qoderVisible("cn")].map((m) => m.id));
-  return new Set(QODER_MODELS.filter((m) => !visible.has(m.id)).map((m) => m.id));
-}
 // WorkBuddy's models are addressed by prefix only: several of them (glm-5.3,
 // kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
 // would be ambiguous. The list starts as the bundled snapshot and is replaced
@@ -459,34 +435,48 @@ async function handleAggregate(
 ): Promise<void> {
   const stream = body.stream === true;
   const rctx = routingContext();
-  let lastError: unknown = null;
 
-  // single 只走权重最大的那一个，失败了就是失败了 —— 面板上写着 single，
-  // 流量却悄悄跑到别的账号上，那就跟面板说的不是一回事。
-  // fallback 才试下一个。
-  const targets = entry.strategy === "fallback" ? entry.targets : entry.targets.slice(0, 1);
+  // The targets are the candidates: the heaviest one first, and `single` only
+  // tries that one — the panel says single, and traffic that quietly went to
+  // another upstream is not what the panel says. `fallback` tries the next
+  // one when a target fails.
+  //
+  // The root route does not judge the failures: every one of them moves on to
+  // the next target, the way it always has.
+  const candidates = entry.targets.map((target) => ({
+    id: `${target.group}/${target.upstreamModel}`,
+    weight: target.weight,
+    run: async () => {
+      let route: Route;
+      try {
+        route = routeInGroup(target.group, target.upstreamModel, rctx);
+      } catch (e) {
+        recordAggregateUsage({
+          modelId: entry.id,
+          group: target.group,
+          upstreamModel: target.upstreamModel,
+          ok: false,
+        });
+        throw e;
+      }
+      // The client asked for the published name; the answer says the same, even
+      // though the upstream knows the model by another one.
+      route.label = entry.id;
 
-  for (const target of targets) {
-    let route: Route;
-    try {
-      route = routeInGroup(target.group, target.upstreamModel, rctx);
-    } catch (e) {
-      lastError = e;
-      recordAggregateUsage({
-        modelId: entry.id,
-        group: target.group,
-        upstreamModel: target.upstreamModel,
-        ok: false,
-      });
-      continue;
-    }
-    // The client asked for the published name; the answer says the same, even
-    // though the upstream knows the model by another one.
-    route.label = entry.id;
-
-    const uctx = upstreamContext();
-    try {
-      await callUpstream(uctx, body, route, dialect, stream, ctx);
+      const uctx = upstreamContext();
+      try {
+        await callUpstream(uctx, body, route, dialect, stream, ctx);
+      } catch (e) {
+        recordAggregateUsage({
+          modelId: entry.id,
+          group: target.group,
+          upstreamModel: target.upstreamModel,
+          ok: false,
+        });
+        // Once the answer has started there is nothing to fall back to.
+        if (ctx.res.headersSent) throw new SelectionStop(e);
+        throw e;
+      }
       const usage = uctx.lastUsage;
       recordAggregateUsage({
         modelId: entry.id,
@@ -496,23 +486,56 @@ async function handleAggregate(
         promptTokens: usage?.promptTokens,
         completionTokens: usage?.completionTokens,
       });
-      return;
-    } catch (e) {
-      lastError = e;
-      recordAggregateUsage({
-        modelId: entry.id,
-        group: target.group,
-        upstreamModel: target.upstreamModel,
-        ok: false,
-      });
-      // Once the answer has started there is nothing to fall back to.
-      if (ctx.res.headersSent) break;
-    }
+    },
+  }));
+
+  // The order the candidates are tried in: the heaviest first. The log needs
+  // it to say which target takes over.
+  const ordered = byWeight(candidates);
+
+  try {
+    await select({
+      strategy: entry.strategy,
+      candidates,
+      // Why the traffic went somewhere else: the target that failed, why it
+      // failed, and which one takes the request now.
+      onAttempt: (candidate, error) => {
+        if (!error) return;
+        // The answer had already started: there is nothing to fall back to.
+        const stopped = error instanceof SelectionStop;
+        const reason = stopped ? error.reason : error;
+        const at = ordered.findIndex((c) => c.id === candidate.id);
+        const next = ordered[at + 1];
+        console.log(
+          `[ROUTE] ${candidate.id} failed (${describeTargetFailure(reason)}), ` +
+            (stopped
+              ? "the answer had already started"
+              : next
+                ? `trying ${next.id}`
+                : "no target left"),
+        );
+      },
+      failure: (lastError) =>
+        lastError instanceof Error
+          ? lastError
+          : new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502),
+    });
+  } catch (e) {
+    sendError(ctx, e);
   }
-  sendError(
-    ctx,
-    lastError ?? new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502),
-  );
+}
+
+/**
+ * 这次失败一句话怎么说（给日志）。
+ *
+ * 上游自己的状态最有说明力：400 是请求本身的问题，503 是上游挂了。网关自己
+ * 的状态说明不了问题。
+ */
+function describeTargetFailure(error: unknown): string {
+  const described = describeUpstreamError(error);
+  if (!described.startsWith("unknown")) return described;
+  const err = error as { message?: unknown };
+  return String(err?.message ?? "unknown");
 }
 
 /**

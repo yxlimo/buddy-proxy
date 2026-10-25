@@ -8,12 +8,14 @@
 //               普通的 OpenAI 兼容接口。
 //
 // 一个 key 是一份套餐，所以可以有好几个 key —— 也就是好几个租户。哪个租户
-// 出钱由网关定：轮着来，谁都不行了就换下一个。
+// 出钱由上游自己的策略定（见 lib/router/provider-selection.ts）：单一只调一把
+// key，降级按 key 的次序换下一个。
 
-import { configNumber, configString } from "../config.ts";
+import { configString } from "../config.ts";
 import { readEnvValue } from "../env.ts";
 import { getSecret, setSecret } from "../store.ts";
 import { AuthError } from "../credential.ts";
+import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
 import { providerSecretId } from "../providers.ts";
 import { fetchMiniMaxTokenPlan, minimaxApiHost, type MiniMaxRegion } from "./credits.ts";
 
@@ -117,11 +119,63 @@ export const MINIMAX_API_MODELS: MiniMaxApiModel[] = [
  */
 export class MiniMaxApiTenantError extends Error {
   status: number;
+  /** 平台自己的业务码（如果它说了）。 */
+  code?: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: number) {
     super(message);
     this.name = "MiniMaxApiTenantError";
     this.status = status;
+    if (code !== undefined) this.code = code;
+  }
+}
+
+/**
+ * 平台在 200 答复里说的失败。
+ *
+ * 平台有时用 200 回答一个失败的请求（base_resp.status_code 不为 0）。那不是
+ * 答复 —— 客户端会以为答完了，所以网关把它变成一个错误。
+ */
+export class MiniMaxApiBusinessError extends AuthError {
+  /** 平台自己的码。 */
+  code: number;
+
+  constructor(code: number, message: string) {
+    super(
+      `upstream business error ${code}`,
+      `MiniMax 开放平台返回 ${code}：${message}`,
+      502,
+    );
+    this.name = "MiniMaxApiBusinessError";
+    this.code = code;
+  }
+}
+
+/**
+ * 平台自己的业务码。
+ *
+ * 平台把失败写在两个地方：错误信封的 message 末尾括号里的数字，和 200 答复里
+ * 的 base_resp.status_code。业务码比 HTTP 状态码说得多：2067 是套餐用完，
+ * 2013 是参数错 —— 换一把 key 也没用。
+ */
+export function miniMaxApiBusinessCode(json: any): number | null {
+  const code = Number(json?.base_resp?.status_code ?? 0);
+  return Number.isFinite(code) && code !== 0 ? code : null;
+}
+
+/** 错误信封里的业务码（message 末尾括号里的数字）。 */
+export function miniMaxApiErrorCode(body: any): number | null {
+  const message = String(body?.error?.message ?? "");
+  const match = /\((\d{3,4})\)\s*$/.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
+/** 平台有时候回的不是 JSON。 */
+function parseJson(text: string): any {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -155,17 +209,135 @@ export async function miniMaxApiChat(
     throw new MiniMaxApiTenantError(
       `MiniMax 的第 ${tenant.index} 个租户接不了这个请求（HTTP ${response.status}）：${text.slice(0, 200)}`,
       response.status,
+      miniMaxApiErrorCode(parseJson(text)) ?? undefined,
     );
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new AuthError(
+    const error = new AuthError(
       `upstream HTTP ${response.status}`,
       `MiniMax 开放平台返回 ${response.status}：${text.slice(0, 300)}`,
       502,
     );
+    // The client sees the gateway's status; the upstream's own status says
+    // whether another tenant would do better (a 400 is the request's fault).
+    withUpstreamStatus(error, response.status);
+    const code = miniMaxApiErrorCode(parseJson(text));
+    if (code !== null) withBusinessCode(error, code);
+    throw error;
   }
   return response;
+}
+
+/**
+ * 平台在流的第一个帧里说的失败。
+ *
+ * 平台有时用 200 回答一个失败的请求（base_resp.status_code 不为 0）。流式
+ * 的答复也一样：那不是答复，是失败 —— 客户端会以为答完了。
+ */
+export interface MiniMaxApiStreamFailure {
+  /** 平台自己的码（没有就是 null）。 */
+  code: number | null;
+  /** 平台自己说的话。 */
+  message: string;
+}
+
+/**
+ * 平台有时候用 200 回答一个失败的请求 —— 流式的答复也一样，失败在第一个帧里。
+ *
+ * 第一个帧在写给客户端之前看：答复一旦开始就没有下一个租户可换了。看过的那
+ * 些字节放回去，所以答复照旧是流式的。
+ */
+export async function peekMiniMaxApiStream(response: Response): Promise<Response> {
+  const body = response.body;
+  if (!body) return response;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const kept: Uint8Array[] = [];
+  let text = "";
+  let failure: MiniMaxApiStreamFailure | null = null;
+
+  for (;;) {
+    const frame = firstFrame(text);
+    if (frame) {
+      failure = failureInFrame(frame);
+      break;
+    }
+    const { value, done } = await reader.read();
+    if (done) break;
+    kept.push(value);
+    text += decoder.decode(value, { stream: true });
+  }
+
+  if (failure) {
+    await reader.cancel().catch(() => {});
+    if (failure.code !== null) {
+      throw new MiniMaxApiBusinessError(failure.code, failure.message);
+    }
+    throw new AuthError(
+      "upstream business error",
+      `MiniMax 开放平台返回了一个错误：${failure.message}`,
+      502,
+    );
+  }
+
+  const rest = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const chunk of kept) controller.enqueue(chunk);
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+  });
+  return new Response(rest, {
+    status: response.status,
+    headers: { "content-type": response.headers.get("content-type") ?? "text/event-stream" },
+  });
+}
+
+/** 第一个说得完的帧（没有就是还没有）。 */
+function firstFrame(text: string): any | null {
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice("data:".length).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      return JSON.parse(payload);
+    } catch {
+      /* 还没说完 */
+    }
+  }
+  // 不是 SSE（平台有时候直接回一个 JSON 对象）。
+  try {
+    return text.trim() ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 这个帧里有没有平台的失败。 */
+function failureInFrame(frame: any): MiniMaxApiStreamFailure | null {
+  if (!frame || typeof frame !== "object") return null;
+  const code = miniMaxApiBusinessCode(frame);
+  if (code !== null) {
+    return { code, message: String(frame?.base_resp?.status_msg ?? "") };
+  }
+  const error = frame?.error;
+  if (error) {
+    return {
+      code: miniMaxApiErrorCode(frame),
+      message: String(error.message ?? error.type ?? "上游没有答复"),
+    };
+  }
+  return null;
 }
 
 /**
@@ -184,16 +356,3 @@ export async function miniMaxApiTenantPlans(
   }
   return out;
 }
-
-/** 租户轮着来：第一个先上，之后轮着换。 */
-let cursor = 0;
-
-export function nextMiniMaxApiTenant(tenants: MiniMaxApiTenant[]): MiniMaxApiTenant | null {
-  if (!tenants.length) return null;
-  const tenant = tenants[cursor % tenants.length];
-  cursor = (cursor + 1) % tenants.length;
-  return tenant;
-}
-
-/** 一次请求最多试几个租户。 */
-export const MAX_ATTEMPTS = configNumber("MINIMAX_API_MAX_ATTEMPTS", 3);

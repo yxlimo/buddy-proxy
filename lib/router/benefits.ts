@@ -13,8 +13,20 @@ import { runBenefits, type BenefitOutcome, type BenefitUpstream } from "../benef
 export interface BenefitsOptions {
   /** How often the check-in runs. */
   intervalMs: number;
-  /** The accounts that hand out credits. */
-  upstreams: BenefitUpstream[];
+  /**
+   * The accounts that hand out credits.
+   *
+   * A function, not a list: the panel can add an account or switch one on
+   * after the runner was made, and the next run has to know about it.
+   */
+  upstreams: () => BenefitUpstream[];
+  /**
+   * How to sign in.
+   *
+   * The default is the real thing. The split exists so the timer can be
+   * checked offline: the real one talks to the upstream.
+   */
+  run?: (upstreams: BenefitUpstream[]) => Promise<BenefitOutcome[]>;
 }
 
 export interface BenefitsState {
@@ -47,10 +59,12 @@ export class BenefitsRunner {
    */
   async runOnce(): Promise<void> {
     if (this.state.running) return;
-    if (!this.options.upstreams.length) return;
+    const upstreams = this.options.upstreams();
+    if (!upstreams.length) return;
     this.state.running = true;
     try {
-      const outcomes = await runBenefits(this.options.upstreams);
+      const run = this.options.run;
+      const outcomes = run ? await run(upstreams) : await runBenefits(upstreams);
       this.state.lastRunAt = new Date().toISOString();
       this.state.lastOutcome = outcomes;
       for (const outcome of outcomes) {
@@ -64,13 +78,21 @@ export class BenefitsRunner {
     }
   }
 
-  /** Run the benefits now, and then on the timer. */
+  /**
+   * Run the benefits now, and then on the timer.
+   *
+   * The timer goes up even when there is no account yet: the panel can add
+   * one later, and the next tick has to know about it. runOnce returns early
+   * while the list is empty.
+   */
   start(): void {
-    if (!this.options.upstreams.length) return;
     this.timer = setInterval(() => void this.runOnce(), this.options.intervalMs);
     // The login may still be waiting for an approval, so the first run waits a
     // minute for the session to be there.
-    setTimeout(() => void this.runOnce(), 60_000);
+    // The timers do not hold the process on their own: the server's listener
+    // does that, and a test must be able to finish while they are pending.
+    setTimeout(() => void this.runOnce(), 60_000).unref();
+    this.timer.unref();
   }
 
   stop(): void {

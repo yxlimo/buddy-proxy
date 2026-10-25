@@ -22,6 +22,7 @@ import {
   type QoderRegion,
 } from "./auth.ts";
 import { AuthError } from "../credential.ts";
+import { withUpstreamStatus } from "../upstream-status.ts";
 
 const USER_AGENT = "qoder/1.1.74";
 
@@ -164,11 +165,14 @@ export async function qoderChatCompletion(
     r = await send(true);
   }
   if (r.status === 401) {
-    throw new AuthError(
+    // The client sees the gateway's status; the upstream's own status says
+    // that the credential was refused, not that the request was wrong.
+    const error = new AuthError(
       `upstream rejected the credential (HTTP 401)`,
       `Qoder 拒绝了当前凭据。删掉 session 文件后重启服务即可重新登录。`,
       503,
     );
+    throw withUpstreamStatus(error, 401);
   }
   if (r.status === 403 || r.status === 429) {
     // 403 is not a credential problem here: Qoder answers 403 with
@@ -176,15 +180,24 @@ export async function qoderChatCompletion(
     // it is busy. Both are worth retrying.
     const text = await r.text().catch(() => "");
     const detail = parseLimitError(text);
-    throw new LimitError(
+    const error = new LimitError(
       `qoder model is queued (HTTP ${r.status})`,
       detail?.message ?? `Qoder 上游繁忙（HTTP ${r.status}）：${text.slice(0, 200)}`,
       detail?.retryAfterSec ?? 10,
     );
+    throw withUpstreamStatus(error, r.status);
   }
   if (!r.ok) {
     const text = await r.text().catch(() => "");
-    throw new AuthError(`upstream HTTP ${r.status}`, `Qoder 上游返回 ${r.status}：${text.slice(0, 300)}`, 502);
+    // The client sees the gateway's status; the upstream's own status says
+    // whether another account would do better (a 400 is the request's fault,
+    // and every account would fail the same way).
+    const error = new AuthError(
+      `upstream HTTP ${r.status}`,
+      `Qoder 上游返回 ${r.status}：${text.slice(0, 300)}`,
+      502,
+    );
+    throw withUpstreamStatus(error, r.status);
   }
   return r;
 }

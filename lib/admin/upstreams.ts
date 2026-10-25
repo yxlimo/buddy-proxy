@@ -67,6 +67,7 @@ import { internAiCatalog, internAiInferenceKey } from "../intern-ai/transport.ts
 import { getSecret, peekCached, setCached } from "../store.ts";
 import {
   listProviders,
+  policyOf,
   provider,
   providerEnabled,
   setProviderEnabled,
@@ -86,9 +87,10 @@ import type {
 
 export type { BalanceView, CreditView, CredentialView, HealthSnapshot, QuotaView, TokenPlanView };
 import { tokenFingerprint } from "../credential.ts";
-import { CredentialState, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
+import { CredentialState, ProviderPolicy as ContractPolicy, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { credentialState, hasUsableCredential } from "./credentials.ts";
 import { loginActivity } from "./login.ts";
+import { policyEnum } from "./policy.ts";
 import {
   internAiCatalogModels,
   minimaxCatalogModels,
@@ -173,6 +175,30 @@ export function upstreamBaseUrl(id: string): string {
   const row = provider(id);
   const kind = row ? kindOf(row.kind) : null;
   return kind && row ? kind.baseUrl(row) : "";
+}
+
+/**
+ * 这个上游现在的生效策略。
+ *
+ * 库里那一列就是生效值：面板改了它，下一个请求就是新的。
+ */
+export function upstreamPolicy(id: string): ContractPolicy {
+  return policyEnum(policyOf(id));
+}
+
+/**
+ * 这个上游名下有几个可以切换的账号。
+ *
+ * 账号的形态各家不一样：开放平台一把 key 一个租户，中转站一个账号一个钱包，
+ * 其余上游一个账号就是一行。数法用各家自己的那份名单，不在面板那边数 ——
+ * 面板数会数错（MiniMax 开放平台在账号列表里只有一行，底下却挂着几把 key）。
+ */
+export function upstreamAccountCount(id: string): number {
+  const row = provider(id);
+  if (!row) return 0;
+  if (row.kind === "minimax-api") return miniMaxApiTenants(row.id).length;
+  if (row.kind === "tokenrhythm") return tokenRhythmTenants(row.id).length;
+  return 1;
 }
 
 /**

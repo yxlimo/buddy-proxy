@@ -18,6 +18,7 @@
 
 import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
+import { withUpstreamStatus } from "../upstream-status.ts";
 import {
   chatBase,
   chatHeaders,
@@ -202,10 +203,13 @@ export async function workbuddyChat(
         session = await refreshSession(true, providerId);
         continue;
       }
-      throw new AuthError(
-        `upstream rejected the credential (HTTP ${res.status})`,
-        `WorkBuddy 拒绝了当前凭据：${detail.slice(0, 200)}`,
-        503,
+      throw withUpstreamStatus(
+        new AuthError(
+          `upstream rejected the credential (HTTP ${res.status})`,
+          `WorkBuddy 拒绝了当前凭据：${detail.slice(0, 200)}`,
+          503,
+        ),
+        res.status,
       );
     }
 
@@ -216,19 +220,28 @@ export async function workbuddyChat(
         await backoff(attempt, Number.isFinite(retryAfter) ? retryAfter : 0);
         continue;
       }
-      throw new AuthError(
-        `upstream error (HTTP ${res.status})`,
-        detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
-        res.status === 429 ? 429 : 502,
+      throw withUpstreamStatus(
+        new AuthError(
+          `upstream error (HTTP ${res.status})`,
+          detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
+          res.status === 429 ? 429 : 502,
+        ),
+        res.status,
       );
     }
 
     if (res.status >= 400) {
       const detail = await res.text().catch(() => "");
-      throw new AuthError(
-        `upstream error (HTTP ${res.status})`,
-        detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
-        502,
+      // The client sees the gateway's status; the upstream's own status says
+      // whether another account would do better (a 400 is the request's fault,
+      // and every account would fail the same way).
+      throw withUpstreamStatus(
+        new AuthError(
+          `upstream error (HTTP ${res.status})`,
+          detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
+          502,
+        ),
+        res.status,
       );
     }
 

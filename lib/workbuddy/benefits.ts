@@ -253,12 +253,17 @@ async function workbuddyGrowthCentre(session: WorkBuddySession, report: string[]
   return credits;
 }
 
-/** Take the WorkBuddy credits that are waiting. */
-export async function runWorkBuddyBenefits(): Promise<BenefitOutcome> {
+/**
+ * Take the WorkBuddy credits that are waiting.
+ *
+ * The session belongs to the provider, not to the region: every account of the
+ * kind gets its own check-in.
+ */
+export async function runWorkBuddyBenefits(providerId = "workbuddy-cn"): Promise<BenefitOutcome> {
   const report: string[] = [];
-  const session = loadWorkBuddySession("cn");
+  const session = loadWorkBuddySession(providerId);
   if (!session) {
-    return { upstream: "workbuddy-cn", ok: false, credits: 0, report: ["未找到 WorkBuddy 登录态"], at: new Date().toISOString() };
+    return { upstream: providerId, ok: false, credits: 0, report: ["未找到 WorkBuddy 登录态"], at: new Date().toISOString() };
   }
   let credits = 0;
   try {
@@ -267,5 +272,5 @@ export async function runWorkBuddyBenefits(): Promise<BenefitOutcome> {
   } catch (e) {
     report.push(`异常：${(e as Error).message}`);
   }
-  return { upstream: "workbuddy-cn", ok: true, credits, report, at: new Date().toISOString() };
+  return { upstream: providerId, ok: true, credits, report, at: new Date().toISOString() };
 }

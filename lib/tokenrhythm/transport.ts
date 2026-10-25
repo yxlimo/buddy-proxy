@@ -8,6 +8,7 @@
 // that field out, so the gateway puts it back.
 
 import { AuthError } from "../credential.ts";
+import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
 import { TOKENRHYTHM_INFER_BASE, tokenRhythmTenant, type TokenRhythmTenant } from "./accounts.ts";
 
 /**
@@ -120,11 +121,15 @@ export async function tokenRhythmChat(
     body: JSON.stringify(payload),
   });
   if (!response.ok && response.status === 401) {
-    throw new AuthError(
+    const error = new AuthError(
       "tokenrhythm rejected the key",
       `TokenRhythm 拒绝了第 ${index} 个租户的 key（HTTP 401）。`,
       502,
     );
+    // The client sees the gateway's status; the upstream's own status says
+    // whether the next tenant would do better.
+    withUpstreamStatus(error, 401);
+    throw error;
   }
   if (!response.ok && response.status === 402) {
     const text = await response.text().catch(() => "");
@@ -157,11 +162,17 @@ export async function tokenRhythmChat(
         detail.traceId,
       );
     }
-    throw new AuthError(
+    const error = new AuthError(
       `upstream HTTP ${response.status}`,
       `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
       502,
     );
+    // The client sees the gateway's status; the upstream's own status says
+    // whether the next tenant would do better (a 400 is the request's fault).
+    withUpstreamStatus(error, response.status);
+    const code = busyDetail(parsed).code;
+    if (code) withBusinessCode(error, code);
+    throw error;
   }
   return { response, key: tenant.apiKey ?? key };
 }

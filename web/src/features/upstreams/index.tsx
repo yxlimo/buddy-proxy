@@ -44,6 +44,7 @@ import {
 import { AddProviderDialog } from '@/features/upstreams/add-provider-dialog'
 import { ProviderAliasCell } from '@/features/upstreams/provider-alias'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
+import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
 import { useLogoutAccount, useSetProviderKeys } from '@/features/accounts/api'
 import { useAccountLogin } from '@/features/login/use-account-login'
@@ -271,6 +272,10 @@ export function UpstreamsPage() {
                       {isExpanded ? (
                         <TableRow>
                           <TableCell colSpan={7} className='bg-muted/30 p-0'>
+                            <ProviderPolicySelect
+                              upstream={upstream}
+                              listUpdatedAt={upstreams.dataUpdatedAt}
+                            />
                             <ProviderAccounts
                               providerId={upstream.id}
                               kind={upstream.kind}

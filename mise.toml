@@ -30,6 +30,31 @@ run = "pnpm exec tsc --noEmit"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e"]
+
+[tasks."test:selection"]
+description = "Check the shared selection package (the order, the fallback, the stop)"
+run = "node --experimental-strip-types test/selection-check.ts"
+
+[tasks."test:policy"]
+description = "Check the upstream policies (the accounts, the order, the failure kinds)"
+run = "node --experimental-strip-types test/policy-check.ts"
+
+[tasks."test:upstream:status"]
+description = "Check that the transports keep the upstream's own status (a fake upstream)"
+run = "node --experimental-strip-types test/upstream-status-check.ts"
+
+[tasks."test:minimax:api:policy"]
+description = "Check the open platform's policy (one key, the switch, the business code)"
+run = "node --experimental-strip-types test/minimax-api-policy-check.ts"
+
+[tasks."test:policy:e2e"]
+description = "Check that the policy takes effect at once (a fake upstream, no tokens spent)"
+run = "node --experimental-strip-types test/provider-policy-e2e-check.ts"
+
+[tasks."test:policy:browser"]
+description = "Check the policy in the real panel (needs the panel: cd web && pnpm build)"
+run = "REQUIRE_BROWSER=1 node --experimental-strip-types test/provider-policy-e2e-check.ts"
 
 [tasks."test:admin:contract"]
 description = "Check the panel's API against the contract, field by field"
@@ -46,6 +71,11 @@ run = "bash test/aggregate.sh"
 [tasks."test:admin"]
 description = "Run the tests for the panel's API (Connect)"
 run = "node --experimental-strip-types test/admin-check.ts"
+depends = ["test:admin:policy"]
+
+[tasks."test:admin:policy"]
+description = "Check the upstream provider policy (read, write, validation, the check-in accounts)"
+run = "node --experimental-strip-types test/provider-policy-check.ts"
 
 [tasks."test:admin:login"]
 description = "Run the tests for the panel's login flows (a fake upstream, no real login)"

@@ -57,6 +57,7 @@ import {
   RunBenefitNowResponseSchema,
   SavePublishedModelResponseSchema,
   SetConfigResponseSchema,
+  SetProviderPolicyResponseSchema,
   SetUpstreamEnabledResponseSchema,
   TailLogResponseSchema,
   TestCredentialResponseSchema,
@@ -77,9 +78,11 @@ import {
   setUpstreamEnabled,
   upstreamQuota,
   upstreamQuotas,
+  upstreamAccountCount,
   upstreamBaseUrl,
   upstreamCredential,
   upstreamModelCount,
+  upstreamPolicy,
   upstreamRegion,
   upstreamState,
   upstreamStates,
@@ -112,7 +115,8 @@ import {
   provider,
   updateProvider,
 } from "../providers.ts";
-import { kindOf, selectableKinds } from "../provider-kinds.ts";
+import { kindOf, policiesOfKind, selectableKinds } from "../provider-kinds.ts";
+import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS, unsupportedPolicyText } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
 import { tailLog } from "./log.ts";
 import { benefitUpstreams, benefits } from "./benefits.ts";
@@ -222,6 +226,10 @@ async function upstreamMessage(id: string, state: UpstreamSwitch) {
     alias: row?.alias ?? "",
     // 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。
     enabled: state.enabled,
+    // 名下的多个账号怎么选。库里那一列就是生效值。
+    policy: upstreamPolicy(id),
+    // 名下有几个可以切换的账号。面板用它判「策略有没有用」。
+    accountCount: upstreamAccountCount(id),
     // 现在能不能接：额度用尽、正在登录这些面板自己拼不出来的事，后端知道。
     state: upstreamState(id),
     modelCount: upstreamModelCount(id),
@@ -239,12 +247,6 @@ async function upstreamMessage(id: string, state: UpstreamSwitch) {
     baseUrl: upstreamBaseUrl(id),
     region: upstreamRegion(id),
   });
-}
-
-/** 权益的上游名与面板的上游 id 不是一回事（qoder-global → qoder）。 */
-function benefitUpstreamId(name: string): string {
-  if (name === "qoder-global") return "qoder";
-  return name;
 }
 
 /* ---------------- 登录授权的形状 ---------------- */
@@ -385,6 +387,10 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           login: k.login,
           needsRegion: k.needsRegion,
           regions: k.regions,
+          // 这一类上游支持哪几个策略：面板的选项从这里来。
+          // 兜底在 policiesOfKind 里（没登记的种类只给「单一」）：不直接摸
+          // 注册表那个可选字段，漏填时少一个选项，不是 500。
+          policies: policiesOfKind(k.kind).map(policyEnum),
         }),
       ),
     });
@@ -402,12 +408,45 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   },
 
   async updateProvider(request) {
+    // 别名与开关。策略不在这里：契约里的 alias 是普通 proto3 string，没有
+    // presence 位，混在一起的话「只改策略」会把别名顺手抹掉。
     const patch: { alias?: string; enabled?: boolean } = {};
     if (request.alias !== undefined) patch.alias = String(request.alias);
     if (request.enabled !== undefined && request.enabled !== null) patch.enabled = request.enabled === true;
     const result = updateProvider(String(request.id ?? ""), patch);
     if (result.ok) console.log(`[ADMIN] Provider ${request.id} 改了`);
     return create(UpdateProviderResponseSchema, { ok: result.ok, message: result.message });
+  },
+
+  async setProviderPolicy(request) {
+    const id = String(request.upstreamId ?? "");
+    // 契约里的枚举 → 库里存的策略。不认识的（UNSPECIFIED 或别的数字）就是
+    // 「给错了」，不写库。
+    const policy = policyFromEnum(Number(request.policy));
+    if (!policy) {
+      return create(SetProviderPolicyResponseSchema, {
+        ok: false,
+        message: policyErrorText(request.policy),
+      });
+    }
+    const row = provider(id);
+    if (!row) {
+      return create(SetProviderPolicyResponseSchema, { ok: false, message: `没有这个 Provider：${id}` });
+    }
+    // 这一类上游支不支持这个策略：只有一个账号的上游选了也没用。
+    const supported = policiesOfKind(row.kind);
+    if (!supported.includes(policy)) {
+      return create(SetProviderPolicyResponseSchema, {
+        ok: false,
+        message: unsupportedPolicyText(row.alias || row.kind, policy, supported),
+      });
+    }
+    const result = updateProvider(id, { policy });
+    if (result.ok) console.log(`[ADMIN] Provider ${id} 的策略改成 ${policy}`);
+    return create(SetProviderPolicyResponseSchema, {
+      ok: result.ok,
+      message: result.ok ? `策略改成了${POLICY_LABELS[policy]}` : result.message,
+    });
   },
 
   async deleteProvider(request) {
@@ -715,7 +754,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       const outcome = state.lastOutcome?.find((o) => o.upstream === upstream);
       if (!outcome) {
         return create(BenefitStatusSchema, {
-          upstreamId: benefitUpstreamId(upstream),
+          upstreamId: upstream,
           summary: "暂无签到记录",
           lines: [],
           checkedAt: 0n,
@@ -729,7 +768,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           ? `今日已签到 +${outcome.credits}`
           : "今日暂无新活动";
       return create(BenefitStatusSchema, {
-        upstreamId: benefitUpstreamId(upstream),
+        upstreamId: upstream,
         summary,
         lines: outcome.report,
         checkedAt: BigInt(Date.parse(outcome.at) || 0),

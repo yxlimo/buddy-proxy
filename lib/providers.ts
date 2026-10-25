@@ -69,6 +69,11 @@ export type ProviderPolicy = "single" | "fallback" | "expiry_first";
 /** Every policy there is. */
 export const PROVIDER_POLICIES: ProviderPolicy[] = ["single", "fallback", "expiry_first"];
 
+/** Is this one of the policies? The setter refuses anything else. */
+export function isProviderPolicy(value: unknown): value is ProviderPolicy {
+  return typeof value === "string" && (PROVIDER_POLICIES as string[]).includes(value);
+}
+
 /** 建表之后，把内置的那些 provider 放进去。 */
 /**
  * The environment switch of each built-in provider.
@@ -181,18 +186,29 @@ export function policyOf(id: string): ProviderPolicy {
   return policyOfValue(row?.policy);
 }
 
-/** 改一个 provider 的别名与开关。 */
+/**
+ * 改一个 provider 的别名、开关与生效策略。
+ *
+ * 策略没给就是不改：面板只改开关的时候不能把策略顺手抹掉。
+ */
 export function updateProvider(
   id: string,
-  patch: { alias?: string; enabled?: boolean },
+  patch: { alias?: string; enabled?: boolean; policy?: ProviderPolicy },
 ): { ok: boolean; message: string } {
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个 Provider：${id}` };
+  if (patch.policy !== undefined && !isProviderPolicy(patch.policy)) {
+    return {
+      ok: false,
+      message: `不认识的策略：${String(patch.policy)}。只能选 single、fallback、expiry_first`,
+    };
+  }
   const alias = patch.alias === undefined ? row.alias : String(patch.alias).trim();
   const enabled = patch.enabled === undefined ? row.enabled : patch.enabled;
+  const policy = patch.policy === undefined ? row.policy : patch.policy;
   store()
-    .prepare("UPDATE provider SET alias = ?, enabled = ?, updated_at = ? WHERE id = ?")
-    .run(alias, enabled ? 1 : 0, Date.now(), id);
+    .prepare("UPDATE provider SET alias = ?, enabled = ?, policy = ?, updated_at = ? WHERE id = ?")
+    .run(alias, enabled ? 1 : 0, policy, Date.now(), id);
   return { ok: true, message: "改好了" };
 }
 

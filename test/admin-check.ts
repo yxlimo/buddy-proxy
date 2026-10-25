@@ -214,6 +214,7 @@ check("key 写进去了", keys.body?.ok === true && Number(keys.body?.count) ===
 const afterKeys = await call("ListUpstreams", {}, token);
 const miniMaxApi = list(afterKeys.body?.upstreams).find((u: any) => u.id === "minimax-api");
 check("MiniMax 开放平台有两个租户", String(miniMaxApi?.credential?.detail ?? "").includes("2"), String(miniMaxApi?.credential?.detail));
+check("账号数就是租户数", miniMaxApi?.accountCount === 2, String(miniMaxApi?.accountCount));
 const badKeys = await call("SetProviderKeys", { upstreamId: "qoder", keys: ["x"] }, token);
 check("别的 Provider 不收 key", badKeys.body?.ok === false, JSON.stringify(badKeys.body));
 await call("SetProviderKeys", { upstreamId: "minimax-api", keys: [] }, token);
@@ -243,6 +244,121 @@ check("改了上游立刻生效", setUpstream.body?.pendingRestart === false, JS
 
 const setBadUpstream = await call("SetUpstreamEnabled", { upstreamId: "nope", enabled: true }, token);
 check("不认识的上游不收", setBadUpstream.body?.ok !== true);
+
+console.log("");
+console.log("生效策略");
+
+const policyList = await call("ListUpstreams", {}, token);
+const policyQoder = list(policyList.body?.upstreams).find((u: any) => u.id === "qoder");
+check("上游带着策略", policyQoder?.policy === "PROVIDER_POLICY_SINGLE", JSON.stringify(policyQoder?.policy));
+
+// 策略有自己的方法：改它不碰别名与开关。
+await call("UpdateProvider", { id: "tokenrhythm", alias: "TokenRhythm" }, token);
+const setPolicy = await call(
+  "SetProviderPolicy",
+  { upstreamId: "tokenrhythm", policy: "PROVIDER_POLICY_FALLBACK" },
+  token,
+);
+check("策略改得掉", setPolicy.body?.ok === true, JSON.stringify(setPolicy.body));
+
+const afterPolicy = await call("ListUpstreams", {}, token);
+const fallbackRhythm = list(afterPolicy.body?.upstreams).find((u: any) => u.id === "tokenrhythm");
+check("改完就是降级", fallbackRhythm?.policy === "PROVIDER_POLICY_FALLBACK", JSON.stringify(fallbackRhythm?.policy));
+check("改策略不动别名", fallbackRhythm?.alias === "TokenRhythm", JSON.stringify(fallbackRhythm?.alias));
+
+const setExpiry = await call(
+  "SetProviderPolicy",
+  { upstreamId: "tokenrhythm", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
+  token,
+);
+check("余额到期优先也改得掉", setExpiry.body?.ok === true, JSON.stringify(setExpiry.body));
+
+// 只有一个账号的：别的策略选了也没有用，所以不收。
+const qoderFallback = await call(
+  "SetProviderPolicy",
+  { upstreamId: "qoder", policy: "PROVIDER_POLICY_FALLBACK" },
+  token,
+);
+check("Qoder 不收降级", qoderFallback.body?.ok !== true, JSON.stringify(qoderFallback.body));
+check(
+  "拒收的话说了这一类支持哪几个",
+  String(qoderFallback.body?.message ?? "").includes("单一"),
+  String(qoderFallback.body?.message),
+);
+const qoderExpiry = await call(
+  "SetProviderPolicy",
+  { upstreamId: "qoder", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
+  token,
+);
+check("Qoder 不收余额到期优先", qoderExpiry.body?.ok !== true, JSON.stringify(qoderExpiry.body));
+
+// 给错了不收，而且说清楚只认哪三个。
+const badPolicy = await call("SetProviderPolicy", { upstreamId: "tokenrhythm", policy: 0 }, token);
+check("UNSPECIFIED 不收", badPolicy.body?.ok !== true, JSON.stringify(badPolicy.body));
+check(
+  "错的话说了只认哪三个",
+  ["single", "fallback", "expiry_first"].every((v) => String(badPolicy.body?.message ?? "").includes(v)),
+  String(badPolicy.body?.message),
+);
+
+const unknownPolicy = await call("SetProviderPolicy", { upstreamId: "tokenrhythm", policy: 7 }, token);
+check("不认识的数字不收", unknownPolicy.body?.ok !== true, JSON.stringify(unknownPolicy.body));
+
+const afterBad = await call("ListUpstreams", {}, token);
+check(
+  "给错了策略没写进去",
+  list(afterBad.body?.upstreams).find((u: any) => u.id === "tokenrhythm")?.policy ===
+    "PROVIDER_POLICY_EXPIRY_FIRST",
+);
+
+// 策略不在 UpdateProvider 里了：改别名与开关都不该动它。
+await call("UpdateProvider", { id: "tokenrhythm", alias: "TokenRhythm" }, token);
+await call("UpdateProvider", { id: "tokenrhythm", enabled: true }, token);
+const afterAlias = await call("ListUpstreams", {}, token);
+check(
+  "只改别名与开关不动策略",
+  list(afterAlias.body?.upstreams).find((u: any) => u.id === "tokenrhythm")?.policy ===
+    "PROVIDER_POLICY_EXPIRY_FIRST",
+);
+await call("SetProviderPolicy", { upstreamId: "tokenrhythm", policy: "PROVIDER_POLICY_SINGLE" }, token);
+
+const kinds = await call("ListProviderKinds", {}, token);
+const kindPolicies = (kind: string) => list(list(kinds.body?.kinds).find((k: any) => k.kind === kind)?.policies);
+check("中转站三个策略", kindPolicies("tokenrhythm").length === 3, JSON.stringify(kindPolicies("tokenrhythm")));
+check("开放平台两个策略", kindPolicies("minimax-api").length === 2, JSON.stringify(kindPolicies("minimax-api")));
+check("其余一个策略", kindPolicies("qoder").length === 1, JSON.stringify(kindPolicies("qoder")));
+check(
+  "中转站那三个是单一、降级、余额到期优先",
+  kindPolicies("tokenrhythm").join(",") ===
+    "PROVIDER_POLICY_SINGLE,PROVIDER_POLICY_FALLBACK,PROVIDER_POLICY_EXPIRY_FIRST",
+  kindPolicies("tokenrhythm").join(","),
+);
+
+console.log("");
+console.log("账号数");
+
+const counts = await call("ListUpstreams", {}, token);
+const countList = list(counts.body?.upstreams);
+const qoderCount = countList.find((u: any) => u.id === "qoder");
+check("Qoder 有一个账号", qoderCount?.accountCount === 1, String(qoderCount?.accountCount));
+const workbuddyCount = countList.find((u: any) => u.id === "workbuddy-cn");
+check("WorkBuddy 有一个账号", workbuddyCount?.accountCount === 1, String(workbuddyCount?.accountCount));
+
+// 中转站：一个账号一个钱包。账号数与账号列表里那几行一样。
+const rhythmUpstream = countList.find((u: any) => u.id === "tokenrhythm");
+const accountList = await call("ListAccounts", {}, token);
+const rhythmAccounts = list(accountList.body?.accounts).filter((a: any) => a.upstreamId === "tokenrhythm");
+check(
+  "中转站的账号数就是租户数",
+  rhythmUpstream?.accountCount === rhythmAccounts.length,
+  `${rhythmUpstream?.accountCount} vs ${rhythmAccounts.length}`,
+);
+
+// key 清了，账号数也跟着清。
+await call("SetProviderKeys", { upstreamId: "minimax-api", keys: [] }, token);
+const cleared = await call("ListUpstreams", {}, token);
+const clearedApi = list(cleared.body?.upstreams).find((u: any) => u.id === "minimax-api");
+check("key 清了账号数也是 0", clearedApi?.accountCount === 0, String(clearedApi?.accountCount));
 
 console.log("");
 console.log("账号与凭据");

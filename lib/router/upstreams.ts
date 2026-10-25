@@ -22,15 +22,21 @@ import { legacyChatCompletion, readLegacyFrames } from "../qoder/legacy.ts";
 import { workbuddyChat, aggregateStream, conversationIdFor } from "../workbuddy/transport.ts";
 import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
-import { markTenantOutOfMoney, pickTenants, tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
+import {
+  markTenantOutOfMoney,
+  pickTenants,
+  tokenRhythmStatuses,
+  usableTenants,
+  type TokenRhythmTenantStatus,
+} from "../tokenrhythm/wallet.ts";
 import { zcodeChat } from "../zcode/transport.ts";
 import { zcodeMaxOutput } from "../zcode/models.ts";
 import {
-  MAX_ATTEMPTS,
-  MiniMaxApiTenantError,
+  miniMaxApiBusinessCode,
   miniMaxApiChat,
   miniMaxApiTenants,
-  nextMiniMaxApiTenant,
+  peekMiniMaxApiStream,
+  MiniMaxApiBusinessError,
 } from "../minimax/api.ts";
 import {
   tokenRhythmChat,
@@ -48,6 +54,16 @@ import {
   deliverOpenAIStream,
   type Dialect,
 } from "./deliver.ts";
+import {
+  byOrder,
+  classifyUpstreamError,
+  describeUpstreamError,
+  isDegradableUpstreamError,
+  selectProvider,
+  type ProviderPolicy,
+} from "./provider-selection.ts";
+import { businessCodeOf, upstreamStatusOf, withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
+import { policyOf } from "../providers.ts";
 import { upstreamModel, type Route } from "./routes.ts";
 
 /** The output limit of a MiniMax model, as its own catalog says. */
@@ -100,6 +116,192 @@ export interface UpstreamContext {
 }
 
 /**
+ * The error for an upstream that answered with a status of its own.
+ *
+ * The client sees the gateway's status, and the upstream's own status and
+ * code stay on the error: they say whether another account would do better
+ * (a 402 means this account is out of credit, a 400 means the request is
+ * wrong and every account would fail the same way).
+ */
+function upstreamError(status: number, text: string, what: string): AuthError {
+  const error = new AuthError(
+    `upstream HTTP ${status}`,
+    `${what}上游返回 ${status}：${text.slice(0, 300)}`,
+    502,
+  );
+  withUpstreamStatus(error, status);
+  const code = businessCodeOfBody(text);
+  if (code !== null) withBusinessCode(error, code);
+  return error;
+}
+
+/**
+ * 平台自己的码（如果错误信封里有）。
+ *
+ * 状态码说的是「这个请求被拒了」，业务码说的是「为什么」：墨点用完
+ * （quota_exceeded）与限流（rate_limit_exceeded）都是 429，换一个账号的结果
+ * 却不一样。
+ */
+function businessCodeOfBody(text: string): number | string | null {
+  try {
+    const parsed = text ? JSON.parse(text) : null;
+    const code = parsed?.error?.code ?? parsed?.code ?? null;
+    if (typeof code === "string" && code.trim()) return code.trim();
+    if (typeof code === "number" && Number.isFinite(code)) return code;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The upstream's own policy.
+ *
+ * An upstream that is not in the database has no policy of its own, so it
+ * gets the default: one account, no fallback.
+ */
+function policyOfUpstream(providerId: string): ProviderPolicy {
+  if (!providerId) return "single";
+  return policyOf(providerId);
+}
+
+/**
+ * 这个失败对客户端意味着什么。
+ *
+ * 客户端看的是网关的状态，不是上游的：网关自己的 401 是「网关的 key 不对」，
+ * 上游的 401 是「这把 key 被上游拒了」，两件事不能撞在同一个状态码上。所以
+ * 上游的租户级错误分三档报给客户端：
+ *
+ *   1. 余额真的用完了（上游 402，或者 MiniMax 的业务码 1008）→ 402，提示说
+ *      充值后恢复。那是客户端唯一能动手的一件事。
+ *   2. 别的租户级错误（凭据被拒、配额打满、额度用尽的业务码）→ 503。这是
+ *      网关的凭据或配额问题，客户端无从处理；提示里带上游的状态与原文。
+ *   3. 请求本身的问题（上游 400/404/413）→ 原样抛出去：传输层已经报成 502，
+ *      提示里带着上游的原文。
+ *
+ * 换掉状态码之后，上游自己的状态与业务码仍留在错误上（withUpstreamStatus /
+ * withBusinessCode）：日志与分类器要能看出真实发生了什么。
+ */
+function accountFailure(
+  lastError: unknown,
+  noBalance: { message: string; hint: string },
+): Error {
+  if (isNoBalanceFailure(lastError)) {
+    const trace = lastError instanceof TokenRhythmNoBalanceError ? lastError.traceId : "";
+    const detail = lastError instanceof Error ? lastError.message : "";
+    const error = new AuthError(
+      noBalance.message,
+      `${noBalance.hint}${detail ? ` ${detail}` : ""}${trace ? ` traceId=${trace}` : ""}`,
+      402,
+    );
+    return keepUpstreamTruth(error, lastError);
+  }
+  const tenant = tenantLevelFailure(lastError);
+  if (tenant) {
+    // 网关自己的 503：凭据或配额的问题，客户端处理不了。
+    const error = new AuthError(tenant.message, tenant.hint, 503);
+    if (tenant.type) error.type = tenant.type;
+    return keepUpstreamTruth(error, lastError);
+  }
+  if (lastError instanceof Error) return lastError;
+  return new AuthError(noBalance.message, noBalance.hint, 502);
+}
+
+/**
+ * 租户级错误：这个账号接不了这个请求，客户端也无从处理。
+ *
+ * 凭据被拒、配额打满、额度用尽 —— 都是网关这边要处理的事，所以客户端看到
+ * 503；上游的状态与原文写进提示里，排查时不用猜。
+ */
+function tenantLevelFailure(
+  error: unknown,
+): { message: string; hint: string; type?: string } | null {
+  const kind = classifyUpstreamError(error).kind;
+  if (kind !== "credential" && kind !== "rate-limit" && kind !== "quota") return null;
+  const status = upstreamSaidStatus(error);
+  const code = businessCodeOf(error);
+  const said = [
+    status === null ? null : `上游 HTTP ${status}`,
+    code === null ? null : `业务码 ${code}`,
+  ].filter((part): part is string => part !== null);
+  const because = said.length ? `（${said.join("，")}）` : "";
+  // The code goes into the message too: a client that reads only
+  // error.message still sees which failure it was.
+  return {
+    message: `upstream account cannot serve the request${because}`,
+    hint:
+      `网关这边的账号接不了这个请求${because}：${upstreamDetail(error)}。` +
+      "凭据或配额是网关这边的事，客户端处理不了；等网关换好账号或额度恢复后再试。",
+    // The client reads the type too. A refused credential keeps the type the
+    // rest of the gateway uses for a credential problem (the 503 default),
+    // and the two quota-ish ones say what they are.
+    type: kind === "rate-limit" ? "rate_limit_error" : kind === "quota" ? "usage_limit_error" : undefined,
+  };
+}
+
+/**
+ * 上游自己回过的状态，写进提示里。
+ *
+ * upstreamStatusOf 会退回到错误上的 status 字段：对 MiniMaxApiTenantError
+ * 那是上游的状态（401/402/429），但 AuthError 的 status 是网关给客户端看的
+ * 那个（502/503），把它当「上游回了什么」会写错。只有传输层明确放上去的
+ * upstreamStatus 才是上游真的回过的状态。
+ */
+function upstreamSaidStatus(error: unknown): number | null {
+  const status = upstreamStatusOf(error);
+  if (status === null) return null;
+  if (error instanceof AuthError && (error as { upstreamStatus?: unknown }).upstreamStatus === undefined) {
+    return null;
+  }
+  return status;
+}
+
+/** 上游自己说的话：错误里的原文。 */
+function upstreamDetail(error: unknown): string {
+  if (error instanceof AuthError) return error.hint || error.message;
+  if (error instanceof Error) return error.message;
+  return String(error ?? "");
+}
+
+/**
+ * 把上游的状态与业务码留在新错误上。
+ *
+ * 换了状态码之后，日志与分类器还要能看出真实发生了什么：上游 401 仍然是
+ * 上游 401，不是网关的 503。
+ */
+function keepUpstreamTruth<T extends object>(error: T, original: unknown): T {
+  const status = upstreamStatusOf(original);
+  if (status !== null) withUpstreamStatus(error, status);
+  const code = businessCodeOf(original);
+  if (code !== null) withBusinessCode(error, code);
+  return error;
+}
+
+/** 这个失败是不是「这个账号没钱了」。 */
+function isNoBalanceFailure(error: unknown): boolean {
+  if (error instanceof TokenRhythmNoBalanceError) return true;
+  if (upstreamStatusOf(error) === 402) return true;
+  // MiniMax 的 1008 是「余额不足」。
+  return businessCodeOf(error) === 1008;
+}
+
+/**
+ * Run one upstream call under the upstream's own policy.
+ *
+ * Most upstreams have one account, so the policy makes no difference here —
+ * but the call goes through the same wrapper all the same, so every upstream
+ * answers the policy the same way.
+ */
+async function underPolicy<T>(providerId: string, run: () => Promise<T>): Promise<T> {
+  return selectProvider(policyOfUpstream(providerId), [{ id: providerId, weight: 1, run }], {
+    degradable: isDegradableUpstreamError,
+    // The caller sees the error the upstream produced, not a new one.
+    failure: (lastError) =>
+      lastError instanceof Error ? lastError : new AuthError("upstream failed", "上游没有响应。", 502),
+  });
+}
+
+/**
  * WorkBuddy's China region.
  *
  * The upstream speaks the OpenAI dialect natively, so the request goes out
@@ -111,7 +313,7 @@ export interface UpstreamContext {
  */
 export async function toWorkBuddy(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -133,12 +335,14 @@ export async function toWorkBuddy(
   // The conversation keeps its id for every turn, so the upstream can see
   // that the turns belong together.
   const conversationId = conversationIdFor(openaiBody.messages, openaiBody.conversation_id);
-  const { response } = await workbuddyChat(openaiBody, {
-    providerId: route.provider,
-    stream,
-    conversationId,
-    model: ctx.workbuddyModel(model),
-  });
+  const { response } = await underPolicy(route.provider, () =>
+    workbuddyChat(openaiBody, {
+      providerId: route.provider,
+      stream,
+      conversationId,
+      model: ctx.workbuddyModel(model),
+    }),
+  );
 
   if (!stream) {
     // The upstream always answers with a stream, so a non-streaming request is
@@ -179,7 +383,7 @@ export function extractEffort(body: Record<string, any>): string | undefined {
 
 export async function toQoder(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -210,9 +414,11 @@ export async function toQoder(
   // caller asked for; the gateway ignores it and cuts the answer at the
   // model's real limit.
   openaiBody.max_tokens = QODER_CLIENT_MAX_TOKENS;
-  const upstream = await qoderWithRetry(
-    () => qoderChatCompletion(openaiBody, { stream, providerId: route.provider, region }),
-    ctx.qoderMaxAttempts,
+  const upstream = await underPolicy(route.provider, () =>
+    qoderWithRetry(
+      () => qoderChatCompletion(openaiBody, { stream, providerId: route.provider, region }),
+      ctx.qoderMaxAttempts,
+    ),
   );
 
   if (!stream) {
@@ -234,7 +440,7 @@ export async function toQoder(
  */
 export async function toQoderLegacy(
   ctx: UpstreamContext,
-  openaiBody: Record<string, any>,
+  openaiBody: Record<string, unknown>,
   model: QoderModel,
   dialect: Dialect,
   stream: boolean,
@@ -243,23 +449,25 @@ export async function toQoderLegacy(
   label?: string,
   providerId = "qoder",
 ): Promise<void> {
-  const chunks = legacyWithRetry(
-    () =>
-      legacyChatCompletion(
-        {
-          messages: Array.isArray(openaiBody.messages) ? openaiBody.messages : [],
-          tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
-          modelKey: model.key,
-          displayName: model.name,
-          // The same number the simulated client sends.
-          maxTokens: QODER_CLIENT_MAX_TOKENS,
-          reasoning: model.reasoning,
-          contextWindow: model.context,
-        },
-        { providerId, region },
-      ),
-    ctx.legacyMaxAttempts,
-    ctx.legacyRetryMs,
+  const chunks = await underPolicy(providerId, async () =>
+    legacyWithRetry(
+      () =>
+        legacyChatCompletion(
+          {
+            messages: Array.isArray(openaiBody.messages) ? openaiBody.messages : [],
+            tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
+            modelKey: model.key,
+            displayName: model.name,
+            // The same number the simulated client sends.
+            maxTokens: QODER_CLIENT_MAX_TOKENS,
+            reasoning: model.reasoning,
+            contextWindow: model.context,
+          },
+          { providerId, region },
+        ),
+      ctx.legacyMaxAttempts,
+      ctx.legacyRetryMs,
+    ),
   );
 
   if (!stream) {
@@ -406,7 +614,7 @@ export async function collectOpenAIChunks(
 
 export async function toMinimax(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -421,7 +629,7 @@ export async function toMinimax(
 
   let r: Response;
   try {
-    r = await minimaxChat(anthropicBody, stream);
+    r = await underPolicy(route.provider, () => minimaxChat(anthropicBody, stream));
   } catch (e) {
     const err = e as AuthError;
     throw new AuthError(err.message, err.hint, err.status, err.type);
@@ -453,11 +661,12 @@ export async function toMinimax(
  * MiniMax 开放平台，按 API Key 分租户。
  *
  * 平台说的是 OpenAI 方言，所以 Anthropic 的请求在方言层转过去（跟别的
- * 上游一样）。租户轮着来：一个 key 的套餐用完了就换下一个。
+ * 上游一样）。哪个租户出钱由上游自己的策略定：单一只调一把 key，降级按 key
+ * 的次序换下一个。
  */
 export async function toMiniMaxApi(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -468,7 +677,7 @@ export async function toMiniMaxApi(
   openaiBody.model = model;
   openaiBody.stream = stream;
 
-  const tenants = miniMaxApiTenants();
+  const tenants = miniMaxApiTenants(route.provider);
   if (!tenants.length) {
     throw new AuthError(
       "no minimax api key is configured",
@@ -477,37 +686,60 @@ export async function toMiniMaxApi(
     );
   }
 
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const tenant = nextMiniMaxApiTenant(tenants);
-    if (!tenant) break;
-    if (ctx.logRoute) {
-      console.log(`[ROUTE] minimax-api model=${route.model} tenant=${tenant.index} stream=${stream}`);
-    }
-    let response: Response;
-    try {
-      response = await miniMaxApiChat(tenant, openaiBody, "cn", ctx.clientHeaders);
-    } catch (e) {
-      if (e instanceof MiniMaxApiTenantError) {
-        // 这个租户接不了：套餐用完、key 不对、或者被限流。换一个。
-        console.log(`[ROUTE] minimax-api tenant ${tenant.index} cannot serve it: ${e.message}`);
-        lastError = e;
-        continue;
-      }
-      throw e;
-    }
+  const policy = policyOfUpstream(route.provider);
+  const ids = tenants.map((tenant) => `tenant-${tenant.index}`);
+  const candidates = byOrder(
+    tenants.map((tenant) => ({
+      id: `tenant-${tenant.index}`,
+      run: async () => {
+        if (ctx.logRoute) {
+          console.log(
+            `[ROUTE] minimax-api model=${route.model} policy=${policy} tenant=${tenant.index} stream=${stream}`,
+          );
+        }
+        const response = await miniMaxApiChat(tenant, openaiBody, "cn", ctx.clientHeaders);
+        if (stream) {
+          // 平台有时候用 200 回答一个失败的请求；流式的失败在第一个帧里。
+          // 在写给客户端之前看：答复还没开始，换一把 key 还来得及。
+          return { response: await peekMiniMaxApiStream(response), json: null as any };
+        }
+        const json = await response.json();
+        // 平台有时用 200 回答一个失败的请求（base_resp.status_code 不为 0）。
+        // 那不是答复，交给客户端会让它以为答完了。
+        const code = miniMaxApiBusinessCode(json);
+        if (code !== null) {
+          throw new MiniMaxApiBusinessError(code, String(json?.base_resp?.status_msg ?? ""));
+        }
+        return { response, json };
+      },
+    })),
+  );
 
-    if (!stream) {
-      const json = await response.json();
-      deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
-      return;
-    }
-    await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+  const result = await selectProvider(policy, candidates, {
+    degradable: isDegradableUpstreamError,
+    onAttempt: (candidate, error) => {
+      if (!error) return;
+      const at = ids.indexOf(candidate.id);
+      // 只有真的要换才说「试下一个」：不可降级的错误就地抛出去。
+      const moves = isDegradableUpstreamError(error);
+      const next = moves && policy === "fallback" ? ids[at + 1] : undefined;
+      console.log(
+        `[ROUTE] minimax-api ${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
+          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no key left" : ", not switching"),
+      );
+    },
+    failure: (lastError) =>
+      accountFailure(lastError, {
+        message: "no minimax api tenant can serve the request",
+        hint: "MiniMax 开放平台的 key 都没有额度了（402 余额不足）。充值后恢复。",
+      }),
+  });
+
+  if (!stream) {
+    deliverJson(out, dialect, "openai", result.json, route.label ?? model, ctx.onUsage);
     return;
   }
-
-  const message = lastError instanceof Error ? lastError.message : "没有能用的租户";
-  throw new AuthError("no minimax api tenant can serve the request", message, 503, "api_error");
+  await deliverOpenAIStream(out, result.response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
 }
 
 /**
@@ -518,7 +750,7 @@ export async function toMiniMaxApi(
  */
 export async function toZcode(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -530,14 +762,12 @@ export async function toZcode(
   anthropicBody.model = model;
   anthropicBody.stream = stream;
 
-  const { response } = await zcodeChat(anthropicBody, { effort: zcodeEffort(body) });
+  const { response } = await underPolicy(route.provider, () =>
+    zcodeChat(anthropicBody, { effort: zcodeEffort(body) }),
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new AuthError(
-      `upstream HTTP ${response.status}`,
-      `ZCode 上游返回 ${response.status}：${text.slice(0, 300)}`,
-      502,
-    );
+    throw upstreamError(response.status, text, "ZCode ");
   }
 
   if (!stream) {
@@ -554,19 +784,38 @@ function zcodeEffort(body: Record<string, any>): string | undefined {
 }
 
 /**
+ * The accounts of a TokenRhythm upstream, in the order the policy wants them.
+ *
+ * `expiry_first` asks the wallet: the gift that runs out first is spent
+ * first. The other policies take the accounts in the order they were added.
+ */
+export function tokenRhythmAccounts(
+  statuses: TokenRhythmTenantStatus[],
+  policy: ProviderPolicy,
+): TokenRhythmTenantStatus[] {
+  return policy === "expiry_first" ? pickTenants(statuses) : usableTenants(statuses);
+}
+
+/**
  * TokenRhythm, the relay station.
  *
  * The upstream speaks the OpenAI dialect, so a request in that dialect goes
  * out nearly unchanged and the answer comes back the same way. An Anthropic
  * request is converted first.
  *
- * Which account pays for it is decided by the gift money: the gift that runs
- * out first is spent first, and the money that was paid for is the last
- * resort.
+ * Which account pays for it is decided by the upstream's policy: the gift
+ * money expires, so the gift that runs out first is spent first (that is
+ * `expiry_first`), and the other policies take the accounts in the order they
+ * were added. A tenant that says it has no money left cannot serve the
+ * request at all, so the next one takes it — the busy case is different:
+ * there the request is retried on the same account, so the prompt cache
+ * stays warm and the balance is not eaten by a cold cache. When those retries
+ * are used up the account cannot serve the request at this moment either, so
+ * it is counted as a 5xx and the next one takes it.
  */
 export async function toTokenRhythm(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -577,8 +826,9 @@ export async function toTokenRhythm(
   openaiBody.model = model;
   openaiBody.stream = stream;
 
+  const policy = policyOfUpstream(route.provider);
   const statuses = await tokenRhythmStatuses(route.provider);
-  const tenants = pickTenants(statuses);
+  const tenants = tokenRhythmAccounts(statuses, policy);
   if (!tenants.length) {
     throw new AuthError(
       "no tokenrhythm account has credit left",
@@ -587,70 +837,72 @@ export async function toTokenRhythm(
     );
   }
 
-  // Which account pays for it is decided by the gift money: the gift that
-  // runs out first is spent first, and the money that was paid for is the
-  // last resort. A tenant that says it has no money left cannot serve the
-  // request at all, so the next one takes it — the busy case is different:
-  // there the request is retried on the same account, so the prompt cache
-  // stays warm and the balance is not eaten by a cold cache.
-  let lastError: unknown = null;
-  for (const tenant of tenants) {
-    if (ctx.logRoute) {
-      console.log(`[ROUTE] tokenrhythm model=${route.model} tenant=${tenant.index} stream=${stream}`);
-    }
+  const ids = tenants.map((tenant) => `tenant-${tenant.index}`);
+  const candidates = byOrder(
+    tenants.map((tenant) => ({
+      id: `tenant-${tenant.index}`,
+      run: async () => {
+        if (ctx.logRoute) {
+          console.log(
+            `[ROUTE] tokenrhythm model=${route.model} policy=${policy} tenant=${tenant.index} stream=${stream}`,
+          );
+        }
+        let response: Response;
+        try {
+          const call = await tokenRhythmChatWithRetry(
+            tenant.index,
+            openaiBody,
+            ctx.tokenRhythmMaxAttempts,
+            ctx.clientHeaders,
+          );
+          response = call.response;
+        } catch (e) {
+          // The platform said this account has no money left: the wallet the
+          // gateway cached still says it has, so it is put aside for a while.
+          if (e instanceof TokenRhythmNoBalanceError) markTenantOutOfMoney(tenant.index);
+          throw e;
+        }
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw upstreamError(response.status, text, "TokenRhythm ");
+        }
+        return { response, tenant: tenant.index };
+      },
+    })),
+  );
 
-    let response: Response;
-    try {
-      const call = await tokenRhythmChatWithRetry(
-        tenant.index,
-        openaiBody,
-        ctx.tokenRhythmMaxAttempts,
-        ctx.clientHeaders,
+  const result = await selectProvider(policy, candidates, {
+    degradable: isDegradableUpstreamError,
+    onAttempt: (candidate, error) => {
+      if (!error) return;
+      const at = ids.indexOf(candidate.id);
+      // 只有真的要换才说「试下一个」：不可降级的错误就地抛出去。
+      const moves = isDegradableUpstreamError(error);
+      const next = moves && policy === "fallback" ? ids[at + 1] : undefined;
+      console.log(
+        `[ROUTE] tokenrhythm ${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
+          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching"),
       );
-      response = call.response;
-    } catch (e) {
-      if (e instanceof TokenRhythmNoBalanceError) {
-        markTenantOutOfMoney(tenant.index);
-        console.log(
-          `[ROUTE] tokenrhythm tenant ${tenant.index} has no balance ` +
-            `(${e.traceId || e.message}), trying the next one`,
-        );
-        lastError = e;
-        continue;
-      }
-      throw e;
-    }
+    },
+    failure: (lastError) =>
+      accountFailure(lastError, {
+        message: "no tokenrhythm account has credit left",
+        hint: "TokenRhythm 的账号都没有余额了（402 余额不足）。充值后恢复。",
+      }),
+  });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new AuthError(
-        `upstream HTTP ${response.status}`,
-        `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
-        502,
-      );
-    }
-
-    if (!stream) {
-      const json = await response.json();
-      const reason = json?.choices?.[0]?.finish_reason;
-      if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-      deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
-      return;
-    }
-
-    await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, (reason) => {
-      if (reason === "length") noteTruncation(openaiBody, model, tenant.index);
-    }, ctx.onUsage);
+  const { response, tenant } = result;
+  if (!stream) {
+    const json = await response.json();
+    const reason = json?.choices?.[0]?.finish_reason;
+    if (reason === "length") noteTruncation(openaiBody, model, tenant);
+    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
     return;
   }
 
-  // Every tenant said it has no money left.
-  const trace = lastError instanceof TokenRhythmNoBalanceError ? lastError.traceId : "";
-  throw new AuthError(
-    "no tokenrhythm account has credit left",
-    `TokenRhythm 的账号都没有余额了（402 余额不足）。充值后恢复。${trace ? `traceId=${trace}` : ""}`,
-    402,
-  );
+  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, (reason) => {
+    if (reason === "length") noteTruncation(openaiBody, model, tenant);
+  }, ctx.onUsage);
 }
 
 /**
@@ -662,7 +914,7 @@ export async function toTokenRhythm(
  * treats the answer as broken, and from the outside it looks like the gateway
  * truncated something. The log says where the number came from.
  */
-function noteTruncation(body: Record<string, any>, model: string, tenant: number): void {
+function noteTruncation(body: Record<string, unknown>, model: string, tenant: number): void {
   const asked = typeof body.max_tokens === "number" ? body.max_tokens : null;
   console.log(
     `[TRUNCATED] model=${model} tenant=${tenant} asked_for=${asked ?? "unset"} tokens — ` +
@@ -677,10 +929,14 @@ function noteTruncation(body: Record<string, any>, model: string, tenant: number
  * from the start, and the relay charges the uncached prompt — which is a lot
  * more than the answer itself. So the request waits and is sent again to the
  * account it was meant for.
+ *
+ * When the retries are used up the account cannot serve the request at this
+ * moment either, so it is reported as a 5xx: the policy decides what happens
+ * next (in `fallback` the next account takes it).
  */
 async function tokenRhythmChatWithRetry(
   tenant: number,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   maxAttempts: number,
   extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; key: string }> {
@@ -700,7 +956,8 @@ async function tokenRhythmChatWithRetry(
         throw new AuthError(
           "tokenrhythm is busy",
           `TokenRhythm 现在繁忙（${e.message}）。这是上游的临时状态，稍后重试即可；` +
-            `账号没有换，避免提示词缓存失效。${e.traceId ? `traceId=${e.traceId}` : ""}`.trim(),
+            `同一个账号上已经重试过 ${Math.max(maxAttempts - 1, 0)} 次，还是这个排队。` +
+            `${e.traceId ? `traceId=${e.traceId}` : ""}`.trim(),
           503,
           "api_error",
         );
@@ -721,7 +978,7 @@ async function tokenRhythmChatWithRetry(
  */
 export async function toSenseNova(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -735,14 +992,12 @@ export async function toSenseNova(
     console.log(`[ROUTE] sensenova model=${route.model} stream=${stream}`);
   }
 
-  const response = await senseNovaChat(openaiBody, "sensenova", ctx.clientHeaders);
+  const response = await underPolicy(route.provider, () =>
+    senseNovaChat(openaiBody, "sensenova", ctx.clientHeaders),
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new AuthError(
-      `upstream HTTP ${response.status}`,
-      `SenseNova 上游返回 ${response.status}：${text.slice(0, 300)}`,
-      502,
-    );
+    throw upstreamError(response.status, text, "SenseNova ");
   }
 
   if (!stream) {
@@ -761,7 +1016,7 @@ export async function toSenseNova(
  */
 export async function toInternAi(
   ctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -775,14 +1030,12 @@ export async function toInternAi(
     console.log(`[ROUTE] intern-ai model=${route.model} stream=${stream}`);
   }
 
-  const response = await internAiChat(openaiBody, "intern-ai", ctx.clientHeaders);
+  const response = await underPolicy(route.provider, () =>
+    internAiChat(openaiBody, "intern-ai", ctx.clientHeaders),
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new AuthError(
-      `upstream HTTP ${response.status}`,
-      `书生·端砚上游返回 ${response.status}：${text.slice(0, 300)}`,
-      502,
-    );
+    throw upstreamError(response.status, text, "书生·端砚");
   }
 
   if (!stream) {

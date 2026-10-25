@@ -24,7 +24,7 @@ import {
   type SenseNovaPoolUsage,
 } from "./sensenova/quota.ts";
 import type { InternAiBalance, InternAiCreditPack } from "./intern-ai/quota.ts";
-import type { ProviderRow } from "./providers.ts";
+import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
 import { tokenFingerprint } from "./credential.ts";
 import {
@@ -469,6 +469,7 @@ registerKind({
   kind: "minimax",
   label: "MiniMax Code",
   login: "device",
+  policies: ["single"],
   baseUrl: () => MINIMAX_UPSTREAM.replace(/\/messages$/, ""),
   credential: (provider) => {
     const raw = minimaxCredentialStatus(provider.id);
@@ -495,6 +496,8 @@ registerKind({
   openPlatform: true,
   label: "MiniMax 开放平台",
   login: "password",
+  // 一把 key 一个租户：租户之间可以换着来。
+  policies: ["single", "fallback"],
   baseUrl: () => miniMaxApiBase(),
   credential: (provider) => {
     const tenants = miniMaxApiTenants(provider.id);
@@ -522,6 +525,8 @@ registerKind({
   login: "device",
   needsRegion: true,
   regions: ["global", "cn"],
+  // 一行就是一个账号（两个区是两行）。
+  policies: ["single"],
   baseUrl: (provider) => {
     const region = provider.region === "cn" ? "cn" : "global";
     return QODER_ENDPOINTS[region].infer.replace(/\/model\/v1\/chat\/completions$/, "");
@@ -552,6 +557,7 @@ registerKind({
   kind: "workbuddy",
   label: "WorkBuddy",
   login: "browser",
+  policies: ["single"],
   baseUrl: () => WORKBUDDY_ENDPOINTS.cn.base,
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session", `session:provider:${provider.id}`),
   models: () => workbuddyCatalogModels(workbuddyModelList()),
@@ -571,6 +577,8 @@ registerKind({
   openPlatform: true,
   label: "TokenRhythm",
   login: "password",
+  // 一个账号一个钱包。赠金会过期，所以它还能按到期先后挑。
+  policies: ["single", "fallback", "expiry_first"],
   baseUrl: () => TOKENRHYTHM_API_BASE,
   credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session", `session:provider:${provider.id}`),
   models: () => tokenRhythmCatalogModels(),
@@ -590,6 +598,7 @@ registerKind({
   openPlatform: true,
   label: "SenseNova",
   login: "password",
+  policies: ["single"],
   baseUrl: () => SENSENOVA_INFER_BASE,
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key", `key:provider:${provider.id}`),
   models: () => senseNovaCatalogModels(senseNovaCatalog()),
@@ -609,6 +618,7 @@ registerKind({
   openPlatform: true,
   label: "书生·端砚",
   login: "code",
+  policies: ["single"],
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
   credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key", `key:provider:${provider.id}`),
   models: () => internAiCatalogModels(internAiCatalog()),
@@ -630,6 +640,7 @@ registerKind({
   kind: "zcode",
   label: "ZCode",
   login: "browser",
+  policies: ["single"],
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
   credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session", `session:provider:${provider.id}`),
   models: () => zcodeCatalogModels(ZCODE_MODELS),

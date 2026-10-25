@@ -12,7 +12,7 @@
 // belongs to (lib/router/upstreams.ts) — one dispatch, not one per question.
 
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
-import type { ProviderRow } from "./providers.ts";
+import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import type { CatalogModel } from "./router/catalog.ts";
 
 /** 面板上登录的方式。 */
@@ -147,6 +147,13 @@ export interface ProviderKind {
   openPlatform?: boolean;
   /** 区域都有哪些。 */
   regions?: string[];
+  /**
+   * 这一类上游支持的生效策略。
+   *
+   * 策略是「名下的多个账号怎么选」：只有一个账号的上游选了也没有用，所以
+   * 那些种类只给「单一」。
+   */
+  policies?: ProviderPolicy[];
   /** 基础地址。 */
   baseUrl(provider: ProviderRow): string;
   /** 凭据。 */
@@ -171,6 +178,19 @@ export function kindOf(kind: string): ProviderKind | null {
   return REGISTRY.get(kind) ?? null;
 }
 
+/**
+ * 这一类上游支持的策略。
+ *
+ * 没登记的种类只给「单一」：别的策略要有多个账号才有用，而多账号是各家
+ * 自己的形态（开放平台一把 key 一个租户，中转站一个账号一个钱包）。
+ *
+ * 兜底只在这里一份：注册表里漏填 policies 的种类从这里过一遍，别处不再
+ * 自己写一遍默认策略。
+ */
+export function policiesOfKind(kind: string): ProviderPolicy[] {
+  return kindOf(kind)?.policies ?? ["single"];
+}
+
 /** 全部种类。 */
 export function allKinds(): ProviderKind[] {
   return [...REGISTRY.values()];
@@ -187,6 +207,7 @@ export function selectableKinds(): {
   login: ProviderLoginMethod;
   needsRegion: boolean;
   regions: string[];
+  policies: ProviderPolicy[];
 }[] {
   return allKinds().map((k) => ({
     kind: k.kind,
@@ -194,5 +215,6 @@ export function selectableKinds(): {
     login: k.login,
     needsRegion: k.needsRegion ?? false,
     regions: k.regions ?? [],
+    policies: policiesOfKind(k.kind),
   }));
 }

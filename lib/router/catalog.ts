@@ -73,6 +73,13 @@ export interface AggregateTargetSpec {
   group: UpstreamGroup;
   upstreamModel: string;
   enabled: boolean;
+  /**
+   * How much of the traffic this target takes.
+   *
+   * It also decides the order: the bigger the weight, the earlier the target
+   * is tried.
+   */
+  weight: number;
 }
 
 /** One model the root route publishes. */
@@ -133,6 +140,7 @@ export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateMo
         group: target.group,
         upstreamModel: target.upstreamModel,
         enabled: true,
+        weight: target.weight,
       });
       found.push(upstream);
     }
