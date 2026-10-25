@@ -15,6 +15,14 @@
 // pi 自己没有父会话的概念：它的子代理跑在服务端，头上分不出来 —— 靠扩展
 // 补上。
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// A data directory of its own: the tests below write sessions, and what they
+// write must not be there when the next run starts.
+process.env.BUDDY_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "session-check-"));
+
 import { detectSession, clientSessionHeaders } from "../lib/agent.ts";
 
 let pass = 0;
@@ -151,6 +159,22 @@ console.log("写会话：登录要能覆盖，刷新里的旧代次不能覆盖"
   writeSession(id, { accessToken: "a4", refreshToken: "r4", generation: 1, loginAtMs: 2000 });
   check("重新登录写进去了", readSession<any>(id)?.generation === 1 && readSession<any>(id)?.accessToken === "a4",
     JSON.stringify(readSession<any>(id)));
+}
+
+console.log("");
+console.log("新会话到货，作废的结论也作废");
+
+{
+  const { writeSession, markCredentialRefused, credentialRefused } = await import("../lib/session.ts");
+  const id = "session:provider:test-refused";
+
+  // 探测到平台拒了这个凭据。
+  markCredentialRefused(id, "上游拒绝了这个令牌");
+  check("记下了", credentialRefused(id) !== null, String(credentialRefused(id)));
+
+  // 新会话到货。
+  writeSession(id, { accessToken: "a1", refreshToken: "r1", generation: 1, loginAtMs: 3000 });
+  check("新会话把那个结论作废了", credentialRefused(id) === null, String(credentialRefused(id)));
 }
 
 console.log("");
