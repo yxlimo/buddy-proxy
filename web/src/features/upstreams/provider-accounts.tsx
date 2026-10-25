@@ -45,7 +45,7 @@ function isLoggedIn(account: Account): boolean {
  * 只有会话类的凭据要重新授权：key 失效了是换一把 key 的事，重新登录解决不了。
  * 会话是好的（有可用令牌）时也不需要——服务会按自己的节奏换令牌，不等人点。
  */
-function isDeadSession(credential: Credential): boolean {
+function needsRelogin(credential: Credential): boolean {
   return credential.kind === 'session' && credential.status !== 'usable'
 }
 
@@ -276,7 +276,7 @@ export function ProviderAccounts({
               const owner =
                 list.find((account) => account.id === credential.accountId) ??
                 active
-              const deadSession = isDeadSession(credential)
+              const relogin = needsRelogin(credential)
               return (
                 <TableRow key={credential.id}>
                   <TableCell>
@@ -311,7 +311,7 @@ export function ProviderAccounts({
                       ) : null}
                       {/* 后端说了失效的原因就用它的话；没说的话补一句，
                           免得用户只看到一个「已过期」徽标。 */}
-                      {deadSession && !credential.lastError ? (
+                      {relogin && !credential.lastError ? (
                         <span className='text-xs text-destructive'>
                           这份会话不能用了，要重新登录
                         </span>
@@ -341,7 +341,7 @@ export function ProviderAccounts({
                       </Button>
                       {/* 会话失效了只能重新授权：走账号那一行现成的登录
                           流程，不另写一套。 */}
-                      {deadSession && owner ? (
+                      {relogin && owner ? (
                         <Button
                           size='sm'
                           disabled={loggingIn}
