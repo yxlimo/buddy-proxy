@@ -14,9 +14,9 @@ import { clearDeadSession, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
-import { refreshSession as refreshQoderSession } from "../qoder/auth.ts";
+import { loadSession as loadQoderSession } from "../qoder/auth.ts";
 import { checkAccountHealth } from "../qoder/credits.ts";
-import { refreshSession as refreshWorkBuddySession } from "../workbuddy/auth.ts";
+import { loadSession as loadWorkBuddySession } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { zcodeStatus } from "../zcode/auth.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
@@ -559,11 +559,14 @@ async function refreshTarget(
       return { ok: true, message: `会话由服务定时刷新（第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟）`, generation: cred.generation };
     }
     case "qoder": {
-      const session = await refreshQoderSession(p.id);
+      // 只读现在这一份：换令牌是定时器的事，这里换了就跟定时器撞上了。
+      const session = loadQoderSession(p.id);
+      if (!session) return { ok: false, message: "没有登录，在面板上登录一次", generation: 0 };
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "workbuddy": {
-      const session = await refreshWorkBuddySession(p.id);
+      const session = loadWorkBuddySession(p.id);
+      if (!session) return { ok: false, message: "没有登录，在面板上登录一次", generation: 0 };
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "zcode":
