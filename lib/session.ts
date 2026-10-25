@@ -97,6 +97,8 @@ export function clearHint(id: string): string {
  */
 export function writeSession(id: string, session: unknown, options: { force?: boolean } = {}): boolean {
   deadSessions.delete(id);
+  // 新会话到货了：刚才那些「平台拒了它」的结论作废。
+  clearCredentialRefused(id);
   const stored = getSecret(id);
   if (!options.force && stored && !newer(stampOf(session), stampOf(stored))) return false;
   setSecret(id, "session", session);
