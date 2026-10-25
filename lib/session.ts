@@ -97,8 +97,6 @@ export function clearHint(id: string): string {
  */
 export function writeSession(id: string, session: unknown, options: { force?: boolean } = {}): boolean {
   deadSessions.delete(id);
-  // 新会话到货了：刚才那些「平台拒了它」的结论作废。
-  clearCredentialRefused(id);
   const stored = getSecret(id);
   if (!options.force && stored && !newer(stampOf(session), stampOf(stored))) return false;
   setSecret(id, "session", session);
@@ -160,66 +158,21 @@ export function clearDeadSession(id: string): void {
 }
 
 /**
- * 凭据被上游拒了。
+ * One writer at a time for a session.
  *
- * 凭据的状态是「刚才探测出来的结果」：上游答 401 就是它不行了。这个记在
- * 进程里——服务重启后流水线会再扫一遍，于是状态又是新的，不必存到数据库。
- */
-const refusedCredentials = new Map<string, { at: number; message: string }>();
-
-/** 十分钟前的探测结论不算数：流水线会再扫一遍。 */
-const REFUSED_TTL_MS = 10 * 60 * 1000;
-
-/** 记下：上游拒了这个凭据。 */
-export function markCredentialRefused(id: string, message: string): void {
-  refusedCredentials.set(id, { at: Date.now(), message });
-}
-
-/** 上游拒过这个凭据吗（刚才探测出来的结论）。 */
-export function credentialRefused(id: string): string | null {
-  const entry = refusedCredentials.get(id);
-  if (!entry) return null;
-  if (Date.now() - entry.at > REFUSED_TTL_MS) {
-    refusedCredentials.delete(id);
-    return null;
-  }
-  return entry.message;
-}
-
-/** 这个凭据又能用了（换了新的令牌，或者探到了好结果）。 */
-export function clearCredentialRefused(id: string): void {
-  refusedCredentials.delete(id);
-}
-
-/**
- * The session as it is now, if somebody else has refreshed it since we read ours.
- *
- * The refresh token rotates on every refresh, so a token that differs from the
- * one we used means another holder refreshed it: the answer to a refused
- * refresh is then that holder's session — and this call refreshes again with
- * that one. So two concurrent refreshes never send the same token, and neither
- * of them waits for the other.
- */
-export function rotatedSession<T extends SessionTokens>(id: string, used: T): T | null {
-  const current = getSecret<T>(id);
-  if (!current) return null;
-  if (current.refreshToken === used.refreshToken) return null;
-  return current;
-}
-
-/**
- * Single-writer lock around a refresh. Two holders of the same refresh token
- * would rotate it twice and one of them would be logged out, so a refresh
- * takes this lock first.
+ * Two writers of the same session would each take a token from the platform
+ * and the second one would be logged out. So a login takes this lock first.
  */
 export async function withSessionLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await withLock(id, fn);
   } catch (e) {
     if (!(e instanceof LockUnavailableError)) throw e;
-    // Another writer is mid-refresh: its result is the session it wrote, so
-    // read that and use it.
+    // Another writer is mid-way: its result is the session it wrote, so read
+    // that and use it.
     const existing = getSecret<SessionTokens>(id);
+    // SAFETY: the lock is named after the session, so what is stored under it
+    // is that session; T is the caller's view of it.
     if (existing) return existing as unknown as T;
     throw new AuthError("could not acquire the credential lock", `另一个进程正在刷新凭据，稍后重试。`, 503);
   }
@@ -270,15 +223,6 @@ export interface CredentialCache {
   key?: string;
 }
 
-/** How a credential is wanted: now, when it is due, or only when it is dead. */
-export type RefreshMode =
-  /** Refresh right away, whatever the clock says. */
-  | "now"
-  /** Refresh when the token is about to expire — the timer wants this. */
-  | "due"
-  /** Refresh only when the token is already expired — a request wants this. */
-  | "expired";
-
 /** How `ensureCredential` gets the credential it hands out. */
 export interface EnsureCredentialOptions<T extends SessionTokens> {
   /** The cache to read and to fill. */
@@ -289,37 +233,26 @@ export interface EnsureCredentialOptions<T extends SessionTokens> {
   key?: string;
   /** How long a cached credential is reused. */
   cacheMs: number;
-  /**
-   * Who refreshes when.
-   *
-   * The refresh rotates the refresh token, so it is single-use: two refreshes
-   * of the same session at the same time would make one of them fail. So the
-   * mode says who refreshes when: the timer refreshes a token that is due
-   * (`due`), a request waits for that and only refreshes a token that is
-   * already dead (`expired`), and a rejected token is refreshed right away
-   * (`now`).
-   */
-  mode: RefreshMode;
-  /** The session id, which is also what the lock is named after. */
+  /** The session id. */
   lockId: string;
   /**
-   * Refresh, or return the session when it is still good.
+   * The session as it is now.
    *
-   * The refresh rotates the refresh token, so it is single-use: two refreshes
-   * of the same session at the same time would make one of them fail. So the
-   * mode says who refreshes when: the timer refreshes when the token is due,
-   * a request waits for that and only refreshes a token that is already dead.
+   * Nobody refreshes here: the timer does that, and it does it before the
+   * token runs out. A request that finds an expired token says so — it does
+   * not swap the token itself, because the refresh token is single-use and two
+   * refreshes of the same session at the same time cost the whole session.
    */
-  refresh: (mode: RefreshMode) => Promise<T>;
+  session: () => T | null;
   /** The credential, built from the session. */
   toCredential: (session: T) => Credential;
-  /** The error to raise when the credential is already expired. */
-  expired: (session: T) => AuthError;
+  /** The error to raise when there is no session, or it is expired. */
+  expired: (session: T | null) => AuthError;
 }
 
 /**
- * The credential for the proxy: the cached one when it is still fresh, otherwise
- * the session, refreshed when it is about to expire.
+ * The credential for the proxy: the cached one when it is still fresh,
+ * otherwise the session as it is.
  */
 export async function ensureCredential<T extends SessionTokens>(
   opts: EnsureCredentialOptions<T>,
@@ -330,15 +263,12 @@ export async function ensureCredential<T extends SessionTokens>(
   if (dead) throw new AuthError("session refused by the platform", dead, 503);
   const cached = opts.cache;
   const sameKey = opts.key === undefined || cached?.key === opts.key;
-  if (opts.mode !== "now" && cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
+  if (cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
     return cached.cred;
   }
-  // 上游刚才拒过这个凭据：那就换一个，别拿那个被拒的继续发。
-  const mode = credentialRefused(opts.lockId) ? "now" : opts.mode;
-  const session = await opts.refresh(mode);
-  if (mode === "now") clearCredentialRefused(opts.lockId);
-  const cred = opts.toCredential(session);
-  if (cred.remainingMs <= 0) throw opts.expired(session);
+  const session = opts.session();
+  const cred = session ? opts.toCredential(session) : null;
+  if (!cred || cred.remainingMs <= 0) throw opts.expired(session);
   opts.setCache({ at: Date.now(), cred, key: opts.key });
   return cred;
 }

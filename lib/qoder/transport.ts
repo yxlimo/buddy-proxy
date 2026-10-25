@@ -83,8 +83,6 @@ export interface QoderRequestOptions {
   /** Which provider (which account) to talk to. */
   providerId?: string;
   region?: QoderRegion;
-  /** Force a token refresh before the request (used after a 401). */
-  force?: boolean;
 }
 
 /** The session ids the gateway expects on every request. */
@@ -111,11 +109,8 @@ export function buildBody(body: Record<string, unknown>, stream: boolean): Recor
   return out;
 }
 
-async function upstreamHeaders(
-  providerId: string,
-  force: boolean,
-): Promise<Record<string, string>> {
-  const cred = await ensureCredential(force ? "now" : "expired", providerId);
+async function upstreamHeaders(providerId: string): Promise<Record<string, string>> {
+  const cred = await ensureCredential(providerId);
   const identity = deviceIdentity(providerId);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${cred.accessToken}`,
@@ -138,8 +133,9 @@ async function upstreamHeaders(
 
 /**
  * One chat completion. Returns the upstream response as-is; the agent decides
- * whether to stream it through or read it whole. A 401 triggers exactly one
- * forced refresh and retry, the way the simulated client does.
+ * whether to stream it through or read it whole.
+ *
+ * 令牌是定时器换的，这一条路不换：它只取现在这一份。
  */
 export async function qoderChatCompletion(
   body: Record<string, unknown>,
@@ -150,19 +146,12 @@ export async function qoderChatCompletion(
   const region = opts.region ?? regionOf(providerId);
   const url = ENDPOINTS[region].infer;
 
-  const send = async (force: boolean) => {
-    const headers = await upstreamHeaders(providerId, force);
-    return fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(buildBody(body, opts.stream)),
-    });
-  };
-
-  let r = await send(opts.force ?? false);
-  if (r.status === 401) {
-    r = await send(true);
-  }
+  const headers = await upstreamHeaders(providerId);
+  const r = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildBody(body, opts.stream)),
+  });
   if (r.status === 401) {
     // The client sees the gateway's status; the upstream's own status says
     // that the credential was refused, not that the request was wrong.

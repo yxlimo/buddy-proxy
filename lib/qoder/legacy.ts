@@ -100,7 +100,7 @@ export interface LegacySession {
 /** The identity the CLI itself stores in `~/.qoder/.auth/user`. */
 export async function buildSession(providerId = "qoder"): Promise<LegacySession> {
   const region = regionOf(providerId);
-  const cred = await ensureCredential("expired", providerId);
+  const cred = await ensureCredential(providerId);
   const stored = loadSession(providerId);
   const uid = stored?.userId ?? "";
   const identity: LegacyIdentity = {

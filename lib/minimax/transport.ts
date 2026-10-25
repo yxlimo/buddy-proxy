@@ -108,7 +108,7 @@ export async function minimaxChat(
 ): Promise<Response> {
   let cred;
   try {
-    cred = await readCredential("expired", providerId);
+    cred = await readCredential(providerId);
   } catch (e) {
     throw e as AuthError;
   }
@@ -117,22 +117,16 @@ export async function minimaxChat(
   const send = (token: string) =>
     fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText });
 
-  let r = await send(cred.accessToken);
+  const r = await send(cred.accessToken);
 
+  // 平台拒了这个令牌：不是这里换令牌的事——令牌是定时器换的，它没换说明
+  // 定时器出了问题。这里只把话说清楚。
   if (r.status === 401) {
-    try {
-      cred = await readCredential("now", providerId);
-      r = await send(cred.accessToken);
-    } catch (e) {
-      throw e as AuthError;
-    }
-    if (r.status === 401) {
-      throw new AuthError(
-        `access token rejected (generation ${cred.generation})`,
-        RELOGIN_HINT,
-        401,
-      );
-    }
+    throw new AuthError(
+      `access token rejected (generation ${cred.generation})`,
+      RELOGIN_HINT,
+      401,
+    );
   }
 
   return r;

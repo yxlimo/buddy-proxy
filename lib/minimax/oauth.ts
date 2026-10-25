@@ -24,7 +24,7 @@ import { configString, configNumber } from "../config.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import { clearHint, credentialRefused, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, type RefreshMode, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
@@ -230,110 +230,95 @@ function toCredential(session: Session): Credential {
  * Refresh the session with the stored refresh token. The refresh token rotates on every
  * call, so the write must happen even when the caller only wanted a status.
  */
-export async function refreshSession(
-  mode: RefreshMode = "expired",
-  providerId = "minimax",
-): Promise<Session> {
+/**
+ * 换令牌：到了临期就换，没到就原样返回。
+ *
+ * 定时器每分钟问一次，所以「临期」这个判断放在这里：没到临期就什么都不做。
+ *
+ * 刷新时 refresh token 会轮换，而它是**一次性的**：同一份 session 被换两次，
+ * 平台会当成重放，把**整个会话**的令牌一起撤掉。所以这份会话同一时刻只有
+ * 一个刷新者——定时器。请求那一条路不换令牌（它看到过期就报错）。
+ */
+export async function refreshSession(providerId = "minimax"): Promise<Session> {
   const id = sessionId(providerId);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
-  // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
+  // 记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
   const dead = deadSession(id);
   if (dead) {
     markSessionDead(id, dead);
     throw new AuthError("session refused by the platform", dead, 503);
   }
-  // 每个登录态各有一份 refresh token，登录态之间互不相干。所以这里只有一种
-  // 撞法：同一个登录态被同时刷新了两次。那时两个调用拿着同一份 token 去换，
-  // 一个成功（token 轮换了），另一个被拒——被拒的那个重读一次，拿已经轮换过
-  // 的新 token 再换，于是两个调用拿到两个不同的 token，谁也不等谁。
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const session = loadSession(providerId);
-    if (!session) {
-      cache = null;
-      throw new AuthError("no session", loginHint(providerId), 503);
-    }
-    // 谁该刷：定时器刷“快到期的”，请求只刷“已经死了的”，读状态的刷都不刷。
-    const remainingMs = session.expiresAtMs - Date.now();
-    if (mode === "expired" && remainingMs > 0) return session;
-    if (mode === "due" && remainingMs > REFRESH_BUFFER_MS) return session;
-
-    const r = await postForm(`${ORIGIN}/oauth2/token`, {
-      grant_type: "refresh_token",
-      refresh_token: session.refreshToken,
-      client_id: CLIENT_ID,
-      scope: SCOPES.join(" "),
-      audience: AUDIENCE,
-    });
-    if (!r.ok) {
-      cache = null;
-      const code = r.error ?? `HTTP ${r.status}`;
-      authLog(dataDir(), `minimax/${providerId} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
-      if (code === "invalid_grant" || code === "invalid_token" || r.status === 401) {
-        // 也许只是同一个登录态的另一个调用先刷了：重读，用新的 token 再来一次。
-        const rotated = rotatedSession(id, session);
-        if (rotated) {
-          authLog(dataDir(), `minimax/${providerId} refresh retried`, `另一个调用先刷新了，换成第 ${rotated.generation ?? 0} 代再试`);
-          mode = "now";
-          continue;
-        }
-        const hint =
-          `这个会话的 refresh token 被平台拒了（${code}）。刷新时 token 会轮换，所以一份 session ` +
-          `同一时间只能有一个持有者：另一台机器、另一份数据库副本、或者桌面端那份 store，` +
-          `只要有一份在刷新，这份就作废。而且平台会把**同一个账号**的其它会话一起撤掉——` +
-          `所以两个 MiniMax 账号会同时报 503。` +
-          `恢复：在面板上重新登录这个账号；或者${clearHint(sessionId(providerId))}，` +
-          `服务会重新登录。`;
-        // 别再拿这份会话去问平台了：每一次都是同样的拒绝，白白浪费往返。
-        markSessionDead(id, hint);
-        throw new AuthError(`refresh rejected (${code})`, hint, 503);
-      }
-      throw new AuthError(`refresh failed (${code})`, `OAuth 刷新失败（${code}），稍后重试。`, 502);
-    }
-
-    const next = sessionFromGrant(parseGrant(r.body), session);
-    // 写不进去说明库里已经是更新的代次（另一个调用先刷了）：那就用库里那个，
-    // 它才是还活着的令牌。
-    const written = saveSession(next, providerId);
-    const effective = written ? next : (readSession<Session>(id) ?? next);
+  const session = loadSession(providerId);
+  if (!session) {
     cache = null;
-    authLog(
-      dataDir(),
-      `minimax/${providerId} refresh ok`,
-      `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
-        `refresh ${tokenFingerprint(next.refreshToken)}, scope ${next.scopes.join(",") || "?"}, ` +
-        `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left` +
-        (written ? "" : "（库里已经是更新的代次，没有覆盖）"),
-    );
-    return effective;
+    throw new AuthError("no session", loginHint(providerId), 503);
   }
-  throw new AuthError("refresh failed", "刷新没能成功，稍后重试。", 502);
+  // 没到临期就不换。
+  if (session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
+
+  const r = await postForm(`${ORIGIN}/oauth2/token`, {
+    grant_type: "refresh_token",
+    refresh_token: session.refreshToken,
+    client_id: CLIENT_ID,
+    scope: SCOPES.join(" "),
+    audience: AUDIENCE,
+  });
+  if (!r.ok) {
+    cache = null;
+    const code = r.error ?? `HTTP ${r.status}`;
+    authLog(dataDir(), `minimax/${providerId} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
+    if (code === "invalid_grant" || code === "invalid_token" || r.status === 401) {
+      const hint =
+        `这个会话的 refresh token 被平台拒了（${code}）。刷新时 token 会轮换，所以一份 session ` +
+        `同一时间只能有一个持有者：另一台机器、另一份数据库副本、或者桌面端那份 store，` +
+        `只要有一份在刷新，这份就作废。而且平台会把**同一个账号**的其它会话一起撤掉——` +
+        `所以两个 MiniMax 账号会同时报 503。` +
+        `恢复：在面板上重新登录这个账号；或者${clearHint(sessionId(providerId))}，` +
+        `服务会重新登录。`;
+      // 别再拿这份会话去问平台了：每一次都是同样的拒绝，白白浪费往返。
+      markSessionDead(id, hint);
+      throw new AuthError(`refresh rejected (${code})`, hint, 503);
+    }
+    throw new AuthError(`refresh failed (${code})`, `OAuth 刷新失败（${code}），稍后重试。`, 502);
+  }
+
+  const next = sessionFromGrant(parseGrant(r.body), session);
+  saveSession(next, providerId);
+  cache = null;
+  authLog(
+    dataDir(),
+    `minimax/${providerId} refresh ok`,
+    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
+      `refresh ${tokenFingerprint(next.refreshToken)}, scope ${next.scopes.join(",") || "?"}, ` +
+      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+  );
+  return next;
 }
 
 /**
  * Credential for the proxy. Cached for CACHE_MS; `force` means "the token we just sent
  * was rejected, get a new one" and refreshes unconditionally.
  */
-export async function ensureCredential(
-  mode: RefreshMode = "expired",
-  providerId = "minimax",
-): Promise<Credential> {
+export async function ensureCredential(providerId = "minimax"): Promise<Credential> {
   return ensureCredentialShared({
     cache,
     setCache: (next) => {
       cache = next;
     },
     cacheMs: CACHE_MS,
-    mode,
     // 缓存是模块级的，两个账号共用一份：所以缓存里要记着它是哪个账号的。
     // 不然 A 的凭据会被当成 B 的发出去（同一个平台账号时能用，但代次就乱了）。
     key: providerId,
     lockId: sessionId(providerId),
-    refresh: (m) => refreshSession(m, providerId),
+    // 令牌是定时器换的，这里只取现在这一份。
+    session: () => loadSession(providerId),
     toCredential,
     expired: (session) =>
       new AuthError(
-        `access token expired (generation ${session.generation})`,
-        `token 已过期且刷新没成功。${clearHint(sessionId(providerId))}。`,
+        session ? `access token expired (generation ${session.generation})` : "no session",
+        session
+          ? `token 已过期。服务会按临期刷新，若一直是这个状态，请${clearHint(sessionId(providerId))}。`
+          : `没有登录。${clearHint(sessionId(providerId))}。`,
         503,
       ),
   });
@@ -478,7 +463,7 @@ export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
   }
   const remainingMs = session.expiresAtMs - Date.now();
   // 平台拒过这份会话：令牌没了，换令牌也没用，只能重新授权。
-  const refused = deadSession(sessionId(providerId)) ?? credentialRefused(sessionId(providerId));
+  const refused = deadSession(sessionId(providerId));
   if (refused) {
     return {
       source: sessionId(providerId),

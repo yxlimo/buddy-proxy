@@ -78,26 +78,31 @@ const { ensureCredential, refreshSession } = await import("../lib/minimax/oauth.
 const providerId = "minimax";
 const id = providerSecretId(providerId);
 
-writeSession(id, {
-  schemaVersion: 1,
-  clientId: "mcode-public",
-  audience: "agent-backend",
-  scopes: ["agent.default"],
-  region: "cn",
-  accessToken: "mmoat_old",
-  refreshToken: "mmort_old",
-  tokenType: "Bearer",
-  expiresAtMs: Date.now() + 3600_000,
-  generation: 1,
-  loginAtMs: Date.now(),
-  refreshedAtMs: Date.now(),
-});
+/** 一份会话：临期（还有一分钟到期），所以定时器会换它。 */
+function session(generation: number, access: string, refresh: string, minutesLeft: number) {
+  return {
+    schemaVersion: 1,
+    clientId: "mcode-public",
+    audience: "agent-backend",
+    scopes: ["agent.default"],
+    region: "cn",
+    accessToken: access,
+    refreshToken: refresh,
+    tokenType: "Bearer",
+    expiresAtMs: Date.now() + minutesLeft * 60_000,
+    generation,
+    loginAtMs: Date.now(),
+    refreshedAtMs: Date.now(),
+  };
+}
+
+writeSession(id, session(1, "mmoat_old", "mmort_old", 1));
 
 console.log("平台拒绝了刷新");
 
 let thrown: any = null;
 try {
-  await refreshSession("now", providerId);
+  await refreshSession(providerId);
 } catch (e) {
   thrown = e;
 }
@@ -120,7 +125,7 @@ console.log("别再问平台了");
 
 thrown = null;
 try {
-  await refreshSession("now", providerId);
+  await refreshSession(providerId);
 } catch (e) {
   thrown = e;
 }
@@ -130,7 +135,7 @@ check("平台没有被再问", tokenCalls === 1, String(tokenCalls));
 
 thrown = null;
 try {
-  await ensureCredential(false, providerId);
+  await ensureCredential(providerId);
 } catch (e) {
   thrown = e;
 }
@@ -138,46 +143,43 @@ check("取凭据时也不问平台", thrown !== null && thrown?.status === 503, 
 check("平台还是没有被问", tokenCalls === 1, String(tokenCalls));
 
 console.log("");
-console.log("写进新会话之后可以再试");
+console.log("没到临期就不换");
 
 refuse = false;
-writeSession(id, {
-  schemaVersion: 1,
-  clientId: "mcode-public",
-  audience: "agent-backend",
-  scopes: ["agent.default"],
-  region: "cn",
-  accessToken: "mmoat_new",
-  refreshToken: "mmort_new",
-  tokenType: "Bearer",
-  expiresAtMs: Date.now() + 3600_000,
-  generation: 2,
-  loginAtMs: Date.now(),
-  refreshedAtMs: Date.now(),
-});
-const session = await refreshSession("now", providerId);
-check("刷新成功了", session.generation === 3, String(session.generation));
-check("平台被问了一次", tokenCalls === 2, String(tokenCalls));
-check("拿到的是新的 refresh token", session.refreshToken === "mmort_new_refresh", String(session.refreshToken));
+writeSession(id, session(2, "mmoat_fresh", "mmort_fresh", 60));
+const unchanged = await refreshSession(providerId);
+check("原样返回，没有去换", unchanged.refreshToken === "mmort_fresh", String(unchanged.refreshToken));
+check("平台没有被问", tokenCalls === 1, String(tokenCalls));
 
 console.log("");
-console.log("操作者点了「刷新一下」，可以再试一次");
+console.log("写进新会话之后可以再试");
+
+writeSession(id, session(2, "mmoat_new", "mmort_new", 1));
+const session2 = await refreshSession(providerId);
+check("刷新成功了", session2.generation === 3, String(session2.generation));
+check("平台被问了一次", tokenCalls === 2, String(tokenCalls));
+check("拿到的是新的 refresh token", session2.refreshToken === "mmort_new_refresh", String(session2.refreshToken));
+
+console.log("");
+console.log("操作者清了那个记号，可以再试一次");
 
 refuse = true;
-await refreshSession("now", providerId).catch(() => {});
+// 刚换来的令牌还有一个小时才到期，所以再写一份临期的：定时器会换它。
+writeSession(id, session(3, "mmoat_again", "mmort_again", 1));
+await refreshSession(providerId).catch(() => {});
 check("平台拒了", tokenCalls === 3, String(tokenCalls));
 clearDeadSession(id);
 let retried: any = null;
 try {
-  await refreshSession("now", providerId);
+  await refreshSession(providerId);
 } catch (e) {
   retried = e;
 }
-check("操作者主动要求时平台又被问了一次", tokenCalls === 4, String(tokenCalls));
+check("平台又被问了一次", tokenCalls === 4, String(tokenCalls));
 check("还是那个拒绝", retried?.status === 503, String(retried?.status));
 
 fake.close();
 
 console.log("");
-console.log(problems.length ? `FAIL: ${problems.length} 项` : "全部通过");
+console.log(problems.length ? `FAIL: ${problems.length} 项` : `全部通过（${pass} 项）`);
 process.exit(fail === 0 ? 0 : 1);

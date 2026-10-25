@@ -21,7 +21,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, type RefreshMode, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { provider, providerSecretId } from "../providers.ts";
 
@@ -254,70 +254,61 @@ function parseGrant(body: any, previous?: QoderSession | null): QoderSession {
 }
 
 /** Refresh with the stored refresh token. The token rotates, so this must persist. */
-export async function refreshSession(
-  mode: RefreshMode = "expired",
-  providerId = "qoder",
-): Promise<QoderSession> {
+/**
+ * 换令牌：到了临期就换，没到就原样返回。
+ *
+ * 定时器每分钟问一次，所以「临期」这个判断放在这里：没到临期就什么都不做。
+ *
+ * 刷新时 refresh token 会轮换，而它是**一次性的**：同一份 session 被换两次，
+ * 平台会当成重放，把整个会话的令牌一起撤掉。所以这份会话同一时刻只有一
+ * 刷新者——定时器。请求那一条路不换令牌（它看到过期就报错）。
+ */
+export async function refreshSession(providerId = "qoder"): Promise<QoderSession> {
   const id = sessionId(providerId);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
-  // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
+  // 记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
   const dead = deadSession(id);
   if (dead) {
     markSessionDead(id, dead);
     throw new AuthError("session refused by the platform", dead, 503);
   }
-  // 每个登录态各有一份 refresh token，登录态之间互不相干。唯一的撞法是同一个
-  // 登录态被同时刷新两次：那时两个调用拿着同一份 token 去换，一个成功（轮换
-  // 了），另一个被拒——被拒的那个重读一次，拿新的 token 再换。
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const session = loadSession(providerId);
-    const region = session?.region ?? regionOf(providerId);
-    if (!session) throw new AuthError("no session", loginHint(providerId), 503);
-    // 谁该刷：定时器刷“快到期的”，请求只刷“已经死了的”。
-    const remainingMs = session.expiresAtMs - Date.now();
-    if (mode === "expired" && remainingMs > 0) return session;
-    if (mode === "due" && remainingMs > REFRESH_BUFFER_MS) return session;
+  const session = loadSession(providerId);
+  const region = session?.region ?? regionOf(providerId);
+  if (!session) throw new AuthError("no session", loginHint(providerId), 503);
+  // 没到临期就不换。
+  if (session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
-    const r = await postJson(
-      `${ENDPOINTS[region].openapi}/api/v1/deviceToken/refresh`,
-      { refresh_token: session.refreshToken, ...machineFields(session) },
-      session.accessToken,
-    );
-    if (r.status !== 200) {
-      const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
-      authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
-      if (r.status === 401 || r.status === 403) {
-        // 也许只是同一个登录态的另一个调用先刷了：重读，用新的 token 再来一次。
-        const rotated = rotatedSession(id, session);
-        if (rotated) {
-          authLog(dataDir(), `qoder ${region} refresh retried`, `另一个调用先刷新了，换成第 ${rotated.generation ?? 0} 代再试`);
-          mode = "now";
-          continue;
-        }
-        const hint =
-          `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
-          `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
-          `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
-        // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
-        markSessionDead(id, hint);
-        throw new AuthError(`refresh rejected (${code})`, hint, 503);
-      }
-      throw new AuthError(`refresh failed (${code})`, `Qoder 刷新失败（${code}），稍后重试。`, 502);
+  const r = await postJson(
+    `${ENDPOINTS[region].openapi}/api/v1/deviceToken/refresh`,
+    { refresh_token: session.refreshToken, ...machineFields(session) },
+    session.accessToken,
+  );
+  if (r.status !== 200) {
+    const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
+    authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
+    if (r.status === 401 || r.status === 403) {
+      const hint =
+        `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
+        `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
+        `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
+      // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
+      markSessionDead(id, hint);
+      throw new AuthError(`refresh rejected (${code})`, hint, 503);
     }
-
-    const next = parseGrant(r.body, session);
-    saveSession(next, providerId);
-    cache = null;
-    authLog(
-      dataDir(),
-      `qoder ${region} refresh ok`,
-      `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
-        `refresh ${tokenFingerprint(next.refreshToken)}, ` +
-        `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
-    );
-    return next;
+    throw new AuthError(`refresh failed (${code})`, `Qoder 刷新失败（${code}），稍后重试。`, 502);
   }
-  throw new AuthError("refresh failed", "刷新没能成功，稍后重试。", 502);
+
+  const next = parseGrant(r.body, session);
+  saveSession(next, providerId);
+  cache = null;
+  authLog(
+    dataDir(),
+    `qoder ${region} refresh ok`,
+    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
+      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
+      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+  );
+  return next;
 }
 
 let cache: CredentialCache | null = null;
@@ -339,10 +330,7 @@ function toCredential(session: QoderSession): Credential {
  * The mode says who refreshes when: the timer refreshes a token that is due,
  * a request waits for that and only refreshes a token that is already dead.
  */
-export async function ensureCredential(
-  mode: RefreshMode = "expired",
-  providerId = "qoder",
-): Promise<Credential> {
+export async function ensureCredential(providerId = "qoder"): Promise<Credential> {
   return ensureCredentialShared<QoderSession>({
     cache,
     setCache: (next) => {
@@ -350,14 +338,16 @@ export async function ensureCredential(
     },
     key: providerId,
     cacheMs: CACHE_MS,
-    mode,
     lockId: sessionId(providerId),
-    refresh: (m) => refreshSession(m, providerId),
+    // 令牌是定时器换的，这里只取现在这一份。
+    session: () => loadSession(providerId),
     toCredential,
     expired: (session) =>
       new AuthError(
-        `access token expired (generation ${session.generation})`,
-        `Qoder token 已过期且刷新没成功。${clearHint(sessionId(providerId))}。`,
+        session ? `access token expired (generation ${session.generation})` : "no session",
+        session
+          ? `Qoder token 已过期。服务会按临期刷新，若一直是这个状态，请${clearHint(sessionId(providerId))}。`
+          : `没有登录。${clearHint(sessionId(providerId))}。`,
         503,
       ),
   });

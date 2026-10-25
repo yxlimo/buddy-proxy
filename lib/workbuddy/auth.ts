@@ -21,8 +21,7 @@ import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
-import type { RefreshMode } from "../session.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { getSecret } from "../store.ts";
 import { provider, providerSecretId } from "../providers.ts";
@@ -406,23 +405,28 @@ export async function login(providerId = "workbuddy-cn"): Promise<WorkBuddySessi
 }
 
 /** Refresh the session when it is close to expiry, or when the token was rejected. */
-export async function refreshSession(
-  mode: RefreshMode = "expired",
-  providerId = "workbuddy-cn",
-): Promise<WorkBuddySession> {
+/**
+ * 换令牌：到了临期就换，没到就原样返回。
+ *
+ * 定时器每分钟问一次，所以「临期」这个判断放在这里：没到临期就什么都不做。
+ *
+ * 刷新时 refresh token 会轮换，而它是**一次性的**：同一份 session 被换两次，
+ * 平台会当成重放，把整个会话的令牌一起撤掉。所以这份会话同一时刻只有一
+ * 刷新者——定时器。请求那一条路不换令牌（它看到过期就报错）。
+ */
+export async function refreshSession(providerId = "workbuddy-cn"): Promise<WorkBuddySession> {
   const session = loadSession(providerId);
   if (!session) throw new AuthError("no session", loginHint(providerId), 503);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
+  // 记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
   const dead = deadSession(sessionId(providerId));
   if (dead) {
     // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
     markSessionDead(sessionId(providerId), dead);
     throw new AuthError("session refused by the platform", dead, 503);
   }
-  // 谁该刷：定时器刷“快到期的”，请求只刷“已经死了的”。
-  const remainingMs = session.expiresAtMs - Date.now();
-  if (mode === "expired" && remainingMs > 0) return session;
-  if (mode === "due" && remainingMs > REFRESH_BUFFER_MS) return session;
+  // 没到临期就不换。
+  if (session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
   const region = session.region ?? regionOf(providerId);
   const base = ENDPOINTS[region];
@@ -481,7 +485,7 @@ export async function refreshSession(
     `workbuddy ${region} refresh ok`,
     `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
       `refresh ${tokenFingerprint(next.refreshToken)}, ` +
-      `${Math.round(next.expiresAtMs / 1000 - now / 1000)}s left`,
+      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
   );
   return next;
 }
@@ -500,10 +504,7 @@ function toCredential(session: WorkBuddySession, providerId: string): Credential
 }
 
 /** Credential for the proxy. `force` means the token we sent was rejected. */
-export async function ensureCredential(
-  mode: RefreshMode = "expired",
-  providerId = "workbuddy-cn",
-): Promise<Credential> {
+export async function ensureCredential(providerId = "workbuddy-cn"): Promise<Credential> {
   return ensureCredentialShared<WorkBuddySession>({
     cache,
     setCache: (next) => {
@@ -511,14 +512,16 @@ export async function ensureCredential(
     },
     key: providerId,
     cacheMs: CACHE_MS,
-    mode,
     lockId: sessionId(providerId),
-    refresh: (m) => refreshSession(m, providerId),
+    // 令牌是定时器换的，这里只取现在这一份。
+    session: () => loadSession(providerId),
     toCredential: (session) => toCredential(session, providerId),
     expired: (session) =>
       new AuthError(
-        `access token expired (generation ${session.generation})`,
-        `WorkBuddy token 已过期且刷新没成功。${clearHint(sessionId(providerId))}。`,
+        session ? `access token expired (generation ${session.generation})` : "no session",
+        session
+          ? `WorkBuddy token 已过期。服务会按临期刷新，若一直是这个状态，请${clearHint(sessionId(providerId))}。`
+          : `没有登录。${clearHint(sessionId(providerId))}。`,
         503,
       ),
   });

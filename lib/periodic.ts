@@ -16,7 +16,6 @@
 
 import { listProviders } from "./providers.ts";
 import { kindOf } from "./provider-kinds.ts";
-import type { RefreshMode } from "./session.ts";
 import { benefits } from "./admin/benefits.ts";
 import { HEALTH_CACHE_MS, refreshHealthSnapshot } from "./admin/upstreams.ts";
 import { BENEFITS_INTERVAL_MS } from "./admin/benefits.ts";
@@ -69,13 +68,28 @@ function done(step: string): void {
  * spent.
  */
 export async function runPeriodicOnce(): Promise<void> {
+  // 上一轮还没跑完就不叠着跑：令牌是一次性的，两轮同时换同一个会话，平台会
+  // 当成重放，把整个会话撤掉。
+  if (running) return;
+  running = true;
+  try {
+    await runOnce();
+  } finally {
+    running = false;
+  }
+}
+
+/** 这一轮是不是正在跑。 */
+let running = false;
+
+async function runOnce(): Promise<void> {
   for (const provider of listProviders()) {
     const kind = kindOf(provider.kind);
     if (!kind) continue;
     // 1. 令牌快到期就换（启动那一轮是立刻换，好知道会话还活着没有）。
     if (kind.refresh) {
       try {
-        await kind.refresh(provider, "due");
+        await kind.refresh(provider);
         lastFailure.delete(`${provider.id}:refresh`);
       } catch (e) {
         const err = e as { message?: string; hint?: string };

@@ -13,8 +13,7 @@ import {
   sessionId,
   type QoderRegion,
 } from "./auth.ts";
-import { clearHint, markCredentialRefused } from "../session.ts";
-import { providerSecretId } from "../providers.ts";
+import { clearHint } from "../session.ts";
 
 export interface QoderAccountHealth {
   region: QoderRegion;
@@ -55,7 +54,7 @@ export async function fetchQoderCredits(providerId = "qoder"): Promise<QoderCred
   const session = loadSession(providerId);
   if (!session) return null;
   try {
-    const cred = await ensureCredential("expired", providerId);
+    const cred = await ensureCredential(providerId);
     const r = await fetch(`${ENDPOINTS[region].openapi}/api/v2/quota/usage`, {
       headers: {
         Authorization: `Bearer ${cred.accessToken}`,
@@ -65,11 +64,7 @@ export async function fetchQoderCredits(providerId = "qoder"): Promise<QoderCred
         ...(session.machineType ? { "Cosy-Machine-Type": session.machineType } : {}),
       },
     });
-    if (!r.ok) {
-      // 上游拒了这个令牌：记下来，于是下一次拿凭据时会换一个。
-      if (r.status === 401) markCredentialRefused(providerSecretId(providerId), "上游拒绝了这个令牌");
-      return null;
-    }
+    if (!r.ok) return null;
     const body = await r.json().catch(() => undefined);
     const pot = (p: any) => ({
       total: Number(p?.total ?? 0),
@@ -94,7 +89,7 @@ export async function checkAccountHealth(providerId = "qoder"): Promise<QoderAcc
   if (!session) {
     return { region, authorized: false, usable: false, reason: "no session", hint: loginHint(providerId) };
   }
-  const cred = await ensureCredential("expired", providerId);
+  const cred = await ensureCredential(providerId);
   const r = await fetch(`${ENDPOINTS[region].openapi}/api/v3/user/status`, {
     headers: {
       Authorization: `Bearer ${cred.accessToken}`,

@@ -14,8 +14,6 @@
 import { createHash } from "node:crypto";
 import { configString } from "../config.ts";
 import { readCredential } from "./auth.ts";
-import { markCredentialRefused } from "../session.ts";
-import { providerSecretId } from "../providers.ts";
 import type { BenefitOutcome } from "../benefits.ts";
 
 /** The public gateway, per region. The LLM gateway is a different host. */
@@ -333,7 +331,7 @@ export async function runMiniMaxBenefits(providerId = "minimax"): Promise<Benefi
   let token = "";
   let region = REGION;
   try {
-    const credential = await readCredential("expired", providerId);
+    const credential = await readCredential(providerId);
     token = credential.accessToken;
     region = credential.region || REGION;
   } catch {
@@ -356,11 +354,6 @@ export async function runMiniMaxBenefits(providerId = "minimax"): Promise<Benefi
   }
   const userId = await fetchUserId(token, region);
   const status = await minimaxCheckinStatus(token, userId, region);
-  if (status.status === 401) {
-    // 上游拒了这个令牌：记下来，于是下一次拿凭据时会换一个，而不是拿这个
-    // 被拒的继续发。
-    markCredentialRefused(providerSecretId(providerId), "上游拒绝了这个令牌");
-  }
   if (status.status !== 200 || !status.panel) {
     report.push(`查签到状态失败（HTTP ${status.status}）`);
     return { upstream, ok: false, credits: 0, report, at: new Date().toISOString() };

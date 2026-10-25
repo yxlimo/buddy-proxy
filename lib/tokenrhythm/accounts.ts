@@ -194,64 +194,18 @@ function validSession(raw: any): boolean {
  * 读到表就整张搬一遍 —— 只搬当前这一格的话，别的租户那一格会被这次的写入盖
  * 掉，它们就得重新登录。
  */
+/**
+ * 这一份会话现在在哪。
+ *
+ * 只有一处：账号行自己的那一格。旧位置的记录不再读，也不再搬——搬过一次的
+ * 账号会在下次启动时带着别人的身份回来。
+ */
 export function loadSession(accountId: string): TokenRhythmSession | null {
   const id = sessionId(accountId);
   const raw = getSecret<any>(id);
   if (raw && typeof raw.cookie === "string") {
     const session = { ...(raw as TokenRhythmSession), accountId };
     return validSession(session) ? session : null;
-  }
-  const index = legacyIndex(accountId);
-  if (index === null) return null;
-  const legacy = raw && typeof raw === "object" ? raw[String(index)] : null;
-  if (legacy && validSession(legacy)) {
-    adoptLegacySessionTable(raw);
-    const session = { ...(legacy as TokenRhythmSession), accountId };
-    return session;
-  }
-  const taken = takeOverLegacySession(index, accountId);
-  return taken;
-}
-
-/**
- * 整张旧的会话表搬到各账号行上。
- *
- * 格子的编号就是账号的编号（1 → `tokenrhythm`、2 → `tokenrhythm-2`）。
- */
-function adoptLegacySessionTable(table: Record<string, unknown>): void {
-  for (const [key, entry] of Object.entries(table ?? {})) {
-    const index = Number(key);
-    if (!Number.isInteger(index) || index <= 0) continue;
-    if (!validSession(entry)) continue;
-    const target = accountIdOfIndex(index);
-    writeSession(
-      sessionId(target),
-      { ...(entry as TokenRhythmSession), accountId: target },
-      { force: true },
-    );
-  }
-}
-
-/** The session of a tenant from the places it used to live. */
-function takeOverLegacySession(index: number, accountId: string): TokenRhythmSession | null {
-  const legacy = getSecret<TokenRhythmSession>(legacySessionId(index));
-  if (legacy && validSession(legacy)) {
-    const session = { ...legacy, accountId };
-    saveSession(session, { force: true });
-    deleteSecret(legacySessionId(index));
-    return session;
-  }
-  for (const file of legacySessionPath(index)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!raw || typeof raw !== "object" || !validSession(raw)) continue;
-      const session = { ...(raw as TokenRhythmSession), accountId };
-      // The first read moves the session into the database.
-      saveSession(session, { force: true });
-      return session;
-    } catch {
-      /* no such file */
-    }
   }
   return null;
 }

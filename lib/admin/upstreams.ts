@@ -263,7 +263,7 @@ const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
  */
 export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
   try {
-    const cred = await readCredential("expired", providerId);
+    const cred = await readCredential(providerId);
     return await fetchMiniMaxBalance(cred.accessToken, MINIMAX_REGION === "en" ? "global" : "cn");
   } catch {
     return null;
@@ -278,7 +278,7 @@ export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
  */
 export async function miniMaxCredits(providerId = "minimax"): Promise<unknown> {
   try {
-    const cred = await readCredential("expired", providerId);
+    const cred = await readCredential(providerId);
     return await fetchMiniMaxCredits(cred.accessToken, "", MINIMAX_REGION === "en" ? "global" : "cn");
   } catch {
     return null;
@@ -295,7 +295,7 @@ export async function miniMaxCredits(providerId = "minimax"): Promise<unknown> {
 export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unknown> {
   const region = MINIMAX_REGION === "en" ? "global" : "cn";
   try {
-    const cred = await readCredential("expired", providerId);
+    const cred = await readCredential(providerId);
     const withSession = await fetchMiniMaxTokenPlanWithSession(cred.accessToken, region);
     if (withSession?.windows.length) return withSession;
   } catch {

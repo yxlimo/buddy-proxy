@@ -23,7 +23,7 @@ import { withUpstreamStatus } from "../upstream-status.ts";
 import {
   chatBase,
   chatHeaders,
-  refreshSession,
+  loadSession,
   CONFIG_PATH,
   type WorkBuddySession,
 } from "./auth.ts";
@@ -164,7 +164,17 @@ export async function workbuddyChat(
   const providerId = opts.providerId ?? "workbuddy-cn";
   // The session, not just the credential: the request needs the account id and
   // the domain the account belongs to as well as the token.
-  let session = await refreshSession("expired", providerId);
+  //
+  // 令牌是定时器换的，这一条路不换：它只取现在这一份。过期了就是过期了，
+  // 报出来，让定时器去换。
+  let session = loadSession(providerId);
+  if (!session) {
+    throw new AuthError(
+      "no session",
+      `WorkBuddy 这个账号没有登录。在面板上登录一次。`,
+      503,
+    );
+  }
 
   const payload = buildChatBody(body, opts.model ?? null);
   const url = `${chatBase(session)}${CHAT_PATH}`;
@@ -193,13 +203,8 @@ export async function workbuddyChat(
 
     if (res.status === 401 || res.status === 403) {
       const detail = await res.text().catch(() => "");
-      // A refused token means the token is old, not that the account is gone —
-      // and only a 401 says that. A 403 is the account's business, and
-      // refreshing for it would turn the token over for nothing.
-      if (res.status === 401 && attempt === 1) {
-        session = await refreshSession("now", providerId);
-        continue;
-      }
+      // 平台拒了这个令牌：这里不换令牌（换令牌是定时器的事，它临期就换）。
+      // 换个说法报出去。
       throw withUpstreamStatus(
         new AuthError(
           `upstream rejected the credential (HTTP ${res.status})`,
@@ -270,7 +275,9 @@ export async function fetchWorkBuddyCatalog(providerId = "workbuddy-cn"): Promis
   if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.data.models;
 
   try {
-    const session = await refreshSession("expired", providerId);
+    // 只取现在这一份会话：换令牌是定时器的事。
+    const session = loadSession(providerId);
+    if (!session) return cached?.data.models ?? null;
     const res = await cliFetch(`${chatBase(session)}${CONFIG_PATH}`, {
       headers: { ...chatHeaders(session), "Content-Type": "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),

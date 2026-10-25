@@ -842,7 +842,7 @@ const server = app.listen(PORT, HOST, () => {
   for (const provider of providersNeedingLogin("minimax")) {
     void ensureMinimaxSession(provider)
       .then(async (outcome) => {
-        const c = await readCredential("expired", provider);
+        const c = await readCredential(provider);
         const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
         console.log(
           outcome === "logged-in"

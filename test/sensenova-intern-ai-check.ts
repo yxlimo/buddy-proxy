@@ -534,8 +534,24 @@ function db(): DatabaseSync {
  * 服务默认全关，所以测试自己打开这两个 —— 面板上做的是同一件事。
  */
 async function enableUpstream(id: string): Promise<void> {
-  const res = await admin("SetUpstreamEnabled", { upstreamId: id, enabled: true });
+  // 账号模型下，开关在账号行上。
+  const res = await admin("SetAccountEnabled", { accountId: id, enabled: true });
   if (!res?.ok) throw new Error(`the upstream ${id} did not turn on: ${JSON.stringify(res)}`);
+}
+
+// 账号模型下凭据挂在账号行上，所以先建这两个账号行，再打开它们。
+const now = Date.now();
+for (const account of [
+  { id: "sensenova", platform: "sensenova" },
+  { id: "intern-ai", platform: "intern-ai" },
+]) {
+  const conn = db();
+  conn
+    .prepare(
+      "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 100, ?, ?)",
+    )
+    .run(account.id, account.platform, "", now, now);
+  conn.close();
 }
 
 await enableUpstream("sensenova");
@@ -602,8 +618,9 @@ check(
 );
 
 // 登录态与推理 key 一起写进去 —— 这就是面板登录完之后的样子。
-const now = Date.now();
-writeSecret("session:sensenova", "session", {
+//
+
+writeSecret("session:provider:sensenova", "session", {
   cookie: "oauth2_authentication_session=abc",
   accessToken: "sense-token",
   refreshToken: "sense-refresh",
@@ -611,12 +628,12 @@ writeSecret("session:sensenova", "session", {
   obtainedAtMs: now,
   username: "someone",
 });
-writeSecret("account:sensenova", "account", {
+writeSecret("key:provider:sensenova:account", "account", {
   user: "someone",
   password: "",
   apiKey: "sk-sensenova-test",
 });
-writeSecret("session:intern-ai", "session", {
+writeSecret("session:provider:intern-ai", "session", {
   sites: [
     { name: "discovery", token: "intern-token", clientId: "dagw" },
     { name: "chat", token: "intern-token", clientId: "ebmr" },
@@ -625,7 +642,7 @@ writeSecret("session:intern-ai", "session", {
   obtainedAtMs: now,
   username: "someone",
 });
-writeSecret("account:intern-ai", "account", {
+writeSecret("key:provider:intern-ai:account", "account", {
   user: "someone",
   password: "",
   discoveryKey: "sk-intern-test",
@@ -758,15 +775,15 @@ check(
 );
 
 // 上游关着的时候要说清楚。
-await admin("SetUpstreamEnabled", { upstreamId: "sensenova", enabled: false });
+await admin("SetAccountEnabled", { accountId: "sensenova", enabled: false });
 const off = await chat("sensenova", "sensenova-6.8-flash-lite");
 check("上游关着的时候被拒了", off.status === 400, `HTTP ${off.status}`);
 check(
-  "错话说得清楚（哪个上游没启用）",
-  String(off.json?.error?.message ?? "").includes("not enabled"),
+  "错话说得清楚（这个平台的账号都关着）",
+  String(off.json?.error?.message ?? "").includes("no account turned on"),
   JSON.stringify(off.json),
 );
-await admin("SetUpstreamEnabled", { upstreamId: "sensenova", enabled: true });
+await admin("SetAccountEnabled", { accountId: "sensenova", enabled: true });
 
 /* ------------------------------------------------------------------ *
  * 七、额度是积分，不是钱

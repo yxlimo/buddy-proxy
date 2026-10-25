@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import { miniMaxApiTenantSecretId, miniMaxApiTenants } from "../minimax/api.ts";
 import { deleteProviderCredentials, listProviders, provider } from "../providers.ts";
 import { getSecret, listSecrets } from "../store.ts";
-import { clearDeadSession, credentialRefused, deadSession } from "../session.ts";
+import { clearDeadSession, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
@@ -117,7 +117,7 @@ function sessionRow(
   const expiresAt = Number(raw.expiresAtMs ?? 0);
   const expired = expiresAt > 0 && expiresAt <= Date.now();
   // 平台拒过这份会话：它已经作废了，重新授权才有新的。
-  const refused = deadSession(id) ?? credentialRefused(id);
+  const refused = deadSession(id);
   return {
     id,
     accountId: account.id,
@@ -427,7 +427,7 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
           ? { ok: true, message: `plan 额度读到了（${plan.windows.length} 个窗口）` }
           : { ok: false, message: "无法读取 plan 额度，key 可能不正确" };
       }
-      const cred = await readCredential("expired", p.id);
+      const cred = await readCredential(p.id);
       return {
         ok: true,
         message: `能用，第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟`,
@@ -552,18 +552,18 @@ async function refreshTarget(
     case "minimax": {
       // 会话由服务定时刷新（客户端就是这么干的），手动刷新没有意义；
       // 失效了的会话只能重新授权。
-      const cred = await readCredential("expired", p.id);
+      const cred = await readCredential(p.id);
       if (cred.status !== "authenticated") {
         return { ok: false, message: "这份会话已经失效，需要重新登录（面板上登录一次）", generation: cred.generation };
       }
       return { ok: true, message: `会话由服务定时刷新（第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟）`, generation: cred.generation };
     }
     case "qoder": {
-      const session = await refreshQoderSession("due", p.id);
+      const session = await refreshQoderSession(p.id);
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "workbuddy": {
-      const session = await refreshWorkBuddySession("due", p.id);
+      const session = await refreshWorkBuddySession(p.id);
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "zcode":
