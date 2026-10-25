@@ -30,7 +30,7 @@ run = "pnpm exec tsc --noEmit"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -67,6 +67,10 @@ run = "node --experimental-strip-types test/cleanup-admin-check.ts"
 [tasks."test:quota"]
 description = "Check the quota readout: the MiniMax plan by session, the SenseNova pools, the ZCode quota"
 run = "node --experimental-strip-types test/quota-readout-check.ts"
+
+[tasks."test:dead-session"]
+description = "Check that a refused session is not asked about again"
+run = "node --experimental-strip-types test/dead-session-check.ts"
 
 [tasks."test:admin:contract"]
 description = "Check the panel's API against the contract, field by field"

@@ -12,7 +12,8 @@ import crypto from "node:crypto";
 import { miniMaxApiTenantSecretId, miniMaxApiTenants } from "../minimax/api.ts";
 import { listProviders, provider } from "../providers.ts";
 import { deleteSecret, getSecret, listSecrets } from "../store.ts";
-import { deleteProviderCredentials } from "../providers.ts";
+import { deleteProviderCredentials, providerSecretId } from "../providers.ts";
+import { clearDeadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
@@ -704,6 +705,8 @@ async function refreshTarget(
   id: string,
 ): Promise<{ ok: boolean; message: string; generation: number }> {
   const p = target.provider;
+  // 操作者主动点了「刷新一下」：就算平台刚才拒过，也再试一次。
+  clearDeadSession(providerSecretId(p.id));
   switch (p.kind) {
     case "minimax": {
       const cred = await readCredential(true, p.id);

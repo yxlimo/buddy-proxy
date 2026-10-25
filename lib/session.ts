@@ -84,7 +84,42 @@ export function clearHint(id: string): string {
 
 /** Write a session. */
 export function writeSession(id: string, session: unknown): void {
+  deadSessions.delete(id);
   setSecret(id, "session", session);
+}
+
+/**
+ * Sessions the platform refused to refresh.
+ *
+ * A refused refresh token is dead for good: every later attempt gets the same
+ * answer, and every attempt costs a round trip to the platform. So the refusal
+ * is remembered and answered straight away, until a new session arrives — and
+ * writing a session clears the note.
+ */
+const deadSessions = new Map<string, { until: number; reason: string }>();
+
+/** How long a refusal is remembered. */
+const DEAD_SESSION_MS = 30 * 60 * 1000;
+
+/** Remember that this session cannot be refreshed. */
+export function markSessionDead(id: string, reason: string, ms = DEAD_SESSION_MS): void {
+  deadSessions.set(id, { until: Date.now() + ms, reason });
+}
+
+/** The refusal of this session, while it is still remembered. */
+export function deadSession(id: string): string | null {
+  const entry = deadSessions.get(id);
+  if (!entry) return null;
+  if (Date.now() >= entry.until) {
+    deadSessions.delete(id);
+    return null;
+  }
+  return entry.reason;
+}
+
+/** Forget the refusal: the operator asked for another try. */
+export function clearDeadSession(id: string): void {
+  deadSessions.delete(id);
 }
 
 /**
@@ -181,6 +216,10 @@ export interface EnsureCredentialOptions<T extends SessionTokens> {
 export async function ensureCredential<T extends SessionTokens>(
   opts: EnsureCredentialOptions<T>,
 ): Promise<Credential> {
+  // A session the platform already refused is not worth asking again: every
+  // request would cost a round trip and get the same answer.
+  const dead = deadSession(opts.lockId);
+  if (dead) throw new AuthError("session refused by the platform", dead, 503);
   const cached = opts.cache;
   const sameKey = opts.key === undefined || cached?.key === opts.key;
   if (!opts.force && cached && sameKey && Date.now() - cached.at < opts.cacheMs) {

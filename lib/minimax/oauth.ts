@@ -24,7 +24,7 @@ import { configString, configNumber } from "../config.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
@@ -231,6 +231,9 @@ export async function refreshSession(force = false, providerId = "minimax"): Pro
     cache = null;
     throw new AuthError("no session", loginHint(providerId), 503);
   }
+  // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
+  const dead = deadSession(sessionId(providerId));
+  if (dead) throw new AuthError("session refused by the platform", dead, 503);
   if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
   const r = await postForm(`${ORIGIN}/oauth2/token`, {
@@ -243,16 +246,18 @@ export async function refreshSession(force = false, providerId = "minimax"): Pro
   if (!r.ok) {
     cache = null;
     const code = r.error ?? `HTTP ${r.status}`;
-    authLog(dataDir(), "minimax refresh rejected", `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
+    authLog(dataDir(), `minimax/${providerId} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
     if (code === "invalid_grant" || code === "invalid_token" || r.status === 401) {
-      throw new AuthError(
-        `refresh rejected (${code})`,
-        `这个会话的 refresh token 被拒绝了（${code}）。刷新时 token 会轮换，所以一份 session ` +
-          `同一时间只能有一个持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，` +
-          `那边刷新过之后这份就失效了。把当前那份复制过去，或者${clearHint(sessionId())} ` +
-          `再重启，服务会重新登录。`,
-        503,
-      );
+      const hint =
+        `这个会话的 refresh token 被平台拒了（${code}）。刷新时 token 会轮换，所以一份 session ` +
+        `同一时间只能有一个持有者：另一台机器、另一份数据库副本、或者桌面端那份 store，` +
+        `只要有一份在刷新，这份就作废。而且平台会把**同一个账号**的其它会话一起撤掉——` +
+        `所以两个 MiniMax 账号会同时报 503。` +
+        `恢复：在面板上重新登录这个账号；或者${clearHint(sessionId(providerId))}，` +
+        `服务会重新登录。`;
+      // 别再拿这份会话去问平台了：每一次都是同样的拒绝，白白浪费往返。
+      markSessionDead(sessionId(providerId), hint);
+      throw new AuthError(`refresh rejected (${code})`, hint, 503);
     }
     throw new AuthError(`refresh failed (${code})`, `OAuth 刷新失败（${code}），稍后重试。`, 502);
   }
@@ -262,7 +267,7 @@ export async function refreshSession(force = false, providerId = "minimax"): Pro
   cache = null;
   authLog(
     dataDir(),
-    "minimax refresh ok",
+    `minimax/${providerId} refresh ok`,
     `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
       `refresh ${tokenFingerprint(next.refreshToken)}, scope ${next.scopes.join(",") || "?"}, ` +
       `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
@@ -401,7 +406,7 @@ export async function login(providerId = "minimax"): Promise<Session> {
   console.log("  later refreshes are automatic — nothing else to do.");
   authLog(
     dataDir(),
-    "minimax login ok",
+    `minimax/${providerId} login ok`,
     `generation ${session.generation}, access ${tokenFingerprint(session.accessToken)}, ` +
       `refresh ${tokenFingerprint(session.refreshToken)}, scope ${session.scopes.join(",") || "?"}, ` +
       `${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s left`,

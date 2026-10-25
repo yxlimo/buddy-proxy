@@ -21,7 +21,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { provider, providerSecretId } from "../providers.ts";
 
@@ -254,6 +254,9 @@ export async function refreshSession(force = false, providerId = "qoder"): Promi
   const session = loadSession(providerId);
   const region = session?.region ?? regionOf(providerId);
   if (!session) throw new AuthError("no session", loginHint(providerId), 503);
+  // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
+  const dead = deadSession(sessionId(providerId));
+  if (dead) throw new AuthError("session refused by the platform", dead, 503);
   if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
 
   const r = await postJson(
@@ -265,13 +268,13 @@ export async function refreshSession(force = false, providerId = "qoder"): Promi
     const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
     authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
     if (r.status === 401 || r.status === 403) {
-      throw new AuthError(
-        `refresh rejected (${code})`,
+      const hint =
         `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
-          `持有者去刷新：如果你在别处（NAS、另一台机器）也跑着一份，那边刷新过之后这份就失效了。` +
-          `把当前那份复制过去，或者${clearHint(sessionId(providerId))}。`,
-        503,
-      );
+        `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
+        `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
+      // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
+      markSessionDead(sessionId(providerId), hint);
+      throw new AuthError(`refresh rejected (${code})`, hint, 503);
     }
     throw new AuthError(`refresh failed (${code})`, `Qoder 刷新失败（${code}），稍后重试。`, 502);
   }
@@ -379,7 +382,7 @@ export async function pollDeviceToken(auth: DeviceAuthorization, providerId = "q
     let r: Response;
     try {
       r = await fetch(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT } });
-    } catch (e) {
+    } catch {
       await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
       continue;
     }
