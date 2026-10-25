@@ -50,7 +50,7 @@ function policyHint(policy: ProviderPolicy): string {
     case ProviderPolicy.FALLBACK:
       return '名下的账号挨个试，一个接不了就换下一个'
     case ProviderPolicy.EXPIRY_FIRST:
-      return '先用赠金最先到期的那本，不换'
+      return '先用赠金最先到期的那本；那本没钱了就换一个'
     default:
       return policy === ProviderPolicy.UNSPECIFIED
         ? '服务端没给这个平台的策略'
