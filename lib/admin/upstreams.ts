@@ -120,7 +120,7 @@ export type LegacyUpstreamId =
 /**
  * 这个 Provider 开着吗？
  *
- * The switch lives in the database, next to the provider it belongs to: two
+ * The switch lives in the database, next to the upstream it belongs to: two
  * accounts of the same kind are switched separately.
  */
 export function upstreamEnabled(id: string): boolean {
@@ -315,7 +315,7 @@ export function upstreamModelCount(id: string): number {
  * The health snapshot's cache.
  *
  * The version is part of the key: the snapshot's shape changed when the
- * providers arrived (each provider has its own numbers now), and an old
+ * upstreams arrived (each upstream has its own numbers now), and an old
  * snapshot read as a new one would say the wrong thing.
  */
 const HEALTH_CACHE_ID = "health:upstreams:v2";
@@ -406,7 +406,7 @@ async function internAiCredits(providerId = "intern-ai"): Promise<{ balance: unk
 /**
  * 问一遍上游，把答案记下来。
  *
- * 每家按 provider 分开记：两个同类的账号各有各的数字。
+ * 每家按上游分开记：两个同类的上游各有各的数字。
  */
 export async function refreshHealthSnapshot(): Promise<void> {
   const snapshot: HealthSnapshot = {
@@ -838,7 +838,7 @@ export function upstreamQuota(id: UpstreamId): QuotaView | null {
 /**
  * 快照里一个 Provider 的那一份。
  *
- * 快照是**按 Provider id** 存的（provider.minimax、provider.qoder-cn……），
+ * 快照是**按上游 id** 存的（provider.minimax、provider.qoder-cn……），
  * 所以按 kind 去取会取到 undefined —— 面板上的余额、套餐额度、租户就全是
  * null，而数据其实就在旁边。
  */

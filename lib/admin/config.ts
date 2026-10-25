@@ -267,7 +267,7 @@ export function configItems(): ConfigItemView[] {
  * 只有 USER_FACING 里那些。服务内部的设置不公布，也不许面板改 —— 改���
  * 也没用（env 覆盖了照样按代码走），改了只会改出坏状态。
  *
- * 运维要改内部的设置，走 config-cli.ts（那是给这台机器的人用的 ✓）。
+ * 运维要改内部的设置，走 config-cli.ts（那是给这台机器的人用的）。
  */
 export function knownConfigKeys(): Set<string> {
   return new Set([...USER_FACING].filter((key) => configSnapshot().some((s) => s.key === key)));
@@ -279,7 +279,7 @@ export function knownConfigKeys(): Set<string> {
  * 清掉就是回到环境变量或代码里的默认值。改完不热生效，要重启。
  *
  * 面板能改的那几个是热的（下一个请求就是新的值）✓ —— 用量保留天数是其中
- * 一个：改完立刻按新的天数清一遍 ✓。
+ * 一个：改完立刻按新的天数清一遍。
  */
 export function setConfigValue(key: string, value: string, clear = false): { ok: boolean; message: string } {
   if (!knownConfigKeys().has(key)) {

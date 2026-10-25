@@ -1,13 +1,19 @@
-// lib/providers.ts — the providers: one row per account the gateway talks to.
+// lib/providers.ts — the rows the gateway talks to.
 //
-// A provider has two parts:
+// The vocabulary is AGENTS.md's: an **upstream** is one platform's one service
+// (MiniMax's open platform, MiniMax Code, Qoder China, ...), and a **provider**
+// is one account of an upstream. A row here is an upstream; the accounts
+// under it are its providers.
+//
+// A row has two parts:
 //
 //   kind   what kind of upstream it is (the behaviour)
-//   id     which account of that kind (the identity)
+//   id     which one it is (the identity)
 //
-// The kind says how to talk to it; the id says which one. Two MiniMax open
-// platform accounts are two rows of the same kind — the alias tells them
-// apart ("Token Plan" / "M Plan").
+// The kind says how to talk to it; the id says which one. Two accounts of the
+// MiniMax open platform are two providers under one upstream — the alias
+// tells them apart ("Token Plan" / "M Plan"), and the upstream's own policy
+// decides which of them takes a request.
 //
 // The behaviour lives in a registry (see lib/provider-kinds.ts) instead of a
 // switch on the kind: adding a kind is one entry, not seven case branches.
@@ -17,7 +23,7 @@ import { configFlag } from "./config.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
 
 /**
- * 一个 provider 的引用。
+ * 一个上游的引用。
  *
  * 认证与传输这些模块只认这三样：它是谁、它是什么种类、它在哪个区域。
  * 传这个而不是整行，是为了让它们不必知道数据库长什么样。
@@ -28,7 +34,7 @@ export interface ProviderRef {
   region: string;
 }
 
-/** 一行 provider。 */
+/** 一行上游。 */
 export interface ProviderRow {
   /** 唯一标识，也是路径里那一段：/{id}/v1/messages。 */
   id: string;

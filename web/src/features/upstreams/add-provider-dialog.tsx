@@ -21,7 +21,7 @@ import {
 import type { ProviderKind } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
- * 加一个 Provider。
+ * 加一个上游。
  *
  * The id is the path segment clients use, so it has to be spelled out; the
  * alias is what the panel shows after the name, and it is how two accounts of
@@ -71,12 +71,12 @@ export function AddProviderDialog({
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2'>
             <Plus className='size-4' />
-            添加 Provider
+            添加上游
           </DialogTitle>
           <DialogDescription>
             同一类可以加很多个：它们各有各的凭据、自己的模型和自己的额度。唯一
             id 是客户端用的路径（/{'{id}'}/v1），也是客户端里那个 provider 的名字
-            ；Provider 名称是显示给人看的。
+            ；上游名称是显示给人看的。
           </DialogDescription>
         </DialogHeader>
         <div className='grid gap-3'>
@@ -119,7 +119,7 @@ export function AddProviderDialog({
             </p>
           </div>
           <div className='grid gap-2'>
-            <Label htmlFor='provider-alias'>Provider 名称</Label>
+            <Label htmlFor='provider-alias'>上游名称</Label>
             <Input
               id='provider-alias'
               value={alias}

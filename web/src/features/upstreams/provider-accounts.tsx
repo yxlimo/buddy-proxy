@@ -55,15 +55,15 @@ export function ProviderAccounts({
   loggingIn,
   loggingOutId,
 }: {
-  /** 这个 Provider 的唯一 id。 */
+  /** 这个上游的唯一 id。 */
   providerId: string
   /** 点「登录」：开一次登录会话。 */
   onLogin: (account: Account) => void
   /** 点「注销」：删掉这个账号名下的凭据。 */
   onLogout: (account: Account) => void
-  /** 管理这个 Provider 的 API Key。 */
+  /** 管理这个上游的 API Key。 */
   onManageKeys: (account: Account) => void
-  /** 这个 Provider 是哪一类：不同种类的 key 不一样。 */
+  /** 这个上游是哪一类：不同种类的 key 不一样。 */
   kind: string
   /** 正在发起登录。 */
   loggingIn: boolean
@@ -72,7 +72,7 @@ export function ProviderAccounts({
 }) {
   const [picked, setPicked] = useState('')
   const accounts = useAccounts()
-  // 账号按 Provider 分组：这个 Provider 名下的那些。
+  // 账号按上游分组：这个上游名下的那些。
   const list = (accounts.data?.accounts ?? []).filter(
     (account) => account.upstreamId === providerId
   )
@@ -113,7 +113,7 @@ export function ProviderAccounts({
     return (
       <div className='p-4'>
         <EmptyState
-          title='这个 Provider 名下没有账号'
+          title='这个上游名下没有账号'
           description='账号由网关的登录流程创建。'
         />
       </div>

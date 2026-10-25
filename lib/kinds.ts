@@ -3,9 +3,9 @@
 // This is where "what does a MiniMax Code gateway look like" lives. The
 // registry (lib/provider-kinds.ts) holds the shape; this file fills it in.
 //
-// A kind is not an account: two MiniMax open platform accounts are two
-// providers of the same kind. Everything here takes the provider, so the
-// answer can depend on which account is asking.
+// A kind is not an account: two accounts of the MiniMax open platform are two
+// providers of the same kind, under one upstream. Everything here takes the
+// upstream, so the answer can depend on which one is asking.
 
 import {
   registerKind,

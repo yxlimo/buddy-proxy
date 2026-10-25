@@ -12,7 +12,7 @@ Point a client at it and it works with either dialect — see
 
 ## What is switched on
 
-There are nine reverse proxies behind this, and each has a switch. All of them
+There are nine upstreams behind this, and each has a switch. All of them
 are **off by default**; turn on the ones you actually use.
 
 | Switch | Turns on |
@@ -27,11 +27,15 @@ are **off by default**; turn on the ones you actually use.
 | `SENSENOVA=true` | SenseNova (token.sensenova.cn) |
 | `INTERN_AI=true` | 书生·端砚 (discovery-api.intern-ai.org.cn) |
 
-A proxy that is switched off is not looked at: no credential is read, no login
-is attempted, no models are advertised, and a request for one is refused with a
-message saying which switch to flip. The two Qoder regions are separate
-accounts, so they are switched on separately, and WorkBuddy's China account is
-a third one.
+An upstream that is switched off is not looked at: no credential is read, no
+login is attempted, no models are advertised, and a request for one is refused
+with a message saying which switch to flip.
+
+The two Qoder regions are two upstreams of the same platform, and WorkBuddy's
+China account is a third one. One upstream can carry several **providers**
+(the accounts): the TokenRhythm relay has three, the MiniMax open platform
+has one per API key. The upstream's own policy decides which of its providers
+takes a request.
 
 One process reads all nine.
 
@@ -350,7 +354,7 @@ Base URL: `http://localhost:6450` (use `.../v1` for OpenAI clients).
 
 Each upstream also has a path of its own — `/qoder/v1`, `/qoder-cn/v1`,
 `/workbuddy-cn/v1`, `/minimax/v1`, `/tokenrhythm/v1` — so a client can be
-pointed at one provider, and the model name there is the real one. The root
+pointed at one upstream, and the model name there is the real one. The root
 paths above take the model name with a prefix instead (`qoder-cn/glm-5.3`).
 
 ```bash
@@ -421,8 +425,8 @@ into `/data/admin-token` (0600). `/health` stays public.
 | `ListPublishedModels` / `SavePublishedModel` / `DeletePublishedModel` | the published models |
 | `GetBenefitStatus` / `RunBenefitNow` | the daily check-in |
 | `ListModels` | the catalogues of the upstreams |
-| `ListProviderKinds` / `AddProvider` / `UpdateProvider` / `DeleteProvider` | the providers themselves |
-| `SetProviderKeys` | the API keys of a provider |
+| `ListProviderKinds` / `AddProvider` / `UpdateProvider` / `DeleteProvider` | the upstreams themselves |
+| `SetProviderKeys` | the API keys of an upstream |
 | `BeginLogin` / `GetLoginStatus` / `CancelLogin` / `LoginWithPassword` / `ExchangeLoginCode` / `ImportLoginToken` | the logins |
 | `TailLog` | the log |
 
@@ -481,7 +485,7 @@ WorkBuddy app each put in their requests:
 The Qoder gateway ignores the number and cuts the answer at the model's real
 limit; the WorkBuddy gateway cuts the answer there.
 
-Each upstream is a provider of its own, so the model ids are the real ones:
+Each upstream is a path of its own, so the model ids are the real ones:
 
 | Provider | Base URL | Upstream |
 |---|---|---|

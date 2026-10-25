@@ -5,9 +5,8 @@
 // left", …). Adding a kind meant writing a case in each of them, and two
 // accounts of the same kind could not be told apart at all.
 //
-// A kind is one entry here instead. The provider row says which kind it is
-// and which account of that kind it is; the registry says how to talk to that
-// kind.
+// A kind is one entry here instead. The row says which kind it is and which
+// one of that kind it is; the registry says how to talk to that kind.
 //
 // What is NOT here: the call to the upstream. That lives with the transport it
 // belongs to (lib/router/upstreams.ts) — one dispatch, not one per question.
@@ -107,7 +106,7 @@ export interface QuotaView {
 /**
  * /health 里的快照：各家报上来的原始数字。
  *
- * 按 provider 分开：两个同类的账号各有各的数字。
+ * 按上游分开：两个同类的上游各有各的数字。
  */
 export interface HealthSnapshot {
   qoder: Record<string, { account: unknown; credits: unknown; quota?: unknown }>;

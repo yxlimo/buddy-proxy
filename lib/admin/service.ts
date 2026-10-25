@@ -368,7 +368,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async listUpstreams() {
     const states = upstreamStates();
     const upstreams = [];
-    // The list is the database's, not a fixed one: a provider added in the
+    // The list is the database's, not a fixed one: an upstream added in the
     // panel shows up here without a restart.
     for (const row of listProviders()) {
       upstreams.push(await upstreamMessage(row.id, states[row.id] ?? { enabled: row.enabled }));

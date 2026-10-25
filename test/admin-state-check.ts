@@ -233,7 +233,7 @@ function deleteCached(id: string): void {
   }
 }
 
-/** 直接往聚合表里写一个目标（面板的接口不收上游没有的模型 ✓）。 */
+/** 直接往聚合表里写一个目标（面板的接口不收上游没有的模型）。 */
 function writeTarget(modelId: string, group: string, upstreamModel: string, weight: number, enabled = true): void {
   const conn = db();
   try {

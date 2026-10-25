@@ -61,9 +61,11 @@ export interface CredentialRow {
 }
 
 /**
- * 账号：provider 表里的一行就是一个账号。
+ * 账号（provider）：上游名下的一个账号。
  *
- * 账号的 id 就是 provider 的 id —— 面板上的每条凭据都挂在它下面。
+ * 术语按 AGENTS.md：upstream 是上游的 API，provider 是它名下的一个账号。
+ * 代码里的 provider 表存的是**上游**（一行一个上游服务），账号的 id 就是
+ * 上游的 id —— 面板上的每条凭据都挂在它下面。
  * 凭据本身是 secrets 表里的行，id 说明了它是谁的
  * （session:provider:<id>、key:provider:<id>:account）。
  */
@@ -129,8 +131,8 @@ function sessionCredential(id: string, accountId: string, upstreamId: string, la
  */
 export function credentialsOf(accountId: string): CredentialRow[] {
   const out: CredentialRow[] = [];
-  // The account is a provider: the provider says which kind it is, and the
-  // kind says what its credentials look like.
+  // The account belongs to an upstream: the upstream says which kind it is,
+  // and the kind says what its credentials look like.
   const row = provider(accountId);
   if (row) {
     switch (row.kind) {
@@ -404,14 +406,14 @@ export function credentialExists(id: string): boolean {
 /**
  * 注销：把一个账号的凭据删掉。
  *
- * 账号的 id 是 provider 自己的 id，或者是「provider:租户号」那种。凭据的
+ * 账号的 id 是上游自己的 id，或者是「上游:租户号」那种。凭据的
  * id 跟着走：`session:provider:<id>`、`key:provider:<id>…`、
  * `account:<id>…` —— 前缀对上了就是它的。
  */
 export function logoutAccount(accountId: string): { ok: boolean; message: string; removed: number } {
   const id = String(accountId ?? "").trim();
   if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
-  // 账号是「provider:租户号」的时候，凭据挂在 provider 下面、用租户号区分，
+  // 账号是「上游:租户号」的时候，凭据挂在那个上游下面、用租户号区分，
   // 所以按账号的 id 找得到。
   const providerId = id.split(":")[0];
   const row = provider(id) ?? provider(providerId);

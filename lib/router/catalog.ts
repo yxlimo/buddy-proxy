@@ -25,10 +25,10 @@ export {
 } from "../catalog-models.ts";
 
 /**
- * A group is a provider: one row of the provider table.
+ * A group is an upstream: one row of the provider table.
  *
- * The prefix the server puts in front of a model id is the provider's id, so
- * two accounts of the same kind do not collide.
+ * The prefix the server puts in front of a model id is the upstream's id, so
+ * two services of the same platform do not collide.
  */
 export type UpstreamGroup = string;
 

@@ -194,7 +194,7 @@ export async function toQoder(
   // Anthropic spelling (`output_config.effort`), and that is where opencode and
   // pi put it.
   const effort = extractEffort(body);
-  // The provider says which account, the account says which region.
+  // The upstream says which kind, the account says which region.
   const region = qoderRegionOf(route.provider);
   const { model, key } = resolveModelRoute(upstreamModel(route), effort, region);
   if (ctx.logRoute) {

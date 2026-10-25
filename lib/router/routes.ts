@@ -6,8 +6,8 @@
 // the server prefixes the model internally, so the two never have to be kept
 // in step by hand.
 //
-// The prefix is the provider's id, not its kind: two accounts of the same kind
-// are two providers, each with its own path.
+// The prefix is the upstream's id, not its kind: two services of the same platform
+// are two upstreams, each with its own path.
 
 import { AuthError } from "../credential.ts";
 import { matchZcodeModel } from "../zcode/models.ts";
@@ -84,7 +84,7 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
     if (!info.enabled) throw disabledProvider(prefix);
     return { provider: prefix, model: raw };
   }
-  // A bare model name: whichever provider can serve it.
+  // A bare model name: whichever upstream can serve it.
   const provider = providerForModel(raw, ctx);
   if (provider) return { provider, model: `${provider}/${raw}` };
   // Known but not being served: say so.
@@ -99,9 +99,9 @@ export function resolveRoute(model: string, ctx: RoutingContext): Route {
 }
 
 /**
- * 路径形式：/{provider}/v1/messages，模型名是真的。
+ * 路径形式：/{上游}/v1/messages，模型名是真的。
  *
- * The path names the provider; the model in the body is the real one.
+ * The path names the upstream; the model in the body is the real one.
  */
 export function routeInGroup(providerId: string, model: string, ctx: RoutingContext): Route {
   const info = ctx.providers.get(providerId);

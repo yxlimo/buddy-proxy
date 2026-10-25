@@ -68,13 +68,13 @@ export function UpstreamsPage() {
   const setKeys = useSetProviderKeys()
   const login = useAccountLogin()
   const [adding, setAdding] = useState(false)
-  /** 展开着的那个 Provider：点一行看它名下的账号与凭据。 */
+  /** 展开着的那个上游：点一行看它名下的账号与凭据。 */
   const [expanded, setExpanded] = useState<string | null>(null)
   /** 待注销的账号。 */
   const [logoutTarget, setLogoutTarget] = useState<Account | null>(null)
-  /** 要删掉的 Provider：null 是没在删。 */
+  /** 要删掉的上游：null 是没在删。 */
   const [deleteTarget, setDeleteTarget] = useState<Upstream | null>(null)
-  /** 正在填 key 的 Provider。 */
+  /** 正在填 key 的上游。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
 
   // 正在改的是哪一个：用 mutation 的 variables 判断，不用自己存一份
@@ -103,7 +103,7 @@ export function UpstreamsPage() {
 
   return (
     <PageShell
-      title='Provider'
+      title='上游'
       description='每个 Provider 是一路请求的去处。点一行看它名下的账号与凭据。开关修改后立即生效。'
       actions={
         <Button size='sm' onClick={() => setAdding(true)}>
@@ -124,7 +124,7 @@ export function UpstreamsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Provider</TableHead>
+                  <TableHead>上游</TableHead>
                   <TableHead>地址</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>凭据</TableHead>
@@ -399,7 +399,7 @@ export function UpstreamsPage() {
               删掉 {deleteTarget ? deleteTarget.alias || deleteTarget.label || deleteTarget.id : ''}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              这个 Provider 会被删掉，它名下的凭据也会一起删掉。删掉之后客户端要用新的
+              这个上游会被删掉，它名下的凭据也会一起删掉。删掉之后客户端要用新的
               路径（/{deleteTarget?.id ?? ''}/v1）才能访问它。
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -16,8 +16,8 @@ import { store } from "./store.ts";
 /**
  * The group of a published model's target.
  *
- * It is a provider id: one row of the provider table, so two accounts of the
- * same kind can each be a target.
+ * It is an upstream id: one row of the provider table, so two services of the
+ * same platform can each be a target.
  */
 export type AggregateGroup = string;
 
@@ -25,7 +25,7 @@ export type AggregateGroup = string;
  * How the targets of a model are used.
  *
  * `single` sends everything to the first target and nowhere else — the same
- * model, the same account, every time.
+ * model, the same upstream, every time.
  *
  * `fallback` tries the targets in the order they are listed and stops at the
  * first one that answers. An upstream that runs out of credits then costs the

@@ -363,7 +363,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
  * 这个上游现在有没有在登录，最近一次是不是被拒了。
  *
  * 面板要知道「正在登录」（用户在点授权，别催他）和「被拒了」（让人重登，
- * 而不是让人以为「没登录」）。登录会话都在 cache 表里 —— 多进程共享 ✓。
+ * 而不是让人以为「没登录」）。登录会话都在 cache 表里，多进程共享。
  */
 export function loginActivity(upstreamId: string): { loggingIn: boolean; rejected: boolean } {
   let loggingIn = false;
