@@ -11,6 +11,7 @@
 // 出钱由上游自己的策略定（见 lib/router/provider-selection.ts）：单一只调一把
 // key，降级按 key 的次序换下一个。
 
+import type { Json } from "../json.ts";
 import { configString } from "../config.ts";
 import { readEnvValue } from "../env.ts";
 import { getSecret, setSecret } from "../store.ts";
@@ -187,7 +188,7 @@ function parseJson(text: string): any {
  */
 export async function miniMaxApiChat(
   tenant: MiniMaxApiTenant,
-  body: Record<string, any>,
+  body: Json,
   region: MiniMaxRegion = "cn",
   extraHeaders: Record<string, string> = {},
 ): Promise<Response> {

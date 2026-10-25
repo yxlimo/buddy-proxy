@@ -16,6 +16,7 @@
 //   * A failure can arrive as HTTP 200 with an error object in the body. The
 //     gateway has to look, or the agent sees an empty answer.
 
+import type { Json } from "../json.ts";
 import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
 import { withUpstreamStatus } from "../upstream-status.ts";
@@ -56,10 +57,10 @@ export interface WorkBuddyChat {
  * accepts, and leaves the tools out of a model that cannot call them.
  */
 export function buildChatBody(
-  body: Record<string, any>,
+  body: Json,
   model?: WorkBuddyModel | null,
-): Record<string, any> {
-  const out: Record<string, any> = { ...body };
+): Json {
+  const out: Json = { ...body };
   const messages = Array.isArray(out.messages) ? out.messages : [];
   if (!messages.length || messages[0]?.role !== "system") {
     out.messages = [{ role: "system", content: "You are a helpful assistant." }, ...messages];
@@ -156,7 +157,7 @@ async function backoff(attempt: number, retryAfterSec = 0): Promise<void> {
  * and it tries a failed request once more with a backoff.
  */
 export async function workbuddyChat(
-  body: Record<string, any>,
+  body: Json,
   opts: WorkBuddyChatOptions = {},
 ): Promise<WorkBuddyChat> {
   // The provider says which account; the account says which region.
@@ -330,7 +331,7 @@ export async function aggregateStream(response: Response, model: string): Promis
     }
   }
 
-  const message: Record<string, any> = { role: "assistant", content: content.join("") };
+  const message: Json = { role: "assistant", content: content.join("") };
   if (reasoning.length) message.reasoning_content = reasoning.join("");
   const calls = [...toolCalls.values()];
   if (calls.length) message.tool_calls = calls;

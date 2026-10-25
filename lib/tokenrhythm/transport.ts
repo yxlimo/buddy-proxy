@@ -7,6 +7,7 @@
 // upstream answers 400. A client that switched models mid-conversation leaves
 // that field out, so the gateway puts it back.
 
+import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
 import { TOKENRHYTHM_INFER_BASE, tokenRhythmTenant, type TokenRhythmTenant } from "./accounts.ts";
@@ -18,7 +19,7 @@ import { TOKENRHYTHM_INFER_BASE, tokenRhythmTenant, type TokenRhythmTenant } fro
  * missing: `reasoning_content: null` is a type error upstream, so an empty
  * string is what goes in.
  */
-export function restoreReasoningContent(body: Record<string, any>): void {
+export function restoreReasoningContent(body: Json): void {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   for (const message of messages) {
     if (message?.role !== "assistant") continue;
@@ -104,7 +105,7 @@ export class TokenRhythmNoBalanceError extends Error {
 
 export async function tokenRhythmChat(
   index: number,
-  body: Record<string, any>,
+  body: Json,
   extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; key: string }> {
   const { tenant, key } = inferenceTenant(index);

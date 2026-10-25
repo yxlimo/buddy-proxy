@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { KeyRound, LogIn, LogOut, RefreshCw, Stethoscope } from 'lucide-react'
+import { KeyRound, LogIn, LogOut, Stethoscope } from 'lucide-react'
 import { EmptyState, ErrorState, LoadingState } from '@/components/async-state'
 import { StatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
@@ -15,12 +15,11 @@ import {
 import {
   useAccounts,
   useCredentials,
-  useRefreshCredential,
   useTestCredential,
 } from '@/features/accounts/api'
 import { QuotaSummary } from '@/features/balance/quota'
 import { formatDateTime } from '@/lib/format'
-import type { Account } from '@/gen/buddy/admin/v1/admin_pb'
+import type { Account, Credential } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
  * 账号状态的文案。
@@ -38,6 +37,16 @@ const ACCOUNT_STATUS_LABELS: Record<string, string> = {
 /** 这个账号现在有没有能用的凭据。没有就登录，有就注销。 */
 function isLoggedIn(account: Account): boolean {
   return account.status === 'usable'
+}
+
+/**
+ * 这条凭据是不是一份不能用了的会话。
+ *
+ * 只有会话类的凭据要重新授权：key 失效了是换一把 key 的事，重新登录解决不了。
+ * 会话是好的（有可用令牌）时也不需要——服务会按自己的节奏换令牌，不等人点。
+ */
+function isDeadSession(credential: Credential): boolean {
+  return credential.kind === 'session' && credential.status !== 'usable'
 }
 
 /**
@@ -85,14 +94,10 @@ export function ProviderAccounts({
 
   const credentials = useCredentials(activeId)
   const testCredential = useTestCredential()
-  const refreshCredential = useRefreshCredential()
 
   // 正在动的是哪条凭据：看 mutation 的 variables，不用自己存一份状态。
   const testingId = testCredential.isPending
     ? testCredential.variables?.credentialId
-    : undefined
-  const refreshingId = refreshCredential.isPending
-    ? refreshCredential.variables?.credentialId
     : undefined
 
   if (accounts.isPending) {
@@ -266,78 +271,94 @@ export function ProviderAccounts({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {credentials.data?.credentials.map((credential) => (
-              <TableRow key={credential.id}>
-                <TableCell>
-                  <div className='grid gap-0.5'>
-                    <span className='font-medium'>
-                      {credential.label || credential.id}
-                    </span>
-                    <span className='font-mono text-xs text-muted-foreground'>
-                      {credential.id}
-                      {credential.generation > 0
-                        ? ` · 第 ${credential.generation} 代`
-                        : ''}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Badge variant='outline'>{credential.kind || '—'}</Badge>
-                </TableCell>
-                <TableCell className='font-mono text-xs'>
-                  {credential.masked || '—'}
-                </TableCell>
-                <TableCell className='font-mono text-xs'>
-                  {credential.fingerprint || '—'}
-                </TableCell>
-                <TableCell>
-                  <div className='grid gap-0.5'>
-                    <StatusBadge status={credential.status} />
-                    {credential.lastError ? (
-                      <span className='text-xs text-destructive'>
-                        {credential.lastError}
+            {credentials.data?.credentials.map((credential) => {
+              // 这条凭据属于哪个账号：重新登录要走这个账号的登录流程。
+              const owner =
+                list.find((account) => account.id === credential.accountId) ??
+                active
+              const deadSession = isDeadSession(credential)
+              return (
+                <TableRow key={credential.id}>
+                  <TableCell>
+                    <div className='grid gap-0.5'>
+                      <span className='font-medium'>
+                        {credential.label || credential.id}
                       </span>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell className='text-xs'>
-                  {formatDateTime(credential.expiresAt)}
-                  {credential.lastOkAt ? (
-                    <div className='text-muted-foreground'>
-                      最近可用 {formatDateTime(credential.lastOkAt)}
+                      <span className='font-mono text-xs text-muted-foreground'>
+                        {credential.id}
+                        {credential.generation > 0
+                          ? ` · 第 ${credential.generation} 代`
+                          : ''}
+                      </span>
                     </div>
-                  ) : null}
-                </TableCell>
-                <TableCell className='text-right'>
-                  <div className='flex justify-end gap-2'>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      disabled={testingId === credential.id}
-                      onClick={() =>
-                        testCredential.mutate({ credentialId: credential.id })
-                      }
-                    >
-                      <Stethoscope />
-                      试一下
-                    </Button>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      disabled={refreshingId === credential.id}
-                      onClick={() =>
-                        refreshCredential.mutate({
-                          credentialId: credential.id,
-                        })
-                      }
-                    >
-                      <RefreshCw />
-                      强制刷新
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant='outline'>{credential.kind || '—'}</Badge>
+                  </TableCell>
+                  <TableCell className='font-mono text-xs'>
+                    {credential.masked || '—'}
+                  </TableCell>
+                  <TableCell className='font-mono text-xs'>
+                    {credential.fingerprint || '—'}
+                  </TableCell>
+                  <TableCell>
+                    <div className='grid gap-0.5'>
+                      <StatusBadge status={credential.status} />
+                      {credential.lastError ? (
+                        <span className='text-xs text-destructive'>
+                          {credential.lastError}
+                        </span>
+                      ) : null}
+                      {/* 后端说了失效的原因就用它的话；没说的话补一句，
+                          免得用户只看到一个「已过期」徽标。 */}
+                      {deadSession && !credential.lastError ? (
+                        <span className='text-xs text-destructive'>
+                          这份会话不能用了，要重新登录
+                        </span>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className='text-xs'>
+                    {formatDateTime(credential.expiresAt)}
+                    {credential.lastOkAt ? (
+                      <div className='text-muted-foreground'>
+                        最近可用 {formatDateTime(credential.lastOkAt)}
+                      </div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className='text-right'>
+                    <div className='flex justify-end gap-2'>
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        disabled={testingId === credential.id}
+                        onClick={() =>
+                          testCredential.mutate({ credentialId: credential.id })
+                        }
+                      >
+                        <Stethoscope />
+                        试一下
+                      </Button>
+                      {/* 会话失效了只能重新授权：走账号那一行现成的登录
+                          流程，不另写一套。 */}
+                      {deadSession && owner ? (
+                        <Button
+                          size='sm'
+                          disabled={loggingIn}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onLogin(owner)
+                          }}
+                        >
+                          <LogIn />
+                          重新登录
+                        </Button>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       )}

@@ -27,6 +27,7 @@
 // `data:{"headers":…,"body":"<json string>"}`, where the inner JSON is a regular
 // OpenAI chat completion chunk. Errors arrive as their own frames.
 
+import type { Json } from "../json.ts";
 import { configString } from "../config.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
@@ -201,7 +202,6 @@ export interface LegacyRequestBody {
   contextWindow?: number;
 }
 
-type Json = Record<string, any>;
 
 const BLANK_RESPONSE_META = {
   is_input_modification: false,

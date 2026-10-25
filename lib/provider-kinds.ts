@@ -184,6 +184,15 @@ export interface ProviderKind {
    * 登记一次，而不是在签到那里再写一个 if/else。
    */
   benefits?(provider: ProviderRow): Promise<BenefitOutcome>;
+  /**
+   * 定时刷新这个上游的会话。
+   *
+   * 官方客户端自己按时间表换令牌，不等人来点。网关也这样：种类说得出自己
+   * 怎么刷，定时器（lib/session-refresh.ts）只管按时叫它。
+   *
+   * 没有这一项的种类不刷：它的凭据不是会话（key、账号密码），不轮换。
+   */
+  refresh?(provider: ProviderRow): Promise<void>;
 }
 
 const REGISTRY = new Map<string, ProviderKind>();

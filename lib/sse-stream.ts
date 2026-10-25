@@ -1,3 +1,5 @@
+import type { Json } from "./json.ts";
+
 // lib/sse-stream.ts — reading and writing SSE, for the paths that have to convert
 // between dialects instead of passing bytes through.
 //
@@ -134,10 +136,10 @@ export function parseLooseJson(text: string): any {
  * empty reply, which looks like a model that thought for a moment and gave up —
  * so it is raised instead.
  */
-export async function* readOpenAIChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, any>> {
+export async function* readOpenAIChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Json> {
   for await (const ev of readSseEvents(body)) {
     if (!ev.data || ev.data === "[DONE]") continue;
-    let chunk: Record<string, any>;
+    let chunk: Json;
     try {
       chunk = parseLooseJson(ev.data);
     } catch {

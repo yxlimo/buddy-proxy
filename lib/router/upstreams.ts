@@ -6,6 +6,7 @@
 // turn the request into what the upstream wants, call it, and hand the answer
 // over.
 
+import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../credential.ts";
@@ -375,7 +376,7 @@ export async function toWorkBuddy(
  * Qoder's own protocol has no per-request thinking switch: the tier *is* the
  * switch, so the level is translated into a tier here.
  */
-export function extractEffort(body: Record<string, any>): string | undefined {
+export function extractEffort(body: Json): string | undefined {
   return effortOf(body);
 }
 
@@ -507,7 +508,7 @@ async function* legacyWithRetry(
   send: () => Promise<Response>,
   maxAttempts: number,
   retryMs: number,
-): AsyncGenerator<Record<string, any>> {
+): AsyncGenerator<Json> {
   for (let attempt = 1; ; attempt++) {
     const upstream = await send();
     const frames = readLegacyFrames(upstream.body!)[Symbol.asyncIterator]();
@@ -561,16 +562,16 @@ export async function qoderWithRetry(
 
 /** Collect a chunk stream into a single chat completion. */
 export async function collectOpenAIChunks(
-  chunks: AsyncGenerator<Record<string, any>>,
+  chunks: AsyncGenerator<Json>,
   model: string,
-): Promise<Record<string, any>> {
+): Promise<Json> {
   const completionId = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
   const created = Math.floor(Date.now() / 1000);
   let content = "";
   let reasoning = "";
   let finishReason: string | null = null;
   const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
-  let usage: Record<string, any> | undefined;
+  let usage: Json | undefined;
 
   for await (const chunk of chunks) {
     if (chunk.usage) usage = chunk.usage;
@@ -590,7 +591,7 @@ export async function collectOpenAIChunks(
     if (choice.finish_reason) finishReason = choice.finish_reason;
   }
 
-  const message: Record<string, any> = { role: "assistant", content: toolCalls.size ? null : content };
+  const message: Json = { role: "assistant", content: toolCalls.size ? null : content };
   if (reasoning) message.reasoning_content = reasoning;
   if (toolCalls.size) message.tool_calls = [...toolCalls.entries()].map(([index, call]) => ({ index, ...call }));
 

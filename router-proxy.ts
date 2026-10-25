@@ -18,6 +18,7 @@
 //   Anthropic → Qoder  converted to Anthropic on the way in
 //   Anthropic → MiniMax passes through
 
+import type { Json } from "./lib/json.ts";
 import { configString, configFlag, configNumber, logConfig } from "./lib/config.ts";
 import Koa from "koa";
 import Router from "@koa/router";
@@ -31,6 +32,7 @@ import { ZCODE_MODELS } from "./lib/zcode/models.ts";
 import { ZCODE_MESSAGES_URL } from "./lib/zcode/transport.ts";
 import { zcodeStatus } from "./lib/zcode/auth.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
+import { startSessionRefresh } from "./lib/session-refresh.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
 import { tokenRhythmStatus, tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
@@ -114,9 +116,6 @@ import {
 
 const PORT = configNumber("ROUTER_PORT", 6450);
 const HOST = configString("ROUTER_HOST", "0.0.0.0");
-// How often the MiniMax credential is looked at, so a warning reaches the log
-// even when nothing is being asked for.
-const MINIMAX_WATCH_MS = configNumber("MINIMAX_WATCH_MS", 5 * 60 * 1000);
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 
 const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
@@ -419,7 +418,7 @@ function findAggregate(id: string): AggregateEntry | undefined {
 async function handleAggregate(
   ctx: Koa.Context,
   entry: AggregateEntry,
-  body: Record<string, any>,
+  body: Json,
   dialect: Dialect,
 ): Promise<void> {
   const stream = body.stream === true;
@@ -606,7 +605,7 @@ async function handle(
   dialect: Dialect,
   providerId?: string,
 ): Promise<void> {
-  const body = (ctx.request.body ?? {}) as Record<string, any>;
+  const body = (ctx.request.body ?? {}) as Json;
 
   // The root route serves the published models and nothing else: the database
   // decides which models exist and which upstream serves them.
@@ -645,7 +644,7 @@ async function handle(
 /** Hand the request to the upstream the route points at. */
 async function callUpstream(
   uctx: UpstreamContext,
-  body: Record<string, any>,
+  body: Json,
   route: Route,
   dialect: Dialect,
   stream: boolean,
@@ -715,7 +714,7 @@ async function callUpstream(
  * 成功还是失败、用了多少令牌。面板的用量页和「今日用量」从这张表出。
  */
 function recordRequestUsage(
-  body: Record<string, any>,
+  body: Json,
   route: Route,
   agent: string,
   session: SessionInfo,
@@ -862,32 +861,10 @@ const server = app.listen(PORT, HOST, () => {
       );
     }, HEALTH_CACHE_MS);
 
-    // A periodic watch, so a credential that is about to expire reaches the log
-    // even when nothing is being asked for.
-    let lastState = "";
-    setInterval(
-      () => {
-        void readCredential()
-          .then((c) => {
-            const state = c.warning ? "warning" : "ok";
-            if (state !== lastState) {
-              lastState = state;
-              console.log(
-                `[AUTH] ${state}: generation ${c.generation}, ${Math.round(c.remainingMs / 60000)} min left`,
-              );
-            }
-          })
-          .catch((e) => {
-            const err = e as AuthError;
-            if (err.message !== lastState) {
-              lastState = err.message;
-              console.warn(`[AUTH] ${err.message}`);
-              console.warn(`       ${err.hint}`);
-            }
-          });
-      },
-      MINIMAX_WATCH_MS,
-    ).unref();
+    // The sessions are refreshed on a timer of their own, the way the client
+    // does it: nobody has to ask for a new token, and a request never waits
+    // for one.
+    startSessionRefresh();
   }
 
   for (const provider of providersNeedingLogin("qoder")) {

@@ -13,7 +13,7 @@ import { miniMaxApiTenantSecretId, miniMaxApiTenants } from "../minimax/api.ts";
 import { listProviders, provider } from "../providers.ts";
 import { deleteSecret, getSecret, listSecrets } from "../store.ts";
 import { deleteProviderCredentials, providerSecretId } from "../providers.ts";
-import { clearDeadSession } from "../session.ts";
+import { clearDeadSession, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
@@ -129,6 +129,8 @@ function sessionRow(
   const token = String(raw.accessToken ?? raw.cookie ?? raw.token ?? "");
   const expiresAt = Number(raw.expiresAtMs ?? 0);
   const expired = expiresAt > 0 && expiresAt <= Date.now();
+  // 平台拒过这份会话：它已经作废了，重新授权才有新的。
+  const refused = deadSession(id);
   return {
     id,
     accountId,
@@ -137,11 +139,11 @@ function sessionRow(
     label,
     masked: maskOf(token),
     fingerprint: fingerprintOf(token),
-    status: expired ? CredentialState.EXPIRED : CredentialState.USABLE,
+    status: refused || expired ? CredentialState.EXPIRED : CredentialState.USABLE,
     generation: Number(raw.generation ?? 0),
     expiresAt,
     lastOkAt: Number(raw.refreshedAtMs ?? raw.obtainedAtMs ?? raw.loginAtMs ?? 0),
-    lastError: "",
+    lastError: refused ? "这份会话已经失效，需要重新授权" : "",
     updatedAt,
   };
 }
@@ -709,16 +711,21 @@ async function refreshTarget(
   clearDeadSession(providerSecretId(p.id));
   switch (p.kind) {
     case "minimax": {
-      const cred = await readCredential(true, p.id);
-      return { ok: true, message: `刷新好了，第 ${cred.generation} 代`, generation: cred.generation };
+      // 会话由服务定时刷新（客户端就是这么干的），手动刷新没有意义；
+      // 失效了的会话只能重新授权。
+      const cred = await readCredential(false, p.id);
+      if (cred.status !== "authenticated") {
+        return { ok: false, message: "这份会话已经失效，需要重新登录（面板上登录一次）", generation: cred.generation };
+      }
+      return { ok: true, message: `会话由服务定时刷新（第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟）`, generation: cred.generation };
     }
     case "qoder": {
-      const session = await refreshQoderSession(true, p.id);
-      return { ok: true, message: `刷新好了，第 ${session.generation} 代`, generation: session.generation };
+      const session = await refreshQoderSession(false, p.id);
+      return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "workbuddy": {
-      const session = await refreshWorkBuddySession(true, p.id);
-      return { ok: true, message: `刷新好了，第 ${session.generation} 代`, generation: session.generation };
+      const session = await refreshWorkBuddySession(false, p.id);
+      return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "zcode":
       // ZCode 的令牌是 JWT，没有刷新通道：过期了只能重登。

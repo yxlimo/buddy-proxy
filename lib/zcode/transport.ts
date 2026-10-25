@@ -9,6 +9,7 @@
 // 请求体是 Anthropic 原生的，外加 ZCode 的两个字段：thinking 与
 // output_config（思考档位），还有 metadata.user_id。
 
+import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import { release as osRelease } from "node:os";
 import { AuthError } from "../credential.ts";
@@ -68,12 +69,12 @@ export function zcodeHeaders(session: ZcodeSession): Record<string, string> {
  * `metadata.user_id` 是设备与会话的标识。
  */
 export function zcodeBody(
-  body: Record<string, any>,
+  body: Json,
   session: ZcodeSession,
   effort?: string,
   model?: string,
-): Record<string, any> {
-  const out: Record<string, any> = { ...body };
+): Json {
+  const out: Json = { ...body };
   const level = effort ?? "medium";
   if (model && /glm-5\.3/i.test(model)) {
     out.thinking = { type: "enabled" };
@@ -98,7 +99,7 @@ export function zcodeBody(
  * 401 是登录过期（zcode JWT 没有刷新通道，只能重登）；其它错误照原样报。
  */
 export async function zcodeChat(
-  body: Record<string, any>,
+  body: Json,
   options: { effort?: string } = {},
 ): Promise<{ response: Response; session: ZcodeSession }> {
   const session = loadSession();

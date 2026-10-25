@@ -12,6 +12,7 @@
 // The upstream speaks the Anthropic dialect natively: the request goes out as
 // it is, and the answer comes back the same way.
 
+import type { Json } from "../json.ts";
 import { configString, configFlag, configNumber } from "../config.ts";
 import crypto from "node:crypto";
 import { AUTH_MODE, AuthError, readCredential } from "./auth.ts";
@@ -86,7 +87,7 @@ export function classify(status: number, code?: number): string {
  * give up.
  */
 export async function minimaxChat(
-  body: Record<string, any>,
+  body: Json,
 ): Promise<Response> {
   let cred;
   try {

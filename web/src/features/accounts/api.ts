@@ -5,7 +5,6 @@ import {
   ListAccountsRequestSchema,
   ListCredentialsRequestSchema,
   LogoutAccountRequestSchema,
-  RefreshCredentialRequestSchema,
   SetProviderKeysRequestSchema,
   TestCredentialRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
@@ -93,32 +92,6 @@ export function useSetProviderKeys() {
     },
     onSuccess: (result) => {
       toast.success(result.message || '已写入')
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-    },
-  })
-}
-
-/** 强制刷新一条凭据。 */
-export function useRefreshCredential() {
-  const client = useAdminClient()
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: { credentialId: string }) => {
-      const result = await client.refreshCredential(
-        create(RefreshCredentialRequestSchema, {
-          credentialId: input.credentialId,
-        })
-      )
-      assertOk(result, '刷新失败')
-      return result
-    },
-    onError: (error) => {
-      toast.error(describeError(error))
-    },
-    onSuccess: (result) => {
-      toast.success(result.message || `刷新完成（第 ${result.generation} 代）`)
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: accountKeys.all })

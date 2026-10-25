@@ -41,6 +41,7 @@ import {
  * ------------------------------------------------------------------ */
 
 import { credentialStatus as minimaxCredentialStatus } from "./minimax/auth.ts";
+import { refreshSession as refreshMiniMaxSession } from "./minimax/oauth.ts";
 import { runMiniMaxBenefits } from "./minimax/checkin.ts";
 import { MINIMAX_MODELS } from "./minimax/models.ts";
 import { MINIMAX_UPSTREAM } from "./minimax/transport.ts";
@@ -56,6 +57,7 @@ import { miniMaxApiTenants, MINIMAX_API_MODELS, miniMaxApiBase } from "./minimax
  * ------------------------------------------------------------------ */
 
 import { qoderStatus, regionOf as qoderRegionOf } from "./qoder/auth.ts";
+import { refreshSession as refreshQoderSession } from "./qoder/auth.ts";
 import { qoderModelsForRegion } from "./qoder/models.ts";
 import { ENDPOINTS as QODER_ENDPOINTS } from "./qoder/auth.ts";
 import { runQoderBenefits } from "./qoder/benefits.ts";
@@ -65,6 +67,7 @@ import { runQoderBenefits } from "./qoder/benefits.ts";
  * ------------------------------------------------------------------ */
 
 import { workbuddyStatus } from "./workbuddy/auth.ts";
+import { refreshSession as refreshWorkBuddySession } from "./workbuddy/auth.ts";
 import { runWorkBuddyBenefits } from "./workbuddy/benefits.ts";
 
 import { ENDPOINTS as WORKBUDDY_ENDPOINTS } from "./workbuddy/auth.ts";
@@ -500,6 +503,10 @@ registerKind({
   models: () => minimaxCatalogModels(MINIMAX_MODELS),
   quotas: (provider, snapshot) => minimaxQuotas(provider, snapshot),
   benefits: (provider) => runMiniMaxBenefits(provider.id),
+  // 客户端自己按时间表换令牌，网关也这样（见 lib/session-refresh.ts）。
+  refresh: async (provider) => {
+    await refreshMiniMaxSession(false, provider.id);
+  },
   outOfCredits: (provider, snapshot) => {
     // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑。看 plan 的窗口。
     const mine = (snapshot.minimax?.[provider.id] ?? {}) as any;
@@ -558,6 +565,10 @@ registerKind({
   models: (provider) => qoderCatalogModels(qoderModelsForRegion(qoderRegionOf(provider.id))),
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),
   benefits: (provider) => runQoderBenefits(provider.id),
+  // 客户端自己按时间表换令牌，网关也这样（见 lib/session-refresh.ts）。
+  refresh: async (provider) => {
+    await refreshQoderSession(false, provider.id);
+  },
   outOfCredits: (provider, snapshot) => {
     // The platform's own flag decides. The plan (the free part) running out
     // is not the end: the credits bought on top are a separate pool, and the
@@ -587,6 +598,10 @@ registerKind({
   models: () => workbuddyCatalogModels(workbuddyModelList()),
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),
   benefits: (provider) => runWorkBuddyBenefits(provider.id),
+  // 客户端自己按时间表换令牌，网关也这样（见 lib/session-refresh.ts）。
+  refresh: async (provider) => {
+    await refreshWorkBuddySession(false, provider.id);
+  },
   outOfCredits: (provider, snapshot) => {
     // The check-in credits: the platform reports them as "daily".
     const mine = (snapshot.workbuddy?.[provider.id] ?? {}) as any;

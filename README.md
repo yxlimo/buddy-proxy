@@ -768,6 +768,22 @@ The file is 0600 and lives in the data volume. The refresh tokens rotate on
 every refresh, so only one holder of a session can refresh it — the database
 holds a lock for that, the same way the lock file used to.
 
+### How the sessions stay alive
+
+The official clients refresh their own tokens on a timer; nobody presses a
+button. The gateway does the same: a timer (every minute) looks at each
+session and swaps the token before it expires (`lib/session-refresh.ts`; each
+kind says how its own session is refreshed). A request never waits for a
+refresh, and the panel has no "refresh" button — a session that the platform
+refused is dead, and the way back is to authorize again.
+
+One session, one holder. The refresh token rotates on every refresh, so the
+old one dies immediately, and the platform withdraws **every** session of that
+account when it sees an old token used again. So a copy of the database
+running somewhere else is a second holder: it refreshes, and the copy here
+stops working. The same is true of the desktop client's own store — it must
+not keep a session of an account the gateway holds.
+
 ### Health
 
 `/health` does not ask the upstreams. The live part — the account standing,

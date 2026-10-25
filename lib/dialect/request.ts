@@ -1,7 +1,7 @@
+import type { Json } from "../json.ts";
 import { randomUUID } from "node:crypto";
 
 
-type Json = Record<string, any>;
 
 /* ------------------------------------------------------------------ *
  * Request conversion

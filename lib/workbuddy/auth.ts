@@ -507,6 +507,20 @@ export function workbuddyStatus(providerId = "workbuddy-cn"): Record<string, unk
     return { region, source: sessionId(providerId), status: "anonymous", error: "no session", hint: loginHint(providerId) };
   }
   const remainingMs = session.expiresAtMs - Date.now();
+  // 平台拒过这份会话：令牌没了，换令牌也没用，只能重新授权。
+  const refused = deadSession(sessionId(providerId));
+  if (refused) {
+    return {
+      source: sessionId(providerId),
+      status: "expired",
+      error: "这份会话已经失效，需要重新授权",
+      hint: refused,
+      warning: true,
+      generation: session.generation,
+      expiresAt: new Date(session.expiresAtMs).toISOString(),
+      remainingSec: Math.round(remainingMs / 1000),
+    };
+  }
   return {
     region,
     source: sessionId(providerId),

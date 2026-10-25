@@ -6,6 +6,7 @@
 // answer is converted at most once, and the way it is written out — the
 // headers, the frames, the error events — is the same for every upstream.
 
+import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../credential.ts";
@@ -145,10 +146,10 @@ export function deliverJson(
  * whoever wants to say so in the log.
  */
 async function* watchFinish(
-  chunks: AsyncIterable<Record<string, any>>,
+  chunks: AsyncIterable<Json>,
   onFinish?: (reason: string) => void,
   onUsage?: (usage: any) => void,
-): AsyncGenerator<Record<string, any>> {
+): AsyncGenerator<Json> {
   for await (const chunk of chunks) {
     const reason = chunk?.choices?.[0]?.finish_reason;
     if (reason && onFinish) onFinish(String(reason));

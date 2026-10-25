@@ -1,8 +1,8 @@
+import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
 import { randomUUID } from "node:crypto";
 import { readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
 
-type Json = Record<string, any>;
 
 /* ------------------------------------------------------------------ *
  * Streaming response conversion
