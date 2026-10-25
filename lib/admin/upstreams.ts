@@ -9,7 +9,7 @@
 
 import { configNumber, configString } from "../config.ts";
 import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
-import { miniMaxApiTenantPlans, miniMaxApiTenants } from "../minimax/api.ts";
+import { miniMaxApiTenantPlans } from "../minimax/api.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
@@ -24,22 +24,23 @@ import {
   type WorkBuddyModel,
 } from "../workbuddy/models.ts";
 import { tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
-import { tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
 import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
 import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
 import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
 import { peekCached, setCached } from "../store.ts";
 import {
+  accountsOfPlatform,
   listProviders,
   policyOf,
   provider,
-  providerEnabled,
   setProviderEnabled,
 } from "../providers.ts";
+import { isPlatform, platformOf } from "../platforms.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds.ts";
 import { kindOf } from "../provider-kinds.ts";
+import type { ProviderRow } from "../providers.ts";
 import type {
   BalanceView,
   CreditView,
@@ -57,18 +58,33 @@ import { loginActivity } from "./login.ts";
 import { policyEnum } from "./policy.ts";
 import { type CatalogGroup } from "../router/catalog.ts";
 
-/** 上游的 id。跟聚合路由里的分组名一致。 */
+/** 上游的 id。现在有两种：平台 id（面板上的那一行），与账号行的 id。 */
 /** A provider's id. The kind is not part of it: the table has the kind. */
 export type UpstreamId = string;
 
 /**
- * 这个 Provider 开着吗？
+ * 这个 id 名下的账号行。
  *
- * The switch lives in the database, next to the upstream it belongs to: two
- * accounts of the same kind are switched separately.
+ * 面板问的是**平台**（一行九个服务之一），适配器手里是**账号**（一行一份
+ * 登录）。两种 id 都收：认得出来的平台就取它名下的账号，否则就当账号 id。
+ *
+ * 先认平台：账号 id 是从平台 id 起的（`minimax`、`minimax-2`），所以一个平台
+ * 的第一个账号与平台同名 —— 先认平台才看得见同名的其他账号。
+ */
+function accountsFor(id: string): ProviderRow[] {
+  if (isPlatform(id)) return accountsOfPlatform(id);
+  const row = provider(id);
+  return row ? [row] : [];
+}
+
+/**
+ * 这个平台现在能不能接：它名下有没有开着的账号。
+ *
+ * 平台自己没有开关 —— 开关在账号上，一个平台下有两个账号时可以只开一个。
+ * 传账号 id 时问的就是那一个账号。
  */
 export function upstreamEnabled(id: string): boolean {
-  return providerEnabled(id);
+  return accountsFor(id).some((row) => row.enabled);
 }
 
 /** 一个上游的开关状态。 */
@@ -78,11 +94,11 @@ export interface UpstreamSwitch {
 }
 
 /**
- * 打开或关掉一个上游。
+ * 打开或关掉一个账号。
  *
  * 开关在数据库的 provider.enabled 上，每次现读：写进去，下一个请求就是新的。
  */
-export function setUpstreamEnabled(id: string, enabled: boolean): { ok: boolean; message: string } {
+export function setAccountEnabled(id: string, enabled: boolean): { ok: boolean; message: string } {
   const result = setProviderEnabled(id, enabled);
   if (!result.ok) return result;
   const row = provider(id);
@@ -93,62 +109,45 @@ export function setUpstreamEnabled(id: string, enabled: boolean): { ok: boolean;
 }
 
 /**
- * 每个上游的开关状态。
+ * 一个平台的地址。
  *
- * 开关在数据库的 provider.enabled 上，每次现读：面板改了，下一个请求就是新的。
- * 所以这里只有「现在在生效的值」—— 没有「改了还没生效」这回事。
- */
-export function upstreamStates(): Record<string, UpstreamSwitch> {
-  const out: Record<string, UpstreamSwitch> = {};
-  for (const row of listProviders()) {
-    out[row.id] = { enabled: row.enabled };
-  }
-  return out;
-}
-
-/**
- * 上游的地址。
- *
- * 面板上要看得见网关到底在跟谁说话：这个上游的基础地址。
+ * 面板上要看得见网关到底在跟谁说话：这个平台的基础地址。地址是平台的事，所以
+ * 拿它名下随便哪个账号去问都是同一个（账号只是登录身份）。
  */
 export function upstreamBaseUrl(id: string): string {
-  const row = provider(id);
+  const row = accountsFor(id)[0];
   const kind = row ? kindOf(row.kind) : null;
   return kind && row ? kind.baseUrl(row) : "";
 }
 
 /**
- * 这个上游现在的生效策略。
+ * 这个平台的生效策略。
  *
- * 库里那一列就是生效值：面板改了它，下一个请求就是新的。
+ * 策略在平台层：它说的是「这个平台下的几个账号怎么选」，而一个账号自己没法
+ * 决定要不要退到另一个账号。
  */
 export function upstreamPolicy(id: string): ContractPolicy {
   return policyEnum(policyOf(id));
 }
 
 /**
- * 这个上游名下有几个可以切换的账号。
+ * 这个平台名下有几个账号。
  *
- * 账号的形态各家不一样：开放平台一把 key 一个租户，中转站一个账号一个钱包，
- * 其余上游一个账号就是一行。数法用各家自己的那份名单，不在面板那边数 ——
- * 面板数会数错（MiniMax 开放平台在账号列表里只有一行，底下却挂着几把 key）。
+ * 数的是 provider 表的行 —— 账号模型里一行就是一个登录，所以这里不按平台自己
+ * 的名单去数（那样同一个平台下的两个账号会被数成一个）。
  */
 export function upstreamAccountCount(id: string): number {
-  const row = provider(id);
-  if (!row) return 0;
-  if (row.kind === "minimax-api") return miniMaxApiTenants(row.id).length;
-  if (row.kind === "tokenrhythm") return tokenRhythmTenants(row.id).length;
-  return 1;
+  return accountsFor(id).length;
 }
 
 /**
- * 上游的区域。
+ * 平台的区域。
  *
- * cn / global 是契约里写的两个。MiniMax 用的是 cn / en，TokenRhythm、SenseNova
- * 与书生·端砚没有区域之分（就一个站点）。
+ * cn / global 是契约里写的两个。TokenRhythm、SenseNova 与书生·端砚没有区域
+ * 之分（就一个站点）。
  */
 export function upstreamRegion(id: string): string {
-  return provider(id)?.region ?? "";
+  return platformOf(id)?.region ?? provider(id)?.region ?? "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -192,31 +191,34 @@ export function qoderRegions(): QoderRegion[] {
 }
 
 /**
- * 每个上游的模型目录，面板与 /v1/models 共用。
+ * 每个平台的模型目录，面板与 /v1/models 共用。
  *
- * 由 provider 表与 kind 注册表驱动：每一个开着的上游都有一组，模型是它自己
- * 的 kind 说的。用户自己加的 provider 也在里面 —— 以前这里写死了九个 id，
- * 于是用户加的上游能被路由到，却不出现在模型列表里。
+ * 一组一个**平台**：路径里那一段是平台 id，同一个平台下有两个账号也只有一组
+ * 目录 —— 按账号分组会把同一批模型公布两遍。目录本身是平台的 kind 说的，跟
+ * 是哪个账号无关。
  *
- * 只收开着的上游：一个关着的上游不公布模型，请求它的时候也给一句清楚的
- * 「没启用」，而不是把它丢给一个不会回答的上游。
+ * 只收有开着账号的平台：一个关着的上游不公布模型，请求它的时候也给一句清楚
+ * 的「没启用」，而不是把它丢给一个不会回答的上游。
  */
 export function catalogGroups(): CatalogGroup[] {
   const groups: CatalogGroup[] = [];
+  const seen = new Set<string>();
   for (const row of listProviders()) {
     if (!row.enabled) continue;
+    if (seen.has(row.platform)) continue;
     const kind = kindOf(row.kind);
     if (!kind) continue;
     const models = kind.models(row);
     if (!models.length) continue;
-    groups.push({ group: row.id, models });
+    seen.add(row.platform);
+    groups.push({ group: row.platform, models });
   }
   return groups;
 }
 
-/** 一个上游现在公布几个模型。 */
+/** 一个平台现在公布几个模型。 */
 export function upstreamModelCount(id: string): number {
-  const row = provider(id);
+  const row = accountsFor(id)[0];
   const kind = row ? kindOf(row.kind) : null;
   if (!row || !kind) return 0;
   return kind.models(row).length;
@@ -390,6 +392,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
         snapshot.workbuddy[row.id] = { credits: await fetchWorkBuddyCredits(row.id) };
         break;
       case "tokenrhythm":
+        // 一个账号一行一个钱包：快照也按账号存。
         snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
         break;
       case "sensenova":
@@ -450,14 +453,22 @@ export async function freshHealthSnapshot(): Promise<HealthSnapshot> {
  * ------------------------------------------------------------------ */
 
 /**
- * 一个上游的凭据状态。
+ * 一个平台的凭据状态。
+ *
+ * 凭据在账号上，所以平台报的是它名下那些账号里最好的那一份：有能用的就说
+ * 能用，全都没有才说没有。要逐个看的话在账号列表里（ListAccounts）。
  *
  * 各家上游的会话形状不一样，但状态字段是同一套，所以这里把它们抹平。
  */
 export function upstreamCredential(id: string): CredentialView {
-  const row = provider(id);
-  const kind = row ? kindOf(row.kind) : null;
-  if (!row || !kind) {
+  const rows = accountsFor(id);
+  // 一份坏掉的会话不该把整个面板打成 500：读不出来的那一条当作没有凭据。
+  const views = rows.flatMap((row) => {
+    const view = safeCredential(row);
+    return view ? [view] : [];
+  });
+  const pick = views.find((view) => hasUsableCredential(view.status)) ?? views[0];
+  if (!pick) {
     return {
       kind: "session",
       status: CredentialState.MISSING,
@@ -465,11 +476,32 @@ export function upstreamCredential(id: string): CredentialView {
       expiresAt: 0,
       remainingSec: 0,
       warning: false,
-      detail: "没有这个 Provider",
+      detail: "这个平台还没有账号",
       generation: 0,
     };
   }
-  return kind.credential(row);
+  return pick;
+}
+
+/** 一个账号的凭据状态。会话坏了就是读不出来，不抛。 */
+function safeCredential(row: ProviderRow): CredentialView | null {
+  const kind = kindOf(row.kind);
+  if (!kind) return null;
+  try {
+    return kind.credential(row);
+  } catch (e) {
+    console.warn(`[ADMIN] 账号 ${row.id} 的凭据状态读不出来：${(e as Error)?.message}`);
+    return {
+      kind: "session",
+      status: CredentialState.ERROR,
+      fingerprint: "",
+      expiresAt: 0,
+      remainingSec: 0,
+      warning: false,
+      detail: "凭据状态读不出来，重新登录一次",
+      generation: 0,
+    };
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -493,14 +525,19 @@ export function upstreamCredential(id: string): CredentialView {
  * `fresh` 的时候先问一遍平台：面板要看现数时才用，不然就用缓存里的。
  */
 export async function upstreamQuotas(id: string, fresh = false): Promise<QuotaView[]> {
-  const row = provider(id);
-  const kind = row ? kindOf(row.kind) : null;
-  if (!row || !kind) return [];
+  const rows = accountsFor(id);
+  if (!rows.length) return [];
   const snapshot = fresh
     ? await freshHealthSnapshot()
     : peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return [];
-  return kind.quotas(row, snapshot);
+  const out: QuotaView[] = [];
+  for (const row of rows) {
+    const kind = kindOf(row.kind);
+    if (!kind) continue;
+    out.push(...kind.quotas(row, snapshot));
+  }
+  return out;
 }
 
 /**
@@ -568,10 +605,13 @@ export function snapshotEntry(
 function upstreamQuotasCached(id: string): QuotaView[] {
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
   if (!snapshot) return [];
-  const row = provider(id);
-  const kind = row ? kindOf(row.kind) : null;
-  if (!row || !kind) return [];
-  return kind.quotas(row, snapshot);
+  const out: QuotaView[] = [];
+  for (const row of accountsFor(id)) {
+    const kind = kindOf(row.kind);
+    if (!kind) continue;
+    out.push(...kind.quotas(row, snapshot));
+  }
+  return out;
 }
 
 
@@ -621,13 +661,42 @@ export function tokenPlanView(plan: unknown): TokenPlanView | undefined {
  * 读不到数据就说「不知道」：null 不算用尽。
  */
 export function outOfCredits(id: string): boolean {
-  const row = provider(id);
-  const kind = row ? kindOf(row.kind) : null;
-  if (!row || !kind) return false;
+  const rows = accountsFor(id).filter((row) => row.enabled);
   const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
-  if (!snapshot) return false;
-  return kind.outOfCredits(row, snapshot);
+  if (!snapshot || !rows.length) return false;
+  // 一个平台名下有几个账号：只要有一个还有钱，这个平台就还没用完。
+  return rows.every((row) => {
+    const kind = kindOf(row.kind);
+    return kind ? kind.outOfCredits(row, snapshot) : false;
+  });
 }
+
+/** 一个账号自己的状态（不看别的账号）。 */
+function accountState(row: ProviderRow): UpstreamState {
+  if (!row.enabled) return UpstreamState.DISABLED;
+  const activity = loginActivity(row.id);
+  if (activity.loggingIn) return UpstreamState.LOGGING_IN;
+  const credential = safeCredential(row);
+  if (!credential) return UpstreamState.NO_CREDENTIAL;
+  if (credential.status === CredentialState.ERROR) return UpstreamState.CREDENTIAL_REJECTED;
+  if (!hasUsableCredential(credential.status)) {
+    // 登录被拒过：面板上要说的是「被拒了」—— 用户能照着改密码。
+    if (activity.rejected) return UpstreamState.CREDENTIAL_REJECTED;
+    if (credential.status === CredentialState.EXPIRED) return UpstreamState.CREDENTIAL_EXPIRED;
+    return UpstreamState.NO_CREDENTIAL;
+  }
+  if (outOfCredits(row.id)) return UpstreamState.OUT_OF_CREDITS;
+  return UpstreamState.READY;
+}
+
+/** 严重程度：同时有几种时，面板先要看哪一种。 */
+const STATE_ORDER: UpstreamState[] = [
+  UpstreamState.LOGGING_IN,
+  UpstreamState.CREDENTIAL_REJECTED,
+  UpstreamState.CREDENTIAL_EXPIRED,
+  UpstreamState.NO_CREDENTIAL,
+  UpstreamState.OUT_OF_CREDITS,
+];
 
 /**
  * 这个上游现在能不能接请求。
@@ -642,19 +711,18 @@ export function outOfCredits(id: string): boolean {
  *   5. 凭据过期            → CREDENTIAL_EXPIRED
  *   6. 额度用尽            → OUT_OF_CREDITS
  *   7. 其余                → READY
+ *
+ * 平台名下有几个账号时，有一个能接就算能接（READY）；都接不了就报最要紧的
+ * 那一种：面板要的是「为什么接不了」，而不是一串状态。
  */
 export function upstreamState(id: UpstreamId): UpstreamState {
-  if (!upstreamEnabled(id)) return UpstreamState.DISABLED;
-  const activity = loginActivity(id);
-  if (activity.loggingIn) return UpstreamState.LOGGING_IN;
-  const credential = upstreamCredential(id);
-  if (credential.status === CredentialState.ERROR) return UpstreamState.CREDENTIAL_REJECTED;
-  if (!hasUsableCredential(credential.status)) {
-    // 登录被拒过：面板上要说的是「被拒了」—— 用户能照着改密码。
-    if (activity.rejected) return UpstreamState.CREDENTIAL_REJECTED;
-    if (credential.status === CredentialState.EXPIRED) return UpstreamState.CREDENTIAL_EXPIRED;
-    return UpstreamState.NO_CREDENTIAL;
+  const rows = accountsFor(id);
+  if (!rows.length) return UpstreamState.NO_CREDENTIAL;
+  if (!rows.some((row) => row.enabled)) return UpstreamState.DISABLED;
+  const states = rows.filter((row) => row.enabled).map(accountState);
+  if (states.includes(UpstreamState.READY)) return UpstreamState.READY;
+  for (const state of STATE_ORDER) {
+    if (states.includes(state)) return state;
   }
-  if (outOfCredits(id)) return UpstreamState.OUT_OF_CREDITS;
-  return UpstreamState.READY;
+  return states[0] ?? UpstreamState.NO_CREDENTIAL;
 }

@@ -181,6 +181,8 @@ if (!(await waitForHealth())) {
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
+
+
 /** 打一个 Connect 方法。 */
 async function call(method: string, body: unknown = {}): Promise<{ status: number; body: any }> {
   const res = await fetch(`${base}${SERVICE}/${method}`, {
@@ -196,6 +198,13 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
     parsed = text;
   }
   return { status: res.status, body: parsed };
+}
+
+// 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
+// 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
+for (const platform of ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"]) {
+  const made = await call("AddAccount", { platform });
+  if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
 
 /** 等到满足条件为止。条件可以是异步的。 */
@@ -407,8 +416,8 @@ const wrongUpstream = await call("LoginWithPassword", { upstreamId: "qoder", use
 check("不用密码的上游会拒绝", wrongUpstream.body?.ok !== true, JSON.stringify(wrongUpstream.body));
 check("拒绝时说的是人话", String(wrongUpstream.body?.message ?? "").length > 0);
 
-const noTenant = await call("LoginWithPassword", { upstreamId: "tokenrhythm", accountId: "tokenrhythm:99", username: "x", password: "y" });
-check("没有那个租户就不登", noTenant.body?.ok !== true, JSON.stringify(noTenant.body));
+const noAccount = await call("LoginWithPassword", { upstreamId: "tokenrhythm", accountId: "no-such-account", username: "x", password: "y" });
+check("没有那个账号就不登", noAccount.body?.ok !== true, JSON.stringify(noAccount.body));
 
 const noToken = await call("ImportLoginToken", { upstreamId: "intern-ai", token: "", site: "chat" });
 check("空 token 不导入", noToken.body?.ok !== true, JSON.stringify(noToken.body));

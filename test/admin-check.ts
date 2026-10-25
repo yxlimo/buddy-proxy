@@ -215,16 +215,37 @@ console.log("上游与配置");
 const upstreams = await call("ListUpstreams", {}, token);
 check("上游列表有九个", list(upstreams.body?.upstreams).length === 9, String(list(upstreams.body?.upstreams).length));
 
-// MiniMax 开放平台的 key 从面板写进去。
-const keys = await call("SetProviderKeys", { upstreamId: "minimax-api", keys: ["sk-cp-test-one", "sk-cp-test-two"] }, token);
+// 启动不再插行：新库里一个账号都没有。后面要用的账号按面板的做法加出来 ——
+// 平台是模板，账号才是 provider 表里的行。
+const created: Record<string, string> = {};
+for (const platform of ["qoder-cn", "qoder", "tokenrhythm", "minimax-api"]) {
+  const res = await call("AddAccount", { platform, alias: `${platform} 主账号` }, token);
+  created[platform] = String(res.body?.id ?? "");
+}
+check(
+  "账号按平台加得出来，id 就是平台 id 加序号",
+  created["qoder-cn"] === "qoder-cn" &&
+    created["qoder"] === "qoder" &&
+    created["tokenrhythm"] === "tokenrhythm",
+  JSON.stringify(created),
+);
+
+// MiniMax 开放平台的 key 从面板写进去，挂在账号下面（upstream_id 是账号 id）。
+const apiAccountId = created["minimax-api"];
+const keys = await call("SetProviderKeys", { upstreamId: apiAccountId, keys: ["sk-cp-test-one", "sk-cp-test-two"] }, token);
 check("key 写进去了", keys.body?.ok === true && Number(keys.body?.count) === 2, JSON.stringify(keys.body));
-const afterKeys = await call("ListUpstreams", {}, token);
-const miniMaxApi = list(afterKeys.body?.upstreams).find((u: any) => u.id === "minimax-api");
-check("MiniMax 开放平台有两个租户", String(miniMaxApi?.credential?.detail ?? "").includes("2"), String(miniMaxApi?.credential?.detail));
-check("账号数就是租户数", miniMaxApi?.accountCount === 2, String(miniMaxApi?.accountCount));
-const badKeys = await call("SetProviderKeys", { upstreamId: "qoder", keys: ["x"] }, token);
+const afterKeys = await call("ListCredentials", { accountId: apiAccountId }, token);
+check(
+  "一个账号下有两把 key",
+  list(afterKeys.body?.credentials).filter((c: any) => c.kind === "api_key").length === 2,
+  JSON.stringify(list(afterKeys.body?.credentials).map((c: any) => c.kind)),
+);
+const afterKeysUp = await call("ListUpstreams", {}, token);
+const miniMaxApi = list(afterKeysUp.body?.upstreams).find((u: any) => u.id === "minimax-api");
+check("开放平台下就是一个账号", miniMaxApi?.accountCount === 1, String(miniMaxApi?.accountCount));
+const badKeys = await call("SetProviderKeys", { upstreamId: "no-such-account", keys: ["x"] }, token);
 check("别的 Provider 不收 key", badKeys.body?.ok === false, JSON.stringify(badKeys.body));
-await call("SetProviderKeys", { upstreamId: "minimax-api", keys: [] }, token);
+await call("SetProviderKeys", { upstreamId: apiAccountId, keys: [] }, token);
 
 const config = await call("ListConfig", {}, token);
 check("配置项列出来了", Array.isArray(config.body?.items) && config.body.items.length > 0);
@@ -256,12 +277,12 @@ check(
 );
 await call("SetConfig", { key: "USAGE_RETENTION_DAYS", value: "30" }, token);
 
-const setUpstream = await call("SetUpstreamEnabled", { upstreamId: "qoder-cn", enabled: true }, token);
-check("上游开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
-check("改了上游立刻生效", setUpstream.body?.pendingRestart === false, JSON.stringify(setUpstream.body));
+const setUpstream = await call("SetAccountEnabled", { accountId: created["qoder-cn"], enabled: true }, token);
+check("账号开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
+check("改了账号立刻生效", setUpstream.body?.pendingRestart === false, JSON.stringify(setUpstream.body));
 
-const setBadUpstream = await call("SetUpstreamEnabled", { upstreamId: "nope", enabled: true }, token);
-check("不认识的上游不收", setBadUpstream.body?.ok !== true);
+const setBadUpstream = await call("SetAccountEnabled", { accountId: "nope", enabled: true }, token);
+check("不认识的账号不收", setBadUpstream.body?.ok !== true);
 
 console.log("");
 console.log("生效策略");
@@ -273,8 +294,8 @@ check("上游带着策略", policyQoder?.policy === "PROVIDER_POLICY_SINGLE", JS
 // 策略有自己的方法：改它不碰别名与开关。
 await call("UpdateProvider", { id: "tokenrhythm", alias: "TokenRhythm" }, token);
 const setPolicy = await call(
-  "SetProviderPolicy",
-  { upstreamId: "tokenrhythm", policy: "PROVIDER_POLICY_FALLBACK" },
+  "SetPlatformPolicy",
+  { platform: "tokenrhythm", policy: "PROVIDER_POLICY_FALLBACK" },
   token,
 );
 check("策略改得掉", setPolicy.body?.ok === true, JSON.stringify(setPolicy.body));
@@ -282,36 +303,39 @@ check("策略改得掉", setPolicy.body?.ok === true, JSON.stringify(setPolicy.b
 const afterPolicy = await call("ListUpstreams", {}, token);
 const fallbackRhythm = list(afterPolicy.body?.upstreams).find((u: any) => u.id === "tokenrhythm");
 check("改完就是降级", fallbackRhythm?.policy === "PROVIDER_POLICY_FALLBACK", JSON.stringify(fallbackRhythm?.policy));
-check("改策略不动别名", fallbackRhythm?.alias === "TokenRhythm", JSON.stringify(fallbackRhythm?.alias));
+const aliasAfterPolicy = list((await call("ListAccounts", {}, token)).body?.accounts).find(
+  (a: any) => a.id === "tokenrhythm",
+);
+check("改策略不动账号的别名", aliasAfterPolicy?.alias === "TokenRhythm", JSON.stringify(aliasAfterPolicy?.alias));
 
 const setExpiry = await call(
-  "SetProviderPolicy",
-  { upstreamId: "tokenrhythm", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
+  "SetPlatformPolicy",
+  { platform: "tokenrhythm", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
   token,
 );
 check("余额到期优先也改得掉", setExpiry.body?.ok === true, JSON.stringify(setExpiry.body));
 
 // 只有一个账号的：别的策略选了也没有用，所以不收。
 const qoderFallback = await call(
-  "SetProviderPolicy",
-  { upstreamId: "qoder", policy: "PROVIDER_POLICY_FALLBACK" },
+  "SetPlatformPolicy",
+  { platform: "qoder", policy: "PROVIDER_POLICY_FALLBACK" },
   token,
 );
 check("Qoder 不收降级", qoderFallback.body?.ok !== true, JSON.stringify(qoderFallback.body));
 check(
-  "拒收的话说了这一类支持哪几个",
-  String(qoderFallback.body?.message ?? "").includes("单一"),
+  "拒收的话说了这个平台支持哪几个",
+  String(qoderFallback.body?.message ?? "").includes("single"),
   String(qoderFallback.body?.message),
 );
 const qoderExpiry = await call(
-  "SetProviderPolicy",
-  { upstreamId: "qoder", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
+  "SetPlatformPolicy",
+  { platform: "qoder", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
   token,
 );
 check("Qoder 不收余额到期优先", qoderExpiry.body?.ok !== true, JSON.stringify(qoderExpiry.body));
 
 // 给错了不收，而且说清楚只认哪三个。
-const badPolicy = await call("SetProviderPolicy", { upstreamId: "tokenrhythm", policy: 0 }, token);
+const badPolicy = await call("SetPlatformPolicy", { platform: "tokenrhythm", policy: 0 }, token);
 check("UNSPECIFIED 不收", badPolicy.body?.ok !== true, JSON.stringify(badPolicy.body));
 check(
   "错的话说了只认哪三个",
@@ -319,7 +343,7 @@ check(
   String(badPolicy.body?.message),
 );
 
-const unknownPolicy = await call("SetProviderPolicy", { upstreamId: "tokenrhythm", policy: 7 }, token);
+const unknownPolicy = await call("SetPlatformPolicy", { platform: "tokenrhythm", policy: 7 }, token);
 check("不认识的数字不收", unknownPolicy.body?.ok !== true, JSON.stringify(unknownPolicy.body));
 
 const afterBad = await call("ListUpstreams", {}, token);
@@ -338,7 +362,7 @@ check(
   list(afterAlias.body?.upstreams).find((u: any) => u.id === "tokenrhythm")?.policy ===
     "PROVIDER_POLICY_EXPIRY_FIRST",
 );
-await call("SetProviderPolicy", { upstreamId: "tokenrhythm", policy: "PROVIDER_POLICY_SINGLE" }, token);
+await call("SetPlatformPolicy", { platform: "tokenrhythm", policy: "PROVIDER_POLICY_SINGLE" }, token);
 
 const kinds = await call("ListProviderKinds", {}, token);
 const kindPolicies = (kind: string) => list(list(kinds.body?.kinds).find((k: any) => k.kind === kind)?.policies);
@@ -357,26 +381,33 @@ console.log("账号数");
 
 const counts = await call("ListUpstreams", {}, token);
 const countList = list(counts.body?.upstreams);
-const qoderCount = countList.find((u: any) => u.id === "qoder");
-check("Qoder 有一个账号", qoderCount?.accountCount === 1, String(qoderCount?.accountCount));
-const workbuddyCount = countList.find((u: any) => u.id === "workbuddy-cn");
-check("WorkBuddy 有一个账号", workbuddyCount?.accountCount === 1, String(workbuddyCount?.accountCount));
+const accountRows = list((await call("ListAccounts", {}, token)).body?.accounts);
+// 账号数是 provider 表的行数：跟账号列表里那几行一致。
+for (const platform of ["qoder", "qoder-cn", "tokenrhythm", "minimax-api", "workbuddy-cn"]) {
+  const upstream = countList.find((u: any) => u.id === platform);
+  const rows = accountRows.filter((a: any) => a.platform === platform);
+  check(
+    `${platform} 的账号数就是表里的行数`,
+    Number(upstream?.accountCount ?? 0) === rows.length,
+    `${upstream?.accountCount} vs ${rows.length}`,
+  );
+}
 
-// 中转站：一个账号一个钱包。账号数与账号列表里那几行一样。
-const rhythmUpstream = countList.find((u: any) => u.id === "tokenrhythm");
-const accountList = await call("ListAccounts", {}, token);
-const rhythmAccounts = list(accountList.body?.accounts).filter((a: any) => a.upstreamId === "tokenrhythm");
-check(
-  "中转站的账号数就是租户数",
-  rhythmUpstream?.accountCount === rhythmAccounts.length,
-  `${rhythmUpstream?.accountCount} vs ${rhythmAccounts.length}`,
+// 加一个账号，账号数跟着加一；平台本身删不掉。
+const secondRhythm = await call("AddAccount", { platform: "tokenrhythm", alias: "中转站二号" }, token);
+check("中转站能加第二个账号", secondRhythm.body?.ok === true, JSON.stringify(secondRhythm.body));
+const withSecond = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
+  (u: any) => u.id === "tokenrhythm",
 );
+check("加了就是两个", withSecond?.accountCount === 2, String(withSecond?.accountCount));
 
-// key 清了，账号数也跟着清。
-await call("SetProviderKeys", { upstreamId: "minimax-api", keys: [] }, token);
-const cleared = await call("ListUpstreams", {}, token);
-const clearedApi = list(cleared.body?.upstreams).find((u: any) => u.id === "minimax-api");
-check("key 清了账号数也是 0", clearedApi?.accountCount === 0, String(clearedApi?.accountCount));
+// 注销账号：行与凭据一起删。
+const deleted = await call("DeleteAccount", { id: String(secondRhythm.body?.id ?? "") }, token);
+check("账号删得掉", deleted.body?.ok === true, JSON.stringify(deleted.body));
+const afterDelete = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
+  (u: any) => u.id === "tokenrhythm",
+);
+check("删完就剩一个", afterDelete?.accountCount === 1, String(afterDelete?.accountCount));
 
 console.log("");
 console.log("账号与凭据");
@@ -384,9 +415,38 @@ console.log("账号与凭据");
 const accounts = await call("ListAccounts", {}, token);
 check("账号列出来了", list(accounts.body?.accounts).length >= 4);
 check(
-  "账号带着上游",
-  list(accounts.body?.accounts).some((a: any) => a.upstreamId === "qoder-cn" && a.id === "qoder-cn"),
+  "账号带着平台",
+  list(accounts.body?.accounts).some((a: any) => a.platform === "qoder-cn" && a.id === "qoder-cn"),
 );
+check(
+  "账号带着开关与建出来的时刻",
+  list(accounts.body?.accounts).every((a: any) => typeof a.enabled === "boolean" && String(a.createdAt) > "0"),
+  JSON.stringify(list(accounts.body?.accounts)[0]),
+);
+
+// 给 qoder-cn 那个账号写一份会话：凭据列表要看得到指纹（掩码不算数）。
+const qoderDb = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
+qoderDb.exec("PRAGMA busy_timeout = 5000");
+qoderDb
+  .prepare(
+    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+  )
+  .run(
+    "session:provider:qoder-cn",
+    "session",
+    JSON.stringify({
+      accessToken: "test-access-token",
+      refreshToken: "test-refresh-token",
+      expiresAtMs: Date.now() + 3600_000,
+      refreshExpiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
+      generation: 1,
+      loginAtMs: Date.now(),
+      refreshedAtMs: Date.now(),
+    }),
+    Date.now(),
+  );
+qoderDb.close();
 
 const credentials = await call("ListCredentials", {}, token);
 check("凭据列出来了", Array.isArray(list(credentials.body?.credentials)));
@@ -405,7 +465,7 @@ check(
   oneAccount.body?.credentials?.every((c: any) => c.accountId === "qoder-cn"),
 );
 
-// 中转站的会话是一张表（按租户号存），不是按租户号拼的一个 id。
+// 中转站的会话挂在账号行上：一个账号一份，不再按租户号拼 id。
 // 写一份会话进去，面板上那条会话凭据就不是 missing。
 const rhythmDb = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
 rhythmDb.exec("PRAGMA busy_timeout = 5000");
@@ -418,22 +478,19 @@ rhythmDb
     "session:provider:tokenrhythm",
     "session",
     JSON.stringify({
-      "1": {
-        index: 1,
-        providerId: "tokenrhythm",
-        cookie: "tr_session=test",
-        csrf: "test-csrf",
-        userId: "u-1",
-        name: "测试账号",
-        obtainedAtMs: Date.now(),
-        expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
-      },
+      accountId: "tokenrhythm",
+      cookie: "tr_session=test",
+      csrf: "test-csrf",
+      userId: "u-1",
+      name: "测试账号",
+      obtainedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
     }),
     Date.now(),
-);
+  );
 rhythmDb.close();
 
-const rhythmCredentials = list((await call("ListCredentials", { accountId: "tokenrhythm:1" }, token)).body?.credentials);
+const rhythmCredentials = list((await call("ListCredentials", { accountId: "tokenrhythm" }, token)).body?.credentials);
 const rhythmSession = rhythmCredentials.find((c: any) => c.kind === "session");
 check("中转站的会话凭据列出来了", Boolean(rhythmSession), JSON.stringify(rhythmCredentials));
 check(
@@ -442,8 +499,8 @@ check(
   String(rhythmSession?.status),
 );
 check(
-  "中转站的会话凭据的 id 是按租户拼的",
-  rhythmSession?.id === "session:provider:tokenrhythm:tenant-1",
+  "中转站的会话凭据 id 就是账号那一格",
+  rhythmSession?.id === "session:provider:tokenrhythm",
   String(rhythmSession?.id),
 );
 
@@ -464,11 +521,9 @@ console.log("凭据的 id：现行格式");
 // 一个字也不出机器。
 const knownIds = [
   "session:provider:no-such-upstream",
-  "session:provider:no-such-upstream:tenant-1",
   "key:provider:no-such-upstream:plan",
   "key:provider:no-such-upstream:key-1",
   "key:provider:no-such-upstream:account",
-  "key:provider:no-such-upstream:tenant-1",
 ];
 for (const id of knownIds) {
   const tried = await call("TestCredential", { credentialId: id }, token);
@@ -491,8 +546,8 @@ check(
 );
 const unknownProvider = await call("TestCredential", { credentialId: "session:provider:no-such-upstream" }, token);
 check(
-  "上游不在就说上游不在",
-  String(unknownProvider.body?.message ?? "").includes("没有这个 Provider"),
+  "账号不在就说账号不在",
+  String(unknownProvider.body?.message ?? "").includes("没有这个账号"),
   String(unknownProvider.body?.message),
 );
 // 旧格式是迁移回落，不再是现行格式。
@@ -574,15 +629,22 @@ check(
   modelsOne.status === 200 && list(modelsOne.body?.models).every((m: any) => m.id !== "hy3"),
 );
 
-// 用户自己加的 provider 也要在目录里：以前写死了九个 id，于是用户加的上游
-// 能被路由到，却不在模型列表里。
-const added = await call("AddProvider", { id: "qoder-cleanup", kind: "qoder", alias: "第二个 Qoder" }, token);
-check("用户加的上游加得进去", added.body?.ok === true, JSON.stringify(added.body));
-const addedModels = await call("ListModels", { upstreamId: "qoder-cleanup" }, token);
+// 目录是**平台**的一组（路径里那一段是平台 id）：同一个平台下加第二个账号
+// 不会让同一批模型在列表里出现两遍。
+const added = await call("AddAccount", { platform: "qoder-cn", alias: "第二个 Qoder CN" }, token);
+check("用户加的账号加得进去", added.body?.ok === true, JSON.stringify(added.body));
+const addedModels = await call("ListModels", { upstreamId: "qoder-cn" }, token);
 check(
-  "用户加的上游在模型目录里",
+  "同一个平台加第二个账号，目录还只有一组",
   addedModels.status === 200 && list(addedModels.body?.models).length > 0,
   JSON.stringify(list(addedModels.body?.models).map((m: any) => m.id)),
+);
+const afterSecond = await call("ListUpstreams", {}, token);
+const modelsPerPlatform = list(afterSecond.body?.upstreams).find((u: any) => u.id === "qoder-cn");
+check(
+  "平台上两个账号，账号数是 2",
+  modelsPerPlatform?.accountCount === 2,
+  JSON.stringify(afterSecond.body).slice(0, 300),
 );
 
 const tail = await call("TailLog", { lines: 10 }, token);
@@ -718,16 +780,19 @@ check("上游有区域", qoderUpstream?.region === "global", JSON.stringify(qode
 const cnUpstream = list(withUrls.body?.upstreams).find((u: any) => u.id === "qoder-cn");
 check("中国区的区域是 cn", cnUpstream?.region === "cn", JSON.stringify(cnUpstream?.region));
 
-// 开关：enabled 是现在在生效的值。开关是热的，改完就生效。
-// 用全球区那个：上面那节只改过中国区。
-const beforeSwitch = list(withUrls.body?.upstreams).find((u: any) => u.id === "qoder");
-check("改之前是关着的", beforeSwitch?.enabled === false, JSON.stringify(beforeSwitch));
-const setSwitch = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true }, token);
+// 开关：平台自己没有开关，`enabled` 说的是「名下有没有开着的账号」。
+// 关掉唯一的那个账号，平台就是关的；再打开，平台又开着。开关是热的。
+await call("SetAccountEnabled", { accountId: created["qoder"], enabled: false }, token);
+const beforeSwitch = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
+  (u: any) => u.id === "qoder",
+);
+check("账号关着的时候平台是关的", beforeSwitch?.enabled === false, JSON.stringify(beforeSwitch?.enabled));
+const setSwitch = await call("SetAccountEnabled", { accountId: created["qoder"], enabled: true }, token);
 check("开关改得掉", setSwitch.body?.ok === true, JSON.stringify(setSwitch.body));
 const afterSwitch = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
   (u: any) => u.id === "qoder",
 );
-check("改完 enabled 就是改后的值", afterSwitch?.enabled === true, JSON.stringify(afterSwitch));
+check("改完 enabled 就是改后的值", afterSwitch?.enabled === true, JSON.stringify(afterSwitch?.enabled));
 // 没有「待生效」这回事：答复里根本没有这个字段。
 check("答复里没有待生效的标志", !("pending" in (afterSwitch ?? {})), JSON.stringify(afterSwitch));
 
@@ -831,7 +896,13 @@ const health = await fetch(`${base}/health`);
 const healthBody = await health.json();
 check("/health 还是公开的", health.status === 200);
 check("/health 的形状没变", healthBody?.status === "ok" && Boolean(healthBody?.upstreams) && Boolean(healthBody?.snapshot));
-check("/health 里有各上游", Boolean(healthBody?.upstreams?.qoder?.regions));
+check(
+  "/health 里有各平台（名字、区域、账号）",
+  healthBody?.upstreams?.qoder?.region === "global" &&
+    Array.isArray(healthBody?.upstreams?.qoder?.accounts) &&
+    typeof healthBody?.upstreams?.qoder?.enabled === "boolean",
+  JSON.stringify(healthBody?.upstreams?.qoder).slice(0, 200),
+);
 
 console.log("");
 console.log("重启以后");

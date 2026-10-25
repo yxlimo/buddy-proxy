@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { TokenRhythmTenantStatus } from "../lib/tokenrhythm/wallet.ts";
+import type { TokenRhythmAccountStatus } from "../lib/tokenrhythm/wallet.ts";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "balance-account-"));
 process.env.BUDDY_DATA_DIR = tmp;
@@ -37,7 +37,8 @@ function check(name: string, ok: unknown, detail = ""): void {
  * ------------------------------------------------------------------ */
 
 interface FakeTenant {
-  index: number;
+  /** 账号行的 id。 */
+  accountId: string;
   availableCny: number;
   giftCny: number;
   expiresAt: string;
@@ -57,15 +58,15 @@ function tenant(
   expiresAt: string,
   extra: Partial<FakeTenant> = {},
 ): FakeTenant {
-  return { index, availableCny, giftCny, expiresAt, hasKey: true, ...extra };
+  return { accountId: `tokenrhythm-${index}`, availableCny, giftCny, expiresAt, hasKey: true, ...extra };
 }
 
 /** 假钱包：把假租户说成平台会说的那个形状。 */
-const fakeWallet = async (): Promise<TokenRhythmTenantStatus[]> =>
+const fakeWallet = async (): Promise<TokenRhythmAccountStatus[]> =>
   tenants.map((t) => ({
-    index: t.index,
-    account: `acct-${t.index}`,
-    name: `租户 ${t.index}`,
+    accountId: t.accountId,
+    account: `acct-${t.accountId}`,
+    name: `账号 ${t.accountId}`,
     hasKey: t.hasKey,
     credential: null,
     wallet: t.error
@@ -78,13 +79,13 @@ const fakeWallet = async (): Promise<TokenRhythmTenantStatus[]> =>
           giftTotalCny: t.giftCny,
           giftStatus: "ACTIVE",
           asOf: new Date().toISOString(),
-        } as TokenRhythmTenantStatus["wallet"]),
+        } as TokenRhythmAccountStatus["wallet"]),
     credits: t.error
       ? null
       : ({
           lots: [],
           summary: { expiringBalanceCny: t.giftCny, nextExpiryAt: t.expiresAt },
-        } as TokenRhythmTenantStatus["credits"]),
+        } as TokenRhythmAccountStatus["credits"]),
     error: t.error ?? null,
   }));
 
@@ -101,9 +102,9 @@ tenants = [
 ];
 
 const balances = await scanBalance("tokenrhythm", fakeWallet);
-check("扫到了三个账户", balances.length === 3, JSON.stringify(balances.map((b) => b.index)));
-check("最先到期的排第一", balances[0]?.index === 2, JSON.stringify(balances.map((b) => b.index)));
-check("本金排最后", balances[2]?.index === 1, JSON.stringify(balances.map((b) => b.index)));
+check("扫到了三个账户", balances.length === 3, JSON.stringify(balances.map((b) => b.accountId)));
+check("最先到期的排第一", balances[0]?.accountId === "tokenrhythm-2", JSON.stringify(balances.map((b) => b.accountId)));
+check("本金排最后", balances[2]?.accountId === "tokenrhythm-1", JSON.stringify(balances.map((b) => b.accountId)));
 check(
   "余额是钱包说的那个数",
   balances[0]?.availableCny === 18 && balances[0]?.giftCny === 18,
@@ -125,10 +126,12 @@ tenants = [
   tenant(4, 18, 18, "2026-12-01T00:00:00.000Z"), // 能用
 ];
 const usable = await scanBalance("tokenrhythm", fakeWallet);
+// 没钱的、没 key 的不算；查不到余额的照样算（余额读不到不等于没钱），
+// 只是排在有余额的后面。
 check(
-  "只剩一个能用",
-  usable.length === 1 && usable[0]?.index === 4,
-  JSON.stringify(usable.map((b) => b.index)),
+  "没钱、没 key 的不算，查不到余额的留着",
+  usable.map((b) => b.accountId).join(",") === "tokenrhythm-4,tokenrhythm-3",
+  JSON.stringify(usable.map((b) => b.accountId)),
 );
 
 console.log("");
@@ -143,11 +146,11 @@ clearBalanceAccount("tokenrhythm");
 check("一开始没钉住谁", pinnedBalanceAccount("tokenrhythm") === null);
 
 const pinned = await setBalanceAccount("tokenrhythm", fakeWallet);
-check("钉住的是最先到期的那个", pinned?.index === 2, String(pinned?.index));
+check("钉住的是最先到期的那个", pinned?.accountId === "tokenrhythm-2", String(pinned?.accountId));
 check(
   "钉住的可以问出来",
-  pinnedBalanceAccount("tokenrhythm")?.index === 2,
-  String(pinnedBalanceAccount("tokenrhythm")?.index),
+  pinnedBalanceAccount("tokenrhythm")?.accountId === "tokenrhythm-2",
+  String(pinnedBalanceAccount("tokenrhythm")?.accountId),
 );
 
 console.log("");
@@ -159,8 +162,8 @@ tenants = [
   tenant(3, 18, 18, "2026-12-01T00:00:00.000Z"),
 ];
 const repinned = await setBalanceAccount("tokenrhythm", fakeWallet);
-check("换成赠金还剩着的那个", repinned?.index === 3, String(repinned?.index));
-check("问出来也是新的那个", pinnedBalanceAccount("tokenrhythm")?.index === 3, String(pinnedBalanceAccount("tokenrhythm")?.index));
+check("换成赠金还剩着的那个", repinned?.accountId === "tokenrhythm-3", String(repinned?.accountId));
+check("问出来也是新的那个", pinnedBalanceAccount("tokenrhythm")?.accountId === "tokenrhythm-3", String(pinnedBalanceAccount("tokenrhythm")?.accountId));
 
 console.log("");
 console.log("没有能用的账户就钉不上");

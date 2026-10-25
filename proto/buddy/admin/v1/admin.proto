@@ -36,9 +36,16 @@ enum UpstreamState {
 
 // 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
 // 一个 Provider：网关后面的一个账号。
+// 一个平台。
+//
+// 平台是代码里的模板（九个服务），不是数据：它的 id 是请求路径里那一段
+// （`/minimax/v1/messages`），改它等于把调用方的 base_url 打断。平台删不掉。
+//
+// 一个平台下面可以有多个账号（`accounts`），账号才是 provider 表里的行。
 message Upstream {
+  // 平台的 id，也是路径里那一段。
   string id = 1;
-  // 给人看的名字。别名在面板上改，方便分辨同类的两个账号。
+  // 给人看的名字。
   string label = 2;
   // 它是哪一类上游（minimax、minimax-api、qoder……）。
   string kind = 11;
@@ -58,14 +65,19 @@ message Upstream {
   string base_url = 8;
   // 区域：cn / global。
   string region = 9;
-  // 这个上游名下的多个账号怎么选（provider 的生效策略）。
+  // 这个平台名下的多个账号怎么选。策略在平台这一层：一个账号自己没法
+  // 决定要不要退到另一个账号。
   ProviderPolicy policy = 13;
-  // 这个上游名下有几个账号。
+  // 这个平台名下有几个账号。
   //
-  // 面板用它判「策略有没有用」：只有一个账号的时候，换谁都一样。账号数由
-  // 后端数——上游自己的形态不一样（开放平台一把 key 一个租户，中转站一个
-  // 账号一个钱包），面板自己数会数错。
+  // 面板用它判「策略有没有用」：只有一个账号的时候，换谁都一样。
   int32 account_count = 14;
+  // 这个平台支持哪些策略。面板只给它支持的那几个。
+  repeated ProviderPolicy policies = 15;
+  // 这个平台名下的账号，按创建先后排（也就是权重次序）。
+  repeated Account accounts = 16;
+  // 这个平台下有没有开着的账号。有就能接请求。
+  bool has_enabled_account = 17;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -229,12 +241,13 @@ message ListUpstreamsResponse {
   repeated Upstream upstreams = 1;
 }
 
-message SetUpstreamEnabledRequest {
-  string upstream_id = 1;
+message SetAccountEnabledRequest {
+  // 哪个账号：provider 表里那一行的 id。
+  string account_id = 1;
   bool enabled = 2;
 }
 
-message SetUpstreamEnabledResponse {
+message SetAccountEnabledResponse {
   bool ok = 1;
   // 有改了还没生效的东西时为真。开关是热的，所以通常是假。
   bool pending_restart = 2;
@@ -286,17 +299,27 @@ message SetConfigResponse {
 
 // ── 账号与凭据 ────────────────────────────────────────────────────────────
 
-// 一个账号：上游的一个登录身份。
+// 一个账号：provider 表里的一行，也就是一份登录身份。
+//
+// 平台是模板（九个服务），账号是数据：同一个平台下可以有多行 —— MiniMax
+// Code 的主账号与 M plan 是两行，中转站的每个租户也是一行。
 message Account {
+  // 账号 id。路径里不用它，路径里是平台 id。
   string id = 1;
-  string upstream_id = 2;
-  string label = 3;
-  // usable / expired / missing
+  // 它属于哪个平台。
+  string platform = 2;
+  // 面板上用来分辨两个账号。空就是没有设。
+  string alias = 3;
+  // usable / expired / missing —— 与 Credential.status 同一套词。
   string status = 4;
   int32 credential_count = 5;
   string detail = 6;
   // 这个账号的额度摘要。没有额度的账号不带这个。
   UpstreamQuota quota = 7;
+  // 开关。关着的账号不参与选路。
+  bool enabled = 8;
+  // 建出来的时刻，Unix 毫秒。
+  int64 created_at = 9;
 }
 
 message ListAccountsRequest {}
@@ -374,24 +397,22 @@ message SetProviderKeysResponse {
 
 message ListProviderKindsRequest {}
 
-// 加一个 Provider。同一类可以加很多个，它们各有各的凭据。
-message AddProviderRequest {
-  // 路径里就是它，所以要自己起一个好认的。
-  string id = 1;
-  // 它是哪一类上游。
-  string kind = 2;
-  // 别名：面板上显示在名字后面。
-  string alias = 3;
-  // 区域（qoder 有全球区与中国区之分）。
-  string region = 4;
+// 在一个平台下加一个账号。
+message AddAccountRequest {
+  // 哪个平台：九个模板之一的 id。
+  string platform = 1;
+  // 别名：面板上用来分辨同平台的两个账号。空就由服务起一个。
+  string alias = 2;
 }
 
-message AddProviderResponse {
+message AddAccountResponse {
   bool ok = 1;
   string message = 2;
+  // 新账号的 id。
+  string id = 3;
 }
 
-// 改一个 Provider 的别名与开关。
+// 改一个账号的别名与开关。
 message UpdateProviderRequest {
   string id = 1;
   // 别名。面板每次都带上现在这一栏的值，空串表示清掉名字。
@@ -403,18 +424,18 @@ message UpdateProviderRequest {
   optional bool enabled = 3;
 }
 
-// 改一个上游的生效策略。
+// 改一个平台的生效策略。
 //
-// 策略跟别名、开关不是一回事，所以它自己一个方法：混在 UpdateProvider 里，
-// 改策略就会把别名顺手改掉。
-message SetProviderPolicyRequest {
-  // 哪个上游：provider 表里的 id。
-  string upstream_id = 1;
+// 策略是平台的事：它说的是「这个平台下的几个账号怎么选」，而一个账号自己
+// 没法决定要不要退到另一个账号。
+message SetPlatformPolicyRequest {
+  // 哪个平台：九个模板之一的 id。
+  string platform = 1;
   // 改成哪个策略。
   ProviderPolicy policy = 2;
 }
 
-message SetProviderPolicyResponse {
+message SetPlatformPolicyResponse {
   bool ok = 1;
   string message = 2;
 }
@@ -437,11 +458,12 @@ message LogoutAccountResponse {
   int32 removed = 3;
 }
 
-message DeleteProviderRequest {
+message DeleteAccountRequest {
+  // 哪个账号。它名下的凭据一起删。
   string id = 1;
 }
 
-message DeleteProviderResponse {
+message DeleteAccountResponse {
   bool ok = 1;
   string message = 2;
 }
@@ -836,7 +858,7 @@ service AdminService {
   rpc RestartSystem(RestartSystemRequest) returns (RestartSystemResponse);
 
   rpc ListUpstreams(ListUpstreamsRequest) returns (ListUpstreamsResponse);
-  rpc SetUpstreamEnabled(SetUpstreamEnabledRequest) returns (SetUpstreamEnabledResponse);
+  rpc SetAccountEnabled(SetAccountEnabledRequest) returns (SetAccountEnabledResponse);
 
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
   rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
@@ -849,10 +871,12 @@ service AdminService {
   rpc LogoutAccount(LogoutAccountRequest) returns (LogoutAccountResponse);
   rpc RefreshCredential(RefreshCredentialRequest) returns (RefreshCredentialResponse);
   rpc SetProviderKeys(SetProviderKeysRequest) returns (SetProviderKeysResponse);
-  rpc AddProvider(AddProviderRequest) returns (AddProviderResponse);
+  // 加一个账号。平台是模板，账号才是数据。
+  rpc AddAccount(AddAccountRequest) returns (AddAccountResponse);
   rpc UpdateProvider(UpdateProviderRequest) returns (UpdateProviderResponse);
-  rpc SetProviderPolicy(SetProviderPolicyRequest) returns (SetProviderPolicyResponse);
-  rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse);
+  rpc SetPlatformPolicy(SetPlatformPolicyRequest) returns (SetPlatformPolicyResponse);
+  // 删一个账号：行与它的凭据一起删。平台删不掉。
+  rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse);
   rpc ListProviderKinds(ListProviderKindsRequest) returns (ListProviderKindsResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);

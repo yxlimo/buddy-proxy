@@ -10,7 +10,7 @@
 import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
-import { TOKENRHYTHM_INFER_BASE, tokenRhythmTenant, type TokenRhythmTenant } from "./accounts.ts";
+import { TOKENRHYTHM_INFER_BASE, tokenRhythmCredentialOf, type TokenRhythmCredential } from "./accounts.ts";
 
 /**
  * Put the thinking back into the assistant messages.
@@ -28,20 +28,20 @@ export function restoreReasoningContent(body: Json): void {
   }
 }
 
-/** The key the inference uses, and the tenant it belongs to. */
-export function inferenceTenant(index: number): { tenant: TokenRhythmTenant; key: string } {
-  const tenant = tokenRhythmTenant(index);
-  if (!tenant) {
-    throw new AuthError(`no tenant ${index} configured`, `没有配置第 ${index} 个 TokenRhythm 租户。`, 500);
+/** The key the inference uses, and the account it belongs to. */
+export function inferenceAccount(accountId: string): { credential: TokenRhythmCredential; key: string } {
+  const credential = tokenRhythmCredentialOf(accountId);
+  if (!credential) {
+    throw new AuthError(`no tokenrhythm account ${accountId}`, `没有这个 TokenRhythm 账号：${accountId}。`, 500);
   }
-  if (!tenant.apiKey) {
+  if (!credential.apiKey) {
     throw new AuthError(
-      `tenant ${index} has no inference key`,
-      `第 ${index} 个 TokenRhythm 租户没有配置 API key。设置 TOKENRHYTHM_${index}_API_KEY 后重启服务。`,
+      `tokenrhythm account ${accountId} has no inference key`,
+      `TokenRhythm 账号 ${accountId} 没有推理用的 key。在面板上给它配一把，或等网关自己建一把。`,
       500,
     );
   }
-  return { tenant, key: tenant.apiKey };
+  return { credential, key: credential.apiKey };
 }
 
 /**
@@ -89,8 +89,8 @@ function busyDetail(body: any): { code: string; traceId: string } {
  * The account has no money left.
  *
  * Unlike "the service is busy", this does not get better by waiting: the
- * tenant cannot serve anything until it is recharged. The caller switches to
- * another tenant.
+ * account cannot serve anything until it is recharged. The caller switches to
+ * another account.
  */
 export class TokenRhythmNoBalanceError extends Error {
   status = 402;
@@ -104,11 +104,11 @@ export class TokenRhythmNoBalanceError extends Error {
 }
 
 export async function tokenRhythmChat(
-  index: number,
+  accountId: string,
   body: Json,
   extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; key: string }> {
-  const { tenant, key } = inferenceTenant(index);
+  const { credential, key } = inferenceAccount(accountId);
   const payload = { ...body, model: body.model };
   restoreReasoningContent(payload);
   const response = await fetch(`${TOKENRHYTHM_INFER_BASE}/chat/completions`, {
@@ -124,11 +124,11 @@ export async function tokenRhythmChat(
   if (!response.ok && response.status === 401) {
     const error = new AuthError(
       "tokenrhythm rejected the key",
-      `TokenRhythm 拒绝了第 ${index} 个租户的 key（HTTP 401）。`,
+      `TokenRhythm 拒绝了账号 ${accountId} 的 key（HTTP 401）。`,
       502,
     );
     // The client sees the gateway's status; the upstream's own status says
-    // whether the next tenant would do better.
+    // whether the next account would do better.
     withUpstreamStatus(error, 401);
     throw error;
   }
@@ -169,11 +169,11 @@ export async function tokenRhythmChat(
       502,
     );
     // The client sees the gateway's status; the upstream's own status says
-    // whether the next tenant would do better (a 400 is the request's fault).
+    // whether the next account would do better (a 400 is the request's fault).
     withUpstreamStatus(error, response.status);
     const code = busyDetail(parsed).code;
     if (code) withBusinessCode(error, code);
     throw error;
   }
-  return { response, key: tenant.apiKey ?? key };
+  return { response, key: credential.apiKey ?? key };
 }

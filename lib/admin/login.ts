@@ -27,7 +27,7 @@ import {
   saveSession as saveQoderSession,
   type DeviceAuthorization as QoderDeviceAuthorization,
 } from "../qoder/auth.ts";
-import { provider } from "../providers.ts";
+import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts";
 import {
   ZCODE_POLL_INTERVAL_MS,
   ZCODE_POLL_TIMEOUT_MS,
@@ -40,9 +40,9 @@ import {
   saveSession as saveWorkBuddySession,
   startLogin as startWorkBuddyLogin,
 } from "../workbuddy/auth.ts";
-import { loginWithCredentials, storedTenant, tokenRhythmTenants } from "../tokenrhythm/accounts.ts";
+import { loginWithCredentials, tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
 import { ensureApiKey } from "../tokenrhythm/keys.ts";
-import { login as loginSenseNova, ACCOUNT_ID as SENSENOVA_ACCOUNT_ID } from "../sensenova/auth.ts";
+import { login as loginSenseNova } from "../sensenova/auth.ts";
 import { ensureSenseNovaKey } from "../sensenova/transport.ts";
 import {
   importToken as importInternAiToken,
@@ -227,25 +227,34 @@ function startInternAi(): Started {
 }
 
 /**
- * 开始一次登录。
+ * 在某个账号上开始一次登录。
  *
- * 同一个上游的「开始」用锁串行化：两次同时开始会各自在上游那里建一份状态，
+ * account_id 是 provider 表那一行的 id（账号）。不给就用这个平台下的第一个
+ * 账号 —— 面板在平台那一行上点「登录」时不一定带着账号。
+ *
+ * 同一个账号的「开始」用锁串行化：两次同时开始会各自在上游那里建一份状态，
  * 互相踩。
  */
 export async function beginLogin(upstreamId: string, accountId = ""): Promise<StoredLogin> {
   cleanupLogins();
   const id = crypto.randomUUID();
-  const row = provider(upstreamId);
+  const row = accountFor(upstreamId, accountId);
   if (!row) {
-    throw new AuthError("unknown provider", `没有这个 Provider：${upstreamId}`, 400);
+    throw new AuthError(
+      "no account",
+      accountId
+        ? `没有这个账号：${accountId}。`
+        : `这个平台还没有账号，先在面板上新增一个。`,
+      400,
+    );
   }
-  const started = await withLock(`login:${upstreamId}`, async () => {
+  const started = await withLock(`login:${row.id}`, async () => {
     // The provider says which kind it is; the kind says how to log in.
     switch (row.kind) {
       case "minimax":
         return startMinimax();
       case "qoder":
-        return startQoder(upstreamId);
+        return startQoder(row.id);
       case "zcode":
         return startZcode();
       case "workbuddy":
@@ -261,8 +270,9 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
   });
   const session: StoredLogin = {
     loginId: id,
-    upstreamId,
-    accountId: accountId || upstreamId,
+    // 平台是那条路径与那一组目录；账号才是这份登录落在哪一行。
+    upstreamId: row.platform,
+    accountId: row.id,
     status: "pending",
     method: started.method,
     authorizationUrl: started.authorizationUrl,
@@ -301,21 +311,21 @@ async function pollLoop(session: StoredLogin): Promise<void> {
     });
     // 登录的结果要留痕：容器重建就没有日志了，凭据自己的日志里也只有
     // 「刷新成功」，看不出当初是怎么登上去的。
-    authLog(dataDir(), `${session.upstreamId} 登录成功`, credentialId);
-    console.log(`[LOGIN] ${session.upstreamId} 登录成功`);
+    authLog(dataDir(), `${session.accountId} 登录成功`, credentialId);
+    console.log(`[LOGIN] ${session.accountId} 登录成功`);
   } catch (e) {
     const current = loadLogin(session.loginId);
     if (!current || current.status === "cancelled") return;
     updateLogin(session.loginId, { status: "failed", message: errorText(e) });
-    authLog(dataDir(), `${session.upstreamId} 登录失败`, errorText(e));
-    console.warn(`[LOGIN] ${session.upstreamId} 登录失败：${errorText(e)}`);
+    authLog(dataDir(), `${session.accountId} 登录失败`, errorText(e));
+    console.warn(`[LOGIN] ${session.accountId} 登录失败：${errorText(e)}`);
   }
 }
 
 /** 跑上游自己的轮询，成功后把凭据存起来，返回凭据的 id。 */
 async function runPoll(session: StoredLogin): Promise<string> {
   const poll = session.poll ?? {};
-  const providerId = session.upstreamId;
+  const providerId = session.accountId;
   switch (poll.kind) {
     case "minimax": {
       const auth = poll.auth as unknown as MinimaxDeviceAuthorization;
@@ -358,18 +368,21 @@ async function runPoll(session: StoredLogin): Promise<string> {
  * ------------------------------------------------------------------ */
 
 /**
- * 这个上游现在有没有在登录，最近一次是不是被拒了。
+ * 这个账号现在有没有在登录，最近一次是不是被拒了。
+ *
+ * 传的是账号行的 id：一个平台下有两个账号时，只有一个在登录，另一个不该跟着
+ * 显示「正在登录」。
  *
  * 面板要知道「正在登录」（用户在点授权，别催他）和「被拒了」（让人重登，
  * 而不是让人以为「没登录」）。登录会话都在 cache 表里，多进程共享。
  */
-export function loginActivity(upstreamId: string): { loggingIn: boolean; rejected: boolean } {
+export function loginActivity(accountId: string): { loggingIn: boolean; rejected: boolean } {
   let loggingIn = false;
   let latest: LoginStatus | null = null;
   // listCached 按时间排，所以最后一个就是最近的那次。
   for (const row of listCached("login:")) {
     const session = peekCached<StoredLogin>(row.id)?.data;
-    if (!session || session.upstreamId !== upstreamId) continue;
+    if (!session || session.accountId !== accountId) continue;
     // 还在等、但窗口已经过了，就不是「正在登录」了 —— 那次登录早就没戏了。
     // 留着这个状态，面板会一直说「正在登录」，而实际上什么都没在等。
     if (session.status === "pending" && session.expiresAt > 0 && Date.now() > session.expiresAt) {
@@ -442,6 +455,9 @@ export interface PasswordLoginResult {
  *
  * TokenRhythm 与 SenseNova 的密码登录是纯服务端的；intern-ai 还要人机校验的
  * 三个值（浏览器里过一次验证码才有）。
+ *
+ * account_id 是账号行的 id：登录落在哪一行，凭据就存在哪一行下面。没给就用这个
+ * 平台下的第一个账号。
  */
 export async function loginWithPassword(input: {
   upstreamId: string;
@@ -453,35 +469,38 @@ export async function loginWithPassword(input: {
   captchaPrefix: string;
   remember: boolean;
 }): Promise<PasswordLoginResult> {
-  const { upstreamId } = input;
-  switch (upstreamId) {
+  const row = accountFor(input.upstreamId, input.accountId);
+  if (!row) {
+    return {
+      ok: false,
+      message: input.accountId ? `没有这个账号：${input.accountId}` : "这个平台还没有账号，先在面板上新增一个。",
+      credentialId: "",
+      accountId: "",
+    };
+  }
+  switch (row.kind) {
     case "tokenrhythm": {
-      const index = tenantIndex(input.accountId);
-      if (!index) {
-        return { ok: false, message: "需要指定租户编号：账号填写为 tokenrhythm:1 形式。", credentialId: "", accountId: "" };
-      }
-      const session = await loginWithCredentials(index, input.username, input.password, input.remember);
+      const session = await loginWithCredentials(row.id, input.username, input.password, input.remember);
       // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。
       // 账号上没有就建一把（平台只给一次完整值）。
-      const stored = storedTenant(index);
-      await ensureApiKey(session, index, stored?.apiKey ?? null);
+      await ensureApiKey(session, row.id, tokenRhythmCredentialOf(row.id)?.apiKey ?? null);
       return {
         ok: true,
-        message: `租户 ${index} 登录完成。`,
-        // 会话是一张表（按租户号存），凭据的 id 后面带租户号。
-        credentialId: `session:provider:tokenrhythm:tenant-${index}`,
-        accountId: `tokenrhythm:${index}`,
+        message: `${row.alias || row.id} 登录完成。`,
+        credentialId: `session:provider:${row.id}`,
+        accountId: row.id,
       };
     }
     case "sensenova": {
-      const session = await loginSenseNova(input.username, input.password);
+      const session = await loginSenseNova(input.username, input.password, row.id);
       // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整
       // 值，建它的那个函数负责存下来）。登录完了上游才是 READY 的。
-      const keyReady = await ensureKeySafe("SENSENOVA", () => ensureSenseNovaKey(session));
+      const keyReady = await ensureKeySafe("SENSENOVA", () => ensureSenseNovaKey(session, row.id));
       // cookie 必然要存 —— 它就是登录态，没有它就没有会话。所以不提供「要不要
       // 记住」这个选择：cookie 留着，密码不留（下次要密码的时候再问一次）。
-      const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(SENSENOVA_ACCOUNT_ID);
-      setSecret(SENSENOVA_ACCOUNT_ID, "account", {
+      const accountSecret = `key:provider:${row.id}:account`;
+      const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(accountSecret);
+      setSecret(accountSecret, "account", {
         user: stored?.user ?? input.username,
         password: "",
         apiKey: stored?.apiKey ?? null,
@@ -491,8 +510,8 @@ export async function loginWithPassword(input: {
         message: keyReady
           ? "SenseNova 登录完成，推理用的 key 已就绪。"
           : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
-        credentialId: "session:provider:sensenova",
-        accountId: "sensenova",
+        credentialId: `session:provider:${row.id}`,
+        accountId: row.id,
       };
     }
     case "intern-ai": {
@@ -505,39 +524,47 @@ export async function loginWithPassword(input: {
             }
           : undefined;
       // 契约里这个请求没有「登哪个子站」这一项，所以两个子站都登。
-      const session = await loginInternAi({
-        user: input.username,
-        password: input.password,
-        captcha,
-      });
+      const session = await loginInternAi(
+        {
+          user: input.username,
+          password: input.password,
+          captcha,
+        },
+        row.id,
+      );
       // 推理端点认的是 Discovery 子站那把 key：账号上没有就建一把。
-      const keyReady = await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session));
+      const keyReady = await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session, row.id));
       return {
         ok: true,
         message: keyReady
           ? "intern-ai 登录完成，推理用的 key 已就绪。"
           : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
-        credentialId: "session:provider:intern-ai",
-        accountId: "intern-ai",
+        credentialId: `session:provider:${row.id}`,
+        accountId: row.id,
       };
     }
     default:
       return {
         ok: false,
-        message: `这个上游不用账号密码登录：${upstreamId}`,
+        message: `这个账号不用账号密码登录：${row.alias || row.id}`,
         credentialId: "",
         accountId: "",
       };
   }
 }
 
-/** 从账号 id 里读出 TokenRhythm 的租户号。 */
-function tenantIndex(accountId: string): number | null {
-  const match = /^(?:tokenrhythm:)?(\d+)$/.exec(accountId);
-  if (!match) return null;
-  const index = Number(match[1]);
-  // 面板只让登已经有的租户：新租户不在账号列表里，登录了也看不见。
-  return tokenRhythmTenants().some((t) => t.index === index) ? index : null;
+/**
+ * 面板给的 upstream + account 落到哪一行。
+ *
+ * 账号是数据（一行一份登录），平台是模板：给了账号 id 就用它，没给就用这个平台
+ * 下的第一个账号。两者都没有就是 null，调用方要说「先在面板上新增一个」。
+ */
+function accountFor(upstreamId: string, accountId: string): ProviderRow | null {
+  const wanted = String(accountId ?? "").trim();
+  if (wanted) return provider(wanted);
+  const platform = String(upstreamId ?? "").trim();
+  if (!platform) return null;
+  return accountsOfPlatform(platform)[0] ?? null;
 }
 
 /* ------------------------------------------------------------------ *

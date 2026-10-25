@@ -93,38 +93,89 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
-  // The providers: one row per account a gateway talks to. The kind says how
-  // to talk to it, the alias says how to tell two of the same kind apart.
+  // 账号：一行一个账号。`platform` 是代码里的模板（九个平台之一，也是请求
+  // 路径里那一段），同一平台下可以有多行。
   db.exec(
     `CREATE TABLE IF NOT EXISTS provider (
       id         TEXT PRIMARY KEY,
-      kind       TEXT NOT NULL,
+      platform   TEXT NOT NULL,
       alias      TEXT NOT NULL DEFAULT '',
-      region     TEXT NOT NULL DEFAULT '',
       enabled    INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      policy     TEXT NOT NULL DEFAULT 'single'
+      updated_at INTEGER NOT NULL
     )`,
   );
-  // The policy column came later: an existing database needs it added before
-  // anything reads it. The default is 'single' — the policy is the operator's
-  // to set, so an old row keeps the one it had, not a guessed one.
-  const providerColumns = db.prepare("PRAGMA table_info(provider)").all() as { name?: string }[];
-  if (!providerColumns.some((c) => c.name === "policy")) {
-    db.exec("ALTER TABLE provider ADD COLUMN policy TEXT NOT NULL DEFAULT 'single'");
-  }
-  // A provider the operator deleted stays deleted. The built-in ones are put
-  // back on every start, so a deletion has to be remembered somewhere --
-  // without this the provider came back right after the panel said it was
-  // gone.
+  // 平台层的生效策略：一行一个平台，没有行就是默认。
+  //
+  // 这张表要在迁移之前就存在：迁移会把旧行上的策略搬进来。
   db.exec(
-    `CREATE TABLE IF NOT EXISTS deleted_provider (
-      id         TEXT PRIMARY KEY,
-      deleted_at INTEGER NOT NULL
+    `CREATE TABLE IF NOT EXISTS platform_policy (
+      platform   TEXT PRIMARY KEY,
+      policy     TEXT NOT NULL DEFAULT 'single',
+      updated_at INTEGER NOT NULL
     )`,
   );
+  migrateProviderToAccounts(db);
   return db;
+}
+
+/**
+ * 把旧的「一行一个上游」改成「一行一个账号」。
+ *
+ * 旧的行里 `kind` 的值基本上就是平台 id（`minimax`、`qoder`、`qoder-cn`……），
+ * 但有两处要修：`workbuddy` 那一行的平台叫 `workbuddy-cn`，`qoder` 那一行要
+ * 按 region 分成 `qoder`（全球区）与 `qoder-cn`（中国区）两个平台。
+ *
+ * 旧行的 `policy` 搬到平台层：一个平台下有多个账号时，取第一个不是默认值的
+ * 那个——否则 TokenRhythm 的「余额到期优先」会默默丢掉。
+ */
+function migrateProviderToAccounts(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(provider)").all() as { name?: string }[];
+  const has = (name: string) => columns.some((c) => c.name === name);
+  if (!has("kind")) return; // 已经是新的形状了。
+
+  const rows = db
+    .prepare("SELECT id, kind, alias, enabled, region, created_at, updated_at FROM provider")
+    .all() as any[];
+  const policies = has("policy")
+    ? (db.prepare("SELECT id, policy FROM provider").all() as any[])
+    : [];
+
+  db.exec("ALTER TABLE provider RENAME TO provider_old");
+  db.exec(
+    `CREATE TABLE provider (
+      id         TEXT PRIMARY KEY,
+      platform   TEXT NOT NULL,
+      alias      TEXT NOT NULL DEFAULT '',
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  );
+  const insert = db.prepare(
+    "INSERT INTO provider (id, platform, alias, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  const setPolicy = db.prepare(
+    "INSERT INTO platform_policy (platform, policy, updated_at) VALUES (?, ?, ?) " +
+      "ON CONFLICT(platform) DO NOTHING",
+  );
+  const policyOf = new Map(policies.map((r) => [String(r.id), String(r.policy ?? "single")]));
+  const now = Date.now();
+
+  for (const row of rows) {
+    const platform = platformOfLegacyRow(String(row.kind), String(row.region ?? ""));
+    insert.run(String(row.id), platform, String(row.alias ?? ""), Number(row.enabled ?? 1) ? 1 : 0, Number(row.created_at ?? now), Number(row.updated_at ?? now));
+    const policy = policyOf.get(String(row.id));
+    if (policy && policy !== "single") setPolicy.run(platform, policy, now);
+  }
+  db.exec("DROP TABLE provider_old");
+}
+
+/** 旧行（kind + region）属于哪个平台。 */
+function platformOfLegacyRow(kind: string, region: string): string {
+  if (kind === "workbuddy") return "workbuddy-cn";
+  if (kind === "qoder") return region === "cn" ? "qoder-cn" : "qoder";
+  return kind;
 }
 
 /* ------------------------------------------------------------------ *

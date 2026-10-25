@@ -95,8 +95,8 @@ function startRouter(): ChildProcess {
       BUDDY_DATA_DIR: DATA_DIR,
       ROUTER_PORT: String(port),
       BENEFITS_DISABLED: "1",
-      // 上游的开关不在环境里了：它在数据库的 provider.enabled 上，重启也
-      // 还在。开头用面板的 SetUpstreamEnabled 把 Qoder 打开。
+      // 开关不在环境里了：它在数据库的 provider.enabled 上（一行一个账号），
+      // 重启也还在。开头用面板的 SetAccountEnabled 把这个账号打开。
       // 上游指向假上游：一个字都不出机器。
       QODER_GLOBAL_INFER_BASE: `${upstreamBase}/qoder-global`,
       QODER_GLOBAL_OPENAPI_BASE: `${upstreamBase}/openapi-global`,
@@ -179,8 +179,12 @@ async function admin(method: string, body: unknown = {}): Promise<any> {
   }
 }
 
-// 上游的开关在数据库里：只有 Qoder 全球区开着，其余的默认就是关的。
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+// 账号是数据，平台是模板：会话种进库里之后，还要有一行账号才算「开着」。
+const seeded = await admin("ListUpstreams", {});
+const qoderRow = (seeded.upstreams ?? []).find((u: any) => u.id === "qoder");
+const qoderAccount = (qoderRow?.accounts ?? [])[0];
+check("Qoder 全球区有一个账号", Boolean(qoderAccount?.id), JSON.stringify(qoderRow?.accounts ?? []));
+await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: true });
 
 /** 客户端发一次请求（OpenAI 方言，根路由）。 */
 async function chat(
@@ -620,19 +624,19 @@ check("开着的目标答了", disabled.status === 200, `HTTP ${disabled.status}
 
 section("上游关掉的时候");
 
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
+await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: false });
 const stillThere = await fetch(`${base}/v1/models`).then((r) => r.json());
 check(
   "改了开关就生效，目录里没有那些模型了（不用重启）",
   !(stillThere.data ?? []).some((m: any) => m.id === "e2e-main" || m.id === "e2e-fallback"),
   JSON.stringify((stillThere.data ?? []).map((m: any) => m.id)),
 );
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: true });
 
 section("上游真的关掉之后（重启过）");
 
 // 把上游开关改成关（写进数据库），再重启：这次上游是真的关着的。
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
+await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: false });
 await stopRouter();
 startRouter();
 await waitHealthy();
@@ -657,7 +661,7 @@ const offChat = await chat("e2e-fallback");
 check("客户端问一个公布出来的模型，答不上来", offChat.status === 404, `HTTP ${offChat.status}`);
 
 // 回到上游开着的状态，后面的收尾还要用。
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: true });
 await stopRouter();
 startRouter();
 await waitHealthy();

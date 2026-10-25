@@ -138,39 +138,50 @@ const inferencePort = (inference.address() as any).port;
 
 process.env.TOKENRHYTHM_API_BASE = `http://127.0.0.1:${platformPort}`;
 process.env.TOKENRHYTHM_INFER_BASE = `http://127.0.0.1:${inferencePort}/v1`;
-process.env.TOKEN_RHYTHM_1_ACCOUNT = "19000000001";
-process.env.TOKEN_RHYTHM_1_PASSWORD = "pw1";
-process.env.TOKEN_RHYTHM_1_API_KEY = "sk_tr_tenant_1";
-process.env.TOKEN_RHYTHM_2_ACCOUNT = "19000000002";
-process.env.TOKEN_RHYTHM_2_PASSWORD = "pw2";
-process.env.TOKEN_RHYTHM_2_API_KEY = "sk_tr_tenant_2";
-
 /* ------------------------------------------------------------------ *
- * 两个租户的会话
+ * 账号
+ *
+ * 一个账号就是 provider 表里的一行：账号密码与推理 key 是它的凭据，会话也
+ * 是它自己的。前两个先建，后面的测试再往上加。
  * ------------------------------------------------------------------ */
 
-const { setSecret } = await import("../lib/store.ts");
-for (const index of [1, 2]) {
-  setSecret(`session:tokenrhythm:${index}`, "session", {
-    schemaVersion: 1,
-    account: `1900000000${index}`,
-    password: `pw${index}`,
-    name: `租户 ${index}`,
-    cookie: `tr_session=session-${index}; tr_csrf=csrf-${index}`,
-    generation: 1,
-    loginAtMs: Date.now(),
+const { addAccount, provider: accountRow } = await import("../lib/providers.ts");
+const { saveSession, saveTokenRhythmCredential } = await import("../lib/tokenrhythm/accounts.ts");
+
+/** 建第 n 个账号（第 1 个的 id 就是平台 id），带上凭据与会话。 */
+function makeAccount(n: number): string {
+  const id = n === 1 ? "tokenrhythm" : `tokenrhythm-${n}`;
+  if (!accountRow(id)) addAccount({ platform: "tokenrhythm" });
+  saveTokenRhythmCredential(id, {
+    account: `1900000000${n}`,
+    password: `pw${n}`,
+    apiKey: `sk_tr_tenant_${n}`,
   });
+  saveSession(
+    {
+      accountId: id,
+      cookie: `tr_session=session-${n}; tr_csrf=csrf-${n}`,
+      csrf: `csrf-${n}`,
+      userId: `u${n}`,
+      name: `账号 ${n}`,
+      obtainedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
+    },
+    { force: true },
+  );
+  return id;
 }
+
+makeAccount(1);
+makeAccount(2);
 
 const { toTokenRhythm } = await import("../lib/router/upstreams.ts");
 const { resetTokenRhythmStatusCache } = await import("../lib/tokenrhythm/wallet.ts");
+const { setPlatformPolicy } = await import("../lib/platforms.ts");
 
 // 上游自己的策略：这个测试要的是「余额不足就换一个」，所以策略是降级。
-const { ensureBuiltinProviders } = await import("../lib/providers.ts");
-const { store } = await import("../lib/store.ts");
-ensureBuiltinProviders();
 const setPolicy = (policy: string): void => {
-  store().prepare("UPDATE provider SET policy = ? WHERE id = ?").run(policy, "tokenrhythm");
+  setPlatformPolicy("tokenrhythm", policy as never);
 };
 setPolicy("fallback");
 
@@ -188,10 +199,8 @@ const ctx: any = {
 };
 
 const route: any = {
-  upstream: "tokenrhythm",
-  provider: "tokenrhythm",
+  platform: "tokenrhythm",
   model: "deepseek-v4.1-flash-1017",
-  group: "tokenrhythm",
 };
 
 // A Koa context, roughly: the status starts at 200 and the body goes in it.
@@ -230,23 +239,8 @@ console.log("");
 console.log("所有租户都没钱");
 
 // Two more tenants, both with money on paper and neither able to pay.
-process.env.TOKEN_RHYTHM_3_ACCOUNT = "19000000003";
-process.env.TOKEN_RHYTHM_3_PASSWORD = "pw3";
-process.env.TOKEN_RHYTHM_3_API_KEY = "sk_tr_tenant_3";
-process.env.TOKEN_RHYTHM_4_ACCOUNT = "19000000004";
-process.env.TOKEN_RHYTHM_4_PASSWORD = "pw4";
-process.env.TOKEN_RHYTHM_4_API_KEY = "sk_tr_tenant_4";
-for (const index of [3, 4]) {
-  setSecret(`session:tokenrhythm:${index}`, "session", {
-    schemaVersion: 1,
-    account: `1900000000${index}`,
-    password: `pw${index}`,
-    name: `租户 ${index}`,
-    cookie: `tr_session=session-${index}; tr_csrf=csrf-${index}`,
-    generation: 1,
-    loginAtMs: Date.now(),
-  });
-}
+makeAccount(3);
+makeAccount(4);
 
 // Now every key says "no balance".
 serveKey = null;
@@ -282,23 +276,8 @@ console.log("单一策略不换租户");
 
 // Two more accounts, and only the second one can pay. The policy says one
 // account, so the request fails on the first one and stays there.
-process.env.TOKEN_RHYTHM_5_ACCOUNT = "19000000005";
-process.env.TOKEN_RHYTHM_5_PASSWORD = "pw5";
-process.env.TOKEN_RHYTHM_5_API_KEY = "sk_tr_tenant_5";
-process.env.TOKEN_RHYTHM_6_ACCOUNT = "19000000006";
-process.env.TOKEN_RHYTHM_6_PASSWORD = "pw6";
-process.env.TOKEN_RHYTHM_6_API_KEY = "sk_tr_tenant_6";
-for (const index of [5, 6]) {
-  setSecret(`session:tokenrhythm:${index}`, "session", {
-    schemaVersion: 1,
-    account: `1900000000${index}`,
-    password: `pw${index}`,
-    name: `租户 ${index}`,
-    cookie: `tr_session=session-${index}; tr_csrf=csrf-${index}`,
-    generation: 1,
-    loginAtMs: Date.now(),
-  });
-}
+makeAccount(5);
+makeAccount(6);
 
 // The wallet is read again, so the new accounts are in the picture.
 resetTokenRhythmStatusCache("tokenrhythm");

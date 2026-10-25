@@ -174,6 +174,13 @@ check("网关起来了", await waitHealthy());
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
+// 启动不再插行：新库里一个账号都没有，先按面板的做法加一行出来。
+// 平台是模板（九个服务），账号才是 provider 表的行。
+async function addAccount(platform: string, alias = ""): Promise<string> {
+  const res = await admin("AddAccount", { platform, alias });
+  return String(res.id ?? "");
+}
+
 async function admin(method: string, body: unknown = {}): Promise<any> {
   const res = await fetch(`${base}${SERVICE}/${method}`, {
     method: "POST",
@@ -310,8 +317,9 @@ async function upstreamStateOf(id: string): Promise<string> {
   return String(found?.state ?? "");
 }
 
-async function setEnabled(id: string, enabled: boolean): Promise<void> {
-  await admin("SetUpstreamEnabled", { upstreamId: id, enabled });
+/** 开关在账号上，不在平台上。 */
+async function setEnabled(accountId: string, enabled: boolean): Promise<void> {
+  await admin("SetAccountEnabled", { accountId, enabled });
 }
 
 /* ------------------------------------------------------------------ *
@@ -319,6 +327,10 @@ async function setEnabled(id: string, enabled: boolean): Promise<void> {
  * ------------------------------------------------------------------ */
 
 section("上游的状态");
+
+// 先把这个平台下的账号建出来：账号 id 由服务起（`qoder`、`qoder-2`……）。
+const qoderAccountId = await addAccount("qoder", "Qoder 主账号");
+check("账号加得出来", qoderAccountId === "qoder", qoderAccountId);
 
 // 1. 开关关着。
 await setEnabled("qoder", false);

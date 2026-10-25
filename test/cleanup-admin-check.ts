@@ -48,19 +48,16 @@ function section(title: string): void {
 
 section("新装好的服务");
 
-const { ensureBuiltinProviders, listProviders, addProvider } = await import("../lib/providers.ts");
-ensureBuiltinProviders();
+const { listProviders, addAccount } = await import("../lib/providers.ts");
+const { PLATFORMS } = await import("../lib/platforms.ts");
 
+// 启动不再插行：新装好的服务里一个账号都没有，平台是代码里的模板。
 const builtIn = listProviders();
+check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
 check(
-  "九个内置上游都在",
-  builtIn.length === 9,
-  builtIn.map((p) => p.id).join(","),
-);
-check(
-  "内置上游默认全是关的",
-  builtIn.every((p) => !p.enabled),
-  builtIn.filter((p) => p.enabled).map((p) => p.id).join(",") || "（没有开着的）",
+  "九个平台是模板，不是表里的行",
+  PLATFORMS.length === 9 && PLATFORMS.every((p) => typeof p.id === "string"),
+  PLATFORMS.map((p) => p.id).join(","),
 );
 check(
   "上游的开关不在环境里了",
@@ -79,12 +76,11 @@ const { parseCredentialId } = await import("../lib/admin/credentials.ts");
 
 const shapes: [string, string, number | null][] = [
   ["session:provider:qoder", "session", null],
-  ["session:provider:tokenrhythm:tenant-2", "session", 2],
   ["key:provider:minimax:plan", "plan_key", null],
   ["key:provider:minimax-api:key-1", "api_key", 1],
   ["key:provider:sensenova:account", "login", null],
   ["key:provider:intern-ai:account", "login", null],
-  ["key:provider:tokenrhythm:tenant-3", "login", 3],
+  ["key:provider:tokenrhythm:account", "login", null],
 ];
 for (const [id, form, tenant] of shapes) {
   const ref = parseCredentialId(id);
@@ -101,8 +97,10 @@ check(
 );
 check(
   "旧格式不认（那是迁移回落，不是现行格式）",
-  parseCredentialId("session:minimax") === null && parseCredentialId("account:tokenrhythm:1") === null,
-  JSON.stringify(parseCredentialId("session:minimax")),
+  parseCredentialId("session:minimax") === null &&
+    parseCredentialId("account:tokenrhythm:1") === null &&
+    parseCredentialId("session:provider:tokenrhythm:tenant-1") === null,
+  JSON.stringify(parseCredentialId("session:provider:tokenrhythm:tenant-1")),
 );
 
 /* ------------------------------------------------------------------ *
@@ -142,19 +140,20 @@ section("「试一下」说的话");
 
 const { testCredential } = await import("../lib/admin/accounts.ts");
 
-addProvider({ id: "sensenova-cleanup", kind: "sensenova", alias: "测试 SenseNova" });
-writeSecret("key:provider:sensenova-cleanup:account", "account", {
+const senseAccount = addAccount({ platform: "sensenova", alias: "测试 SenseNova" });
+const senseId = String(senseAccount.id ?? "sensenova");
+writeSecret(`key:provider:${senseId}:account`, "account", {
   user: "one@example.com",
   password: "",
   apiKey: "sk-sense-test",
 });
-const loginTried = await testCredential("key:provider:sensenova-cleanup:account");
+const loginTried = await testCredential(`key:provider:${senseId}:account`);
 check(
   "登录凭据说的是登录账号",
   loginTried.message.includes("登录账号") && !loginTried.message.includes("推理 key"),
   loginTried.message,
 );
-const apiKeyTried = await testCredential("key:provider:sensenova-cleanup:account#api_key");
+const apiKeyTried = await testCredential(`key:provider:${senseId}:account#api_key`);
 check(
   "推理 key 说的是推理 key",
   apiKeyTried.message.includes("推理 key"),
@@ -162,35 +161,33 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
- * 三、TokenRhythm 的会话是一张表
+ * 三、TokenRhythm 的凭据挂在账号行上
  * ------------------------------------------------------------------ */
 
-section("TokenRhythm 的会话");
+section("TokenRhythm 的凭据");
 
 const { setSecret } = await import("../lib/store.ts");
 const { credentialsOf, listAccounts } = await import("../lib/admin/accounts.ts");
 const { CredentialState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts");
 
-addProvider({ id: "tr-cleanup", kind: "tokenrhythm", alias: "测试中转站" });
-setSecret("key:provider:tr-cleanup:tenant-1", "account", {
+const trOne = addAccount({ platform: "tokenrhythm", alias: "中转站一号" });
+const trOneId = String(trOne.id ?? "tokenrhythm");
+setSecret(`key:provider:${trOneId}:account`, "account", {
   account: "one@example.com",
   password: "pw-one",
   apiKey: "sk_tr_one",
 });
-setSecret("session:provider:tr-cleanup", "session", {
-  "1": {
-    index: 1,
-    providerId: "tr-cleanup",
-    cookie: "tr_session=abc",
-    csrf: "csrf-token",
-    userId: "u-1",
-    name: "测试账号",
-    obtainedAtMs: Date.now(),
-    expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
-  },
+setSecret(`session:provider:${trOneId}`, "session", {
+  accountId: trOneId,
+  cookie: "tr_session=abc",
+  csrf: "csrf-token",
+  userId: "u-1",
+  name: "测试账号",
+  obtainedAtMs: Date.now(),
+  expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
 });
 
-const rhythmCredentials = credentialsOf("tr-cleanup:1");
+const rhythmCredentials = credentialsOf(trOneId);
 const sessionCredential = rhythmCredentials.find((c) => c.kind === "session");
 check("会话凭据列出来了", Boolean(sessionCredential), JSON.stringify(rhythmCredentials));
 check(
@@ -199,8 +196,8 @@ check(
   String(sessionCredential?.status),
 );
 check(
-  "会话凭据的 id 是按租户拼的",
-  sessionCredential?.id === "session:provider:tr-cleanup:tenant-1",
+  "会话凭据的 id 就是账号那一格",
+  sessionCredential?.id === `session:provider:${trOneId}`,
   String(sessionCredential?.id),
 );
 check(
@@ -209,68 +206,53 @@ check(
   rhythmCredentials.map((c) => c.kind).join(","),
 );
 check(
-  "账号列表里看得见这个租户",
-  listAccounts().some((a) => a.id === "tr-cleanup:1"),
+  "账号列表里看得见这个账号",
+  listAccounts().some((a) => a.id === trOneId),
   listAccounts().map((a) => a.id).join(","),
 );
+check(
+  "账号带着平台",
+  listAccounts().find((a) => a.id === trOneId)?.platform === "tokenrhythm",
+  JSON.stringify(listAccounts().find((a) => a.id === trOneId)),
+);
 
-// 注销一个租户：只删那一个租户的，别把别的租户一起删了。
+// 第二个账号：旧库里的那一份（按序号存的）要落在这个账号行上。
+const trTwo = addAccount({ platform: "tokenrhythm", alias: "中转站二号" });
+const trTwoId = String(trTwo.id ?? "tokenrhythm-2");
+check("第二个账号的 id 是接序号起的", trTwoId === "tokenrhythm-2", trTwoId);
+
+// 注销一个账号：它的凭据全删，旧库里那一份也删 —— 不删它，下一次读又搬回来。
 const { logoutAccount } = await import("../lib/admin/accounts.ts");
-const loggedOut = logoutAccount("tr-cleanup:1");
-check("注销一个租户", loggedOut.ok === true && loggedOut.removed > 0, JSON.stringify(loggedOut));
-check(
-  "那个租户的登录账号没了",
-  !credentialsOf("tr-cleanup:1").some((c) => c.kind === "login" || c.kind === "api_key"),
-  JSON.stringify(credentialsOf("tr-cleanup:1")),
-);
-check(
-  "那个租户的会话没了（不再是 usable）",
-  credentialsOf("tr-cleanup:1").every((c) => c.kind !== "session" || c.status === CredentialState.MISSING),
-  JSON.stringify(credentialsOf("tr-cleanup:1")),
-);
-
-// 内置的那个中转站：旧的那一份（account:tokenrhythm:<n>）也要删掉。
-// 不删它，注销的租户下一次列账号就回来了 —— 读账号的那一步会回落读旧 id。
-setSecret("key:provider:tokenrhythm:tenant-2", "account", {
-  account: "two@example.com",
-  password: "pw-two",
-  apiKey: "sk_tr_two",
-});
+const { getSecret: readSecret } = await import("../lib/store.ts");
 setSecret("account:tokenrhythm:2", "account", {
   account: "two@example.com",
   password: "pw-two",
   apiKey: "sk_tr_two",
 });
-const { getSecret: readSecret } = await import("../lib/store.ts");
+setSecret("key:provider:tokenrhythm:tenant-2", "account", {
+  account: "two@example.com",
+  password: "pw-two",
+  apiKey: "sk_tr_two",
+});
 check("旧的那一份先在", readSecret("account:tokenrhythm:2") !== null);
-const loggedOutBuiltIn = logoutAccount("tokenrhythm:2");
-check("注销内置中转站的一个租户", loggedOutBuiltIn.ok === true, JSON.stringify(loggedOutBuiltIn));
+
+const loggedOut = logoutAccount(trTwoId);
+check("注销一个账号", loggedOut.ok === true && loggedOut.removed > 0, JSON.stringify(loggedOut));
 check(
   "旧的那一份也删了（不然账号会回来）",
   readSecret("account:tokenrhythm:2") === null,
   JSON.stringify(readSecret("account:tokenrhythm:2")),
 );
 check(
-  "现行的那一份也删了",
+  "更早的那一份也删了",
   readSecret("key:provider:tokenrhythm:tenant-2") === null,
+  JSON.stringify(readSecret("key:provider:tokenrhythm:tenant-2")),
 );
-
-// 环境变量里配着的租户：删掉库里那份它就回来了 —— 消息里要说清楚。
-process.env.TOKEN_RHYTHM_3_ACCOUNT = "three@example.com";
-process.env.TOKEN_RHYTHM_3_PASSWORD = "pw-three";
-setSecret("key:provider:tokenrhythm:tenant-3", "account", {
-  account: "three@example.com",
-  password: "pw-three",
-  apiKey: "sk_tr_three",
-});
-const loggedOutEnv = logoutAccount("tokenrhythm:3");
 check(
-  "环境里配着的租户：消息说清楚了它还在",
-  loggedOutEnv.message.includes("TOKEN_RHYTHM_3_ACCOUNT"),
-  loggedOutEnv.message,
+  "别的账号的凭据没动",
+  credentialsOf(trOneId).some((c) => c.kind === "login"),
+  JSON.stringify(credentialsOf(trOneId).map((c) => c.kind)),
 );
-delete process.env.TOKEN_RHYTHM_3_ACCOUNT;
-delete process.env.TOKEN_RHYTHM_3_PASSWORD;
 
 /* ------------------------------------------------------------------ *
  * 四、用量保留天数是热设置
@@ -291,39 +273,46 @@ check(
 setConfigValue("USAGE_RETENTION_DAYS", "30", true);
 
 /* ------------------------------------------------------------------ *
- * 五、用户自己加的 provider 出现在模型目录里
+ * 五、目录按平台分组（不是按账号）
  * ------------------------------------------------------------------ */
 
-section("用户自己加的 provider");
+section("模型目录按平台分组");
 
 const { catalogGroups } = await import("../lib/admin/upstreams.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
-addProvider({ id: "qoder-cleanup", kind: "qoder", alias: "第二个 Qoder" });
+const { accountsOfPlatform } = await import("../lib/providers.ts");
+addAccount({ platform: "qoder", alias: "第一个 Qoder" });
+addAccount({ platform: "qoder", alias: "第二个 Qoder" });
 const groups = catalogGroups();
-const mine = groups.find((g) => g.group === "qoder-cleanup");
-check("目录里有用户加的那个", Boolean(mine), groups.map((g) => g.group).join(","));
+const mine = groups.find((g) => g.group === "qoder");
+check("目录里有加过账号的平台", Boolean(mine), groups.map((g) => g.group).join(","));
 check(
-  "它的模型是它自己的 kind 说的",
+  "它的模型是它的 kind 说的",
   (mine?.models.length ?? 0) > 0,
   String(mine?.models.length ?? 0),
 );
 check(
-  "关着的上游不在目录里",
+  "同一个平台有两个账号也只有一组",
+  groups.filter((g) => g.group === "qoder").length === 1,
+  groups.map((g) => g.group).join(","),
+);
+check(
+  "没有账号的平台不在目录里",
   !groups.some((g) => g.group === "qoder-cn"),
   groups.map((g) => g.group).join(","),
 );
 
-// 目录里的每一组，名字就是那个 provider 的 id：发布模型靠它指路，写错了
-// 就指不到人。
+// 目录里的每一组，名字就是平台 id：路径里那一段、发布模型指路都用它。
 check(
-  "每一组的 group 就是那个 provider 的 id",
-  groups.every((g) => listProviders().some((p) => p.id === g.group)),
+  "每一组的 group 就是平台 id",
+  groups.every((g) => PLATFORMS.some((p) => p.id === g.group)),
   groups.map((g) => g.group).join(","),
 );
 check(
   "组的模型是它自己的 kind 说的那一份",
   groups.every((g) => {
-    const row = listProviders().find((p) => p.id === g.group);
+    // 目录是平台的一组：拿它名下随便哪个账号去问 kind 都是同一份。
+    const row = accountsOfPlatform(g.group)[0];
     if (!row) return false;
     const kind = kindOf(row.kind);
     if (!kind) return false;
@@ -334,6 +323,7 @@ check(
 );
 
 // WorkBuddy 的目录只有一份：注册表读到的就是 workbuddyModelList() 那一份。
+addAccount({ platform: "workbuddy-cn", alias: "测试 WorkBuddy" });
 const { workbuddyModelList } = await import("../lib/workbuddy/models.ts");
 const wbRow = listProviders().find((p) => p.kind === "workbuddy");
 const wbKind = wbRow ? kindOf(wbRow.kind) : null;
@@ -394,10 +384,11 @@ const ENV_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-admin-env-"));
 const envRun = spawnSync(
   process.execPath,
   ["--experimental-strip-types", "-e", `
-    const { ensureBuiltinProviders, listProviders } = await import("${ROOT}/lib/providers.ts");
-    ensureBuiltinProviders();
+    const { listProviders } = await import("${ROOT}/lib/providers.ts");
+    const { PLATFORMS } = await import("${ROOT}/lib/platforms.ts");
+    // 环境里那几个开关还在，但没人读了：一个账号都不该冒出来。
     const rows = listProviders();
-    console.log(JSON.stringify(rows.map((r) => [r.id, r.enabled])));
+    console.log(JSON.stringify({ platforms: PLATFORMS.length, rows: rows.map((r) => [r.id, r.enabled]) }));
   `],
   {
     cwd: ROOT,
@@ -406,16 +397,16 @@ const envRun = spawnSync(
   },
 );
 check("带着环境开关起进程没报错", envRun.status === 0, envRun.stderr?.slice(-300) ?? "");
-let envRows: [string, boolean][] = [];
+let envRun_body: { platforms: number; rows: [string, boolean][] } = { platforms: 0, rows: [] };
 try {
-  envRows = JSON.parse(envRun.stdout.trim().split("\n").pop() ?? "[]");
+  envRun_body = JSON.parse(envRun.stdout.trim().split("\n").pop() ?? "{}");
 } catch {
-  envRows = [];
+  envRun_body = { platforms: 0, rows: [] };
 }
 check(
-  "环境里的开关被忽略了（内置上游仍然全关）",
-  envRows.length === 9 && envRows.every(([, enabled]) => enabled === false),
-  JSON.stringify(envRows),
+  "环境里的开关被忽略了（一个账号都没有）",
+  envRun_body.platforms === 9 && envRun_body.rows.length === 0,
+  JSON.stringify(envRun_body),
 );
 fs.rmSync(ENV_DIR, { recursive: true, force: true });
 

@@ -60,7 +60,12 @@ if [ -n "$BASE" ]; then
   # The MiniMax upstream is called at <base>/messages; the mock and the
   # recorder both answer on /minimax/v1/messages.
   export MINIMAX_BASE_URL="$BASE/minimax/v1"
+  # 额度和套餐探测走的是另一个 host（开放平台那一个）：不指过去的话，测试
+  # 会拿假令牌去问真平台，拿到的是这个账号此刻的真实额度 —— 测试就不离线了。
+  export MINIMAX_API_BASE="$BASE/minimax"
   export TOKENRHYTHM_INFER_BASE="$BASE/tokenrhythm/v1"
+  # 钱包与登录走的是平台另一个 base：不指过去，测试会拿假账号去问真站。
+  export TOKENRHYTHM_API_BASE="$BASE/tokenrhythm"
 fi
 
 # The benefits would talk to the upstream for nothing during a test.

@@ -17,7 +17,7 @@ import {
   AccountSchema,
   AdminService,
   BalanceLotSchema,
-  AddProviderResponseSchema,
+  AddAccountResponseSchema,
   BalanceSummarySchema,
   BeginLoginResponseSchema,
   BenefitStatusSchema,
@@ -28,7 +28,7 @@ import {
   CredentialStatusSchema,
   CreditLotSchema,
   CreditSummarySchema,
-  DeleteProviderResponseSchema,
+  DeleteAccountResponseSchema,
   DeletePublishedModelResponseSchema,
   ExchangeLoginCodeResponseSchema,
   GetBalanceResponseSchema,
@@ -57,8 +57,8 @@ import {
   RunBenefitNowResponseSchema,
   SavePublishedModelResponseSchema,
   SetConfigResponseSchema,
-  SetProviderPolicyResponseSchema,
-  SetUpstreamEnabledResponseSchema,
+  SetPlatformPolicyResponseSchema,
+  SetAccountEnabledResponseSchema,
   TailLogResponseSchema,
   TestCredentialResponseSchema,
   LogoutAccountResponseSchema,
@@ -75,7 +75,7 @@ import { adminTokenSet } from "./token.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
   healthSnapshot,
-  setUpstreamEnabled,
+  setAccountEnabled,
   upstreamQuota,
   upstreamQuotas,
   upstreamAccountCount,
@@ -85,10 +85,8 @@ import {
   upstreamPolicy,
   upstreamRegion,
   upstreamState,
-  upstreamStates,
   type QuotaView,
   type UpstreamId,
-  type UpstreamSwitch,
 } from "./upstreams.ts";
 import {
   listAccounts,
@@ -109,14 +107,16 @@ import {
 } from "./login.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
 import {
-  addProvider,
-  deleteProvider,
+  accountsOfPlatform,
+  addAccount,
+  deleteAccount,
   listProviders,
   provider,
   updateProvider,
 } from "../providers.ts";
-import { kindOf, policiesOfKind, selectableKinds } from "../provider-kinds.ts";
-import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS, unsupportedPolicyText } from "./policy.ts";
+import { PLATFORMS, platformOf, platformPolicies, platformPolicy, setPlatformPolicy as writePlatformPolicy } from "../platforms.ts";
+import { kindOf, selectableKinds } from "../provider-kinds.ts";
+import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
 import { tailLog } from "./log.ts";
 import { benefitUpstreams, benefits } from "./benefits.ts";
@@ -212,27 +212,37 @@ function quotaMessage(quota: QuotaView) {
   });
 }
 
-/** 一个上游在面板上的样子。 */
-async function upstreamMessage(id: string, state: UpstreamSwitch) {
-  const row = provider(id);
+/**
+ * 一个平台在面板上的样子。
+ *
+ * 平台是代码里的模板（九个服务），所以这一条永远在；它名下的账号是数据，
+ * 有几个算几个 —— 一个没有就是空的账号列表。
+ */
+function platformMessage(id: string) {
+  const template = platformOf(id);
   const credential = upstreamCredential(id);
   const quota = upstreamQuota(id);
   return create(UpstreamSchema, {
     id,
-    // The alias is how two accounts of the same kind are told apart; the kind's
-    // own name is the fallback.
-    label: row?.alias || (row ? kindOf(row.kind)?.label ?? row.kind : id),
-    kind: row?.kind ?? "",
-    alias: row?.alias ?? "",
-    // 现在在生效的值。开关是热的：面板改了，下一个请求就是新的。
-    enabled: state.enabled,
-    // 名下的多个账号怎么选。库里那一列就是生效值。
+    // 平台的名字是模板里的那个（“Qoder（全球区）”）—— 账号的别名不能顶在这里：
+    // 一个平台下有几个账号时，用哪个的别名都是错的。
+    label: template?.label ?? id,
+    kind: template?.kind ?? "",
+    // 现在在生效的值：名下有没有开着的账号。平台自己没有开关，开关在账号上。
+    enabled: accountsOfPlatform(id).some((row) => row.enabled),
+    // 名下的多个账号怎么选。策略在平台层。
     policy: upstreamPolicy(id),
-    // 名下有几个可以切换的账号。面板用它判「策略有没有用」。
+    // 这个平台支持哪几个策略：面板只给它支持的那几个。
+    policies: platformPolicies(id).map(policyEnum),
+    // 名下有几个账号。面板用它判「策略有没有用」。
     accountCount: upstreamAccountCount(id),
+    // 名下有没有开着的账号 —— 跟 enabled 同一个答案，两个名字一个是给机器判
+    // 断用的、一个是给面板画开关用的，别让它们各说各话。
+    hasEnabledAccount: accountsOfPlatform(id).some((row) => row.enabled),
     // 现在能不能接：额度用尽、正在登录这些面板自己拼不出来的事，后端知道。
     state: upstreamState(id),
     modelCount: upstreamModelCount(id),
+    // 凭据在账号上：这里报的是名下最好的那一份，要逐个看就在 accounts 里。
     credential: create(CredentialStatusSchema, {
       kind: credential.kind,
       status: credential.status,
@@ -246,6 +256,10 @@ async function upstreamMessage(id: string, state: UpstreamSwitch) {
     quota: quota ? quotaMessage(quota) : undefined,
     baseUrl: upstreamBaseUrl(id),
     region: upstreamRegion(id),
+    accounts: accountsOfPlatform(id).flatMap((row) => {
+      const account = accountRowMessage(row.id);
+      return account ? [account] : [];
+    }),
   });
 }
 
@@ -287,15 +301,23 @@ function credentialStatusMessage(credentialId: string) {
 /** 一个账号，面板看的形状。 */
 function accountMessage(accountId: string) {
   if (!accountId) return undefined;
+  return accountRowMessage(accountId);
+}
+
+/** 一个账号行，面板看的形状。 */
+function accountRowMessage(accountId: string) {
   const row = listAccounts().find((a) => a.id === accountId);
   if (!row) return undefined;
   return create(AccountSchema, {
     id: row.id,
-    upstreamId: row.upstreamId,
-    label: row.label,
+    // 它属于哪个平台。路径里用平台 id，不用账号 id。
+    platform: row.platform,
+    alias: row.alias,
     status: credentialStateText(row.status),
     credentialCount: row.credentialCount,
     detail: row.detail,
+    enabled: row.enabled,
+    createdAt: BigInt(row.createdAt),
   });
 }
 
@@ -307,7 +329,7 @@ function credentialMessage(credentialId: string) {
   return create(CredentialSchema, {
     id: row.id,
     accountId: row.accountId,
-    upstreamId: row.upstreamId,
+    upstreamId: row.platform,
     kind: row.kind,
     label: row.label,
     masked: row.masked,
@@ -330,6 +352,14 @@ function loginErrorText(e: unknown): string {
   return hint || code || "登录未成功。";
 }
 
+/** 九个平台，面板看的那一层。 */
+function platformMessages() {
+  return PLATFORMS.flatMap((platform) => {
+    const message = platformMessage(platform.id);
+    return message ? [message] : [];
+  });
+}
+
 /** 管理接口的实现。 */
 export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   /* ---------------- 系统 ---------------- */
@@ -337,14 +367,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async getSystemStatus() {
     // 先看一眼快照：旧了就起一个后台刷新，面板这次拿旧答案、下次拿新的。
     healthSnapshot();
-    const states = upstreamStates();
-    const upstreams = [];
-    for (const row of listProviders()) {
-      upstreams.push(await upstreamMessage(row.id, states[row.id] ?? { enabled: row.enabled }));
-    }
     return create(GetSystemStatusResponseSchema, {
       version: serviceVersion(),
-      upstreams,
+      upstreams: platformMessages(),
       pendingRestart: pendingRestart(),
       uptimeSec: BigInt(Math.round(process.uptime())),
       publishedModelCount: publishedModels().filter((m) => m.published).length,
@@ -365,17 +390,12 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     });
   },
 
-  /* ---------------- 上游 ---------------- */
+  /* ---------------- 平台与账号 ---------------- */
 
   async listUpstreams() {
-    const states = upstreamStates();
-    const upstreams = [];
-    // The list is the database's, not a fixed one: an upstream added in the
-    // panel shows up here without a restart.
-    for (const row of listProviders()) {
-      upstreams.push(await upstreamMessage(row.id, states[row.id] ?? { enabled: row.enabled }));
-    }
-    return create(ListUpstreamsResponseSchema, { upstreams });
+    // 列表是代码里的那九个模板，不是数据库的：平台删不掉，账号才是数据 ——
+    // 一个平台下没有账号也照样列出来，面板要在它下面「新增账号」。
+    return create(ListUpstreamsResponseSchema, { upstreams: platformMessages() });
   },
 
   async listProviderKinds() {
@@ -388,23 +408,24 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           needsRegion: k.needsRegion,
           regions: k.regions,
           // 这一类上游支持哪几个策略：面板的选项从这里来。
-          // 兜底在 policiesOfKind 里（没登记的种类只给「单一」）：不直接摸
-          // 注册表那个可选字段，漏填时少一个选项，不是 500。
-          policies: policiesOfKind(k.kind).map(policyEnum),
+          // 兜底在 platformPolicies 里（没登记的种类只给「单一」）。
+          policies: k.policies.map(policyEnum),
         }),
       ),
     });
   },
 
-  async addProvider(request) {
-    const result = addProvider({
-      id: String(request.id ?? ""),
-      kind: String(request.kind ?? ""),
+  async addAccount(request) {
+    const result = addAccount({
+      platform: String(request.platform ?? ""),
       alias: String(request.alias ?? ""),
-      region: String(request.region ?? ""),
     });
-    if (result.ok) console.log(`[ADMIN] 加了 Provider ${request.id}（${request.kind}）`);
-    return create(AddProviderResponseSchema, { ok: result.ok, message: result.message });
+    if (result.ok) console.log(`[ADMIN] 在 ${request.platform} 下加了账号 ${result.id}`);
+    return create(AddAccountResponseSchema, {
+      ok: result.ok,
+      message: result.message,
+      id: result.id ?? "",
+    });
   },
 
   async updateProvider(request) {
@@ -414,52 +435,40 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     if (request.alias !== undefined) patch.alias = String(request.alias);
     if (request.enabled !== undefined && request.enabled !== null) patch.enabled = request.enabled === true;
     const result = updateProvider(String(request.id ?? ""), patch);
-    if (result.ok) console.log(`[ADMIN] Provider ${request.id} 改了`);
+    if (result.ok) console.log(`[ADMIN] 账号 ${request.id} 改了`);
     return create(UpdateProviderResponseSchema, { ok: result.ok, message: result.message });
   },
 
-  async setProviderPolicy(request) {
-    const id = String(request.upstreamId ?? "");
+  async setPlatformPolicy(request) {
+    const platform = String(request.platform ?? "");
     // 契约里的枚举 → 库里存的策略。不认识的（UNSPECIFIED 或别的数字）就是
     // 「给错了」，不写库。
     const policy = policyFromEnum(Number(request.policy));
     if (!policy) {
-      return create(SetProviderPolicyResponseSchema, {
+      return create(SetPlatformPolicyResponseSchema, {
         ok: false,
         message: policyErrorText(request.policy),
       });
     }
-    const row = provider(id);
-    if (!row) {
-      return create(SetProviderPolicyResponseSchema, { ok: false, message: `没有这个 Provider：${id}` });
-    }
-    // 这一类上游支不支持这个策略：只有一个账号的上游选了也没用。
-    const supported = policiesOfKind(row.kind);
-    if (!supported.includes(policy)) {
-      return create(SetProviderPolicyResponseSchema, {
-        ok: false,
-        message: unsupportedPolicyText(row.alias || row.kind, policy, supported),
-      });
-    }
-    const result = updateProvider(id, { policy });
-    if (result.ok) console.log(`[ADMIN] Provider ${id} 的策略改成 ${policy}`);
-    return create(SetProviderPolicyResponseSchema, {
-      ok: result.ok,
-      message: result.ok ? `策略改成了${POLICY_LABELS[policy]}` : result.message,
-    });
+    // 平台支不支持这个策略：只有一个账号的平台选了也没用，所以那边只给「单一」。
+    // 校验在 lib/platforms.ts 里，这里只把结果转成一句面板能看的话。
+    const result = writePlatformPolicy(platform, policy);
+    if (result.ok) console.log(`[ADMIN] 平台 ${platform} 的策略改成 ${policy}`);
+    return create(SetPlatformPolicyResponseSchema, { ok: result.ok, message: result.message });
   },
 
-  async deleteProvider(request) {
-    const result = deleteProvider(String(request.id ?? ""));
-    if (result.ok) console.log(`[ADMIN] 删了 Provider ${request.id}`);
-    return create(DeleteProviderResponseSchema, { ok: result.ok, message: result.message });
+  async deleteAccount(request) {
+    const id = String(request.id ?? "");
+    const result = deleteAccount(id);
+    if (result.ok) console.log(`[ADMIN] 删了账号 ${id}（连它的凭据一起）`);
+    return create(DeleteAccountResponseSchema, { ok: result.ok, message: result.message });
   },
 
-  async setUpstreamEnabled(request) {
-    const id = String(request.upstreamId ?? "") as UpstreamId;
-    const result = setUpstreamEnabled(id, request.enabled === true);
-    console.log(`[ADMIN] Provider ${id} 改成 ${request.enabled ? "true" : "false"}（立刻生效）`);
-    return create(SetUpstreamEnabledResponseSchema, {
+  async setAccountEnabled(request) {
+    const id = String(request.accountId ?? "") as UpstreamId;
+    const result = setAccountEnabled(id, request.enabled === true);
+    console.log(`[ADMIN] 账号 ${id} 改成 ${request.enabled ? "true" : "false"}（立刻生效）`);
+    return create(SetAccountEnabledResponseSchema, {
       ok: result.ok,
       pendingRestart: pendingRestart(),
       message: result.message,
@@ -526,11 +535,14 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         const quota = quotas.get(account.id);
         return create(AccountSchema, {
           id: account.id,
-          upstreamId: account.upstreamId,
-          label: account.label,
+          // 账号属于哪个平台。路径里用平台 id，不用账号 id。
+          platform: account.platform,
+          alias: account.alias,
           status: credentialStateText(account.status),
           credentialCount: account.credentialCount,
           detail: account.detail,
+          enabled: account.enabled,
+          createdAt: BigInt(account.createdAt),
           quota: quota ? quotaMessage(quota) : undefined,
         });
       }),
@@ -544,7 +556,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         create(CredentialSchema, {
           id: row.id,
           accountId: row.accountId,
-          upstreamId: row.upstreamId,
+          upstreamId: row.platform,
           kind: row.kind,
           label: row.label,
           masked: row.masked,

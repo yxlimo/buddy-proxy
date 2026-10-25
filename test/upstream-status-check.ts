@@ -59,8 +59,10 @@ process.env.WORKBUDDY_CHAT_BASE = `http://127.0.0.1:${port}`;
  * ------------------------------------------------------------------ */
 
 const { setSecret } = await import("../lib/store.ts");
-const { ensureBuiltinProviders } = await import("../lib/providers.ts");
-ensureBuiltinProviders();
+const { addAccount } = await import("../lib/providers.ts");
+// 账号是表里的行：先建一行，凭据挂在它的 id 上。
+addAccount({ platform: "qoder" });
+addAccount({ platform: "workbuddy-cn" });
 
 const now = Date.now();
 const year = now + 365 * 24 * 3600 * 1000;

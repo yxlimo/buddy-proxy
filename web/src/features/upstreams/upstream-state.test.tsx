@@ -2,9 +2,8 @@ import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 import { screen } from '@testing-library/react'
 import {
-  CredentialState,
-  CredentialStatusSchema,
   ListUpstreamsResponseSchema,
+  ProviderPolicy,
   UpstreamSchema,
   UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
@@ -13,44 +12,37 @@ import { mockAdminClient } from '@/test/mock-transport'
 import { renderWithClient } from '@/test/render'
 
 /**
- * 上游的状态徽章按 state 显示。
+ * 平台的状态徽章按 state 显示。
  *
- * 能不能接由后端说（state），面板不再自己拼「开着 && 登录了」。
+ * 能不能接由后端说（state），面板不自己拼「有账号 && 账号开着 && 登录了」。
  */
+function platform(
+  id: string,
+  label: string,
+  state: UpstreamState,
+  hasEnabledAccount = false
+) {
+  return create(UpstreamSchema, {
+    id,
+    label,
+    state,
+    policy: ProviderPolicy.SINGLE,
+    policies: [ProviderPolicy.SINGLE],
+    accountCount: 0,
+    hasEnabledAccount,
+  })
+}
+
 describe('上游页的状态徽章', () => {
   it('按 state 显示', async () => {
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
-            create(UpstreamSchema, {
-              id: 'ready',
-              label: '就绪的那个',
-              enabled: true,
-              state: UpstreamState.READY,
-            }),
-            create(UpstreamSchema, {
-              id: 'off',
-              label: '关着的那个',
-              enabled: false,
-              state: UpstreamState.DISABLED,
-            }),
-            create(UpstreamSchema, {
-              id: 'no-cred',
-              label: '没登录的那个',
-              enabled: true,
-              state: UpstreamState.NO_CREDENTIAL,
-              credential: create(CredentialStatusSchema, {
-                status: CredentialState.MISSING,
-                kind: 'session',
-              }),
-            }),
-            create(UpstreamSchema, {
-              id: 'no-money',
-              label: '没额度的那个',
-              enabled: true,
-              state: UpstreamState.OUT_OF_CREDITS,
-            }),
+            platform('ready', '就绪的那个', UpstreamState.READY, true),
+            platform('off', '关着的那个', UpstreamState.DISABLED),
+            platform('no-cred', '没登录的那个', UpstreamState.NO_CREDENTIAL),
+            platform('no-money', '没额度的那个', UpstreamState.OUT_OF_CREDITS),
           ],
         }),
     })
@@ -61,8 +53,6 @@ describe('上游页的状态徽章', () => {
     expect(screen.getByText('已停用')).toBeInTheDocument()
     expect(screen.getByText('没登录')).toBeInTheDocument()
     expect(screen.getByText('额度用完')).toBeInTheDocument()
-    // 凭据状态也按枚举来（不是字符串）。
-    expect(screen.getByText('缺失')).toBeInTheDocument()
   })
 
   it('登录过期了、登录被拒了、正在登录也各有各的说法', async () => {
@@ -70,21 +60,9 @@ describe('上游页的状态徽章', () => {
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
-            create(UpstreamSchema, {
-              id: 'expired',
-              label: '过期的',
-              state: UpstreamState.CREDENTIAL_EXPIRED,
-            }),
-            create(UpstreamSchema, {
-              id: 'rejected',
-              label: '被拒的',
-              state: UpstreamState.CREDENTIAL_REJECTED,
-            }),
-            create(UpstreamSchema, {
-              id: 'logging',
-              label: '登录中的',
-              state: UpstreamState.LOGGING_IN,
-            }),
+            platform('expired', '过期的', UpstreamState.CREDENTIAL_EXPIRED),
+            platform('rejected', '被拒的', UpstreamState.CREDENTIAL_REJECTED),
+            platform('logging', '登录中的', UpstreamState.LOGGING_IN),
           ],
         }),
     })
@@ -94,5 +72,30 @@ describe('上游页的状态徽章', () => {
     expect(await screen.findByText('登录过期了')).toBeInTheDocument()
     expect(screen.getByText('登录被拒了')).toBeInTheDocument()
     expect(screen.getByText('正在登录')).toBeInTheDocument()
+  })
+
+  it('面板不自己拼状态：后端说没登录，就显示没登录', async () => {
+    // 平台下有开着的账号，但后端说 state 是没登录 —— 面板照后端说。
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [
+            create(UpstreamSchema, {
+              id: 'minimax',
+              label: 'MiniMax Code',
+              state: UpstreamState.NO_CREDENTIAL,
+              policy: ProviderPolicy.SINGLE,
+              policies: [ProviderPolicy.SINGLE],
+              accountCount: 1,
+              hasEnabledAccount: true,
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    expect(await screen.findByText('没登录')).toBeInTheDocument()
+    expect(screen.queryByText('就绪')).not.toBeInTheDocument()
   })
 })

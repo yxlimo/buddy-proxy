@@ -151,24 +151,21 @@ check(
   `${kindOf("minimax")?.label} / ${kindOf("minimax-api")?.label}`,
 );
 
-// 「qoder 与 qoder-cn 是同一个模拟端」这句话本身：两个上游的 id 不同，
-// 但它们是同一个 kind，所以模拟端的名字也一样。
-const { providerKindOf } = await import("../lib/providers.ts");
+// 「qoder 与 qoder-cn 是同一个模拟端」这句话本身：两个平台 id 不同，
+// 但它们是同一个 kind，所以模拟端的名字也一样。平台是代码里的模板，所以这里
+// 问的是模板，不是表里的行。
+const { platformOf } = await import("../lib/platforms.ts");
+check("qoder-cn 是一个平台", platformOf("qoder-cn") !== null, String(platformOf("qoder-cn")?.id));
 check(
-  "qoder-cn 的上游 id 是 qoder-cn",
-  providerKindOf("qoder-cn") !== null,
-  String(providerKindOf("qoder-cn")),
+  "qoder-cn 的 kind 是 qoder（与全球区同一个模拟端）",
+  platformOf("qoder-cn")?.kind === "qoder",
+  String(platformOf("qoder-cn")?.kind),
 );
 check(
-  "qoder-cn 的 label 也是 Qoder（与 qoder 同一个模拟端）",
-  providerKindOf("qoder-cn")?.label === "Qoder",
-  String(providerKindOf("qoder-cn")?.label),
-);
-check(
-  "两个上游的 label 一样，id 不一样",
-  providerKindOf("qoder-cn")?.label === providerKindOf("qoder")?.label &&
-    providerKindOf("qoder-cn")?.kind !== providerKindOf("qoder-cn")?.label,
-  `${providerKindOf("qoder-cn")?.kind} / ${providerKindOf("qoder-cn")?.label}`,
+  "两个平台的 kind 一样，id 不一样",
+  platformOf("qoder-cn")?.kind === platformOf("qoder")?.kind &&
+    platformOf("qoder-cn")?.id !== platformOf("qoder")?.id,
+  `${platformOf("qoder-cn")?.id} / ${platformOf("qoder")?.id}`,
 );
 
 /* ------------------------------------------------------------------ *
@@ -285,12 +282,19 @@ async function waitHealthy(): Promise<void> {
 
 await waitHealthy();
 
-// 面板的令牌：开关现在在数据库里，要用面板把它打开。
+// 面板的令牌：启动不再插行，所以先用面板给 qoder-cn 加一个账号（新账号就是
+// 开着的），再让面板把它打开。
 const adminToken = fs.readFileSync(path.join(ROUTER_DIR, "admin-token"), "utf8").trim();
-const switched = await fetch(`${BASE}/buddy.admin.v1.AdminService/SetUpstreamEnabled`, {
+const made = await fetch(`${BASE}/buddy.admin.v1.AdminService/AddAccount`, {
   method: "POST",
   headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
-  body: JSON.stringify({ upstreamId: "qoder-cn", enabled: true }),
+  body: JSON.stringify({ platform: "qoder-cn", alias: "测试 Qoder CN" }),
+}).then((r) => r.json().catch(() => null));
+check("qoder-cn 的账号加出来了", made?.ok === true, JSON.stringify(made));
+const switched = await fetch(`${BASE}/buddy.admin.v1.AdminService/SetAccountEnabled`, {
+  method: "POST",
+  headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
+  body: JSON.stringify({ accountId: String(made?.id ?? ""), enabled: true }),
 }).then((r) => r.json().catch(() => null));
 check("qoder-cn 打开了", switched?.ok === true, JSON.stringify(switched));
 

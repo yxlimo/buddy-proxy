@@ -1,4 +1,4 @@
-// test/tokenrhythm-check.ts — TokenRhythm 的租户选择与余额不足时的回退。
+// test/tokenrhythm-check.ts — TokenRhythm 的账号选择与余额不足时的回退。
 //
 //   node --experimental-strip-types test/tokenrhythm-check.ts
 //
@@ -15,9 +15,10 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokenrhythm-check-"));
 process.env.BUDDY_DATA_DIR = tmp;
 
 const {
-  markTenantOutOfMoney,
-  pickTenant,
-  pickTenants,
+  markAccountOutOfMoney,
+  orderedAccounts,
+  pickAccount,
+  usableAccounts,
 } = await import("../lib/tokenrhythm/wallet.ts");
 const { TokenRhythmNoBalanceError } = await import("../lib/tokenrhythm/transport.ts");
 
@@ -34,7 +35,7 @@ function check(name: string, ok: boolean, detail = ""): void {
   }
 }
 
-/** 一个租户的样子。 */
+/** 一个账号的样子。 */
 function tenant(
   index: number,
   available: number,
@@ -43,9 +44,9 @@ function tenant(
   extra: Partial<Record<string, unknown>> = {},
 ): any {
   return {
-    index,
+    accountId: `tokenrhythm-${index}`,
     account: `190***${index}`,
-    name: `租户 ${index}`,
+    name: `账号 ${index}`,
     hasKey: true,
     wallet: { availableCny: available, giftAvailableCny: gift },
     credits: nextExpiryAt ? { summary: { nextExpiryAt } } : null,
@@ -55,7 +56,7 @@ function tenant(
 }
 
 console.log("");
-console.log("选租户");
+console.log("选账号");
 
 const soon = "2026-11-19T04:28:10.883Z";
 const later = "2026-11-20T04:28:10.883Z";
@@ -67,13 +68,16 @@ const statuses = [
   tenant(3, 18, 18, later),
 ];
 
-check("先到期的那批赠金先用", pickTenant(statuses)?.index === 2, String(pickTenant(statuses)?.index));
+check("先到期的那批赠金先用", pickAccount(statuses)?.accountId === "tokenrhythm-2", String(pickAccount(statuses)?.accountId));
 // 有赠金的先用，赠金是永久的那个排最后 —— 它是最后的备选。
-check("有赠金的先上", pickTenants(statuses).length === 2, String(pickTenants(statuses).length));
-check("永久赠金的那个排最后", pickTenants(statuses).every((t: any) => t.index !== 1));
+check("有赠金的先上", orderedAccounts(statuses).length === 3, String(orderedAccounts(statuses).length));
+check(
+  "永久赠金的那个排最后",
+  orderedAccounts(statuses)[orderedAccounts(statuses).length - 1]?.accountId === "tokenrhythm-1",
+);
 
 console.log("");
-console.log("没用的租户");
+console.log("没用的账号");
 
 const mixed = [
   tenant(1, 0, 0, soon), // 没钱
@@ -82,20 +86,24 @@ const mixed = [
   tenant(4, 5, 5, later), // 能用
   tenant(5, 30, 0, never), // 只有充值的本金，也能用
 ];
-check("没钱、没 key、出错的都排除", pickTenants(mixed).length === 1, String(pickTenants(mixed).length));
-check("剩下的是有赠金的那个", pickTenants(mixed)[0]?.index === 4, String(pickTenants(mixed)[0]?.index));
+check("没钱、没 key、出错的都排除", usableAccounts(mixed).length === 2, String(usableAccounts(mixed).length));
+check("剩下的是有赠金的那个", usableAccounts(mixed)[0]?.accountId === "tokenrhythm-4", String(usableAccounts(mixed)[0]?.accountId));
 // 都没有赠金的时候，充值的本金才上场。
 const noGift = [tenant(1, 30, 0, never), tenant(2, 40, 0, never)];
-check("没有赠金就用充值的本金", pickTenants(noGift).length === 2, String(pickTenants(noGift).length));
+check("没有赠金就用充值的本金", usableAccounts(noGift).length === 2, String(usableAccounts(noGift).length));
 
 console.log("");
 console.log("没钱了就换一个");
 
-markTenantOutOfMoney(4);
-const after = pickTenants(mixed);
-check("被标记的租户被排除", !after.some((t: any) => t.index === 4), JSON.stringify(after.map((t: any) => t.index)));
-check("其它租户不受影响", after.length === 1, String(after.length));
-check("剩下的是那个", after[0]?.index === 5, String(after[0]?.index));
+markAccountOutOfMoney("tokenrhythm-4");
+const after = usableAccounts(mixed);
+check(
+  "被标记的账号被排除",
+  !after.some((t: any) => t.accountId === "tokenrhythm-4"),
+  JSON.stringify(after.map((t: any) => t.accountId)),
+);
+check("其它账号不受影响", after.length === 1, String(after.length));
+check("剩下的是那个", after[0]?.accountId === "tokenrhythm-5", String(after[0]?.accountId));
 
 console.log("");
 console.log("余额不足的错误");

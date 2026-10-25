@@ -4,16 +4,16 @@
 // used first, and the money that was paid in is used last. So the pick is by
 // the date the next batch expires — the platform moves that date on its own as
 // a batch is used up, and the account switches by itself.
+//
+// An account is a row of the provider table, and it has one wallet: the cookie
+// that reads the wallet is the row's own, and so is the key that calls the
+// models. Two rows of the same platform are two accounts with two wallets.
 
 import { platformApi } from "./platform.ts";
 import { tokenRhythmKeys } from "./keys.ts";
-import {
-  loadSession,
-  sessionFor,
-  sessionId,
-  tokenRhythmTenants,
-  type TokenRhythmSession,
-} from "./accounts.ts";
+import { loadSession, sessionFor, sessionId, tokenRhythmCredentialOf, type TokenRhythmSession } from "./accounts.ts";
+import { accountsOfPlatform, provider } from "../providers.ts";
+import { platformOf } from "../platforms.ts";
 
 export interface TokenRhythmWallet {
   currency: string;
@@ -59,15 +59,24 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export async function wallet(
-  session: TokenRhythmSession,
-  providerId = "tokenrhythm",
-): Promise<TokenRhythmWallet> {
+/**
+ * Which platform an id belongs to.
+ *
+ * A platform id is one of the nine templates; an account id is a row of the
+ * provider table. Both reach this file — the router has the platform, the
+ * panel and the health snapshot have the account — so both are accepted and
+ * resolved here once.
+ */
+export function platformOfAccount(id: string): string {
+  return platformOf(id) ? id : (provider(id)?.platform ?? id);
+}
+
+export async function wallet(session: TokenRhythmSession, accountId = session.accountId): Promise<TokenRhythmWallet> {
   const data = await platformApi<any>("/api/wallet/summary", session);
   // A fresh wallet means the cached view is stale: which account runs out
   // first may have changed, and the next request has to decide again. Only
-  // this provider's view goes — another provider's accounts did not change.
-  resetTokenRhythmStatusCache(providerId);
+  // this platform's view goes — another platform's accounts did not change.
+  resetTokenRhythmStatusCache(platformOfAccount(accountId));
   return {
     currency: String(data?.currency ?? "CNY"),
     availableCny: num(data?.availableBalanceCny),
@@ -103,17 +112,19 @@ export async function credits(session: TokenRhythmSession): Promise<TokenRhythmC
 }
 
 /* ------------------------------------------------------------------ *
- * The tenants, as a whole
+ * The accounts of a platform, as a whole
  * ------------------------------------------------------------------ */
 
-export interface TokenRhythmTenantStatus {
-  index: number;
-  /** The account, hidden: only the last two digits are shown. */
+export interface TokenRhythmAccountStatus {
+  /** The account row this is about. */
+  accountId: string;
+  /** The platform account, hidden: only the last two digits are shown. */
   account: string;
+  /** The alias of the row, so the log and the panel can tell two apart. */
   name: string;
-  /** Whether the tenant has a key for the inference. */
+  /** Whether the account has a key for the inference. */
   hasKey: boolean;
-  /** The tenant's own credential: the session and the key. */
+  /** The account's own credential: the session and the key. */
   credential: {
     status: string;
     /** The session's own expiry. */
@@ -129,27 +140,27 @@ export interface TokenRhythmTenantStatus {
 const mask = (account: string): string =>
   account.length <= 4 ? "***" : `${account.slice(0, 3)}***${account.slice(-2)}`;
 
-/** What every tenant has, as far as the platform says. */
-export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenRhythmTenantStatus[]> {
-  const tenants = tokenRhythmTenants(providerId);
-  const out: TokenRhythmTenantStatus[] = [];
-  for (const tenant of tenants) {
-    const status: TokenRhythmTenantStatus = {
-      index: tenant.index,
-      account: mask(tenant.account),
-      name: "",
-      hasKey: Boolean(tenant.apiKey),
+/** What every account of the platform has, as far as the platform says. */
+export async function accountStatuses(platform: string): Promise<TokenRhythmAccountStatus[]> {
+  const out: TokenRhythmAccountStatus[] = [];
+  for (const row of accountsOfPlatform(platform)) {
+    const stored = tokenRhythmCredentialOf(row.id);
+    const status: TokenRhythmAccountStatus = {
+      accountId: row.id,
+      account: mask(stored?.account ?? ""),
+      name: row.alias,
+      hasKey: Boolean(stored?.apiKey),
       credential: null,
       wallet: null,
       credits: null,
-      error: null,
+      error: stored ? null : "这个账号还没有账号密码",
     };
+    out.push(status);
+    if (!stored) continue;
     try {
-      const session = await sessionFor(tenant.index, providerId);
-      status.name = session.name;
-      // The tenant's own credential: the session (the cookie) and the key.
-      // Without this the panel could only say "no credential" for the provider
-      // as a whole, while every tenant had its own.
+      const session = await sessionFor(row.id);
+      status.name = session.name || row.alias;
+      // The account's own credential: the session (the cookie) and the key.
       const remainingMs = session.expiresAtMs - Date.now();
       status.credential = {
         status: remainingMs > 0 ? "authenticated" : "expired",
@@ -161,115 +172,101 @@ export async function tenantStatuses(providerId = "tokenrhythm"): Promise<TokenR
       // ever shown in full in the answer to the call that makes it. So the
       // gateway makes one and keeps it — a new account works without anybody
       // putting a key in the environment.
-      if (!tenant.apiKey) {
-        const made = await tokenRhythmKeys.ensure(
-          { session, index: tenant.index, providerId },
-          null,
-        );
+      if (!stored.apiKey) {
+        const made = await tokenRhythmKeys.ensure({ session, providerId: row.id }, null);
         status.hasKey = Boolean(made);
       }
-      status.wallet = await wallet(session, providerId);
+      status.wallet = await wallet(session, row.id);
       status.credits = await credits(session);
     } catch (e) {
       status.error = (e as Error).message;
     }
-    out.push(status);
   }
   return out;
 }
 
 /**
- * The tenant a request should go to.
- *
- * The gift money expires, so the gift that runs out first is the one to spend
- * first; the money that was paid for does not expire and is the last resort.
- * A tenant with neither is skipped.
- */
-export function pickTenant(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus | null {
-  return pickTenants(statuses)[0] ?? null;
-}
-
-/**
- * The tenants that can serve a request at all.
+ * The accounts that can serve a request at all.
  *
  * They have a key, the platform says they have money, and they have not just
  * said they have none. The order is the order the accounts were added in —
- * the one that runs out first is `pickTenants`'s business, not this one's.
+ * the one that runs out first is `orderedAccounts`'s business, not this one's.
  */
-export function usableTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
-  return statuses.filter(
-    (s) => !s.error && s.hasKey && (s.wallet?.availableCny ?? 0) > 0 && !outOfMoney.has(s.index),
-  );
+export function usableAccounts(statuses: TokenRhythmAccountStatus[]): TokenRhythmAccountStatus[] {
+  return statuses.filter((s) => {
+    // 能发请求靠的是 API key；账号密码那份登录态只用来查余额。
+    if (!s.hasKey) return false;
+    if (outOfMoney.has(s.accountId)) return false;
+    // 余额读到了、而且是空的：这才叫没钱。
+    if (s.wallet && (s.wallet.availableCny ?? 0) <= 0) return false;
+    // 余额读不到（登录失败、平台挂了）：那是「不知道」，不是「没有」——
+    // 排到最后，但照样让它接；拒掉它等于把「查不了余额」当成「没钱」。
+    return true;
+  });
 }
 
 /**
- * The tenants a request may go to, in the order they should be tried.
- *
- * The order is the same as pickTenant's: the gift that runs out first is
- * spent first. Tenants that ran out of money are left out — the platform's
- * cached wallet still says there is money on them for a few minutes, and a
- * request that goes there fails with "insufficient balance".
- */
-export function pickTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
-  const usable = usableTenants(statuses);
-  if (!usable.length) return [];
-
-  const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
-  const pool = withGift.length ? withGift : usable;
-  return sortByExpiry(pool);
-}
-
-/**
- * Every tenant that can serve a request, in the order they should be tried.
+ * Every account that can serve a request, in the order they should be tried.
  *
  * The gift that runs out first is spent first; the money that was paid for
  * does not expire, so it is the last resort — but it is still in the list:
  * once the gifts are gone, the request has to go somewhere.
  */
-export function orderedTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
-  const usable = usableTenants(statuses);
+export function orderedAccounts(statuses: TokenRhythmAccountStatus[]): TokenRhythmAccountStatus[] {
+  const usable = usableAccounts(statuses);
   if (!usable.length) return [];
   const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
-  const withoutGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) <= 0);
-  return [...sortByExpiry(withGift), ...withoutGift];
+  // 余额读得到的本金排在赠金后面；余额读不到的排最后 —— 它们能不能用还不知道。
+  const paid = usable.filter((s) => s.wallet && (s.wallet.giftAvailableCny ?? 0) <= 0);
+  const unknown = usable.filter((s) => !s.wallet);
+  return [...sortByExpiry(withGift), ...paid, ...unknown];
+}
+
+/**
+ * The account a request should go to: the one whose gift runs out first.
+ *
+ * A single account is the first of `orderedAccounts`.
+ */
+export function pickAccount(statuses: TokenRhythmAccountStatus[]): TokenRhythmAccountStatus | null {
+  return orderedAccounts(statuses)[0] ?? null;
 }
 
 /** The ones whose gift runs out first come first. */
-function sortByExpiry(tenants: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
+function sortByExpiry(accounts: TokenRhythmAccountStatus[]): TokenRhythmAccountStatus[] {
   // The soonest expiry first, as the platform reports it: it points at the
   // gift that runs out first and moves on when that gift is spent, so an
   // account whose gift is gone sorts last and the next account takes over.
-  const expiry = (s: TokenRhythmTenantStatus): number => {
+  const expiry = (s: TokenRhythmAccountStatus): number => {
     const at = s.credits?.summary?.nextExpiryAt;
     if (!at) return Number.POSITIVE_INFINITY;
     const t = Date.parse(at);
     return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
   };
-  return tenants.sort((a, b) => expiry(a) - expiry(b));
+  return accounts.sort((a, b) => expiry(a) - expiry(b));
 }
 
 /**
- * Tenants that answered "insufficient balance".
+ * Accounts that answered "insufficient balance".
  *
  * They are left out for a while — the wallet the gateway has cached still
  * says there is money on them, and that answer is a few minutes old. After
  * that the platform's own numbers decide again.
  */
-const outOfMoney = new Map<number, number>();
+const outOfMoney = new Map<string, number>();
 
-/** How long a tenant stays out after it says it has no money. */
+/** How long an account stays out after it says it has no money. */
 const OUT_OF_MONEY_TTL_MS = 10 * 60 * 1000;
 
-/** Remember that a tenant has no money left. */
-export function markTenantOutOfMoney(index: number): void {
-  outOfMoney.set(index, Date.now());
+/** Remember that an account has no money left. */
+export function markAccountOutOfMoney(accountId: string): void {
+  outOfMoney.set(accountId, Date.now());
 }
 
-/** Forget the tenants that ran out of money — the check is stale by now. */
+/** Forget the accounts that ran out of money — the check is stale by now. */
 function pruneOutOfMoney(): void {
   const cutoff = Date.now() - OUT_OF_MONEY_TTL_MS;
-  for (const [index, at] of outOfMoney) {
-    if (at < cutoff) outOfMoney.delete(index);
+  for (const [accountId, at] of outOfMoney) {
+    if (at < cutoff) outOfMoney.delete(accountId);
   }
 }
 
@@ -277,38 +274,42 @@ function pruneOutOfMoney(): void {
  * The cached view
  * ------------------------------------------------------------------ */
 
-/** The cached view, one per provider. */
-const caches = new Map<string, { at: number; statuses: TokenRhythmTenantStatus[] }>();
+/** The cached view, one per platform. */
+const caches = new Map<string, { at: number; statuses: TokenRhythmAccountStatus[] }>();
 
 /**
- * The tenants' status, from a recent answer.
+ * The accounts' status, from a recent answer.
  *
  * Asking the platform for every wallet on every request would be slow, so the
- * answer is kept for a few minutes. A request that has to know which tenant to
- * use asks for the cached view.
+ * answer is kept for a few minutes. A request that has to know which account
+ * to use asks for the cached view.
+ *
+ * The argument is the platform; an account id is accepted too and resolved to
+ * its platform, because the health snapshot asks per account row.
  */
 export async function tokenRhythmStatuses(
-  providerId = "tokenrhythm",
+  platformOrAccount: string = "tokenrhythm",
   maxAgeMs = 300_000,
-): Promise<TokenRhythmTenantStatus[]> {
+): Promise<TokenRhythmAccountStatus[]> {
   pruneOutOfMoney();
-  const cached = caches.get(providerId);
+  const platform = platformOfAccount(platformOrAccount);
+  const cached = caches.get(platform);
   if (cached && Date.now() - cached.at < maxAgeMs) return cached.statuses;
-  const statuses = await tenantStatuses(providerId);
-  caches.set(providerId, { at: Date.now(), statuses });
+  const statuses = await accountStatuses(platform);
+  caches.set(platform, { at: Date.now(), statuses });
   return statuses;
 }
 
 /**
- * Throw one provider's cached view away, so the next question goes to the
+ * Throw one platform's cached view away, so the next question goes to the
  * platform.
  *
- * Only that provider's view goes: the other providers' accounts have not
+ * Only that platform's view goes: the other platforms' accounts have not
  * changed, and asking the platform about them again is a call it does not
  * need to answer.
  */
-export function resetTokenRhythmStatusCache(providerId: string): void {
-  caches.delete(providerId);
+export function resetTokenRhythmStatusCache(platformOrAccount: string): void {
+  caches.delete(platformOfAccount(platformOrAccount));
 }
 
 /* ------------------------------------------------------------------ *
@@ -319,26 +320,20 @@ export function resetTokenRhythmStatusCache(providerId: string): void {
 const WARN_MS = 3 * 24 * 3600 * 1000;
 
 /**
- * 凭据的状态：这个 provider 有几个租户，其中几个还登着。
+ * One account's credential state.
  *
- * 租户各有各的会话，所以这里报的是这一组会话的整体情况。
+ * The account is a row of the provider table, so the answer is about that row:
+ * whether it has a session, and when that session runs out.
  */
-export function tokenRhythmStatus(providerId = "tokenrhythm"): Record<string, unknown> {
-  const tenants = tokenRhythmTenants(providerId);
-  if (!tenants.length) {
-    return { source: sessionId(providerId), status: "anonymous", error: "no tenant" };
-  }
-  const sessions = tenants
-    .map((t) => loadSession(t.index, providerId))
-    .filter((s): s is TokenRhythmSession => s !== null);
-  const expiresAtMs = sessions.map((s) => s.expiresAtMs).sort((a, b) => a - b)[0] ?? 0;
-  const remainingMs = expiresAtMs ? expiresAtMs - Date.now() : 0;
+export function tokenRhythmStatus(accountId: string): Record<string, unknown> {
+  const session = loadSession(accountId);
+  const remainingMs = session ? session.expiresAtMs - Date.now() : 0;
+  const stored = tokenRhythmCredentialOf(accountId);
   return {
-    source: sessionId(providerId),
-    status: sessions.length ? "authenticated" : "anonymous",
-    tenants: tenants.length,
-    loggedIn: sessions.length,
-    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : "",
+    source: sessionId(accountId),
+    status: session ? "authenticated" : stored ? "anonymous" : "missing",
+    hasKey: Boolean(stored?.apiKey),
+    expiresAt: session?.expiresAtMs ? new Date(session.expiresAtMs).toISOString() : "",
     remainingSec: Math.round(remainingMs / 1000),
     warning: remainingMs > 0 && remainingMs < WARN_MS,
   };

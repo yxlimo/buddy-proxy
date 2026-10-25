@@ -12,7 +12,7 @@
 import {
   TOKENRHYTHM_API_BASE,
   TokenRhythmError,
-  forgetSession as forgetTenantSession,
+  forgetSession as forgetAccountSession,
   writeHeaders,
   type TokenRhythmSession,
 } from "./accounts.ts";
@@ -84,7 +84,7 @@ export async function platformApi<T>(
 /** Drop a session that the platform no longer accepts. */
 function forgetSession(session: TokenRhythmSession): void {
   try {
-    forgetTenantSession(session.index, session.providerId);
+    forgetAccountSession(session.accountId);
   } catch {
     /* nothing to clean up */
   }

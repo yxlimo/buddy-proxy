@@ -11,6 +11,10 @@
 
 import type { AggregateModel } from "../aggregate.ts";
 import type { CatalogModel } from "../catalog-models.ts";
+import { accountsOfPlatform } from "../providers.ts";
+import { PLATFORMS } from "../platforms.ts";
+import { kindOf } from "../provider-kinds.ts";
+import "../kinds.ts";
 
 export type { CatalogModel };
 export {
@@ -36,6 +40,34 @@ export type UpstreamGroup = string;
 export interface CatalogGroup {
   group: UpstreamGroup;
   models: CatalogModel[];
+}
+
+/**
+ * 每个平台的模型目录。
+ *
+ * A group is a platform, not an account: the path names the platform, and two
+ * accounts of the same platform serve the same models. The catalogue itself is
+ * the kind's (a platform's models do not depend on who is logged in), so the
+ * first account of the platform is asked for it — an account row is what the
+ * kind's `models()` takes.
+ *
+ * A platform with no account, or with every account turned off, serves
+ * nothing: a request for one of its models is refused, and listing them would
+ * say otherwise.
+ */
+export function platformGroups(): CatalogGroup[] {
+  const groups: CatalogGroup[] = [];
+  for (const template of PLATFORMS) {
+    const kind = kindOf(template.kind);
+    if (!kind) continue;
+    const accounts = accountsOfPlatform(template.id);
+    const on = accounts.filter((row) => row.enabled);
+    if (!on.length) continue;
+    const models = kind.models(on[0]);
+    if (!models.length) continue;
+    groups.push({ group: template.id, models });
+  }
+  return groups;
 }
 
 export function groupCatalog(group: UpstreamGroup, groups: CatalogGroup[], openai: boolean): any {

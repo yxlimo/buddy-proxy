@@ -130,13 +130,18 @@ async function rootModel(id: string): Promise<any> {
 await waitForRouter();
 
 /**
- * 上游的开关现在在数据库里（provider.enabled）。
+ * 启动不再插行：新库里一个账号都没有。面板上做的是「加一个账号」，这里照做。
  *
- * 新装好的服务默认全关，测试要自己把 Qoder 打开 —— 面板上做的是同一件事
- * （SetUpstreamEnabled）。
+ * 新账号是开着的，所以加完平台就是开着的 —— 面板上的开关改的也是这一行。
  */
-const qoderOn = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
-check("Qoder 打开了", qoderOn.body?.ok === true, JSON.stringify(qoderOn.body));
+const qoderOn = await call("AddAccount", { platform: "qoder", alias: "测试 Qoder" });
+check("Qoder 的账号加出来了", qoderOn.body?.ok === true, JSON.stringify(qoderOn.body));
+const platformOn = await call("ListUpstreams");
+check(
+  "Qoder 打开了",
+  (platformOn.body?.upstreams ?? []).find((u: any) => u.id === "qoder")?.enabled === true,
+  JSON.stringify(platformOn.body).slice(0, 200),
+);
 
 /* ------------------------------------------------------------------ *
  * 一、继承来的数

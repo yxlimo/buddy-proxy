@@ -1,4 +1,4 @@
-// lib/tokenrhythm/accounts.ts — the TokenRhythm accounts.
+// lib/tokenrhythm/accounts.ts — the TokenRhythm account: one row, one wallet.
 //
 // TokenRhythm is a relay station: one account, one wallet, one inference key.
 // The wallet is only readable with the session cookie, and the session comes
@@ -6,111 +6,176 @@
 // keeps the cookie on this machine, so the browser and CookieCloud are not in
 // the way.
 //
-// The credentials live in the environment, one set per tenant:
+// Every account is a row of the provider table (lib/providers.ts), the same as
+// on every other platform: the platform says how to talk to it, a row is one
+// login. There is no "tenant number" any more — that was the shape before the
+// account model, when one platform row had to carry several logins.
 //
-//   TOKEN_RHYTHM_1_ACCOUNT=...
-//   TOKEN_RHYTHM_1_PASSWORD=...
-//   TOKEN_RHYTHM_1_API_KEY=sk_tr_...      (the key the inference uses)
+// An account row owns two secrets:
+//
+//   key:provider:<account>:account      { account, password, apiKey }
+//   session:provider:<account>          the wallet cookie
 //
 // The account and the password are for the wallet; the key is for the
 // inference. They are different things on the platform: the key cannot read
 // the wallet, and the session cannot call the models.
 //
-// Those environment variables belong to the built-in provider ("tokenrhythm").
-// Every provider has its own tenants: the accounts live under
-// `key:provider:<id>:tenant-<n>`, and the cookie sessions live in the
-// provider's own session — one entry per tenant.
+// The old shape is read once and moved over on the way (see `legacyIndex`):
+// the tenants used to live on the platform row, numbered in their ids
+// (`key:provider:tokenrhythm:tenant-2`, `account:tokenrhythm:2`) and in the
+// environment (`TOKEN_RHYTHM_2_*`). Those numbers map to the account rows the
+// account model gives them: 1 → `tokenrhythm`, 2 → `tokenrhythm-2`, …
 
 import { configString } from "../config.ts";
-import { readEnvValue } from "../env.ts";
 import fs from "node:fs";
 import { legacyPaths, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
-import { providerSecretId } from "../providers.ts";
+import { addAccount, provider, providerSecretId } from "../providers.ts";
 
 export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
 export const TOKENRHYTHM_INFER_BASE = configString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
 
-/** The built-in provider: the tenants in the environment are its. */
-const BUILT_IN = "tokenrhythm";
+/** The platform id. Also the id of the account row the first tenant lands on. */
+const PLATFORM = "tokenrhythm";
 
-/** One account, and the key that belongs to it. */
-export interface TokenRhythmTenant {
-  /** The number in the environment variable names. */
-  index: number;
+/** One account: what logs in, and the key the inference uses. */
+export interface TokenRhythmCredential {
   account: string;
   password: string;
   /** The key the inference uses, when it is configured. */
   apiKey: string | null;
 }
 
-/** How many tenants the environment may hold. */
-const MAX_TENANTS = 32;
+/** Where the credentials of an account live. */
+export function tokenRhythmCredentialSecretId(accountId: string): string {
+  return providerSecretId(accountId, "account");
+}
+
+/** The account id that a tenant number of the old shape became. */
+function accountIdOfIndex(index: number): string {
+  return index === 1 ? PLATFORM : `${PLATFORM}-${index}`;
+}
 
 /**
- * The tenants, in order.
+ * The tenant number an account id came from.
  *
- * The account and the password are what log in; the key is what the inference
- * uses. All three are credentials, so the environment wins: a key that was
- * rotated in .env has to take effect. The database holds a copy, so the
- * service still works when the .env file is not there.
- *
- * The environment belongs to the built-in provider only: another provider has
- * its own tenants, and it must not borrow these.
+ * The old ids were numbered; the account ids the account model gives them keep
+ * that number (`tokenrhythm`, `tokenrhythm-2`), which is what lets the
+ * credentials of an old database be found without a migration pass of its own.
  */
-export function tokenRhythmTenants(providerId = BUILT_IN): TokenRhythmTenant[] {
-  const out: TokenRhythmTenant[] = [];
-  for (let index = 1; index <= MAX_TENANTS; index++) {
-    const id = tokenRhythmTenantSecretId(index, providerId);
-    // The old copy is read too: the tenants were stored before the providers
-    // existed, and nobody should have to type them in again.
-    const stored = storedTenant(index, providerId);
-    const fromEnv = providerId === BUILT_IN;
-    const account = (fromEnv ? readEnvValue(`TOKEN_RHYTHM_${index}_ACCOUNT`) : null) || stored?.account || "";
-    const password = (fromEnv ? readEnvValue(`TOKEN_RHYTHM_${index}_PASSWORD`) : null) || stored?.password || "";
-    const key = (fromEnv ? readEnvValue(`TOKEN_RHYTHM_${index}_API_KEY`) : null) || stored?.apiKey || "";
-    if (!account || !password) continue;
-    if (
-      !stored ||
-      stored.account !== account ||
-      stored.password !== password ||
-      (stored.apiKey ?? null) !== (key || null)
-    ) {
-      setSecret(id, "account", { account, password, apiKey: key || null });
-    }
-    out.push({ index, account, password, apiKey: key || null });
+function legacyIndex(accountId: string): number | null {
+  if (accountId === PLATFORM) return 1;
+  const match = new RegExp(`^${PLATFORM}-(\\d+)$`).exec(accountId);
+  if (!match) return null;
+  const index = Number(match[1]);
+  return Number.isInteger(index) && index > 0 ? index : null;
+}
+
+/** Where a tenant's credentials used to be kept, newest old shape first. */
+function legacyCredentialIds(index: number): string[] {
+  return [providerSecretId(PLATFORM, `tenant-${index}`), `account:tokenrhythm:${index}`];
+}
+
+/**
+ * 账号行的凭据。
+ *
+ * 旧库里的凭据按租户号存，这里按账号 id 读：没有新的那一份时读旧的，读到就
+ * 搬过来，并把旧的那一份删掉 —— 留着它，「注销」过的账号下一次列账号就又回
+ * 来了。
+ */
+export function tokenRhythmCredentialOf(accountId: string): TokenRhythmCredential | null {
+  const id = tokenRhythmCredentialSecretId(accountId);
+  const stored = getSecret<Partial<TokenRhythmCredential>>(id);
+  const migrated = stored ? normalize(stored) : null;
+  if (migrated && migrated.account && migrated.password) return migrated;
+
+  const index = legacyIndex(accountId);
+  const legacy = index === null ? null : legacyCredentialOf(index);
+  if (!legacy) return migrated;
+
+  // 新的一份不全（比如只有 key），就把它补上，别把已有的覆盖掉。
+  const merged: TokenRhythmCredential = {
+    account: migrated?.account || legacy.account,
+    password: migrated?.password || legacy.password,
+    apiKey: migrated?.apiKey ?? legacy.apiKey,
+  };
+  setSecret(id, "account", merged);
+  for (const legacyId of legacyCredentialIds(index!)) deleteSecret(legacyId);
+  return merged;
+}
+
+/** The old copy of a tenant's credentials, if it is still there. */
+function legacyCredentialOf(index: number): TokenRhythmCredential | null {
+  for (const id of legacyCredentialIds(index)) {
+    const raw = getSecret<Partial<TokenRhythmCredential>>(id);
+    if (!raw) continue;
+    const credential = normalize(raw);
+    if (credential.account || credential.apiKey) return credential;
   }
-  return out;
+  return null;
 }
 
-/** Where the account of a tenant is kept. */
-export function tokenRhythmTenantSecretId(index: number, providerId = BUILT_IN): string {
-  return providerSecretId(providerId, `tenant-${index}`);
+/** 存一个账号的凭据。没给的字段保持原样。 */
+export function saveTokenRhythmCredential(
+  accountId: string,
+  patch: Partial<TokenRhythmCredential>,
+): TokenRhythmCredential {
+  const id = tokenRhythmCredentialSecretId(accountId);
+  const stored = getSecret<Partial<TokenRhythmCredential>>(id);
+  const next: TokenRhythmCredential = {
+    account: patch.account ?? String(stored?.account ?? ""),
+    password: patch.password ?? String(stored?.password ?? ""),
+    apiKey: patch.apiKey === undefined ? (stored?.apiKey ?? null) : patch.apiKey,
+  };
+  setSecret(id, "account", next);
+  return next;
 }
 
-/** Where the account of a tenant used to be kept. */
-function legacyTenantId(index: number): string {
-  return `account:tokenrhythm:${index}`;
+function normalize(raw: Partial<TokenRhythmCredential>): TokenRhythmCredential {
+  return {
+    account: String(raw.account ?? ""),
+    password: String(raw.password ?? ""),
+    apiKey: raw.apiKey ? String(raw.apiKey) : null,
+  };
 }
 
-/** The stored account of a tenant, wherever it is. */
-export function storedTenant(
-  index: number,
-  providerId = BUILT_IN,
-): { account: string; password: string; apiKey: string | null } | null {
-  const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(
-    tokenRhythmTenantSecretId(index, providerId),
-  );
-  if (stored) return stored;
-  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
-  if (providerId !== BUILT_IN) return null;
-  return getSecret<{ account: string; password: string; apiKey: string | null }>(legacyTenantId(index));
+/**
+ * 旧库里按序号存的租户，给它们各建一个账号行。
+ *
+ * 账号模型里一行就是一个登录，而旧库只有一行（`tokenrhythm`）带着几个租户。
+ * 启动时叫一次：有旧凭据的序号，1 → `tokenrhythm`、2 → `tokenrhythm-2`……
+ * 已经有的行不动，所以叫几次都一样。
+ *
+ * 返回新建的账号 id。
+ */
+export function adoptLegacyTokenRhythmAccounts(): string[] {
+  const created: string[] = [];
+  for (let index = 1; index <= 32; index++) {
+    if (!legacyCredentialOf(index)) continue;
+    const wanted = accountIdOfIndex(index);
+    // 行已经在了：凭据在读的时候搬过去，这里不用管。
+    if (accountRowExists(wanted)) continue;
+    const result = addAccount({ platform: PLATFORM });
+    if (!result.ok || !result.id) continue;
+    // 账号 id 是按序号起的（`tokenrhythm`、`tokenrhythm-2`……），所以建出来
+    // 的那一行正好是这个序号的那一行；对不上就停下，别把凭据搬错地方。
+    if (result.id !== wanted) {
+      console.warn(
+        `[TOKENRHYTHM] 账号 ${result.id} 不是旧租户 ${index} 该落的那一行（${wanted}），旧凭据没有搬`,
+      );
+      return created;
+    }
+    tokenRhythmCredentialOf(result.id);
+    created.push(result.id);
+  }
+  return created;
 }
 
-/** The tenant with this number, if it is configured. */
-export function tokenRhythmTenant(index: number, providerId = BUILT_IN): TokenRhythmTenant | null {
-  return tokenRhythmTenants(providerId).find((t) => t.index === index) ?? null;
+/** 这行在不在。 */
+function accountRowExists(id: string): boolean {
+  // 只看 secrets 之外的真相：provider 表。用 providers.ts 的读取函数，别自己查表。
+  return provider(id) !== null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -118,9 +183,8 @@ export function tokenRhythmTenant(index: number, providerId = BUILT_IN): TokenRh
  * ------------------------------------------------------------------ */
 
 export interface TokenRhythmSession {
-  index: number;
-  /** The provider this session belongs to. */
-  providerId: string;
+  /** The account row this session belongs to. */
+  accountId: string;
   /** The cookies the session needs. */
   cookie: string;
   /** The CSRF token, for the writes that need it. */
@@ -132,37 +196,23 @@ export interface TokenRhythmSession {
   expiresAtMs: number;
 }
 
-/** The tenant sessions of one provider, keyed by the tenant number. */
-export type TokenRhythmTenantSessions = Record<string, TokenRhythmSession>;
-
 export function dataDir(): string {
   return sharedDataDir();
 }
 
-/**
- * Where the session lives in the database.
- *
- * The session belongs to the provider, not to the tenant: the provider's own
- * session holds the sessions of all its tenants.
- */
-export function sessionId(providerId = BUILT_IN): string {
-  return providerSecretId(providerId);
+/** Where the session of an account lives. */
+export function sessionId(accountId: string): string {
+  return providerSecretId(accountId);
 }
 
-/** Where the session used to live, while the migration is under way. */
+/** Where the sessions used to live, before they moved into the database. */
 export function legacySessionPath(index: number): string[] {
   return legacyPaths(`tokenrhythm-session.${index}.json`);
 }
 
-/** Where the session of a tenant used to live in the database. */
+/** Where a tenant's session used to live, as a row of its own. */
 function legacySessionId(index: number): string {
   return `session:tokenrhythm:${index}`;
-}
-
-/** The tenant sessions of a provider, as they are in the database. */
-function tenantSessions(providerId: string): TokenRhythmTenantSessions {
-  const raw = getSecret<TokenRhythmTenantSessions>(sessionId(providerId));
-  return raw && typeof raw === "object" ? raw : {};
 }
 
 /** Is this session one the platform would still accept? */
@@ -177,30 +227,67 @@ function validSession(raw: any): boolean {
   return true;
 }
 
-export function loadSession(index: number, providerId = BUILT_IN): TokenRhythmSession | null {
-  const stored = tenantSessions(providerId)[String(index)] ?? null;
-  if (stored && validSession(stored)) return stored;
-  // The session used to have an id of its own: take it over once, so nobody
-  // has to log in again because of the move. Those old ids were global, so
-  // only the built-in provider takes them over.
-  if (providerId !== BUILT_IN) return null;
-  const legacy = getSecret<TokenRhythmSession>(legacySessionId(index));
-  if (legacy && validSession(legacy)) {
-    saveSession({ ...legacy, providerId }, providerId);
-    return legacy;
+/**
+ * 一个账号的会话。
+ *
+ * 旧库里会话是一张表（一个 provider 一行，按租户号分格），现在一个账号一行。
+ * 读到表就整张搬一遍 —— 只搬当前这一格的话，别的租户那一格会被这次的写入盖
+ * 掉，它们就得重新登录。
+ */
+export function loadSession(accountId: string): TokenRhythmSession | null {
+  const id = sessionId(accountId);
+  const raw = getSecret<any>(id);
+  if (raw && typeof raw.cookie === "string") {
+    const session = { ...(raw as TokenRhythmSession), accountId };
+    return validSession(session) ? session : null;
   }
-  return legacyFileSession(index, providerId);
+  const index = legacyIndex(accountId);
+  if (index === null) return null;
+  const legacy = raw && typeof raw === "object" ? raw[String(index)] : null;
+  if (legacy && validSession(legacy)) {
+    adoptLegacySessionTable(raw);
+    const session = { ...(legacy as TokenRhythmSession), accountId };
+    return session;
+  }
+  const taken = takeOverLegacySession(index, accountId);
+  return taken;
 }
 
-/** The session of a tenant, from the file it used to live in. */
-function legacyFileSession(index: number, providerId: string): TokenRhythmSession | null {
+/**
+ * 整张旧的会话表搬到各账号行上。
+ *
+ * 格子的编号就是账号的编号（1 → `tokenrhythm`、2 → `tokenrhythm-2`）。
+ */
+function adoptLegacySessionTable(table: Record<string, unknown>): void {
+  for (const [key, entry] of Object.entries(table ?? {})) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index <= 0) continue;
+    if (!validSession(entry)) continue;
+    const target = accountIdOfIndex(index);
+    writeSession(
+      sessionId(target),
+      { ...(entry as TokenRhythmSession), accountId: target },
+      { force: true },
+    );
+  }
+}
+
+/** The session of a tenant from the places it used to live. */
+function takeOverLegacySession(index: number, accountId: string): TokenRhythmSession | null {
+  const legacy = getSecret<TokenRhythmSession>(legacySessionId(index));
+  if (legacy && validSession(legacy)) {
+    const session = { ...legacy, accountId };
+    saveSession(session, { force: true });
+    deleteSecret(legacySessionId(index));
+    return session;
+  }
   for (const file of legacySessionPath(index)) {
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf8"));
       if (!raw || typeof raw !== "object" || !validSession(raw)) continue;
-      const session = { ...(raw as TokenRhythmSession), providerId };
+      const session = { ...(raw as TokenRhythmSession), accountId };
       // The first read moves the session into the database.
-      saveSession(session, providerId);
+      saveSession(session, { force: true });
       return session;
     } catch {
       /* no such file */
@@ -210,21 +297,37 @@ function legacyFileSession(index: number, providerId: string): TokenRhythmSessio
 }
 
 /** Atomic write, 0600 — this file is a credential. */
-export function saveSession(session: TokenRhythmSession, providerId = BUILT_IN): void {
-  const all = tenantSessions(providerId);
-  all[String(session.index)] = session;
-  writeSession(sessionId(providerId), all);
+export function saveSession(
+  session: TokenRhythmSession,
+  options: { force?: boolean } = {},
+): void {
+  writeSession(sessionId(session.accountId), session, options);
 }
 
-/** Forget the session of a tenant: the next call logs in again. */
-export function forgetSession(index: number, providerId = BUILT_IN): void {
-  const all = tenantSessions(providerId);
-  if (!(String(index) in all)) return;
-  delete all[String(index)];
-  writeSession(sessionId(providerId), all);
-  // The old copy is cleared too: otherwise it would come back. Those old ids
-  // were global, so only the built-in provider touches them.
-  if (providerId === BUILT_IN) deleteSecret(legacySessionId(index));
+/** Forget the session of an account: the next call logs in again. */
+export function forgetSession(accountId: string): void {
+  if (getSecret(sessionId(accountId))) deleteSecret(sessionId(accountId));
+  const index = legacyIndex(accountId);
+  if (index !== null && getSecret(legacySessionId(index))) deleteSecret(legacySessionId(index));
+}
+
+/**
+ * 注销：把这个账号的凭据全删掉，旧的那一份也删。
+ *
+ * 旧的那一份要删，否则下一次读又把它搬冐来 —— 面板上「注销」过的账号会自己
+ * 带着登录态回来。
+ */
+export function forgetTokenRhythmCredential(accountId: string): number {
+  const ids = [tokenRhythmCredentialSecretId(accountId), sessionId(accountId)];
+  const index = legacyIndex(accountId);
+  if (index !== null) ids.push(...legacyCredentialIds(index), legacySessionId(index));
+  let removed = 0;
+  for (const id of ids) {
+    if (!getSecret(id)) continue;
+    deleteSecret(id);
+    removed++;
+  }
+  return removed;
 }
 
 export class TokenRhythmError extends Error {
@@ -236,15 +339,14 @@ export class TokenRhythmError extends Error {
 }
 
 /**
- * 用一组账号密码登录一个租户，把会话拿回来（不存）。
+ * 用一组账号密码登录，把会话拿回来（不存）。
  *
- * 环境变量里的那几份租户走 login()，面板上临时输的走这里。
+ * 存着的凭据走 login()，面板上临时输的走 loginWithCredentials()。
  */
 async function requestLogin(
-  index: number,
+  accountId: string,
   account: string,
   password: string,
-  providerId: string,
 ): Promise<TokenRhythmSession> {
   const r = await fetch(`${TOKENRHYTHM_API_BASE}/api/auth/login`, {
     method: "POST",
@@ -267,8 +369,7 @@ async function requestLogin(
     /* the cookies are what matter */
   }
   return {
-    index,
-    providerId,
+    accountId,
     cookie,
     // The cookie's value ends at the first ";" — the rest of the Set-Cookie
     // line is attributes ("Max-Age=…"), and splitting on "=" alone would keep
@@ -281,36 +382,33 @@ async function requestLogin(
   };
 }
 
-/** Log in with the account and password, and keep the session. */
-export async function login(tenant: TokenRhythmTenant, providerId = BUILT_IN): Promise<TokenRhythmSession> {
-  const session = await requestLogin(tenant.index, tenant.account, tenant.password, providerId);
-  saveSession(session, providerId);
-  return session;
+/** Log in with the stored account and password, and keep the session. */
+export async function login(accountId: string): Promise<TokenRhythmSession> {
+  const credential = tokenRhythmCredentialOf(accountId);
+  if (!credential?.account || !credential.password) {
+    throw new TokenRhythmError(`账号 ${accountId} 没有配置登录账号`, 500);
+  }
+  return loginWithCredentials(accountId, credential.account, credential.password);
 }
 
 /**
- * 用面板给的账号密码登录一个租户。
+ * 用面板给的账号密码登录。
  *
- * 这个文件里的 login() 只认环境变量里的那几份租户；面板上输的是另一组账号
- * 密码，所以这里单独走一遍：登录、存会话、记下账号。
- *
- * 「记住密码」：记住了就把密码也存进 secrets（.env 不在了也能自动登录），
+ * 「记住密码」：记住了就把密码也存进 secrets（新部署没有 .env 也能自动登录），
  * 没记住就只记账号 —— 密码不进数据库。
  */
 export async function loginWithCredentials(
-  index: number,
+  accountId: string,
   account: string,
   password: string,
   remember = true,
-  providerId = BUILT_IN,
 ): Promise<TokenRhythmSession> {
-  const session = await requestLogin(index, account, password, providerId);
-  saveSession(session, providerId);
-  const id = tokenRhythmTenantSecretId(index, providerId);
-  const stored = getSecret<{ account: string; password: string; apiKey: string | null }>(id);
-  setSecret(id, "account", {
+  const session = await requestLogin(accountId, account, password);
+  saveSession(session, { force: true });
+  const stored = tokenRhythmCredentialOf(accountId);
+  saveTokenRhythmCredential(accountId, {
     account,
-    password: remember ? password : "",
+    password: remember ? password : stored?.password ?? "",
     apiKey: stored?.apiKey ?? null,
   });
   return session;
@@ -344,11 +442,9 @@ export function writeHeaders(session: TokenRhythmSession): Record<string, string
   };
 }
 
-/** The session for a tenant: the stored one, or a fresh login. */
-export async function sessionFor(index: number, providerId = BUILT_IN): Promise<TokenRhythmSession> {
-  const stored = loadSession(index, providerId);
+/** The session for an account: the stored one, or a fresh login. */
+export async function sessionFor(accountId: string): Promise<TokenRhythmSession> {
+  const stored = loadSession(accountId);
   if (stored) return stored;
-  const tenant = tokenRhythmTenant(index, providerId);
-  if (!tenant) throw new TokenRhythmError(`没有配置第 ${index} 个租户`, 500);
-  return login(tenant, providerId);
+  return login(accountId);
 }

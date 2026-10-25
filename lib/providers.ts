@@ -1,39 +1,37 @@
-// lib/providers.ts — the rows the gateway talks to.
+// lib/providers.ts — 账号：一行一个登录身份。
 //
-// The vocabulary is AGENTS.md's: an **upstream** is one platform's one service
-// (MiniMax's open platform, MiniMax Code, Qoder China, ...), and a **provider**
-// is one account of an upstream. A row here is an upstream; the accounts
-// under it are its providers.
+// 平台是代码里的模板（lib/platforms.ts）：九个服务，路径里那一段就是它的 id。
+// 账号是这张表里的行：同一个平台下可以有多行 —— MiniMax Code 的主账号与 M
+// plan 是两行，中转站的每个租户也是一行。
 //
-// A row has two parts:
+// 一行有三个来处：
 //
-//   kind   what kind of upstream it is (the behaviour)
-//   id     which one it is (the identity)
+//   id        账号自己的标识，自动生成（`minimax`、`minimax-2`）。路径里不用它。
+//   platform  它属于哪个平台。平台决定 kind、region 与说话的方式。
+//   alias     面板上用来分辨两个账号。
 //
-// The kind says how to talk to it; the id says which one. Two accounts of the
-// MiniMax open platform are two providers under one upstream — the alias
-// tells them apart ("Token Plan" / "M Plan"), and the upstream's own policy
-// decides which of them takes a request.
-//
-// The behaviour lives in a registry (see lib/provider-kinds.ts) instead of a
-// switch on the kind: adding a kind is one entry, not seven case branches.
+// kind 与 region 是从平台模板**派生**的，不是存的：它们是服务的属性，不是
+// 哪个登录的身份。
 
-import { markProviderDeleted, providerDeleted, store } from "./store.ts";
+import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
+import { PLATFORMS, platformOf, platformPolicy, setPlatformPolicy } from "./platforms.ts";
 
-/** 一行上游。 */
+/** 一个账号。 */
 export interface ProviderRow {
-  /** 唯一标识，也是路径里那一段：/{id}/v1/messages。 */
+  /** 账号 id。路径里不用它，路径里是平台 id。 */
   id: string;
-  /** 上游的种类：minimax、minimax-api、qoder…… */
+  /** 它属于哪个平台：九个模板之一，也是路径里那一段。 */
+  platform: string;
+  /** 派生自平台：怎么跟它说话。 */
   kind: string;
-  /** 用来分辨同一个 kind 的两个账号。 */
-  alias: string;
-  /** 区域：qoder 有全球区与中国区之分。 */
+  /** 派生自平台：区域。 */
   region: string;
+  /** 用来分辨同一个平台的两个账号。 */
+  alias: string;
   /** 开关。 */
   enabled: boolean;
-  /** 生效策略：名下的多个账号怎么选。 */
+  /** 派生自平台：这个平台的生效策略。 */
   policy: ProviderPolicy;
   createdAt: number;
   updatedAt: number;
@@ -61,79 +59,38 @@ export function isProviderPolicy(value: unknown): value is ProviderPolicy {
   return typeof value === "string" && (PROVIDER_POLICIES as string[]).includes(value);
 }
 
-const BUILT_IN: { id: string; kind: string; alias: string; region: string }[] = [
-  { id: "minimax", kind: "minimax", alias: "MiniMax Code", region: "cn" },
-  { id: "minimax-api", kind: "minimax-api", alias: "MiniMax 开放平台", region: "cn" },
-  { id: "zcode", kind: "zcode", alias: "ZCode", region: "cn" },
-  // The two Qoder regions are two providers of the same kind: the region says
-  // which one.
-  { id: "qoder", kind: "qoder", alias: "Qoder（全球区）", region: "global" },
-  { id: "qoder-cn", kind: "qoder", alias: "Qoder（中国区）", region: "cn" },
-  { id: "workbuddy-cn", kind: "workbuddy", alias: "WorkBuddy（中国区）", region: "cn" },
-  { id: "tokenrhythm", kind: "tokenrhythm", alias: "TokenRhythm", region: "" },
-  { id: "sensenova", kind: "sensenova", alias: "SenseNova", region: "" },
-  { id: "intern-ai", kind: "intern-ai", alias: "书生·端砚", region: "" },
-];
-
-/**
- * 内置的那些 provider 放进去。
- *
- * The kind and the region belong to the code, not to the user: a row written by
- * an older version keeps its alias and its switch, but its kind is corrected to
- * the one the registry knows.
- *
- * The switch starts off. It used to start from an environment variable, but
- * that variable was read once — when the row was inserted — and never again,
- * so the panel and the environment disagreed about who was in charge. The
- * database is the only authority now: a fresh install has every built-in
- * upstream off, and the operator turns on the ones they want.
- */
-export function ensureBuiltinProviders(): void {
-  const now = Date.now();
-  const insert = store().prepare(
-    "INSERT INTO provider (id, kind, alias, region, enabled, created_at, updated_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-  );
-  const fix = store().prepare("UPDATE provider SET kind = ?, region = ?, updated_at = ? WHERE id = ?");
-  for (const row of BUILT_IN) {
-    // The operator deleted it: it stays deleted.
-    if (providerDeleted(row.id)) continue;
-    insert.run(row.id, row.kind, row.alias, row.region, 0, now, now);
-    const existing = store().prepare("SELECT kind, region FROM provider WHERE id = ?").get(row.id) as
-      | { kind?: string; region?: string }
-      | undefined;
-    if (existing && (existing.kind !== row.kind || existing.region !== row.region)) {
-      fix.run(row.kind, row.region, now, row.id);
-    }
-  }
-}
-
-/** 全部 provider。 */
+/** 全部账号，按平台与创建先后排。 */
 export function listProviders(): ProviderRow[] {
-  ensureBuiltinProviders();
   const rows = store()
-    .prepare("SELECT id, kind, alias, region, enabled, policy, created_at, updated_at FROM provider ORDER BY id")
+    .prepare("SELECT id, platform, alias, enabled, created_at, updated_at FROM provider ORDER BY platform, created_at, id")
     .all() as any[];
   return rows.map(toRow);
 }
 
-/** 某一个 provider。 */
+/** 某个平台下的账号，按创建先后排 —— 也就是「权重」的次序。 */
+export function accountsOfPlatform(platform: string): ProviderRow[] {
+  return listProviders().filter((row) => row.platform === platform);
+}
+
+/** 某一个账号。 */
 export function provider(id: string): ProviderRow | null {
-  ensureBuiltinProviders();
   const row = store()
-    .prepare("SELECT id, kind, alias, region, enabled, policy, created_at, updated_at FROM provider WHERE id = ?")
+    .prepare("SELECT id, platform, alias, enabled, created_at, updated_at FROM provider WHERE id = ?")
     .get(id) as any;
   return row ? toRow(row) : null;
 }
 
 function toRow(row: any): ProviderRow {
+  const platform = String(row.platform ?? "");
+  const template = platformOf(platform);
   return {
     id: String(row.id),
-    kind: String(row.kind),
+    platform,
+    kind: template?.kind ?? "",
+    region: template?.region ?? "",
     alias: String(row.alias ?? ""),
-    region: String(row.region ?? ""),
     enabled: Number(row.enabled) !== 0,
-    policy: policyOfValue(row.policy),
+    policy: platformPolicy(platform),
     createdAt: Number(row.created_at ?? 0),
     updatedAt: Number(row.updated_at ?? 0),
   };
@@ -145,12 +102,15 @@ function policyOfValue(value: unknown): ProviderPolicy {
   return (PROVIDER_POLICIES as string[]).includes(raw) ? (raw as ProviderPolicy) : "single";
 }
 
-/** The policy of an upstream: which of its accounts takes a request. */
-export function policyOf(id: string): ProviderPolicy {
-  const row = store()
-    .prepare("SELECT policy FROM provider WHERE id = ?")
-    .get(id) as { policy?: string } | undefined;
-  return policyOfValue(row?.policy);
+/**
+ * 这个平台的生效策略：它名下的几个账号怎么选。
+ *
+ * 传平台 id 或账号 id 都行 —— 路由那边拿到的是平台 id，适配器手里有时是
+ * 账号行。
+ */
+export function policyOf(idOrPlatform: string): ProviderPolicy {
+  const platform = platformOf(idOrPlatform) ? idOrPlatform : provider(idOrPlatform)?.platform;
+  return platform ? platformPolicy(platform) : "single";
 }
 
 /**
@@ -160,51 +120,48 @@ export function policyOf(id: string): ProviderPolicy {
  */
 export function updateProvider(
   id: string,
-  patch: { alias?: string; enabled?: boolean; policy?: ProviderPolicy },
+  patch: { alias?: string; enabled?: boolean },
 ): { ok: boolean; message: string } {
   const row = provider(id);
-  if (!row) return { ok: false, message: `没有这个 Provider：${id}` };
-  if (patch.policy !== undefined && !isProviderPolicy(patch.policy)) {
-    return {
-      ok: false,
-      message: `不认识的策略：${String(patch.policy)}。只能选 single、fallback、expiry_first`,
-    };
-  }
+  if (!row) return { ok: false, message: `没有这个账号：${id}` };
   const alias = patch.alias === undefined ? row.alias : String(patch.alias).trim();
   const enabled = patch.enabled === undefined ? row.enabled : patch.enabled;
-  const policy = patch.policy === undefined ? row.policy : patch.policy;
   store()
-    .prepare("UPDATE provider SET alias = ?, enabled = ?, policy = ?, updated_at = ? WHERE id = ?")
-    .run(alias, enabled ? 1 : 0, policy, Date.now(), id);
+    .prepare("UPDATE provider SET alias = ?, enabled = ?, updated_at = ? WHERE id = ?")
+    .run(alias, enabled ? 1 : 0, Date.now(), id);
   return { ok: true, message: "改好了" };
 }
 
 /**
- * 加一个 provider。
+ * 在一个平台下加一个账号。
  *
- * 同一个 kind 可以加很多个 —— 它们各自有各自的凭据、自己的模型、自己的额度。
- * id 要自己给（路径里就是它），所以给一个好认的：kind 加个后缀。
+ * id 是自动起的：平台 id 后面接序号（`minimax`、`minimax-2`、`minimax-3`……）。
+ * 路径里用的是平台 id，所以账号 id 只要不重就行，不需要人取名。
  */
-export function addProvider(input: {
-  id: string;
-  kind: string;
+export function addAccount(input: {
+  platform: string;
   alias?: string;
-  region?: string;
-}): { ok: boolean; message: string } {
-  const id = String(input.id ?? "").trim();
-  if (!id) return { ok: false, message: "要一个 id" };
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-    return { ok: false, message: "id 只能用小写字母、数字和连字符" };
+}): { ok: boolean; message: string; id?: string } {
+  const platform = String(input.platform ?? "").trim();
+  if (!platformOf(platform)) {
+    return { ok: false, message: `没有这个平台：${platform}。可选：${PLATFORMS.map((p) => p.id).join("、")}` };
   }
-  if (provider(id)) return { ok: false, message: `已经有叫 ${id} 的了` };
+  const id = nextAccountId(platform);
   const now = Date.now();
+  const existing = accountsOfPlatform(platform).length;
+  const alias = String(input.alias ?? "").trim() || `${platformOf(platform)?.label}${existing ? ` ${existing + 1}` : ""}`;
   store()
-    .prepare(
-      "INSERT INTO provider (id, kind, alias, region, enabled, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, 1, ?, ?)",
-    )
-    .run(id, String(input.kind ?? ""), String(input.alias ?? ""), String(input.region ?? ""), now, now);
-  return { ok: true, message: "加好了" };
+    .prepare("INSERT INTO provider (id, platform, alias, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)")
+    .run(id, platform, alias, now, now);
+  return { ok: true, message: `加好了：${alias}`, id };
+}
+
+/** 这个平台下一个没人用的账号 id。 */
+function nextAccountId(platform: string): string {
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? platform : `${platform}-${n}`;
+    if (!provider(id)) return id;
+  }
 }
 
 /** 删一个 provider。它名下的凭据也一起删 —— 留着就没人认领了。 */
@@ -231,15 +188,16 @@ export function deleteProviderCredentials(id: string): number {
   return dropped;
 }
 
-export function deleteProvider(id: string): { ok: boolean; message: string } {
+/**
+ * 删一个账号。
+ *
+ * 它名下的凭据一起删 —— 留着就没人认领了。平台本身删不掉：那是代码里的
+ * 模板，不是数据。
+ */
+export function deleteAccount(id: string): { ok: boolean; message: string } {
   const row = provider(id);
-  if (!row) return { ok: false, message: `没有这个 Provider：${id}` };
+  if (!row) return { ok: false, message: `没有这个账号：${id}` };
   store().prepare("DELETE FROM provider WHERE id = ?").run(id);
-  // The built-in ones are put back on every start, so the deletion has to be
-  // remembered -- otherwise the panel said it was gone and the next refresh
-  // showed it again.
-  markProviderDeleted(id);
-  // The credentials go with it: nobody would claim them any more.
   const dropped = deleteProviderCredentials(id);
   return { ok: true, message: dropped > 0 ? `删掉了，连 ${dropped} 条凭据一起` : "删掉了" };
 }

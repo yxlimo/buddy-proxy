@@ -1,20 +1,16 @@
 import { Fragment, useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronRight, Plus } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
   ErrorState,
   LoadingState,
 } from '@/components/async-state'
-import {
-  CredentialStateBadge,
-  UpstreamStateBadge,
-} from '@/features/upstreams/state-badge'
+import { UpstreamStateBadge } from '@/features/upstreams/state-badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -34,24 +30,20 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import {
-  useAddProvider,
-  useDeleteProvider,
-  useProviderKinds,
-  useSetUpstreamEnabled,
-  useUpdateProvider,
-  useUpstreams,
   upstreamKeys,
+  useAddAccount,
+  useDeleteAccount,
+  useSetAccountEnabled,
+  useUpstreams,
+  useUpdateProvider,
 } from '@/features/upstreams/api'
-import { AddProviderDialog } from '@/features/upstreams/add-provider-dialog'
-import { ProviderAliasCell } from '@/features/upstreams/provider-alias'
+import { AddAccountDialog } from '@/features/upstreams/add-account-dialog'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
 import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
-import { useLogoutAccount, useSetProviderKeys } from '@/features/accounts/api'
+import { useSetProviderKeys } from '@/features/accounts/api'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
-import { QuotaSummary } from '@/features/balance/quota'
-import { formatCount } from '@/lib/format'
 import type { Account, Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 
 const REGION_LABELS: Record<string, string> = {
@@ -59,37 +51,38 @@ const REGION_LABELS: Record<string, string> = {
   global: '海外',
 }
 
+/**
+ * 上游页：平台列表 + 账号管理。
+ *
+ * 平台是代码里的模板（九个服务），它的 id 是请求路径里那一段，所以删不掉、
+ * 关不掉，能改的只有生效策略。账号是 provider 表里的行：一个平台下可以有好几
+ * 个，各自的凭据、开关、额度各归各。
+ */
 export function UpstreamsPage() {
   const upstreams = useUpstreams()
-  const kinds = useProviderKinds()
-  const setEnabled = useSetUpstreamEnabled()
-  const addProvider = useAddProvider()
+  const setEnabled = useSetAccountEnabled()
+  const addAccount = useAddAccount()
   const updateProvider = useUpdateProvider()
-  const deleteProvider = useDeleteProvider()
-  const logoutAccount = useLogoutAccount()
+  const deleteAccount = useDeleteAccount()
   const setKeys = useSetProviderKeys()
   const login = useAccountLogin()
-  const [adding, setAdding] = useState(false)
-  /** 展开着的那个上游：点一行看它名下的账号与凭据。 */
+  /** 展开着的那个平台：点一行看它名下的账号与凭据。 */
   const [expanded, setExpanded] = useState<string | null>(null)
-  /** 待注销的账号。 */
-  const [logoutTarget, setLogoutTarget] = useState<Account | null>(null)
-  /** 要删掉的上游：null 是没在删。 */
-  const [deleteTarget, setDeleteTarget] = useState<Upstream | null>(null)
-  /** 正在填 key 的上游。 */
+  /** 正在给哪个平台新增账号。 */
+  const [adding, setAdding] = useState<Upstream | null>(null)
+  /** 待注销的账号：删这一行连同它的凭据。 */
+  const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
+  /** 正在填 key 的账号 id。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
 
-  // 正在改的是哪一个：用 mutation 的 variables 判断，不用自己存一份
-  // busy —— 两个上游一起点的时候，后一个的 finally 会把前一个的 busy
-  // 清掉。
-  const busyId = setEnabled.isPending ? setEnabled.variables?.upstreamId : null
-  // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它
-  // 变，免得先弹回旧值再跳到新值。
-  const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
-  // 正在注销的账号：一个账号一次注销。
-  const loggingOutId = logoutAccount.isPending
-    ? (logoutAccount.variables?.accountId ?? null)
+  // 正在改的是哪一个：用 mutation 的 variables 判断，不用自己存一份 busy ——
+  // 两个账号一起点的时候，后一个的 finally 会把前一个的 busy 清掉。
+  const busyAccountId = setEnabled.isPending
+    ? (setEnabled.variables?.accountId ?? null)
     : null
+  // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它变，
+  // 免得先弹回旧值再跳到新值。
+  const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
 
   if (upstreams.isPending) {
     return <LoadingState />
@@ -102,42 +95,33 @@ export function UpstreamsPage() {
 
   const list = upstreams.data.upstreams
   const loginTarget = login.target
-  // 正在填 key 的那个上游。找不到就是没有：key 不能写到别的上游上去，
-  // 所以找不到的时候不开弹窗，也不发请求。
-  const keysTarget = keysFor
-    ? list.find((u) => u.id === keysFor)
-    : undefined
+  // 正在填 key 的那个账号。找不到就是没有：key 不能写到别的账号上去，所以找
+  // 不到的时候不开弹窗，也不发请求。
+  const keysTarget = keysFor ? findAccount(list, keysFor) : undefined
 
   return (
     <PageShell
       title='上游'
-      description='每个 Provider 是一路请求的去处。点一行看它名下的账号与凭据。开关修改后立即生效。'
-      actions={
-        <Button size='sm' onClick={() => setAdding(true)}>
-          <Plus />
-          添加
-        </Button>
-      }
+      description='平台是代码里的模板，固定的九个，删不掉也关不掉。账号才是数据：一个平台下可以有一个或多个账号，凭据挂在账号上'
     >
 
       <Card>
         <CardContent className='px-0'>
           {list.length === 0 ? (
             <EmptyState
-              title='网关未返回任何 Provider'
-              description='Provider 开关位于本页，无需前往「配置」页。'
+              title='网关没有返回任何平台'
+              description='平台是代码里的模板，正常时一定有九个'
             />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>上游</TableHead>
-                  <TableHead>地址</TableHead>
+                  <TableHead>平台</TableHead>
+                  <TableHead>区域</TableHead>
                   <TableHead>状态</TableHead>
-                  <TableHead>凭据</TableHead>
-                  <TableHead className='text-right'>模型</TableHead>
-                  <TableHead className='text-right'>额度</TableHead>
-                  <TableHead className='text-right'>启用</TableHead>
+                  <TableHead>生效策略</TableHead>
+                  <TableHead className='text-right'>账号</TableHead>
+                  <TableHead className='text-right'>操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -173,140 +157,94 @@ export function UpstreamsPage() {
                               />
                             </Button>
                             <div className='grid gap-0.5'>
-                              {/* The name the user gave it. Two accounts of the same
-                                  kind are told apart by it. */}
                               <span className='font-medium'>
-                                {upstream.alias || upstream.label || upstream.id}
+                                {upstream.label || upstream.id}
                               </span>
-                              {/* The unique id: the path segment clients use, and
-                                  the key the provider has in the agent clients. */}
+                              {/* 平台的 id：客户端路径里那一段，也是客户端里那个
+                                  provider 的名字。 */}
                               <span className='font-mono text-xs text-muted-foreground'>
                                 {upstream.id}
                               </span>
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className='max-w-[16rem]'>
-                          {/* min-w-0：网格项默认不肯比容器窄，长地址会顶到隔壁列上去。 */}
-                          <div className='grid min-w-0 gap-0.5'>
-                            {upstream.baseUrl ? (
-                              <span
-                                className='font-mono text-xs break-all whitespace-normal'
-                                title={upstream.baseUrl}
-                              >
-                                {upstream.baseUrl}
-                              </span>
-                            ) : (
-                              <span className='text-xs text-muted-foreground'>—</span>
-                            )}
-                            {upstream.region ? (
-                              <span className='text-xs text-muted-foreground'>
-                                {REGION_LABELS[upstream.region] ?? upstream.region}
-                              </span>
-                            ) : null}
-                          </div>
+                        <TableCell className='text-xs text-muted-foreground'>
+                          {upstream.region
+                            ? (REGION_LABELS[upstream.region] ?? upstream.region)
+                            : '—'}
                         </TableCell>
                         <TableCell>
+                          {/* 能不能接由后端说：有开着的账号就是开着的。 */}
                           <UpstreamStateBadge state={upstream.state} />
                         </TableCell>
                         <TableCell>
-                          {upstream.credential ? (
-                            <div className='grid gap-0.5'>
-                              <CredentialStateBadge status={upstream.credential.status} />
-                              <span className='text-xs text-muted-foreground'>
-                                {upstream.credential.kind || '—'}
-                                {upstream.credential.fingerprint
-                                  ? ` · ${upstream.credential.fingerprint}`
-                                  : ''}
-                              </span>
-                              {upstream.credential.warning ? (
-                                <span className='text-xs text-destructive'>
-                                  {upstream.credential.detail ||
-                                    '令牌过期了，刷新没成功，要重新登录'}
-                                </span>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <span className='text-muted-foreground'>—</span>
-                          )}
+                          {/* 策略在这一格自己处理点击：改策略不该顺带把这一行
+                              展开。 */}
+                          <div onClick={(event) => event.stopPropagation()}>
+                            <ProviderPolicySelect
+                              upstream={upstream}
+                              listUpdatedAt={upstreams.dataUpdatedAt}
+                            />
+                          </div>
                         </TableCell>
                         <TableCell className='text-right font-mono'>
-                          {formatCount(upstream.modelCount)}
-                        </TableCell>
-                        <TableCell className='max-w-[18rem] text-right'>
-                          {/* 额度有三样，单位和单位都不一样：有套餐额度就显示
-                              套餐额度，没有才显示积分，余额另外显示。不相加。 */}
-                          <QuotaSummary quota={upstream.quota} />
+                          {upstream.accountCount}
                         </TableCell>
                         <TableCell className='text-right'>
-                          {/* 这一格里的东西自己处理点击：点开关、点别名、
-                              点删除都不该顺带把这一行展开。 */}
                           <div
-                            className='flex items-center justify-end gap-2'
+                            className='flex justify-end'
                             onClick={(event) => event.stopPropagation()}
                           >
-                            <ProviderAliasCell
-                              providerId={upstream.id}
-                              alias={upstream.alias ?? ''}
-                              onSave={(alias) =>
-                                updateProvider.mutate({ id: upstream.id, alias })
-                              }
-                            />
-                            <Switch
-                              checked={upstream.enabled}
-                              disabled={busyId === upstream.id || refreshing}
-                              onCheckedChange={(checked) =>
-                                setEnabled.mutate({
-                                  upstreamId: upstream.id,
-                                  enabled: checked,
-                                })
-                              }
-                              aria-label={`${upstream.label || upstream.id} 的开关`}
-                            />
                             <Button
-                              variant='ghost'
-                              size='icon-sm'
-                              aria-label={`删掉 ${upstream.id}`}
-                              disabled={deleteProvider.isPending}
-                              onClick={() => setDeleteTarget(upstream)}
+                              size='sm'
+                              onClick={() => setAdding(upstream)}
                             >
-                              <Trash2 />
+                              <Plus />
+                              新增账号
                             </Button>
                           </div>
                         </TableCell>
                       </TableRow>
                       {isExpanded ? (
                         <TableRow>
-                          <TableCell colSpan={7} className='bg-muted/30 p-0'>
-                            <ProviderPolicySelect
-                              upstream={upstream}
-                              listUpdatedAt={upstreams.dataUpdatedAt}
-                            />
+                          <TableCell colSpan={6} className='bg-muted/30 p-0'>
                             <ProviderAccounts
-                              providerId={upstream.id}
+                              platform={upstream.id}
                               kind={upstream.kind}
+                              accounts={upstream.accounts}
                               loggingIn={login.pending}
-                              loggingOutId={loggingOutId}
+                              busyAccountId={busyAccountId}
+                              refreshing={refreshing}
                               onLogin={(account) =>
                                 login.start({
-                                  upstreamId: account.upstreamId,
+                                  // 路径里走的是平台：登录也按平台 + 账号行办。
+                                  upstreamId: upstream.id,
                                   id: account.id,
-                                  label: account.label || account.id,
+                                  label: account.alias || account.id,
                                 })
                               }
-                              onLogout={(account) => setLogoutTarget(account)}
+                              onDelete={(account) => setDeleteTarget(account)}
+                              onToggleEnabled={(account, enabled) =>
+                                setEnabled.mutate({
+                                  accountId: account.id,
+                                  enabled,
+                                })
+                              }
+                              onRename={(account, alias) =>
+                                updateProvider.mutate({
+                                  id: account.id,
+                                  alias,
+                                })
+                              }
                               onManageKeys={(account) => {
-                                const target = list.find(
-                                  (u) => u.id === account.upstreamId
-                                )
-                                if (!target) {
-                                  // 上游不在列表里了：不要把 key 写到别处去。
-                                  toast.error('找不到这个上游', {
-                                    description: `${account.upstreamId} 不在上游列表里`,
+                                // 账号不在列表里了：不要把 key 写到别处去。
+                                if (!findAccount(list, account.id)) {
+                                  toast.error('找不到这个账号', {
+                                    description: `${account.id} 不在上游列表里`,
                                   })
                                   return
                                 }
-                                setKeysFor(target.id)
+                                setKeysFor(account.id)
                               }}
                             />
                           </TableCell>
@@ -321,13 +259,16 @@ export function UpstreamsPage() {
         </CardContent>
       </Card>
 
-      <AddProviderDialog
-        open={adding}
-        onOpenChange={setAdding}
-        kinds={kinds.data?.kinds ?? []}
-        pending={addProvider.isPending}
+      <AddAccountDialog
+        open={adding !== null}
+        platform={adding?.id ?? ''}
+        platformLabel={adding ? (adding.label || adding.id) : ''}
+        pending={addAccount.isPending}
+        onOpenChange={(open) => {
+          if (!open) setAdding(null)
+        }}
         onSubmit={(input) => {
-          addProvider.mutate(input, { onSuccess: () => setAdding(false) })
+          addAccount.mutate(input, { onSuccess: () => setAdding(null) })
         }}
       />
 
@@ -364,7 +305,7 @@ export function UpstreamsPage() {
         onSubmit={(keys) => {
           if (!keysTarget) return
           setKeys.mutate(
-            { upstreamId: keysTarget.id, keys },
+            { accountId: keysTarget.account.id, keys },
             {
               onSuccess: () => setKeysFor(null),
             }
@@ -372,41 +313,7 @@ export function UpstreamsPage() {
         }}
       />
 
-      {/* 注销要确认：凭据删掉就回不来了。 */}
-      <AlertDialog
-        open={logoutTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setLogoutTarget(null)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              注销 {logoutTarget ? logoutTarget.label || logoutTarget.id : ''}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              这个账号名下的凭据会全部删掉（{logoutTarget?.credentialCount ?? 0}{' '}
-              条）。删掉之后它回到「没有凭据」，要重新登录。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              variant='destructive'
-              onClick={() => {
-                const target = logoutTarget
-                setLogoutTarget(null)
-                if (!target) return
-                logoutAccount.mutate({ accountId: target.id })
-              }}
-            >
-              注销
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* 删 Provider 也要确认：凭据跟着一起删掉。 */}
+      {/* 注销要确认：这一行删掉就没了，凭据也跟着删。 */}
       <AlertDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
@@ -416,11 +323,11 @@ export function UpstreamsPage() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              删掉 {deleteTarget ? deleteTarget.alias || deleteTarget.label || deleteTarget.id : ''}
+              注销 {deleteTarget ? deleteTarget.alias || deleteTarget.id : ''}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              这个上游会被删掉，它名下的凭据也会一起删掉。删掉之后客户端要用新的
-              路径（/{deleteTarget?.id ?? ''}/v1）才能访问它。
+              这个账号会被删掉，它名下的 {deleteTarget?.credentialCount ?? 0}{' '}
+              条凭据也一起删掉，删完回不来。平台本身还在，客户端的地址不变
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -431,14 +338,30 @@ export function UpstreamsPage() {
                 const target = deleteTarget
                 setDeleteTarget(null)
                 if (!target) return
-                deleteProvider.mutate({ id: target.id })
+                deleteAccount.mutate({ id: target.id })
               }}
             >
-              删掉
+              注销
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </PageShell>
   )
+}
+
+/**
+ * 在所有平台的账号里找一个账号。
+ *
+ * 找到时把它所在的平台 kind 一起带出来：key 的种类看平台，不看账号。
+ */
+function findAccount(
+  list: Upstream[],
+  accountId: string
+): { account: Account; kind: string } | undefined {
+  for (const upstream of list) {
+    const account = upstream.accounts.find((row) => row.id === accountId)
+    if (account) return { account, kind: upstream.kind }
+  }
+  return undefined
 }

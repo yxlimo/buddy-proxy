@@ -27,15 +27,9 @@ import { authenticate, loadKeys, requireApiKey } from "./lib/api-keys.ts";
 import { deleteSecret, listSecrets } from "./lib/store.ts";
 import { AuthError } from "./lib/credential.ts";
 import { LimitError } from "./lib/qoder/transport.ts";
-import { MINIMAX_API_MODELS, miniMaxApiBase, miniMaxApiTenants } from "./lib/minimax/api.ts";
-import { ZCODE_MODELS } from "./lib/zcode/models.ts";
-import { ZCODE_MESSAGES_URL } from "./lib/zcode/transport.ts";
-import { zcodeStatus } from "./lib/zcode/auth.ts";
-import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
+import { readCredential } from "./lib/minimax/auth.ts";
 import { startPeriodic } from "./lib/periodic.ts";
-import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
-import { TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
-import { tokenRhythmStatus, tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
+import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
 import { qoderStatus } from "./lib/qoder/auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
@@ -49,21 +43,17 @@ import {
   ensureSenseNovaKey,
   refreshSenseNovaCatalog,
   senseNovaCatalog,
-  senseNovaInferenceKey,
 } from "./lib/sensenova/transport.ts";
 import {
   loadSession as loadSenseNovaSession,
   login as loginSenseNova,
 } from "./lib/sensenova/auth.ts";
-import { SENSENOVA_INFER_BASE } from "./lib/sensenova/config.ts";
 import {
   ensureInternAiKey,
   internAiCatalog,
-  internAiInferenceKey,
   refreshInternAiCatalog,
 } from "./lib/intern-ai/transport.ts";
 import { loadSession as loadInternAiSession } from "./lib/intern-ai/auth.ts";
-import { INTERN_AI_DISCOVERY_API_BASE } from "./lib/intern-ai/config.ts";
 import {
   toMinimax,
   toMiniMaxApi,
@@ -80,13 +70,15 @@ import {
   type Route,
   type RoutingContext,
 } from "./lib/router/routes.ts";
-import { listProviders, providerKindOf } from "./lib/providers.ts";
+import { accountsOfPlatform, listProviders } from "./lib/providers.ts";
+import { PLATFORMS, platformOf, platformPolicies, platformPolicy } from "./lib/platforms.ts";
 import { kindOf } from "./lib/provider-kinds.ts";
 import {
   aggregateAnthropicCatalog,
   aggregateCatalog,
   aggregateOpenAICatalog,
   groupCatalog,
+  platformGroups,
   type AggregateEntry,
 } from "./lib/router/catalog.ts";
 import { aggregateModels, recordAggregateUsage } from "./lib/aggregate.ts";
@@ -101,16 +93,11 @@ import { BENEFITS_INTERVAL_MS, benefitUpstreams, benefits } from "./lib/admin/be
 import {
   HEALTH_CACHE_MS,
   outOfCredits,
-  catalogGroups,
   healthRefreshing,
   healthSnapshot,
-  minimaxVisible,
-  qoderRegions,
-  qoderVisible,
   refreshHealthSnapshot,
   setWorkbuddyCatalog,
   snapshotEntry,
-  upstreamEnabled,
   workbuddyCatalog,
 } from "./lib/admin/upstreams.ts";
 
@@ -141,17 +128,60 @@ let workbuddyCatalogAt = 0;
 
 /** The upstream catalogue, refreshed at most every half hour. */
 async function refreshWorkBuddyCatalog(force = false): Promise<void> {
-  if (!upstreamEnabled("workbuddy-cn")) return;
+  const accounts = enabledAccounts("workbuddy-cn");
+  if (!accounts.length) return;
   const age = Date.now() - workbuddyCatalogAt;
   if (!force && workbuddyCatalogAt && age < WORKBUDDY_CATALOG_TTL_MS) return;
   try {
-    const models = await fetchWorkBuddyCatalog("cn");
+    // The catalogue is the platform's, but the request that fetches it needs an
+    // account's session: the first account that is on answers.
+    const models = await fetchWorkBuddyCatalog(accounts[0].id);
     if (models?.length) {
       setWorkbuddyCatalog(models);
       workbuddyCatalogAt = Date.now();
     }
   } catch (e) {
     console.warn(`[WORKBUDDY] catalogue refresh failed: ${(e as Error).message}`);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The platforms, as the router sees them
+ * ------------------------------------------------------------------ */
+
+/** A platform's accounts that are on, in weight order. */
+function enabledAccounts(platform: string) {
+  return accountsOfPlatform(platform).filter((row) => row.enabled);
+}
+
+/** Does the platform have at least one account that is on? */
+function platformServing(platform: string): boolean {
+  return enabledAccounts(platform).length > 0;
+}
+
+/** The platform's models. Without an account nobody can serve them, but the
+ * catalogue is the platform's, not the account's. */
+function modelsOfPlatform(platform: string): string[] {
+  const template = platformOf(platform);
+  const kind = template ? kindOf(template.kind) : null;
+  if (!kind) return [];
+  const accounts = accountsOfPlatform(platform);
+  if (!accounts.length) return [];
+  return kind.models(accounts[0]).map((m) => m.id);
+}
+
+/**
+ * Refresh the catalogues that come from the upstream itself.
+ *
+ * Three platforms publish their models live; the others ship a snapshot. The
+ * fetch needs an account (a session or a key), so it goes account by account.
+ */
+function refreshLiveCatalogs(): void {
+  for (const row of listProviders()) {
+    if (!row.enabled) continue;
+    if (row.kind === "workbuddy") void refreshWorkBuddyCatalog();
+    if (row.kind === "sensenova") void refreshSenseNovaCatalog(false, row.id);
+    if (row.kind === "intern-ai") void refreshInternAiCatalog(false, row.id);
   }
 }
 
@@ -226,105 +256,53 @@ const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
 /**
  * The parts of /health that ask the upstreams live in lib/admin/upstreams.ts,
  * because the management panel needs the same answers.
+ *
+ * The shape follows the account model: a platform is a template in the code,
+ * and what it can serve depends on whether any of its accounts is on. So every
+ * platform is listed, with its policy and its accounts — a platform with no
+ * account is there too, saying so.
  */
 router.get("/health", async (ctx) => {
   const snapshot = healthSnapshot();
-  const regions: Record<string, unknown> = {};
-  for (const region of qoderRegions()) {
-    // The credential lives under the provider id, not the region: the two
-    // regions are two providers, "qoder" and "qoder-cn".
-    const providerId = region === "cn" ? "qoder-cn" : "qoder";
-    regions[region] = {
-      models: qoderVisible(region).length,
-      credential: qoderStatus(providerId),
-      account: snapshotEntry(snapshot.data, "qoder", providerId)?.account ?? null,
-      credits: snapshotEntry(snapshot.data, "qoder", providerId)?.credits ?? null,
+  const platforms: Record<string, unknown> = {};
+  for (const template of PLATFORMS) {
+    const kind = kindOf(template.kind);
+    const accounts = accountsOfPlatform(template.id);
+    const on = accounts.filter((row) => row.enabled);
+    platforms[template.id] = {
+      id: template.id,
+      label: template.label,
+      kind: template.kind,
+      region: template.region,
+      // 有开着的账号才算开着。
+      enabled: on.length > 0,
+      policy: platformPolicy(template.id),
+      policies: platformPolicies(template.id),
+      base: kind && accounts.length ? safe(() => kind.baseUrl(accounts[0])) : null,
+      models: modelsOfPlatform(template.id).length,
+      // 一个账号一行：凭据、额度、快照都在它自己身上。
+      accounts: accounts.map((row) => ({
+        id: row.id,
+        alias: row.alias,
+        enabled: row.enabled,
+        credential: kind ? safe(() => kind.credential(row)) : null,
+        outOfCredits: safe(() => outOfCredits(row.id)) ?? false,
+        snapshot: snapshotOf(snapshot.data, template.kind, row.id),
+      })),
     };
   }
   ctx.body = {
     status: "ok",
     dialects: ["anthropic", "openai"],
-    // Every provider the database holds, in the three values the panel and the
-    // client scripts need: the unique id (the path segment), the name the user
-    // gave it, and whether the upstream is on. A provider the user added is
-    // here too -- this list is driven by the provider table, not by a fixed
-    // set of built-in ones.
-    providers: listProviders().map((row) => ({
-      id: row.id,
-      name: row.alias || providerKindOf(row.id)?.label || row.id,
-      kind: row.kind,
-      enabled: row.enabled,
+    // 平台与开关：客户端脚本与面板用得上的是「这个平台现在服务不服务」。
+    providers: PLATFORMS.map((template) => ({
+      id: template.id,
+      name: template.label,
+      kind: template.kind,
+      enabled: platformServing(template.id),
+      accounts: accountsOfPlatform(template.id).length,
     })),
-    upstreams: {
-      minimax: upstreamEnabled("minimax")
-        ? {
-            base: MINIMAX_UPSTREAM,
-            models: minimaxVisible().length,
-            // Which credential is in use and how much of it is left.
-            credential: credentialStatus(),
-            // What the account has left: the money on the platform account, and
-            // the plan's own windows.
-            balance: snapshotEntry(snapshot.data, "minimax", "minimax")?.balance ?? null,
-            tokenPlan: snapshotEntry(snapshot.data, "minimax", "minimax")?.tokenPlan ?? null,
-          }
-        : { enabled: false },
-      zcode: upstreamEnabled("zcode")
-        ? {
-            base: ZCODE_MESSAGES_URL,
-            models: ZCODE_MODELS.length,
-            credential: zcodeStatus(),
-            quota: snapshotEntry(snapshot.data, "zcode", "zcode")?.quota ?? null,
-          }
-        : { enabled: false },
-      "minimax-api": upstreamEnabled("minimax-api")
-        ? {
-            base: miniMaxApiBase(),
-            models: MINIMAX_API_MODELS.length,
-            // 一把 key 一个租户。
-            tenants: miniMaxApiTenants().length,
-            plans: snapshotEntry(snapshot.data, "minimaxApi", "minimax-api")?.tenants ?? null,
-          }
-        : { enabled: false },
-      qoder: { regions },
-      workbuddy: upstreamEnabled("workbuddy-cn")
-        ? {
-            region: "cn",
-            models: workbuddyCatalog().length,
-            // The provider id, not the region: the session lives under
-            // `session:provider:workbuddy-cn`.
-            credential: workbuddyStatus("workbuddy-cn"),
-            credits: snapshotEntry(snapshot.data, "workbuddy", "workbuddy-cn")?.credits ?? null,
-          }
-        : { enabled: false },
-      tokenrhythm: upstreamEnabled("tokenrhythm")
-        ? {
-            models: TOKENRHYTHM_MODELS.length,
-            tenants: snapshotEntry(snapshot.data, "tokenrhythm", "tokenrhythm")?.tenants ?? null,
-            // The relay station has one account per tenant, so the credential
-            // of the provider is the sum of theirs: without this the panel
-            // said "no credential" while the balances were right there.
-            credential: tokenRhythmStatus("tokenrhythm"),
-          }
-        : { enabled: false },
-      sensenova: upstreamEnabled("sensenova")
-        ? {
-            base: SENSENOVA_INFER_BASE,
-            models: senseNovaCatalog().length,
-            // 推理端点要的是 key，不是 cookie。
-            credential: senseNovaInferenceKey() ? "api_key" : "missing",
-            pools: snapshotEntry(snapshot.data, "sensenova", "sensenova")?.pools ?? null,
-          }
-        : { enabled: false },
-      internAi: upstreamEnabled("intern-ai")
-        ? {
-            base: INTERN_AI_DISCOVERY_API_BASE,
-            models: internAiCatalog().length,
-            credential: internAiInferenceKey() ? "api_key" : "missing",
-            balance: snapshotEntry(snapshot.data, "internAi", "intern-ai")?.balance ?? null,
-            packs: snapshotEntry(snapshot.data, "internAi", "intern-ai")?.packs ?? null,
-          }
-        : { enabled: false },
-    },
+    upstreams: platforms,
     // The live part of the answer is cached; this says how old it is.
     snapshot: {
       at: snapshot.at ? new Date(snapshot.at).toISOString() : null,
@@ -342,6 +320,37 @@ router.get("/health", async (ctx) => {
     },
   };
 });
+
+/** 快照里一个账号的那一段：桶的名字跟 kind 不同名（minimaxApi、internAi）。 */
+const SNAPSHOT_BUCKET: Record<string, string> = {
+  minimax: "minimax",
+  "minimax-api": "minimaxApi",
+  zcode: "zcode",
+  qoder: "qoder",
+  workbuddy: "workbuddy",
+  tokenrhythm: "tokenrhythm",
+  sensenova: "sensenova",
+  "intern-ai": "internAi",
+};
+
+/** 一个账号的健康快照，没有就是 null。 */
+function snapshotOf(data: unknown, kind: string, accountId: string): unknown {
+  const bucket = SNAPSHOT_BUCKET[kind];
+  if (!bucket) return null;
+  return snapshotEntry(data as never, bucket, accountId);
+}
+
+/**
+ * 读状态时一处出错不该让整个 /health 挂掉：一个没登录的账号是正常的，
+ * 不是服务的错误。
+ */
+function safe<T>(read: () => T): T | null {
+  try {
+    return read();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * One upstream's catalogue, with the real model ids, is in
@@ -372,23 +381,30 @@ function upstreamContext(): UpstreamContext {
   return uctx;
 }
 
-/** What the router is serving, and what it knows about. */
+/**
+ * What the router is serving, and what it knows about.
+ *
+ * One entry per platform, not per account: the path names the platform, and
+ * which of its accounts pays is the platform policy's business at call time.
+ */
 function routingContext(): RoutingContext {
-  const providers = new Map<string, { kind: string; enabled: boolean; ids: Set<string> }>();
-  for (const row of listProviders()) {
-    const kind = kindOf(row.kind);
+  const platforms = new Map<string, { kind: string; enabled: boolean; accounts: number; ids: Set<string> }>();
+  for (const template of PLATFORMS) {
+    const kind = kindOf(template.kind);
     if (!kind) continue;
-    const all = kind.models(row).map((m) => m.id);
-    // A provider that is off, or has no credits, serves nothing: a request
-    // for one of its models is refused with "not enabled".
-    const serving = row.enabled && !outOfCredits(row.id);
-    providers.set(row.id, {
-      kind: row.kind,
-      enabled: row.enabled,
-      ids: new Set(serving ? all : []),
+    const accounts = accountsOfPlatform(template.id);
+    const on = accounts.filter((row) => row.enabled);
+    const models = modelsOfPlatform(template.id);
+    // 没有开着的账号，或者开着的账号都没额度了：这个平台接不了请求。
+    const serving = on.some((row) => !outOfCredits(row.id));
+    platforms.set(template.id, {
+      kind: template.kind,
+      enabled: on.length > 0,
+      accounts: accounts.length,
+      ids: new Set(serving ? models : []),
     });
   }
-  return { providers };
+  return { platforms };
 }
 
 /**
@@ -399,7 +415,7 @@ function routingContext(): RoutingContext {
  * database holds a model, the database is the catalog.
  */
 function aggregateEntries(): AggregateEntry[] {
-  return aggregateCatalog(catalogGroups(), aggregateModels());
+  return aggregateCatalog(platformGroups(), aggregateModels());
 }
 
 /** The published model a client asked for, if it is one of ours. */
@@ -533,32 +549,29 @@ function describeTargetFailure(error: unknown): string {
  * (`qoder-cn/glm-5.3`); the prefixed form takes it in the path
  * (`/qoder-cn/v1/messages`) and the model name is the real one.
  */
-for (const base of ["", "/:provider"]) {
+for (const base of ["", "/:platform"]) {
   router.post(`${base}/v1/messages`, requireKey, parseBody, async (ctx) => {
     // The root route serves the published models in both dialects. The model
     // name in the body is the published one; the path prefix, when there is
-    // one, names the provider.
-    await handle(ctx, "anthropic", String(ctx.params.provider ?? "") || undefined);
+    // one, names the platform.
+    await handle(ctx, "anthropic", String(ctx.params.platform ?? "") || undefined);
   });
 
   router.post(`${base}/v1/chat/completions`, requireKey, parseBody, async (ctx) => {
-    await handle(ctx, "openai", String(ctx.params.provider ?? "") || undefined);
+    await handle(ctx, "openai", String(ctx.params.platform ?? "") || undefined);
   });
 
   router.get(`${base}/v1/models`, (ctx) => {
     const dialect = String(ctx.query.dialect ?? "").toLowerCase();
     // The upstream's catalogue is the source of truth; fetch it in the background
     // so this answer is never blocked by it.
-    for (const row of listProviders()) {
-      if (!row.enabled) continue;
-      if (row.kind === "workbuddy") void refreshWorkBuddyCatalog();
-      if (row.kind === "sensenova") void refreshSenseNovaCatalog();
-      if (row.kind === "intern-ai") void refreshInternAiCatalog();
-    }
-    const groups = catalogGroups();
-    const provider = String(ctx.params.provider ?? "");
-    if (provider) {
-      ctx.body = groupCatalog(provider, groups, dialect === "openai");
+    refreshLiveCatalogs();
+    const groups = platformGroups();
+    const platform = String(ctx.params.platform ?? "");
+    if (platform) {
+      // The path names the platform; the models are the platform's, with the
+      // real ids — the path already says where they live.
+      ctx.body = groupCatalog(platform, groups, dialect === "openai");
       return;
     }
     // The root route publishes one list: the models the database says it
@@ -603,13 +616,13 @@ app.use(router.allowedMethods());
 async function handle(
   ctx: Koa.Context,
   dialect: Dialect,
-  providerId?: string,
+  platform?: string,
 ): Promise<void> {
   const body = (ctx.request.body ?? {}) as Json;
 
   // The root route serves the published models and nothing else: the database
   // decides which models exist and which upstream serves them.
-  if (!providerId) {
+  if (!platform) {
     const wanted = String(body.model ?? "").trim();
     const entry = findAggregate(wanted);
     if (!entry) {
@@ -627,7 +640,7 @@ async function handle(
   let route: Route;
   try {
     const rctx = routingContext();
-    route = routeInGroup(providerId!, String(body.model ?? "").trim(), rctx);
+    route = routeInGroup(platform!, String(body.model ?? "").trim(), rctx);
   } catch (e) {
     sendError(ctx, e);
     return;
@@ -653,8 +666,10 @@ async function callUpstream(
   const started = Date.now();
   const agent = detectAgent(ctx.request.headers).name;
   const session = detectSession(ctx.request.headers);
-  // The kind says how to talk to it. The provider says which account.
-  const kind = providerKindOf(route.provider);
+  // The platform says how to talk to it; its accounts are the ones the policy
+  // picks from, inside the adapter.
+  const template = platformOf(route.platform);
+  const kind = template ? kindOf(template.kind) : null;
   // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
   // 是直接转发的，客户端的会话头跟着过去。模拟客户端的那些（Qoder、
   // WorkBuddy、MiniMax Code、ZCode）按客户端的样子重建请求，多余的头无视。
@@ -688,7 +703,7 @@ async function callUpstream(
         await toMinimax(uctx, body, route, dialect, stream, ctx);
         break;
     }
-    recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "", kind?.label ?? route.provider);
+    recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "", kind?.label ?? route.platform);
   } catch (e) {
     const err = e as AuthError;
     const status = typeof err?.status === "number" ? err.status : 500;
@@ -701,7 +716,7 @@ async function callUpstream(
       status,
       started,
       err?.message ?? String(e),
-      kind?.label ?? route.provider,
+      kind?.label ?? route.platform,
     );
     throw e;
   }
@@ -729,7 +744,7 @@ function recordRequestUsage(
     ? route.model.slice(route.model.indexOf("/") + 1)
     : route.model;
   recordUsage({
-    upstreamId: providerId(route),
+    upstreamId: route.platform,
     upstreamModel,
     agentModel: String(body.model ?? route.label ?? upstreamModel),
     agent,
@@ -747,10 +762,7 @@ function recordRequestUsage(
   });
 }
 
-/** 面板里的 provider id。 */
-function providerId(route: Route): string {
-  return route.provider;
-}
+
 
 /* ---------------- plumbing ---------------- */
 
@@ -805,24 +817,16 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`    Panel      ${base}/admin${hasWebDist() ? "" : " (还没有构建产物)"}`);
   console.log(`    Admin API  ${base}${CONNECT_PREFIX}/<Method>  (Bearer 令牌)`);
   console.log("");
-  console.log(`  upstreams:`);
-  console.log(
-    `    qoder    global=${upstreamEnabled("qoder") ? `${qoderVisible("global").length} models` : "off"}` +
-      `  cn=${upstreamEnabled("qoder-cn") ? `${qoderVisible("cn").length} models` : "off"}`,
-  );
-  console.log(
-    `    minimax  ${upstreamEnabled("minimax") ? `${MINIMAX_UPSTREAM}  models=${minimaxVisible().length}` : "off"}`,
-  );
-  console.log(
-    `    workbuddy cn=${upstreamEnabled("workbuddy-cn") ? `${workbuddyCatalog().length} models` : "off"}`,
-  );
-  console.log(
-    `    tokenrhythm ${upstreamEnabled("tokenrhythm") ? `${TOKENRHYTHM_MODELS.length} models` : "off"}`,
-  );
-  // 这两个的目录是启动后从上游问来的（要拿推理 key、要问平台），所以这里只说
-  // 「正在取」——数目在下面的日志里。
-  console.log(`    sensenova ${upstreamEnabled("sensenova") ? "loading" : "off"}`);
-  console.log(`    intern-ai ${upstreamEnabled("intern-ai") ? "loading" : "off"}`);
+  // 每个平台一行：开着的账号数、策略、服务多少个模型。没有账号的平台也列
+  // 出来 —— 新装好的服务一个账号都没有，这是要看出来的常态，不是错误。
+  console.log(`  platforms:`);
+  for (const template of PLATFORMS) {
+    const accounts = accountsOfPlatform(template.id);
+    const on = accounts.filter((row) => row.enabled).length;
+    const models = modelsOfPlatform(template.id).length;
+    const state = on ? `${on}/${accounts.length} accounts, ${models} models` : `off (${accounts.length} accounts)`;
+    console.log(`    ${template.id.padEnd(13)} ${state}  policy=${platformPolicy(template.id)}`);
+  }
   console.log(`  auth: ${requireApiKey() ? "api key required" : "public"}`);
   console.log("");
 
@@ -892,51 +896,55 @@ const server = app.listen(PORT, HOST, () => {
       .catch((e) => console.warn(`  [AUTH] ${provider} login failed: ${(e as Error).message}`));
   }
 
-  for (const provider of providersNeedingLogin("tokenrhythm")) {
-    void tokenRhythmStatuses(provider)
-      .then((tenants) => {
-        for (const tenant of tenants) {
-          const wallet = tenant.wallet;
-          const gift = wallet ? `${wallet.availableCny} 元` : "未知";
+  // 中转站：一个账号一行一个钱包，启动时问一遍平台，余额不明就早说。
+  for (const template of PLATFORMS) {
+    if (template.kind !== "tokenrhythm") continue;
+    if (!accountsOfPlatform(template.id).length) continue;
+    void tokenRhythmStatuses(template.id)
+      .then((accounts) => {
+        for (const account of accounts) {
+          const wallet = account.wallet;
+          const left = wallet ? `${wallet.availableCny} 元` : "未知";
           console.log(
-            `  [TOKENRHYTHM] 租户 ${tenant.index} (${tenant.account}): 可用 ${gift}` +
-              (tenant.error ? ` — ${tenant.error}` : ""),
+            `  [TOKENRHYTHM] ${account.accountId} (${account.account}): 可用 ${left}` +
+              (account.error ? ` — ${account.error}` : ""),
           );
         }
       })
       .catch((e) => console.warn(`  [TOKENRHYTHM] 账号状态获取失败: ${(e as Error).message}`));
   }
 
-  if (upstreamEnabled("sensenova")) {
+  // 账号一行一个：谁的会话没了就补谁的，不停在整个平台上。
+  for (const row of enabledAccounts("sensenova")) {
     // 推理端点要的是一把 key，不是 cookie。账号上有会话却没有 key 的（老版本
     // 登录留下的），在这里补一把 —— 登录完了上游才是 READY 的。
     void (async () => {
       // SenseNova 的登录是账号密码加 PKCE，不用开浏览器，所以没有会话时
       // 网关自己登 —— 凭据在环境里，够用。
-      let session = loadSenseNovaSession();
+      let session = loadSenseNovaSession(row.id);
       if (!session) {
-        console.log("  [SENSENOVA] 还没有登录态，用环境里的账号密码登录");
-        session = await loginSenseNova();
+        console.log(`  [SENSENOVA] ${row.id} 还没有登录态，用环境里的账号密码登录`);
+        session = await loginSenseNova(undefined, undefined, row.id);
       }
-      await ensureSenseNovaKey(session);
-      await refreshSenseNovaCatalog(true);
-      console.log(`  [SENSENOVA] 模型清单：${senseNovaCatalog().length} 个`);
-    })().catch((e) => console.warn(`  [SENSENOVA] ${(e as Error).message}`));
+      await ensureSenseNovaKey(session, row.id);
+      await refreshSenseNovaCatalog(true, row.id);
+      console.log(`  [SENSENOVA] ${row.id} 模型清单：${senseNovaCatalog().length} 个`);
+    })().catch((e) => console.warn(`  [SENSENOVA] ${row.id}: ${(e as Error).message}`));
   }
 
-  if (upstreamEnabled("intern-ai")) {
+  for (const row of enabledAccounts("intern-ai")) {
     // 与 SenseNova 一样：推理端点认的是 Discovery 子站那把 key。
     void (async () => {
-      const session = loadInternAiSession();
+      const session = loadInternAiSession(row.id);
       if (!session) {
         // 端砚的登录要过人机验证，服务器替不了：让人在面板上登一次。
-        console.log("  [INTERN-AI] 还没有登录态，在面板上登录一次即可");
+        console.log(`  [INTERN-AI] ${row.id} 还没有登录态，在面板上登录一次即可`);
         return;
       }
-      await ensureInternAiKey(session);
-      await refreshInternAiCatalog(true);
-      console.log(`  [INTERN-AI] 模型目录：${internAiCatalog().length} 个`);
-    })().catch((e) => console.warn(`  [INTERN-AI] ${(e as Error).message}`));
+      await ensureInternAiKey(session, row.id);
+      await refreshInternAiCatalog(true, row.id);
+      console.log(`  [INTERN-AI] ${row.id} 模型目录：${internAiCatalog().length} 个`);
+    })().catch((e) => console.warn(`  [INTERN-AI] ${row.id}: ${(e as Error).message}`));
   }
 
   // The daily benefits of the China accounts — the check-in, the growth centre

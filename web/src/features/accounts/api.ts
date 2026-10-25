@@ -2,29 +2,16 @@ import { create } from '@bufbuild/protobuf'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  ListAccountsRequestSchema,
   ListCredentialsRequestSchema,
-  LogoutAccountRequestSchema,
   SetProviderKeysRequestSchema,
   TestCredentialRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
+import { accountKeys } from '@/features/accounts/keys'
 import { upstreamKeys } from '@/features/upstreams/api'
 import { assertOk, describeError } from '@/lib/errors'
 
-export const accountKeys = {
-  all: ['accounts'] as const,
-  credentials: (accountId: string) =>
-    ['accounts', accountId, 'credentials'] as const,
-}
-
-export function useAccounts() {
-  const client = useAdminClient()
-  return useQuery({
-    queryKey: accountKeys.all,
-    queryFn: () => client.listAccounts(create(ListAccountsRequestSchema)),
-  })
-}
+export { accountKeys }
 
 /**
  * 某个账号名下的凭据。
@@ -69,18 +56,19 @@ export function useTestCredential() {
 }
 
 /**
- * 写一个 Provider 的 API Key 列表。
+ * 写一个账号的 API Key 列表。
  *
- * MiniMax 开放平台一把 key 一个租户，所以这里传的是列表。
+ * key 挂在账号上（一个账号一份凭据），所以这里带的是账号行 id。契约里的字段名
+ * 还叫 upstream_id —— 账号就是 provider 表里那一行，语义是同一处。
  */
 export function useSetProviderKeys() {
   const client = useAdminClient()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { upstreamId: string; keys: string[] }) => {
+    mutationFn: async (input: { accountId: string; keys: string[] }) => {
       const result = await client.setProviderKeys(
         create(SetProviderKeysRequestSchema, {
-          upstreamId: input.upstreamId,
+          upstreamId: input.accountId,
           keys: input.keys,
         })
       )
@@ -95,36 +83,6 @@ export function useSetProviderKeys() {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-    },
-  })
-}
-
-/**
- * 注销一个账号：把它名下的凭据全删掉。
- *
- * 删完这个账号就回到「没有凭据」的状态，面板上「登录」按钮重新出现。
- */
-export function useLogoutAccount() {
-  const client = useAdminClient()
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: { accountId: string }) => {
-      const result = await client.logoutAccount(
-        create(LogoutAccountRequestSchema, { accountId: input.accountId })
-      )
-      assertOk(result, '没注销掉')
-      return result
-    },
-    onError: (error) => {
-      toast.error(describeError(error))
-    },
-    onSuccess: (result) => {
-      toast.success(result.message || '已注销')
-    },
-    onSettled: () => {
-      // ['accounts'] 是所有账号与凭据查询的前缀，所以这一句把凭据列表也刷了。
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-      // 上游那行的凭据摘要也是后端算的，跟着变。
       void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
     },
   })

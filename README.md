@@ -16,24 +16,37 @@ There are nine upstreams behind this, and each has a switch. All of them
 start **off**; turn on the ones you actually use, in the panel.
 
 The switch is a row in the gateway's database, not an environment variable:
-the panel's 上游 tab has one switch per upstream, and the next request after
-you flip it is the first one that changes. Nothing in the environment decides
-which upstream runs — that was the old arrangement, and it is gone.
+the panel's 上游 tab has one switch per account, and the next request after you
+flip it is the first one that changes. Nothing in the environment decides which
+account runs — that was the old arrangement, and it is gone.
 
-| Upstream | What it is |
-|----------|------------|
-| MiniMax Code | the MiniMax Code gateway (two accounts: the main one and the M plan) |
-| MiniMax open platform | the MiniMax open platform (api.minimax.cn), by API key |
-| ZCode | ZCode (zcode.z.ai), the GLM coding client |
-| Qoder (two regions) | the Qoder global account (qoder.com) and the China one (qoder.cn) |
-| WorkBuddy | the WorkBuddy China account (workbuddy.cn) |
-| TokenRhythm | the TokenRhythm relay station (tokenrhythm.studio) |
-| SenseNova | SenseNova (token.sensenova.cn) |
-| 书生·端砚 | InternAI's open platform (discovery-api.intern-ai.org.cn) |
+A **platform** is written in the code (`lib/platforms.ts`): it is one service,
+and its id is the segment in the request path. An **account** is a row in the
+gateway's database: one login identity. One platform can hold several accounts —
+two MiniMax Code subscriptions, or one relay-station tenant each.
 
-An upstream that is switched off is not looked at: no credential is read, no
-login is attempted, no models are advertised, and a request for one is refused
-with a message saying which switch to flip.
+| Platform (path) | What it is |
+|-----------------|------------|
+| `minimax` | the MiniMax Code gateway |
+| `minimax-api` | the MiniMax open platform (api.minimax.cn), by API key |
+| `zcode` | ZCode (zcode.z.ai), the GLM coding client |
+| `qoder` | the Qoder global service (qoder.com) |
+| `qoder-cn` | the Qoder China service (qoder.cn) |
+| `workbuddy-cn` | WorkBuddy China (workbuddy.cn) |
+| `tokenrhythm` | the TokenRhythm relay station (tokenrhythm.studio) |
+| `sensenova` | SenseNova (token.sensenova.cn) |
+| `intern-ai` | InternAI's open platform (discovery-api.intern-ai.org.cn) |
+
+A fresh install has no accounts at all: the panel's 上游 tab lists the nine
+platforms, and you add an account to the one you want. An account that is
+switched off is not looked at: no credential is read, no login is attempted,
+and a request that would land on it goes to the other accounts of the platform
+(unless the platform's policy says otherwise). With no enabled account on a
+platform, a request for it is refused with a message saying so.
+
+The policy — `single`, `fallback`, `expiry_first` — belongs to the platform,
+not to an account: it says how that platform's accounts take turns. A single
+account cannot decide on its own whether to hand a request to another one.
 
 The two Qoder regions are two upstreams of the same platform, and WorkBuddy's
 China account is a third one. One upstream can carry several **providers**

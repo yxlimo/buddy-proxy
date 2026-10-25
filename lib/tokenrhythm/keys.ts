@@ -14,11 +14,10 @@
 
 import { platformApi } from "./platform.ts";
 import {
-  storedTenant,
-  tokenRhythmTenantSecretId,
+  saveTokenRhythmCredential,
+  tokenRhythmCredentialOf,
   type TokenRhythmSession,
 } from "./accounts.ts";
-import { setSecret } from "../store.ts";
 import type { PlatformKey, PlatformKeys } from "../platform-keys.ts";
 
 export interface TokenRhythmApiKey {
@@ -94,32 +93,30 @@ export async function enableApiKey(session: TokenRhythmSession, id: string): Pro
 }
 
 /**
- * The key of a tenant, and make one when the account has none.
+ * The key of an account, and make one when the account has none.
  *
  * A new account has no key, and the only place the full value ever appears is
  * the answer to the call that creates it. So the gateway creates it and keeps
  * it, and the account works without anybody putting a key in the environment.
  *
- * The key that is already in the environment wins: a key that was rotated
- * there has to take effect.
+ * The key that is already stored wins: a key that was rotated there has to
+ * take effect.
  */
 export async function ensureApiKey(
   session: TokenRhythmSession,
-  index: number,
-  current: string | null,
-  providerId = "tokenrhythm",
+  accountId = session.accountId,
+  current: string | null = null,
 ): Promise<string | null> {
   if (current) return current;
-  const created = await createApiKey(session, `buddy-${index}`);
+  const created = await createApiKey(session, `buddy-${accountId}`);
   if (!created.key) {
     throw new Error("平台没有返回完整的 key");
   }
-  const id = tokenRhythmTenantSecretId(index, providerId);
-  const stored = storedTenant(index, providerId);
+  const stored = tokenRhythmCredentialOf(accountId);
   if (stored) {
-    setSecret(id, "account", { ...stored, apiKey: created.key });
+    saveTokenRhythmCredential(accountId, { ...stored, apiKey: created.key });
   }
-  console.log(`[TOKENRHYTHM] 租户 ${index}: 新建的 key ${created.maskedKey || created.keyPrefix}`);
+  console.log(`[TOKENRHYTHM] ${accountId}: 新建的 key ${created.maskedKey || created.keyPrefix}`);
   return created.key;
 }
 
@@ -153,5 +150,7 @@ export const tokenRhythmKeys: PlatformKeys<TokenRhythmSession> = {
   enable: async ({ session }, id) => {
     await enableApiKey(session, id);
   },
-  ensure: async ({ session, index, providerId }, current) =>
-    ensureApiKey(session, index ?? 1, current ?? null, providerId ?? "tokenrhythm"),};
+  // 账号在网关里的 id 就是账号行的 id：key 存到那一行的凭据里。
+  ensure: async ({ session, providerId }, current) =>
+    ensureApiKey(session, providerId ?? session.accountId, current ?? null),
+};

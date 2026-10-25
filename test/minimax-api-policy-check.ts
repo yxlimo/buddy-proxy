@@ -59,11 +59,11 @@ process.env.MINIMAX_API_2_KEY = "sk_test_key_2";
  * 上游自己的策略
  * ------------------------------------------------------------------ */
 
-const { ensureBuiltinProviders } = await import("../lib/providers.ts");
-const { store } = await import("../lib/store.ts");
-ensureBuiltinProviders();
+const { addAccount } = await import("../lib/providers.ts");
+const { setPlatformPolicy } = await import("../lib/platforms.ts");
+addAccount({ platform: "minimax-api" });
 const setPolicy = (policy: string): void => {
-  store().prepare("UPDATE provider SET policy = ? WHERE id = ?").run(policy, "minimax-api");
+  setPlatformPolicy("minimax-api", policy as never);
 };
 
 const { toMiniMaxApi } = await import("../lib/router/upstreams.ts");
@@ -81,7 +81,7 @@ const ctx: any = {
 
 const route: any = {
   upstream: "minimax-api",
-  provider: "minimax-api",
+  platform: "minimax-api",
   model: "MiniMax-M3.1-Flash",
   group: "minimax-api",
 };

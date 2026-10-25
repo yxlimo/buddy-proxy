@@ -100,9 +100,9 @@ export function zcodeBody(
  */
 export async function zcodeChat(
   body: Json,
-  options: { effort?: string } = {},
+  options: { effort?: string; providerId?: string } = {},
 ): Promise<{ response: Response; session: ZcodeSession }> {
-  const session = loadSession();
+  const session = loadSession(options.providerId);
   if (!session) {
     throw new AuthError(
       "zcode has no session",

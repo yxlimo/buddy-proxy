@@ -45,7 +45,23 @@ export const RELOGIN_HINT =
     : "MiniMax Code 的登录被服务端拒绝。打开桌面 App 重新登录，等它刷新后重试。";
 
 const md5 = (s: string) => crypto.createHash("md5").update(s).digest("hex");
-const upPath = new URL(UPSTREAM).pathname;
+
+/**
+ * The path part of a URL.
+ *
+ * UPSTREAM is one of our own constants, so this never fails in practice — but
+ * a module-level `new URL(...)` that throws would take the whole gateway down
+ * at import time, so it answers with an empty path instead.
+ */
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
+
+const upPath = pathOf(UPSTREAM);
 
 /** Headers exactly as the MiniMax Code client sends them. */
 export function upstreamHeaders(token: string, bodyText: string): Record<string, string> {
@@ -88,10 +104,11 @@ export function classify(status: number, code?: number): string {
  */
 export async function minimaxChat(
   body: Json,
+  providerId = "minimax",
 ): Promise<Response> {
   let cred;
   try {
-    cred = await readCredential("expired");
+    cred = await readCredential("expired", providerId);
   } catch (e) {
     throw e as AuthError;
   }
@@ -104,7 +121,7 @@ export async function minimaxChat(
 
   if (r.status === 401) {
     try {
-      cred = await readCredential("now");
+      cred = await readCredential("now", providerId);
       r = await send(cred.accessToken);
     } catch (e) {
       throw e as AuthError;

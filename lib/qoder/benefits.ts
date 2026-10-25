@@ -17,10 +17,15 @@ interface ApiResult {
   body: any;
 }
 
-const QODER_CLAIM_BASE: Record<QoderRegion, string> = {
-  cn: ENDPOINTS.cn.openapi,
-  global: ENDPOINTS.global.openapi,
-};
+/**
+ * 活动的地址。
+ *
+ * 取值放在函数里，不在模块这一层：auth.ts 与 kind 注册表之间有环，模块级常量
+ * 会在 auth.ts 还没求值完的时候去读 ENDPOINTS，整个进程就起不来了。
+ */
+function claimBase(region: QoderRegion): string {
+  return ENDPOINTS[region].openapi;
+}
 
 export function qoderClaimHeaders(session: QoderSession): Record<string, string> {
   const headers: Record<string, string> = {
@@ -63,7 +68,7 @@ async function qoderCall(
   region: QoderRegion = "cn",
 ): Promise<ApiResult> {
   try {
-    const res = await fetch(`${QODER_CLAIM_BASE[region]}${path}`, {
+    const res = await fetch(`${claimBase(region)}${path}`, {
       method,
       headers: qoderClaimHeaders(session),
       body: method === "POST" ? "" : undefined,

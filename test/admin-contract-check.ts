@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -288,6 +289,35 @@ if (!(await waitForHealth())) {
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
+// 启动不再插行：新库里一个账号都没有。凭据、到期时间那几条断言要一个真账号，
+// 所以按面板的做法加一个，再往它的会话那一格写一份会话。
+const seeded = await call("AddAccount", { platform: "qoder", alias: "契约测试账号" });
+const seededId = String(seeded.body?.id ?? "");
+{
+  const conn = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
+  conn.exec("PRAGMA busy_timeout = 5000");
+  conn
+    .prepare(
+      "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+    )
+    .run(
+      `session:provider:${seededId}`,
+      "session",
+      JSON.stringify({
+        accessToken: "contract-access-token",
+        refreshToken: "contract-refresh-token",
+        expiresAtMs: Date.now() + 3600_000,
+        refreshExpiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
+        generation: 1,
+        loginAtMs: Date.now(),
+        refreshedAtMs: Date.now(),
+      }),
+      Date.now(),
+    );
+  conn.close();
+}
+
 /** 打一个 Connect 方法。 */
 async function call(
   method: string,
@@ -327,7 +357,7 @@ console.log("契约：三十三个方法");
 const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "GetSystemStatus", request: {} },
   { method: "ListUpstreams", request: {} },
-  { method: "SetUpstreamEnabled", request: { upstreamId: "qoder-cn", enabled: false } },
+  { method: "SetAccountEnabled", request: { accountId: "qoder", enabled: true } },
   { method: "ListConfig", request: {} },
   // 用一个后面不会改的键：后面要验「改之前没有待重启」。
   { method: "SetConfig", request: { key: "REQUIRE_API_KEY", value: "false" } },
@@ -354,11 +384,11 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "ImportLoginToken", request: { upstreamId: "intern-ai", token: "" } },
   { method: "SetProviderKeys", request: { upstreamId: "minimax-api", keys: [] } },
   { method: "ListProviderKinds", request: {} },
-  { method: "AddProvider", request: { id: "contract-provider", kind: "minimax-api" } },
-  { method: "UpdateProvider", request: { id: "contract-provider", alias: "契约" } },
-  { method: "SetProviderPolicy", request: { upstreamId: "qoder", policy: "PROVIDER_POLICY_SINGLE" } },
-  { method: "DeleteProvider", request: { id: "contract-provider" } },
-  { method: "LogoutAccount", request: { accountId: "contract-provider" } },
+  { method: "AddAccount", request: { platform: "minimax-api", alias: "契约账号" } },
+  { method: "UpdateProvider", request: { id: "qoder", alias: "契约测试账号" } },
+  { method: "SetPlatformPolicy", request: { platform: "qoder", policy: "PROVIDER_POLICY_SINGLE" } },
+  { method: "DeleteAccount", request: { id: "no-such-account" } },
+  { method: "LogoutAccount", request: { accountId: "no-such-account" } },
 ];
 
 check("契约里有三十三个方法", contract.methods.size === 33, String(contract.methods.size));
@@ -532,9 +562,9 @@ check("配置改得掉", setConfig.body?.ok === true, JSON.stringify(setConfig.b
 check("改完立刻生效", setConfig.body?.pendingRestart === false, JSON.stringify(setConfig.body));
 const after = await call("GetSystemStatus");
 check("改之后也没有待重启", after.body?.pendingRestart === false, JSON.stringify(after.body?.pendingRestart));
-const setUpstream = await call("SetUpstreamEnabled", { upstreamId: "qoder-cn", enabled: true });
-check("上游开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
-check("改了上游立刻生效", setUpstream.body?.pendingRestart === false, JSON.stringify(setUpstream.body));
+const setUpstream = await call("SetAccountEnabled", { accountId: seededId, enabled: true });
+check("账号开关改得掉", setUpstream.body?.ok === true, JSON.stringify(setUpstream.body));
+check("改了账号立刻生效", setUpstream.body?.pendingRestart === false, JSON.stringify(setUpstream.body));
 const listConfigAfter = await call("ListConfig");
 check(
   "改了之后配置项的来源是 database",
@@ -542,9 +572,13 @@ check(
   JSON.stringify(listConfigAfter.body?.items?.find((i: any) => i.key === "ADMIN_CORS_ORIGINS")),
 );
 
-// 上游的开关：enabled 是现在在生效的值。开关是热的，改完就生效。
-const switched = await call("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
-check("上游开关改得掉", switched.body?.ok === true, JSON.stringify(switched.body));
+// 平台自己没有开关：`enabled` 是「名下有没有开着的账号」。开关在账号上，是热的。
+await call("SetAccountEnabled", { accountId: seededId, enabled: false });
+const offBody = await call("ListUpstreams");
+const offUpstream = (offBody.body?.upstreams ?? []).find((u: any) => u.id === "qoder");
+check("账号关着的时候平台是关的", offUpstream?.enabled === false, JSON.stringify(offUpstream?.enabled));
+const switched = await call("SetAccountEnabled", { accountId: seededId, enabled: true });
+check("账号开关改得掉", switched.body?.ok === true, JSON.stringify(switched.body));
 const afterSwitch = await call("ListUpstreams");
 const switchedUpstream = (afterSwitch.body?.upstreams ?? []).find((u: any) => u.id === "qoder");
 check("改完 enabled 是改后的值", switchedUpstream?.enabled === true, JSON.stringify(switchedUpstream));
@@ -711,10 +745,19 @@ const health = await raw("/health");
 check("/health 不带令牌也能访问", health.status === 200, String(health.status));
 const healthBody = JSON.parse(health.text);
 check("/health 的形状没变", healthBody?.status === "ok" && Array.isArray(healthBody?.dialects), health.text.slice(0, 120));
+// 每个平台一条，键就是平台 id（路径里那一段）。
 check(
-  "/health 里有各上游",
-  Boolean(healthBody?.upstreams?.minimax) && Boolean(healthBody?.upstreams?.qoder) && Boolean(healthBody?.upstreams?.workbuddy),
+  "/health 里有各平台",
+  Boolean(healthBody?.upstreams?.minimax) &&
+    Boolean(healthBody?.upstreams?.qoder) &&
+    Boolean(healthBody?.upstreams?.["workbuddy-cn"]),
   JSON.stringify(Object.keys(healthBody?.upstreams ?? {})),
+);
+check(
+  "/health 的平台带着区域与账号",
+  healthBody?.upstreams?.qoder?.region === "global" &&
+    Array.isArray(healthBody?.upstreams?.qoder?.accounts),
+  JSON.stringify(healthBody?.upstreams?.qoder).slice(0, 200),
 );
 // 开关只有一份：provider 表里的 enabled，/health 的 providers 段报的就是它。
 const healthProviders = healthBody?.providers ?? [];

@@ -16,7 +16,7 @@ import {
   type HealthSnapshot,
   type QuotaView,
 } from "./provider-kinds.ts";
-import type { TokenRhythmTenantStatus } from "./tokenrhythm/wallet.ts";
+import type { TokenRhythmAccountStatus } from "./tokenrhythm/wallet.ts";
 import {
   totalRemaining,
   type SenseNovaPoolUsage,
@@ -180,29 +180,31 @@ function apiKeyCredential(keys: string[], detail: string): CredentialView {
 }
 
 function tokenrhythmQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
-  const tenants = ((snapshot.tokenrhythm?.[provider.id]?.tenants ?? []) as unknown) as TokenRhythmTenantStatus[];
-  const out: QuotaView[] = [];
-  for (const tenant of tenants) {
-    const wallet = tenant.wallet;
-    if (!wallet) continue;
-    const lots: BalanceLotView[] = (tenant.credits?.list ?? []).map((lot) => ({
-      id: lot.id,
-      sourceLabel: lot.sourceLabel || lot.source,
-      remainingCny: Number(lot.remainingCny ?? 0),
-      expiresAt: lot.expiresAt ? Date.parse(String(lot.expiresAt)) : 0,
-      status: lot.status || "",
-    }));
-    const nextExpiryAt = tenant.credits?.summary?.nextExpiryAt
-      ? Date.parse(String(tenant.credits.summary.nextExpiryAt))
-      : 0;
-    // 平台用 2099-12-31 标记「永不过期」，那一批不算会过期。
-    const expiringCny = lots
-      .filter((lot) => lot.expiresAt > 0 && lot.expiresAt < PERMANENT_AT)
-      .reduce((sum, lot) => sum + lot.remainingCny, 0);
-    out.push({
-      upstreamId: provider.id,
-      // 一个租户一个账号：面板靠这个分清是哪一条余额。
-      accountId: `${provider.id}:${tenant.index}`,
+  // 快照里一个平台一段，装着这个平台每个账号的钱包；这一行账号取自己那一个。
+  const all = ((snapshot.tokenrhythm?.[provider.id]?.tenants ?? []) as unknown) as TokenRhythmAccountStatus[];
+  const mine = all.filter((status) => status.accountId === provider.id);
+  const status = mine[0] ?? null;
+  const wallet = status?.wallet ?? null;
+  if (!wallet) return [];
+  const lots: BalanceLotView[] = (status?.credits?.list ?? []).map((lot) => ({
+    id: lot.id,
+    sourceLabel: lot.sourceLabel || lot.source,
+    remainingCny: Number(lot.remainingCny ?? 0),
+    expiresAt: lot.expiresAt ? Date.parse(String(lot.expiresAt)) : 0,
+    status: lot.status || "",
+  }));
+  const nextExpiryAt = status?.credits?.summary?.nextExpiryAt
+    ? Date.parse(String(status.credits.summary.nextExpiryAt))
+    : 0;
+  // 平台用 2099-12-31 标记「永不过期」，那一批不算会过期。
+  const expiringCny = lots
+    .filter((lot) => lot.expiresAt > 0 && lot.expiresAt < PERMANENT_AT)
+    .reduce((sum, lot) => sum + lot.remainingCny, 0);
+  return [
+    {
+      upstreamId: provider.platform,
+      // 一个账号一行一个钱包：面板靠这个分清是哪一条余额。
+      accountId: provider.id,
       balance: {
         availableCny: Number(wallet.availableCny ?? 0),
         currency: wallet.currency || "CNY",
@@ -210,9 +212,8 @@ function tokenrhythmQuotas(provider: ProviderRow, snapshot: HealthSnapshot): Quo
         nextExpiryAt: Number.isFinite(nextExpiryAt) ? nextExpiryAt : 0,
         expiringCny,
       },
-    });
-  }
-  return out;
+    },
+  ];
 }
 
 function senseNovaQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
@@ -513,7 +514,9 @@ registerKind({
     const mine = (snapshot.minimax?.[provider.id] ?? {}) as any;
     const windows = (mine.tokenPlan?.windows ?? []) as any[];
     if (!windows.length) return false;
-    return windows.some(
+    // 每个窗口管自己那批模型（general、video……）。一个窗口用完只说明那批模型
+    // 用完，账号还有别的窗口能用 —— 要所有窗口都见底才算这个账号没钱了。
+    return windows.every(
       (w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0,
     );
   },
@@ -632,8 +635,9 @@ registerKind({
     return tenants.every((t: any) => Number(t.wallet?.availableCny ?? 0) <= 0);
   },
   // 定时扫描余额，把「现在该用哪个账户」钉下来（赠金最先到期的那个）。
+  // 钉住的单位是平台：一副账号里哪个先用是平台的事。
   scan: async (provider) => {
-    await setBalanceAccount(provider.id);
+    await setBalanceAccount(provider.platform);
   },
   // The hook of expiry_first: the platform says this account has no money left.
   isRequestMissingBalance: (error) => isRequestMissingBalance(error),

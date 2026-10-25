@@ -15,7 +15,8 @@
 //   node test/fake-sessions.ts
 
 import { setSecret } from "../lib/store.ts";
-import { ensureBuiltinProviders } from "../lib/providers.ts";
+import { addAccount } from "../lib/providers.ts";
+import { saveTokenRhythmCredential } from "../lib/tokenrhythm/accounts.ts";
 import { store } from "../lib/store.ts";
 
 const now = Date.now();
@@ -56,19 +57,56 @@ function workBuddy() {
   };
 }
 
-// The sessions belong to the provider now: one per provider id.
-setSecret("session:provider:qoder", "session", qoder("global"));
-setSecret("session:provider:qoder-cn", "session", qoder("cn"));
-setSecret("session:provider:workbuddy-cn", "session", workBuddy());
-
-// The switches too: a fresh install has every built-in upstream off, and the
-// offline test serves qoder (both regions) and workbuddy. TEST_UPSTREAMS says
-// which ones this run needs.
-ensureBuiltinProviders();
+// 一个平台下建一个账号（启动不再插行），会话与开关都挂在账号行上。
+// TEST_UPSTREAMS 说这一趟要哪几个平台。
 const ON = process.env.TEST_UPSTREAMS ?? "qoder,qoder-cn,workbuddy-cn";
 const on = ON.split(",").map((id) => id.trim()).filter(Boolean);
-for (const id of on) {
-  store().prepare("UPDATE provider SET enabled = 1 WHERE id = ?").run(id);
+const accountOf: Record<string, string> = {};
+for (const platform of on) {
+  const made = addAccount({ platform, alias: "测试账号" });
+  if (!made.ok || !made.id) throw new Error(`加不了 ${platform} 的账号：${made.message}`);
+  accountOf[platform] = made.id;
+}
+
+/** MiniMax Code 的会话：形状与真的那份一致（刷新时会按字段读）。 */
+function miniMax() {
+  return {
+    schemaVersion: 1,
+    clientId: "mcode-public",
+    audience: "agent-backend",
+    scopes: ["agent.default"],
+    region: "cn",
+    accessToken: "test-token",
+    refreshToken: "test-refresh",
+    tokenType: "Bearer",
+    expiresAtMs: year,
+    generation: 1,
+    loginAtMs: now,
+    refreshedAtMs: now,
+  };
+}
+
+// 会话挂在账号行上：qoder 两个区各一份，workbuddy 一份，minimax 一份。
+if (accountOf["qoder"]) setSecret(`session:provider:${accountOf["qoder"]}`, "session", qoder("global"));
+if (accountOf["qoder-cn"]) setSecret(`session:provider:${accountOf["qoder-cn"]}`, "session", qoder("cn"));
+if (accountOf["workbuddy-cn"]) {
+  setSecret(`session:provider:${accountOf["workbuddy-cn"]}`, "session", workBuddy());
+}
+if (accountOf["minimax"]) {
+  setSecret(`session:provider:${accountOf["minimax"]}`, "session", miniMax());
+}
+// 中转站：账号密码（查余额）+ API key（发请求），两个都是假的，mock 不看。
+if (accountOf["tokenrhythm"]) {
+  saveTokenRhythmCredential(accountOf["tokenrhythm"], {
+    account: "test-account%40example.com",
+    password: "test-password",
+    apiKey: "sk_tr_test_key_1",
+  });
+}
+
+// 开关：新装的账号默认就是开着的，这里显式写一遍，免得将来默认值变了。
+for (const platform of on) {
+  store().prepare("UPDATE provider SET enabled = 1 WHERE id = ?").run(accountOf[platform]);
 }
 
 console.log(`[test] 假会话写好了（qoder 全球区 / 中国区 / workbuddy 中国区），开着：${on.join("、")}`);

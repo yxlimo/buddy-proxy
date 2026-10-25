@@ -30,7 +30,7 @@ function check(name: string, ok: unknown, detail = ""): void {
   }
 }
 
-const { addProvider } = await import("../lib/providers.ts");
+const { addAccount } = await import("../lib/providers.ts");
 const { registerKind } = await import("../lib/provider-kinds.ts");
 const { runPeriodicOnce } = await import("../lib/periodic.ts");
 
@@ -39,42 +39,54 @@ let scanned: string[] = [];
 let failWith: Error | null = null;
 let failScanWith: Error | null = null;
 
-registerKind({
-  kind: "test-kind",
-  label: "测试种类",
-  login: "device",
-  baseUrl: () => "http://127.0.0.1",
-  credential: () => ({
-    kind: "session",
-    status: 0 as never,
-    fingerprint: "",
-    expiresAt: 0,
-    remainingSec: 0,
-    warning: false,
-    detail: "",
-    generation: 0,
-  }),
-  models: () => [],
-  quotas: () => [],
-  outOfCredits: () => false,
-  refresh: async (provider) => {
-    if (failWith) throw failWith;
-    refreshed.push(provider.id);
-  },
-  scan: async (provider) => {
-    if (failScanWith) throw failScanWith;
-    scanned.push(provider.id);
-  },
-});
+/**
+ * 一个种类，只记下「刷新过」「扫过」。
+ *
+ * 平台是代码里的模板，种类名必须是那九个之一，所以这里直接顶掉两个真种类：
+ * 定时器看的是注册表，与上游没有关系。选的这两个（中转站与开放平台）在没有
+ * 凭据时不会去问上游，测试全程离线。
+ */
+function stubKind(kind: string): void {
+  registerKind({
+    kind,
+    label: `测试种类 ${kind}`,
+    login: "device",
+    baseUrl: () => "http://127.0.0.1",
+    credential: () => ({
+      kind: "session",
+      status: 0 as never,
+      fingerprint: "",
+      expiresAt: 0,
+      remainingSec: 0,
+      warning: false,
+      detail: "",
+      generation: 0,
+    }),
+    models: () => [],
+    quotas: () => [],
+    outOfCredits: () => false,
+    refresh: async (provider) => {
+      if (failWith) throw failWith;
+      refreshed.push(provider.id);
+    },
+    scan: async (provider) => {
+      if (failScanWith) throw failScanWith;
+      scanned.push(provider.id);
+    },
+  });
+}
 
-addProvider({ id: "test-one", kind: "test-kind", alias: "第一个" });
-addProvider({ id: "test-two", kind: "test-kind", alias: "第二个" });
+stubKind("tokenrhythm");
+stubKind("minimax-api");
+
+addAccount({ platform: "tokenrhythm", alias: "第一个" });
+addAccount({ platform: "minimax-api", alias: "第二个" });
 
 console.log("定时刷新");
 
 await runPeriodicOnce();
-check("两个上游都刷了", refreshed.length === 2, JSON.stringify(refreshed));
-check("刷的是 provider 自己的 id", refreshed.includes("test-one") && refreshed.includes("test-two"), JSON.stringify(refreshed));
+check("两个账号都刷了", refreshed.length === 2, JSON.stringify(refreshed));
+check("刷的是账号自己的 id", refreshed.includes("tokenrhythm") && refreshed.includes("minimax-api"), JSON.stringify(refreshed));
 check("余额也扫了", scanned.length === 2, JSON.stringify(scanned));
 
 console.log("");
@@ -92,11 +104,11 @@ await runPeriodicOnce();
 console.warn = originalWarn;
 
 check(
-  "每个上游只说一次",
+  "每个账号只说一次",
   warnings.filter((w) => w.includes("invalid_grant")).length === 2,
   JSON.stringify(warnings),
 );
-check("说的是哪个上游", warnings.some((w) => w.includes("test-one")), JSON.stringify(warnings));
+check("说的是哪个账号", warnings.some((w) => w.includes("tokenrhythm")), JSON.stringify(warnings));
 
 console.log("");
 console.log("刷得出来之后就不再提这件事");

@@ -25,6 +25,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
@@ -208,6 +209,8 @@ interface Gateway {
   /** 网关的日志（用来断言「为什么换了账号」）。 */
   log: () => string;
   stop: () => void;
+  /** 中转站那三个账号的 id，按建出来的先后排。 */
+  accounts?: string[];
 }
 
 function freePort(): Promise<number> {
@@ -245,15 +248,8 @@ async function startGateway(): Promise<Gateway> {
       // 所以永远轮不到它 —— 测试里也不该有真凭据。
       TOKENRHYTHM_API_BASE: platformBase,
       TOKENRHYTHM_INFER_BASE: `${inferenceBase}/v1`,
-      TOKEN_RHYTHM_1_ACCOUNT: "19000000001",
-      TOKEN_RHYTHM_1_PASSWORD: "pw1",
-      TOKEN_RHYTHM_1_API_KEY: "sk_tr_tenant_1",
-      TOKEN_RHYTHM_2_ACCOUNT: "19000000002",
-      TOKEN_RHYTHM_2_PASSWORD: "pw2",
-      TOKEN_RHYTHM_2_API_KEY: "sk_tr_tenant_2",
-      TOKEN_RHYTHM_3_ACCOUNT: "19000000003",
-      TOKEN_RHYTHM_3_PASSWORD: "pw3",
-      TOKEN_RHYTHM_3_API_KEY: "sk_tr_tenant_3",
+      // 账号不再从环境变量来：醒来之后按面板的做法给每个账号建一行，凭据写进库。
+      // （原来那 THREE 组 TOKEN_RHYTHM_<n>_* 已经退场。）
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -302,9 +298,33 @@ async function startGateway(): Promise<Gateway> {
       fs.rmSync(dataDir, { recursive: true, force: true });
     },
   };
-  // 上游的开关现在在数据库里（provider.enabled），环境变量不再参与。
-  // 新装好的服务默认全关，所以测试自己把中转站打开 —— 面板上做的是同一件事。
-  await call(gw, "SetUpstreamEnabled", { upstreamId: "tokenrhythm", enabled: true });
+  // 中转站的账号：一个账号一个钱包。三个账号，第三个没钱（测试里也不该有真
+  // 凭据）。凭据挂在账号行上，直接写这个测试自己的库 —— 一个真请求都不发。
+  const seed = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  seed.exec("PRAGMA busy_timeout = 5000");
+  const insertSecret = seed.prepare(
+    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+  );
+  const accounts: string[] = [];
+  for (const index of [1, 2, 3]) {
+    const made = await call(gw, "AddAccount", { platform: "tokenrhythm", alias: `中转站 ${index}` });
+    const id = String(made.body?.id ?? "");
+    if (!id) throw new Error(`加不了中转站的账号：${JSON.stringify(made.body)}`);
+    accounts.push(id);
+    insertSecret.run(
+      `key:provider:${id}:account`,
+      "account",
+      JSON.stringify({
+        account: `1900000000${index}`,
+        password: `pw${index}`,
+        apiKey: `sk_tr_tenant_${index}`,
+      }),
+      Date.now(),
+    );
+  }
+  seed.close();
+  gw.accounts = accounts;
   return gw;
 }
 
@@ -331,10 +351,10 @@ async function call(gw: Gateway, method: string, body: unknown = {}): Promise<an
 /** 改一个上游的生效策略 —— 面板上那一下就是它。 */
 async function setPolicy(
   gw: Gateway,
-  upstreamId: string,
+  platform: string,
   policy: string,
 ): Promise<{ status: number; body: any }> {
-  return call(gw, "SetProviderPolicy", { upstreamId, policy });
+  return call(gw, "SetPlatformPolicy", { platform, policy });
 }
 
 /** 上游列表里那一条的策略。 */
@@ -419,7 +439,11 @@ console.log("场景一：单一 —— 第一个账号接不了，不换");
     check("改完策略，下一个请求就换人了（先 1 后 2）", calledTenants().join(",") === "1,2", calledTenants().join(","));
     check("客户端拿到了答复", after.status === 200, `${after.status} ${after.text.slice(0, 200)}`);
     check("答复是第二个账号给的", String(after.body?.choices?.[0]?.message?.content ?? "").includes("tenant 2"), after.text.slice(0, 200));
-    check("日志里说了为什么换", gw.log().includes("trying tenant-2"), gw.log().slice(-400));
+    check(
+      "日志里说了为什么换",
+      /account=tokenrhythm cannot serve it \([^)]*\), trying tokenrhythm-2/.test(gw.log()),
+      gw.log().slice(-400),
+    );
 
     console.log("");
     console.log("场景三：改回单一，立刻又不换了");
@@ -471,7 +495,7 @@ console.log("场景五：降级 —— 第一个账号没钱，换到下一个")
     check("答复是第二个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 2"), res.text.slice(0, 200));
     check(
       "日志里说了是没钱所以换",
-      gw.log().includes("tenant-1 cannot serve it (no-balance HTTP 402), trying tenant-2"),
+      /account=tokenrhythm cannot serve it \([^)]*(no-balance|quota)[^)]*\), trying tokenrhythm-2/.test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {
@@ -534,7 +558,7 @@ console.log("场景六之二：余额到期优先 —— 那个账号没钱时�
     check("答复是另一个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 1"), res.text.slice(0, 200));
     check(
       "日志里说了余额不足所以重新扫描",
-      gw.log().includes("tenant-2 cannot serve it (no-balance HTTP 402)"),
+      /account=tokenrhythm-2 cannot serve it \([^)]*(no-balance|quota)[^)]*\), rescanning the balances/.test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {
@@ -643,14 +667,14 @@ if (panelBuilt) {
     ]);
     check("展开了中转站那一行", expanded.code === 0, expanded.out.slice(-200));
 
-    const openedSelect = await ab(browserSession, ["find", "role", "combobox", "click", "--name", "生效策略"]);
+    const openedSelect = await ab(browserSession, ["find", "role", "combobox", "click", "--name", "生效策略（tokenrhythm）"]);
     check("策略选择器点开了", openedSelect.code === 0, openedSelect.out.slice(-200));
     const picked = await ab(browserSession, ["find", "role", "option", "click", "--name", "降级"]);
     check("选了「降级」", picked.code === 0, picked.out.slice(-200));
     const toasted = await ab(browserSession, ["wait", "--text", "策略改成了降级"]);
     check("面板说策略改好了", toasted.code === 0, toasted.out.slice(-200));
 
-    const shown = await abRetry(browserSession, ["find", "role", "combobox", "text", "--name", "生效策略"], 5);
+    const shown = await abRetry(browserSession, ["find", "role", "combobox", "text", "--name", "生效策略（tokenrhythm）"], 5);
     check("面板上显示的是降级", shown.out.includes("降级"), shown.out.slice(-200));
     check("服务端也记下了降级", (await policyOf(gw, "tokenrhythm")) === "PROVIDER_POLICY_FALLBACK", await policyOf(gw, "tokenrhythm"));
 

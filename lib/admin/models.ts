@@ -4,7 +4,7 @@
 // 它们的元数据可以留空，留空就是「上游说多少就是多少」—— 两个上游 fronts
 // 同一个模型时，面板给的是两者里较小的那个上下文。
 
-import { provider } from "../providers.ts";
+import { isPlatform, platformOf } from "../platforms.ts";
 import {
   deleteAggregateModel,
   getAggregateModel,
@@ -114,8 +114,8 @@ function unpublishedReason(model: AggregateModel, groups: CatalogGroup[]): Unpub
 /** 一个目标为什么不能用。空 = 能用。 */
 function targetBlocker(target: AggregateTarget, groups: CatalogGroup[]): UnpublishedReason {
   const group = target.group as UpstreamId;
-  // 不认识的 Provider：没有开关，也没有目录 —— 当作关着。
-  if (!provider(group)) return UnpublishedReason.UPSTREAM_DISABLED;
+  // 不认识的分组：不是九个平台之一，没有开关也没有目录 —— 当作关着。
+  if (!isPlatform(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   if (!upstreamEnabled(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   const credential = upstreamCredential(group);
   if (!hasUsableCredential(credential.status)) return UnpublishedReason.NO_CREDENTIAL;

@@ -244,13 +244,15 @@ const statuses = [
 
 {
   const mixed = [
-    tenant(1, 0, 0, soon), // 没钱
-    tenant(2, 18, 18, soon, { hasKey: false }), // 没有 key
-    tenant(3, 18, 18, soon, { error: "登录过期" }), // 查询出错
+    tenant(1, 0, 0, soon), // 余额读到了，是空的 → 没钱
+    tenant(2, 18, 18, soon, { hasKey: false }), // 没有 key → 发不出请求
+    tenant(3, 18, 18, soon, { error: "登录过期" }), // 查询出错 → 不知道，不是没钱
     tenant(4, 18, 18, later), // 能用
   ];
   const order = tokenRhythmAccounts(mixed, "fallback").map((t: any) => t.index);
-  check("没钱、没 key、出错的都排除", order.join(",") === "4", order.join(","));
+  // 没钱的、没 key 的排除；查询出错的照样留着（余额读不到不等于没钱）。
+  // 降级按账号行的次序，不按余额排 —— 序号就是行的次序。
+  check("没钱、没 key 的排除，查不到余额的留着", order.join(",") === "3,4", order.join(","));
 }
 
 console.log("");
