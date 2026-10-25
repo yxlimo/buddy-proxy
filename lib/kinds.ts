@@ -505,8 +505,8 @@ registerKind({
   quotas: (provider, snapshot) => minimaxQuotas(provider, snapshot),
   benefits: (provider) => runMiniMaxBenefits(provider.id),
   // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。
-  refresh: async (provider) => {
-    await refreshMiniMaxSession("due", provider.id);
+  refresh: async (provider, mode) => {
+    await refreshMiniMaxSession(mode, provider.id);
   },
   outOfCredits: (provider, snapshot) => {
     // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑。看 plan 的窗口。
@@ -567,8 +567,8 @@ registerKind({
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),
   benefits: (provider) => runQoderBenefits(provider.id),
   // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。
-  refresh: async (provider) => {
-    await refreshQoderSession("due", provider.id);
+  refresh: async (provider, mode) => {
+    await refreshQoderSession(mode, provider.id);
   },
   outOfCredits: (provider, snapshot) => {
     // The platform's own flag decides. The plan (the free part) running out
@@ -600,8 +600,8 @@ registerKind({
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),
   benefits: (provider) => runWorkBuddyBenefits(provider.id),
   // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。
-  refresh: async (provider) => {
-    await refreshWorkBuddySession("due", provider.id);
+  refresh: async (provider, mode) => {
+    await refreshWorkBuddySession(mode, provider.id);
   },
   outOfCredits: (provider, snapshot) => {
     // The check-in credits: the platform reports them as "daily".

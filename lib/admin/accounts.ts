@@ -13,7 +13,7 @@ import { miniMaxApiTenantSecretId, miniMaxApiTenants } from "../minimax/api.ts";
 import { listProviders, provider } from "../providers.ts";
 import { deleteSecret, getSecret, listSecrets } from "../store.ts";
 import { deleteProviderCredentials, providerSecretId } from "../providers.ts";
-import { clearDeadSession, deadSession } from "../session.ts";
+import { clearDeadSession, credentialRefused, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
@@ -130,7 +130,7 @@ function sessionRow(
   const expiresAt = Number(raw.expiresAtMs ?? 0);
   const expired = expiresAt > 0 && expiresAt <= Date.now();
   // 平台拒过这份会话：它已经作废了，重新授权才有新的。
-  const refused = deadSession(id);
+  const refused = deadSession(id) ?? credentialRefused(id);
   return {
     id,
     accountId,

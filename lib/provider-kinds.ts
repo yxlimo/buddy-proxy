@@ -13,6 +13,7 @@
 
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
 import type { ProviderPolicy, ProviderRow } from "./providers.ts";
+import type { RefreshMode } from "./session.ts";
 import type { CatalogModel } from "./router/catalog.ts";
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code";
@@ -191,8 +192,13 @@ export interface ProviderKind {
    * 怎么刷，定时器（lib/periodic.ts）只管按时叫它。
    *
    * 没有这一项的种类不刷：它的凭据不是会话（key、账号密码），不轮换。
+   *
+   * The mode says who refreshes when: the timer refreshes a token that is due
+   * (`due`), the first round after a start refreshes it right away (`now`),
+   * so a session the platform has revoked is noticed at once instead of when
+   * the first request comes.
    */
-  refresh?(provider: ProviderRow): Promise<void>;
+  refresh?(provider: ProviderRow, mode: RefreshMode): Promise<void>;
   /**
    * 定时扫描这个上游的状态，把「现在该用哪个账户」定下来。
    *

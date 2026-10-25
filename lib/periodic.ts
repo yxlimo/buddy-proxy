@@ -16,6 +16,7 @@
 
 import { listProviders } from "./providers.ts";
 import { kindOf } from "./provider-kinds.ts";
+import type { RefreshMode } from "./session.ts";
 import { benefits } from "./admin/benefits.ts";
 import { HEALTH_CACHE_MS, refreshHealthSnapshot } from "./admin/upstreams.ts";
 import { BENEFITS_INTERVAL_MS } from "./admin/benefits.ts";
@@ -61,15 +62,20 @@ function done(step: string): void {
  * 把该做的事做一遍。
  *
  * 每一件都是独立的：某一件失败不挡住后面的。
+ *
+ * The refresh only swaps a token that is due. A session the platform has
+ * revoked is noticed by the check-in and by the state read further down: they
+ * ask the platform, and a 401 is the answer that says this credential is
+ * spent.
  */
 export async function runPeriodicOnce(): Promise<void> {
   for (const provider of listProviders()) {
     const kind = kindOf(provider.kind);
     if (!kind) continue;
-    // 1. 令牌快到期就换。
+    // 1. 令牌快到期就换（启动那一轮是立刻换，好知道会话还活着没有）。
     if (kind.refresh) {
       try {
-        await kind.refresh(provider);
+        await kind.refresh(provider, "due");
         lastFailure.delete(`${provider.id}:refresh`);
       } catch (e) {
         const err = e as { message?: string; hint?: string };
@@ -119,8 +125,12 @@ export async function runPeriodicOnce(): Promise<void> {
  * 定时做事。
  *
  * 客户端是自己在后台换令牌的，网关也这样：不需要谁来点。
+ *
+ * The first round runs right away: the service has just started, and a
+ * session the platform revoked should show up as expired right then.
  */
 export function startPeriodic(intervalMs = INTERVAL_MS): void {
+  void runPeriodicOnce();
   const timer = setInterval(() => void runPeriodicOnce(), intervalMs);
   timer.unref?.();
 }

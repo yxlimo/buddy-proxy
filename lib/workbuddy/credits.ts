@@ -5,6 +5,8 @@
 
 import { loadSession as loadWorkBuddySession } from "./auth.ts";
 import { dataOf, workbuddyApi } from "./api.ts";
+import { markCredentialRefused } from "../session.ts";
+import { providerSecretId } from "../providers.ts";
 
 export interface WorkBuddyCredits {
   /** The credits the daily check-in hands out. */
@@ -25,7 +27,11 @@ export async function fetchWorkBuddyCredits(providerId = "workbuddy-cn"): Promis
   try {
     const res = await workbuddyApi(session, "/v2/billing/meter/checkin-activity-status", "POST");
     // A failed query is "unknown", not "no credits".
-    if (res.status !== 200) return null;
+    if (res.status !== 200) {
+      // 上游拒了这个令牌：记下来，于是下一次拿凭据时会换一个。
+      if (res.status === 401) markCredentialRefused(providerSecretId(providerId), "上游拒绝了这个令牌");
+      return null;
+    }
     const data = dataOf(res.body);
     if (!data) return null;
     return {

@@ -244,6 +244,20 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
+ * The host of an endpoint.
+ *
+ * The base is one of our own constants, so this never fails — but a header
+ * is not worth an exception over.
+ */
+function hostOf(base: string): string {
+  try {
+    return new URL(base).host;
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Run the browser login: ask for a state, print the URL, and poll until the
  * user has approved.
  */
@@ -400,7 +414,11 @@ export async function refreshSession(
   if (!session) throw new AuthError("no session", loginHint(providerId), 503);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
   const dead = deadSession(sessionId(providerId));
-  if (dead) throw new AuthError("session refused by the platform", dead, 503);
+  if (dead) {
+    // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
+    markSessionDead(sessionId(providerId), dead);
+    throw new AuthError("session refused by the platform", dead, 503);
+  }
   // 谁该刷：定时器刷“快到期的”，请求只刷“已经死了的”。
   const remainingMs = session.expiresAtMs - Date.now();
   if (mode === "expired" && remainingMs > 0) return session;
@@ -418,7 +436,7 @@ export async function refreshSession(
       "X-Auth-Refresh-Source": "plugin",
       // The domain is the endpoint we are talking to, not the one the login
       // answered with.
-      "X-Domain": new URL(base.base).host,
+      "X-Domain": hostOf(base.base),
     },
     body: "{}",
   });

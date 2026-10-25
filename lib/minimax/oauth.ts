@@ -24,7 +24,7 @@ import { configString, configNumber } from "../config.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, type RefreshMode, writeSession } from "../session.ts";
+import { clearHint, credentialRefused, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, type RefreshMode, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
@@ -236,8 +236,12 @@ export async function refreshSession(
 ): Promise<Session> {
   const id = sessionId(providerId);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
+  // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
   const dead = deadSession(id);
-  if (dead) throw new AuthError("session refused by the platform", dead, 503);
+  if (dead) {
+    markSessionDead(id, dead);
+    throw new AuthError("session refused by the platform", dead, 503);
+  }
   // 每个登录态各有一份 refresh token，登录态之间互不相干。所以这里只有一种
   // 撞法：同一个登录态被同时刷新了两次。那时两个调用拿着同一份 token 去换，
   // 一个成功（token 轮换了），另一个被拒——被拒的那个重读一次，拿已经轮换过
@@ -474,7 +478,7 @@ export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
   }
   const remainingMs = session.expiresAtMs - Date.now();
   // 平台拒过这份会话：令牌没了，换令牌也没用，只能重新授权。
-  const refused = deadSession(sessionId(providerId));
+  const refused = deadSession(sessionId(providerId)) ?? credentialRefused(sessionId(providerId));
   if (refused) {
     return {
       source: sessionId(providerId),

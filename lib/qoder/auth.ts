@@ -260,8 +260,12 @@ export async function refreshSession(
 ): Promise<QoderSession> {
   const id = sessionId(providerId);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
+  // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
   const dead = deadSession(id);
-  if (dead) throw new AuthError("session refused by the platform", dead, 503);
+  if (dead) {
+    markSessionDead(id, dead);
+    throw new AuthError("session refused by the platform", dead, 503);
+  }
   // 每个登录态各有一份 refresh token，登录态之间互不相干。唯一的撞法是同一个
   // 登录态被同时刷新两次：那时两个调用拿着同一份 token 去换，一个成功（轮换
   // 了），另一个被拒——被拒的那个重读一次，拿新的 token 再换。

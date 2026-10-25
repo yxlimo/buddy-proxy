@@ -147,6 +147,38 @@ export function clearDeadSession(id: string): void {
 }
 
 /**
+ * 凭据被上游拒了。
+ *
+ * 凭据的状态是「刚才探测出来的结果」：上游答 401 就是它不行了。这个记在
+ * 进程里——服务重启后流水线会再扫一遍，于是状态又是新的，不必存到数据库。
+ */
+const refusedCredentials = new Map<string, { at: number; message: string }>();
+
+/** 十分钟前的探测结论不算数：流水线会再扫一遍。 */
+const REFUSED_TTL_MS = 10 * 60 * 1000;
+
+/** 记下：上游拒了这个凭据。 */
+export function markCredentialRefused(id: string, message: string): void {
+  refusedCredentials.set(id, { at: Date.now(), message });
+}
+
+/** 上游拒过这个凭据吗（刚才探测出来的结论）。 */
+export function credentialRefused(id: string): string | null {
+  const entry = refusedCredentials.get(id);
+  if (!entry) return null;
+  if (Date.now() - entry.at > REFUSED_TTL_MS) {
+    refusedCredentials.delete(id);
+    return null;
+  }
+  return entry.message;
+}
+
+/** 这个凭据又能用了（换了新的令牌，或者探到了好结果）。 */
+export function clearCredentialRefused(id: string): void {
+  refusedCredentials.delete(id);
+}
+
+/**
  * The session as it is now, if somebody else has refreshed it since we read ours.
  *
  * The refresh token rotates on every refresh, so a token that differs from the
@@ -288,7 +320,10 @@ export async function ensureCredential<T extends SessionTokens>(
   if (opts.mode !== "now" && cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
     return cached.cred;
   }
-  const session = await opts.refresh(opts.mode);
+  // 上游刚才拒过这个凭据：那就换一个，别拿那个被拒的继续发。
+  const mode = credentialRefused(opts.lockId) ? "now" : opts.mode;
+  const session = await opts.refresh(mode);
+  if (mode === "now") clearCredentialRefused(opts.lockId);
   const cred = opts.toCredential(session);
   if (cred.remainingMs <= 0) throw opts.expired(session);
   opts.setCache({ at: Date.now(), cred, key: opts.key });

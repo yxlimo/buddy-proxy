@@ -13,7 +13,8 @@ import {
   sessionId,
   type QoderRegion,
 } from "./auth.ts";
-import { clearHint } from "../session.ts";
+import { clearHint, markCredentialRefused } from "../session.ts";
+import { providerSecretId } from "../providers.ts";
 
 export interface QoderAccountHealth {
   region: QoderRegion;
@@ -64,7 +65,11 @@ export async function fetchQoderCredits(providerId = "qoder"): Promise<QoderCred
         ...(session.machineType ? { "Cosy-Machine-Type": session.machineType } : {}),
       },
     });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      // 上游拒了这个令牌：记下来，于是下一次拿凭据时会换一个。
+      if (r.status === 401) markCredentialRefused(providerSecretId(providerId), "上游拒绝了这个令牌");
+      return null;
+    }
     const body = await r.json().catch(() => undefined);
     const pot = (p: any) => ({
       total: Number(p?.total ?? 0),
