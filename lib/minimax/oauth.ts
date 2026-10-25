@@ -287,6 +287,9 @@ export async function ensureCredential(force = false, providerId = "minimax"): P
     },
     cacheMs: CACHE_MS,
     force,
+    // 缓存是模块级的，两个账号共用一份：所以缓存里要记着它是哪个账号的。
+    // 不然 A 的凭据会被当成 B 的发出去（同一个平台账号时能用，但代次就乱了）。
+    key: providerId,
     lockId: sessionId(providerId),
     load: () => loadSession(providerId),
     refresh: (f) => refreshSession(f, providerId),
