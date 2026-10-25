@@ -105,6 +105,60 @@ const iso = (ms: unknown): string | null =>
   typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 
 /**
+ * A percentage the platform reports as a string: "0%", "100%", "-1%".
+ *
+ * "-1%" means the platform has no number for it (an unlimited plan), so it
+ * counts as zero rather than as a negative percentage.
+ */
+function percent(raw: unknown): number {
+  const text = String(raw ?? "").replace("%", "").trim();
+  const value = Number(text);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * The token plan's usage, read with the account's own session.
+ *
+ * The open platform's `/v1/token_plan/remains` needs an API key (sk-cp-…), so
+ * an account that only has a session has no plan to show. The Code client
+ * reads the same plan from `/backend/account/token_plan/remains_percent` with
+ * the session, and that works for every account — the session is what the
+ * account logs in with.
+ *
+ * The two endpoints report the same window differently: the key one says how
+ * much is *left*, this one says how much is *used* out of the total. Both end
+ * up as "how much is left" here.
+ */
+export async function fetchMiniMaxTokenPlanWithSession(
+  accessToken: string,
+  region: MiniMaxRegion = "cn",
+): Promise<MiniMaxTokenPlan | null> {
+  try {
+    const r = await fetch(`${minimaxApiHost(region)}/backend/account/token_plan/remains_percent`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!r.ok) return null;
+    const body: any = await r.json().catch(() => null);
+    if (!body || body?.base_resp?.status_code !== 0) return null;
+    const rows = Array.isArray(body.model_remains) ? body.model_remains : [];
+    return {
+      windows: rows.map((row: any) => ({
+        model: String(row?.model_name ?? ""),
+        intervalPercent: percent(row?.current_interval_total_percent) - percent(row?.current_interval_used_percent),
+        weeklyPercent: percent(row?.current_weekly_total_percent) - percent(row?.current_weekly_used_percent),
+        intervalEndsAt: iso(row?.end_time),
+        weeklyEndsAt: iso(row?.weekly_end_time),
+        intervalRemainsMs: num(row?.remains_time),
+        weeklyRemainsMs: num(row?.weekly_remains_time),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The token plan's usage.
  *
  * The plan's key is the API key (`sk-cp-…`), not the OAuth session: the

@@ -12,7 +12,7 @@ import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
 import { miniMaxApiTenantPlans, miniMaxApiTenants } from "../minimax/api.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
-import { fetchMiniMaxBalance, miniMaxTokenPlan } from "../minimax/credits.ts";
+import { fetchMiniMaxBalance, miniMaxTokenPlan, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
 import { fetchMiniMaxCredits } from "../minimax/checkin.ts";
 import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
 import { type QoderRegion } from "../qoder/auth.ts";
@@ -284,6 +284,25 @@ export async function miniMaxCredits(providerId = "minimax"): Promise<unknown> {
 }
 
 /**
+ * MiniMax Code 账号上的套餐额度。
+ *
+ * 先用会话读：会话是账号自己登录用的，每个账号都有，桌面客户端就是这么读的
+ * （`/backend/account/token_plan/remains_percent`）。读不到再退回 plan key 那条
+ * （开放平台的 `/v1/token_plan/remains`，要 sk-cp- 那种 key）。
+ */
+export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unknown> {
+  const region = MINIMAX_REGION === "en" ? "global" : "cn";
+  try {
+    const cred = await readCredential(false, providerId);
+    const withSession = await fetchMiniMaxTokenPlanWithSession(cred.accessToken, region);
+    if (withSession?.windows.length) return withSession;
+  } catch {
+    // 没有会话或读不到，往下走。
+  }
+  return miniMaxTokenPlan(300_000, providerId);
+}
+
+/**
  * SenseNova 的积分池。
  *
  * 问的是控制台（要登录态），没登录就问不了 —— 那是「不知道」，不是「没有」。
@@ -357,7 +376,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
       case "minimax":
         snapshot.minimax[row.id] = {
           balance: await miniMaxBalance(row.id),
-          tokenPlan: await miniMaxTokenPlan(300_000, row.id),
+          tokenPlan: await miniMaxCodeTokenPlan(row.id),
           credits: await miniMaxCredits(row.id),
         };
         break;

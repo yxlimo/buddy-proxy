@@ -38,17 +38,22 @@ export function TokenPlanPanel({
 
   return (
     <div className='grid gap-4'>
-      {windows.map((window, index) => (
+      {windows.map((window, index) => {
+        const name = windowLabel(window.label)
+        // 认得出的名字（general / video）旁边再写一遍原名；认不出来的
+        // （SenseNova 的池子名）就只写一次。
+        const raw = window.label && window.label !== name ? window.label : ''
+        return (
         <div
           key={`${window.label}-${index}`}
           className='rounded-lg border p-3'
         >
           <div className='mb-3 flex items-center justify-between gap-2'>
             <span className='text-sm font-medium'>
-              {windowLabel(window.label) || '额度窗口'}
+              {name || '额度窗口'}
             </span>
             <span className='text-xs text-muted-foreground'>
-              {window.label || '—'}
+              {raw || '—'}
             </span>
           </div>
 
@@ -65,7 +70,8 @@ export function TokenPlanPanel({
             />
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

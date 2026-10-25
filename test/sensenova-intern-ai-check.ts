@@ -797,19 +797,30 @@ const internUpstream = (withQuota.upstreams ?? []).find((u: any) => u.id === "in
 check("SenseNova 的额度是积分", Boolean(senseUpstream?.quota?.credits), JSON.stringify(senseUpstream?.quota));
 check("SenseNova 没有余额（它不是中转站）", senseUpstream?.quota?.balance === undefined, JSON.stringify(senseUpstream?.quota));
 check(
-  "SenseNova 的积分是池子里那些",
-  Number(senseUpstream?.quota?.credits?.remaining) === 124000,
+  "SenseNova 的积分是活动积分（30 天到期的那种）",
+  Number(senseUpstream?.quota?.credits?.remaining) === 5000,
   JSON.stringify(senseUpstream?.quota?.credits),
 );
 check(
-  "SenseNova 的每一笔是一个池子",
-  (senseUpstream?.quota?.credits?.lots ?? []).length === 2,
+  "只有活动积分不为 0 的池子才列一笔",
+  (senseUpstream?.quota?.credits?.lots ?? []).length === 1,
   JSON.stringify(senseUpstream?.quota?.credits?.lots),
 );
 check(
-  "通用池的积分是周期加活动",
-  Number(senseUpstream?.quota?.credits?.lots?.[0]?.remaining) === 64000,
+  "通用池那一笔是活动积分，不是周期加活动",
+  Number(senseUpstream?.quota?.credits?.lots?.[0]?.remaining) === 5000,
   JSON.stringify(senseUpstream?.quota?.credits?.lots),
+);
+check(
+  "周期积分报成套餐额度：每个池子一个窗口",
+  (senseUpstream?.quota?.tokenPlan?.windows ?? []).length === 2,
+  JSON.stringify(senseUpstream?.quota?.tokenPlan?.windows),
+);
+check(
+  "窗口的百分比是 remaining / limit",
+  Number(senseUpstream?.quota?.tokenPlan?.windows?.[0]?.intervalPercent) === 98 &&
+    Number(senseUpstream?.quota?.tokenPlan?.windows?.[0]?.weeklyPercent) === 98,
+  JSON.stringify(senseUpstream?.quota?.tokenPlan?.windows),
 );
 check(
   "平台没报总额，总额就是 0（契约里 0 = 没报）",
@@ -854,7 +865,7 @@ const senseBalance = (balance.quotas ?? []).find((b: any) => b.upstreamId === "s
 check("问平台得来的也是积分", Boolean(senseBalance?.credits), JSON.stringify(senseBalance));
 check(
   "问平台得来的数与快照里的一样",
-  Number(senseBalance?.credits?.remaining) === 124000,
+  Number(senseBalance?.credits?.remaining) === 5000,
   JSON.stringify(senseBalance?.credits),
 );
 check("问平台得来的没有余额", senseBalance?.balance === undefined, JSON.stringify(senseBalance));

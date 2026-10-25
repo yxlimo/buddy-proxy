@@ -18,8 +18,6 @@ import {
 } from "./provider-kinds.ts";
 import type { TokenRhythmTenantStatus } from "./tokenrhythm/wallet.ts";
 import {
-  poolEmpty,
-  poolPaused,
   totalRemaining,
   type SenseNovaPoolUsage,
 } from "./sensenova/quota.ts";
@@ -219,29 +217,51 @@ function senseNovaQuotas(provider: ProviderRow, snapshot: HealthSnapshot): Quota
   // 能服务模型的池子才算数：没有模型挂在它上面的池子，扣不到。
   const pools = usage.pools.filter((pool) => pool.modelIds.length > 0);
   if (!pools.length) return [];
-  const lots: CreditLotView[] = pools.map((pool) => ({
-    id: pool.id,
-    sourceLabel: pool.name || pool.id,
-    remaining: totalRemaining(pool),
-    // 活动积分有到期日；周期积分靠窗口重置，没有到期日。
-    expiresAt: pool.nearestGrantExpiry ? pool.nearestGrantExpiry * 1000 : 0,
-    status: poolEmpty(pool) ? "已用尽" : poolPaused(pool) ? "窗口用尽" : "可用",
-  }));
+  // 池子里有两种都叫「积分」的东西，不是一回事：
+  //
+  //   活动积分（grant_balance）  兑换码、活动发的，到账后 30 天到期 → 积分
+  //   周期积分（window_5h/7d）  滚动窗口里的额度，5 小时重置 → 套餐额度
+  //
+  // 所以积分只报活动积分，周期积分按窗口的百分比报成套餐额度。
+  const lots: CreditLotView[] = pools
+    .filter((pool) => pool.grantBalance > 0)
+    .map((pool) => ({
+      id: pool.id,
+      sourceLabel: `${pool.name || pool.id} · 30 天到期`,
+      remaining: pool.grantBalance,
+      expiresAt: pool.nearestGrantExpiry ? pool.nearestGrantExpiry * 1000 : 0,
+      status: pool.grantBalance > 0 ? "可用" : "已用尽",
+    }));
   const remaining = lots.reduce((sum, lot) => sum + lot.remaining, 0);
+  const windows = pools.map((pool) => ({
+    label: pool.name || pool.id,
+    intervalPercent: windowPercent(pool.window5h),
+    weeklyPercent: windowPercent(pool.window7d),
+    intervalEndsAt: pool.window5h.resetAt ? pool.window5h.resetAt * 1000 : 0,
+    weeklyEndsAt: pool.window7d.resetAt ? pool.window7d.resetAt * 1000 : 0,
+  }));
   const plan = usage.plan?.name ? `${usage.plan.name}：` : "";
   return [
     {
       upstreamId: provider.id,
       accountId: provider.id,
       credits: {
+        // 平台不报活动积分的总额与已用，只报还剩多少。
         total: 0,
         used: 0,
         remaining,
         lots,
-        note: `${plan}${pools.length} 个积分池，周期积分取 5 小时与 7 天窗口里小的那个`,
+        note: `${plan}活动积分 30 天到期；周期积分按 5 小时与 7 天窗口另算`,
       },
+      ...(windows.length ? { tokenPlan: { windows } } : {}),
     },
   ];
+}
+
+/** 一个滚动窗口里还剩百分之多少。 */
+function windowPercent(window: { limit: number; remaining: number }): number {
+  if (!window.limit || window.limit <= 0) return 0;
+  return Math.round((window.remaining / window.limit) * 100);
 }
 
 function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {

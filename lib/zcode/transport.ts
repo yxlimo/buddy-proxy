@@ -10,6 +10,7 @@
 // output_config（思考档位），还有 metadata.user_id。
 
 import crypto from "node:crypto";
+import { release as osRelease } from "node:os";
 import { AuthError } from "../credential.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
 
@@ -46,7 +47,11 @@ export function zcodeHeaders(session: ZcodeSession): Record<string, string> {
     "X-ZCode-Agent": "glm",
     "X-Platform": `${process.platform}-${process.arch}`,
     "X-Os-Category": process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux",
-    "X-Os-Version": (process as any).release?.() ?? "",
+    // os.release() 是操作系统的版本（客户端发的是这个）。
+    // process.release 是另一个东西：一个描述运行时的对象，不是函数。
+    "X-Os-Version": osRelease(),
+    // 额度接口（billing/balance）认这个头：少了它，那个接口答「参数错误」。
+    "X-Device-Mid": session.deviceId ?? "",
     "x-request-id": crypto.randomUUID(),
     "x-zcode-session-type": "main",
     "x-zcode-trace-id": crypto.randomUUID(),
@@ -128,5 +133,90 @@ export async function zcodeChat(
       502,
     );
   }
-  return { response, session };
+  // 上游会用 200 带业务码报错误（额度用尽是 code 1005）。这不是答复。
+  const peeked = await peekBusinessFailure(response, Boolean(body.stream));
+  if (peeked.failure) throw peeked.failure;
+  return { response: peeked.response, session };
+}
+
+/**
+ * 业务错误：上游答 200，但 body 里是一个错误。
+ *
+ * 非流式时 body 是 JSON，流式时第一帧是同一个 JSON。两种都要在看之前把它
+ * 认出来 —— 写给客户端之后就收不回来了。看过的字节要原样还给下游。
+ */
+async function peekBusinessFailure(
+  response: Response,
+  isStream: boolean,
+): Promise<{ failure: AuthError | null; response: Response }> {
+  const body = response.body;
+  if (!body) return { failure: null, response };
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const kept: Uint8Array[] = [];
+  let text = "";
+  let failure: AuthError | null = null;
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    kept.push(value);
+    text += decoder.decode(value, { stream: true });
+    // JSON 错误是一整个对象，读到第一个「}」就够判断了。
+    if (!isStream || text.includes("}")) {
+      const found = businessFailure(text);
+      if (found) {
+        failure = found;
+        break;
+      }
+      if (!isStream) break;
+    }
+  }
+
+  if (failure) {
+    await reader.cancel().catch(() => {});
+    return { failure, response };
+  }
+
+  const rest = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const chunk of kept) controller.enqueue(chunk);
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+      } catch {
+        // 上游断了：下游会看到截断的流。
+      }
+      controller.close();
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return {
+    failure: null,
+    response: new Response(rest, { status: response.status, headers: response.headers }),
+  };
+}
+
+/** 把 body 里的业务码认出来：code 非 0 就是错误。 */
+function businessFailure(text: string): AuthError | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  let body: any;
+  try {
+    body = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  const code = Number(body?.code);
+  if (!Number.isFinite(code) || code === 0) return null;
+  const message = String(body?.msg ?? body?.message ?? "上游报了业务错误");
+  if (code === 1005) {
+    return new AuthError("zcode quota exceeded", `ZCode 的套餐额度用尽了：${message}`, 402);
+  }
+  return new AuthError(`zcode business error ${code}`, `ZCode 上游报了错误（${code}）：${message}`, 502);
 }
