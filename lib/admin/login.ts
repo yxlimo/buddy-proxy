@@ -320,19 +320,19 @@ async function runPoll(session: StoredLogin): Promise<string> {
     case "minimax": {
       const auth = poll.auth as unknown as MinimaxDeviceAuthorization;
       const result = await pollMinimaxDevice(auth);
-      saveMinimaxSession(result, providerId);
+      saveMinimaxSession(result, providerId, { force: true });
       return `session:provider:${providerId}`;
     }
     case "qoder": {
       const auth = poll.auth as unknown as QoderDeviceAuthorization;
       const result = await pollQoderDevice(auth, providerId);
-      saveQoderSession(result, providerId);
+      saveQoderSession(result, providerId, { force: true });
       return `session:provider:${providerId}`;
     }
     case "workbuddy": {
       const state = String(poll.state ?? "");
       const result = await pollWorkBuddyLogin(providerId, state, session.expiresAt);
-      saveWorkBuddySession(result, providerId);
+      saveWorkBuddySession(result, providerId, { force: true });
       return `session:provider:${providerId}`;
     }
     case "zcode": {

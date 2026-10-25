@@ -85,31 +85,42 @@ export function clearHint(id: string): string {
 /**
  * Write a session.
  *
- * A session carries its generation: the higher it is, the newer the session is.
- * A refresh rotates the refresh token, so the same session refreshed twice at
- * the same time leaves the newer result alive and the older one spent — and
- * the older one must not be the one that stays in the database. So a session
- * that is older than what is already stored is not written at all.
+ * A session carries when it was logged in and which generation it is. A login
+ * is newer than anything that came out of the previous login, and a refresh
+ * inside one login is a generation later than the one before it.
  *
- * A login is a new session and always replaces what is there — that is how
- * an operator recovers from a session the platform refused.
+ * So the comparison is: the login time first, the generation second. That
+ * keeps two things straight at once — a login is never blocked by the
+ * session it replaces (its login time is later), and a refresh that raced
+ * with another one does not overwrite the newer result (same login time, so
+ * the generation decides).
  */
 export function writeSession(id: string, session: unknown, options: { force?: boolean } = {}): boolean {
   deadSessions.delete(id);
-  const stored = getSecret<{ generation?: number }>(id);
-  const mine = generationOf(session);
-  const theirs = generationOf(stored);
-  if (!options.force && stored && theirs > mine) return false;
+  const stored = getSecret(id);
+  if (!options.force && stored && !newer(stampOf(session), stampOf(stored))) return false;
   setSecret(id, "session", session);
   return true;
 }
 
-/** The generation of a session, as far as it says. */
-function generationOf(session: unknown): number {
-  if (!session || typeof session !== "object") return 0;
-  const value = (session as { generation?: unknown }).generation;
-  const n = Number(value ?? 0);
-  return Number.isFinite(n) ? n : 0;
+/**
+ * How new a session is: when it was logged in, and which generation it is.
+ */
+function stampOf(session: unknown): [number, number] {
+  if (!session || typeof session !== "object") return [0, 0];
+  const s = session as { loginAtMs?: unknown; obtainedAtMs?: unknown; generation?: unknown };
+  const login = Number(s.loginAtMs ?? s.obtainedAtMs ?? 0);
+  const generation = Number(s.generation ?? 0);
+  return [
+    Number.isFinite(login) ? login : 0,
+    Number.isFinite(generation) ? generation : 0,
+  ];
+}
+
+/** Is the first stamp newer than the second? */
+function newer(a: [number, number], b: [number, number]): boolean {
+  if (a[0] !== b[0]) return a[0] > b[0];
+  return a[1] >= b[1];
 }
 
 /**

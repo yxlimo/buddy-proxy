@@ -129,6 +129,31 @@ check("不带走 host", !("host" in noAuth), JSON.stringify(noAuth));
 check("带走了会话头", noAuth["x-session-id"] === "s1", JSON.stringify(noAuth));
 
 console.log("");
+console.log("写会话：登录要能覆盖，刷新里的旧代次不能覆盖");
+
+{
+  const { writeSession, readSession } = await import("../lib/session.ts");
+  const id = "session:provider:test-write";
+
+  // 一次登录的成果（第 1 代）。
+  writeSession(id, { accessToken: "a1", refreshToken: "r1", generation: 1, loginAtMs: 1000 });
+  check("写进去了", readSession<any>(id)?.generation === 1, String(readSession<any>(id)?.generation));
+
+  // 同一次登录里刷新了一次：第 2 代，比第 1 代新。
+  writeSession(id, { accessToken: "a2", refreshToken: "r2", generation: 2, loginAtMs: 1000 });
+  check("同一次登录的下一代写进去了", readSession<any>(id)?.generation === 2, String(readSession<any>(id)?.generation));
+
+  // 并发的另一个刷新：第 1 代（更旧），不该覆盖第 2 代。
+  writeSession(id, { accessToken: "a3", refreshToken: "r3", generation: 1, loginAtMs: 1000 });
+  check("旧代次没有覆盖新的", readSession<any>(id)?.generation === 2, String(readSession<any>(id)?.generation));
+
+  // 重新登录：登录时刻更晚，哪怕代次又从 1 开始，也要写进去。
+  writeSession(id, { accessToken: "a4", refreshToken: "r4", generation: 1, loginAtMs: 2000 });
+  check("重新登录写进去了", readSession<any>(id)?.generation === 1 && readSession<any>(id)?.accessToken === "a4",
+    JSON.stringify(readSession<any>(id)));
+}
+
+console.log("");
 console.log("结果");
 console.log(`pass=${pass} fail=${fail}`);
 process.exit(fail ? 1 : 0);
