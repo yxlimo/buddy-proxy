@@ -46,9 +46,28 @@ export interface ProviderRow {
   region: string;
   /** 开关。 */
   enabled: boolean;
+  /** 生效策略：名下的多个账号怎么选。 */
+  policy: ProviderPolicy;
   createdAt: number;
   updatedAt: number;
 }
+
+/**
+ * The policy that decides which of an upstream's accounts takes a request.
+ *
+ * `single`      one account, always the first.
+ * `fallback`    try them in order; an account that cannot serve the request
+ *               hands it to the next one.
+ * `expiry_first` one account: the one whose balance runs out first. Only the
+ *               relay stations have balances, so this is theirs alone.
+ *
+ * The column has no per-kind default: the code does not know which upstream
+ * has several accounts and which one has a balance, so the operator sets it.
+ */
+export type ProviderPolicy = "single" | "fallback" | "expiry_first";
+
+/** Every policy there is. */
+export const PROVIDER_POLICIES: ProviderPolicy[] = ["single", "fallback", "expiry_first"];
 
 /** 建表之后，把内置的那些 provider 放进去。 */
 /**
@@ -116,7 +135,7 @@ export function ensureBuiltinProviders(): void {
 export function listProviders(): ProviderRow[] {
   ensureBuiltinProviders();
   const rows = store()
-    .prepare("SELECT id, kind, alias, region, enabled, created_at, updated_at FROM provider ORDER BY id")
+    .prepare("SELECT id, kind, alias, region, enabled, policy, created_at, updated_at FROM provider ORDER BY id")
     .all() as any[];
   return rows.map(toRow);
 }
@@ -125,7 +144,7 @@ export function listProviders(): ProviderRow[] {
 export function provider(id: string): ProviderRow | null {
   ensureBuiltinProviders();
   const row = store()
-    .prepare("SELECT id, kind, alias, region, enabled, created_at, updated_at FROM provider WHERE id = ?")
+    .prepare("SELECT id, kind, alias, region, enabled, policy, created_at, updated_at FROM provider WHERE id = ?")
     .get(id) as any;
   return row ? toRow(row) : null;
 }
@@ -142,9 +161,24 @@ function toRow(row: any): ProviderRow {
     alias: String(row.alias ?? ""),
     region: String(row.region ?? ""),
     enabled: Number(row.enabled) !== 0,
+    policy: policyOfValue(row.policy),
     createdAt: Number(row.created_at ?? 0),
     updatedAt: Number(row.updated_at ?? 0),
   };
+}
+
+/** A policy value from the database; anything unknown means 'single'. */
+function policyOfValue(value: unknown): ProviderPolicy {
+  const raw = String(value ?? "single");
+  return (PROVIDER_POLICIES as string[]).includes(raw) ? (raw as ProviderPolicy) : "single";
+}
+
+/** The policy of an upstream: which of its accounts takes a request. */
+export function policyOf(id: string): ProviderPolicy {
+  const row = store()
+    .prepare("SELECT policy FROM provider WHERE id = ?")
+    .get(id) as { policy?: string } | undefined;
+  return policyOfValue(row?.policy);
 }
 
 /** 改一个 provider 的别名与开关。 */

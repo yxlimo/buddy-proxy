@@ -58,6 +58,19 @@ message Upstream {
   string base_url = 8;
   // 区域：cn / global。
   string region = 9;
+  // 这个上游名下的多个账号怎么选（provider 的生效策略）。
+  ProviderPolicy policy = 13;
+}
+
+// provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
+enum ProviderPolicy {
+  PROVIDER_POLICY_UNSPECIFIED = 0;
+  // 单调第一个（权重最大的那个）。失败就是失败，不换。
+  PROVIDER_POLICY_SINGLE = 1;
+  // 按权重依次试，遇到「不可用」降级到下一个。
+  PROVIDER_POLICY_FALLBACK = 2;
+  // 单调余额最早到期的那个账户。账户判定变了就切过去。不做降级。
+  PROVIDER_POLICY_EXPIRY_FIRST = 3;
 }
 
 // 凭据的状态。
@@ -379,6 +392,8 @@ message UpdateProviderRequest {
   string alias = 2;
   // 没说就是不改。
   optional bool enabled = 3;
+  // 生效策略。没说就是不改。
+  optional ProviderPolicy policy = 4;
 }
 
 message UpdateProviderResponse {
@@ -418,6 +433,8 @@ message ProviderKind {
   bool needs_region = 4;
   // 有区域的话，都有哪些。
   repeated string regions = 5;
+  // 这一类上游支持的生效策略。面板据此显示选项。
+  repeated ProviderPolicy policies = 6;
 }
 
 // 面板上能选的类型。面板不问后端有哪些类，它问。

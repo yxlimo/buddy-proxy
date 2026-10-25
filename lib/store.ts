@@ -103,9 +103,17 @@ export function store(): DatabaseSync {
       region     TEXT NOT NULL DEFAULT '',
       enabled    INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      policy     TEXT NOT NULL DEFAULT 'single'
     )`,
   );
+  // The policy column came later: an existing database needs it added before
+  // anything reads it. The default is 'single' — the policy is the operator's
+  // to set, so an old row keeps the one it had, not a guessed one.
+  const providerColumns = db.prepare("PRAGMA table_info(provider)").all() as { name?: string }[];
+  if (!providerColumns.some((c) => c.name === "policy")) {
+    db.exec("ALTER TABLE provider ADD COLUMN policy TEXT NOT NULL DEFAULT 'single'");
+  }
   // A provider the operator deleted stays deleted. The built-in ones are put
   // back on every start, so a deletion has to be remembered somewhere --
   // without this the provider came back right after the panel said it was
