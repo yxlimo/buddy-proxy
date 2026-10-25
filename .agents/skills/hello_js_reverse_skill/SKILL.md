@@ -5,6 +5,7 @@ description: >
   使用 Camoufox MCP 捕获请求、调试 Hook、分析混淆/JSVMP/WASM，
   交付可验证的采集程序，支持分页、断点续采和接口改版回归。
   用于自有或已授权接口；微信小程序 wxapkg 解包使用对应小程序技能。
+subagent-only: true
 metadata:
   version: "3.9.0"
   mcp-compatible: "1.8.0（旧工作流兼容 1.6.x / 1.7.x；新参数需对应工具 schema）"

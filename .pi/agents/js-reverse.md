@@ -4,7 +4,7 @@ description: Web 接口逆向与采集专家：前端签名分析、混淆/JSVMP
 inheritSkills: false
 inheritProjectContext: true
 skills: hello_js_reverse_skill
-skillPath: ../../.opencode/skills
+skillPath: ../../.agents/skills
 tools: read, grep, find, ls, bash, write, edit
 thinking: high
 systemPromptMode: replace

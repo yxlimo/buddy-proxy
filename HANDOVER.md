@@ -113,6 +113,26 @@ tools/deploy-nas.sh       # 构建镜像、送过去、换容器
 
 客户端配置（opencode、pi）由 `tools/patch-clients.py` 写 —— 它自己从网关拉模型清单。**部署完再跑**，不是之前。
 
+## 本机的 agent 配置
+
+跟网关代码无关，但同仓库：项目里带一个 pi-subagents 的 agent，让逆向类任务交给子代理，主 agent
+不揽。
+
+| | |
+|---|---|
+| 技能正文 | `.agents/skills/hello_js_reverse_skill/`——OpenCode 与 pi 都读这个位置，一份就够，不用软链 |
+| agent 定义 | `.pi/agents/js-reverse.md`——`inheritSkills: false` + `skills:` + `skillPath:` |
+| 过滤扩展 | `~/extensions/subagent-only-skills/`（独立仓库，软链到 `~/.pi/agent/extensions/`） |
+| 检查 | `node .pi/check-subagent-only-skill.mjs`（不调模型） |
+
+技能在 frontmatter 里声明 `subagent-only: true`，扩展据此把它从**主** agent 的系统提示里拿掉，
+子代理照旧能拿到（pi-subagents 把技能注入子代理的提示词文本）。
+
+**不能改用 `disable-model-invocation`**：pi-subagents 也按那个字段过滤，子代理会跟着一起丢，
+两头都没了。
+
+扩展仓库在 `~/extensions/`，有自己的 README 与 HANDOFF。
+
 ## 会咬人的地方
 
 找起来费过时间的，下次还会费：

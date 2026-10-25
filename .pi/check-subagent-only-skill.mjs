@@ -4,8 +4,8 @@
 //   node .pi/check-subagent-only-skill.mjs
 //
 // 不调模型，只走真实代码路径：
-//   1. pi 的 skill 加载器（loadSkills）在项目里发现 hello_js_reverse_skill；
-//   2. 项目扩展在 before_agent_start 里把它从 systemPromptOptions.skills 剔除；
+//   1. pi 的资源加载器在项目里发现 .agents/skills 下的 skill，并加载用户扩展目录里的扩展；
+//   2. 扩展在 before_agent_start 里把该 skill 从 systemPromptOptions.skills 剔除；
 //   3. pi 的提示词渲染（formatSkillsForPrompt）里不再出现该 skill；
 //   4. pi-subagents 按 .pi/agents/js-reverse.md 的 skills + skillPath 解析到同一个 skill，
 //      并把技能注入子代理提示词。
@@ -19,6 +19,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const SKILL_NAME = "hello_js_reverse_skill";
 const AGENT_FILE = path.join(ROOT, ".pi", "agents", "js-reverse.md");
+const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 
 let failed = 0;
 
@@ -38,42 +39,49 @@ function check(name, condition, detail = "") {
 
 /** 找到本机 pi 的安装包（受管安装：~/.pi/agent/install/releases/<version>）。 */
 function resolvePiRoot() {
-  const agentDir = path.join(os.homedir(), ".pi", "agent");
-  const versionFile = path.join(agentDir, "install", "current-version");
+  const versionFile = path.join(AGENT_DIR, "install", "current-version");
   if (!fs.existsSync(versionFile)) return undefined;
   const version = fs.readFileSync(versionFile, "utf8").trim();
-  const root = path.join(agentDir, "install", "releases", version, "node_modules", "@earendil-works", "pi-coding-agent");
+  const root = path.join(AGENT_DIR, "install", "releases", version, "node_modules", "@earendil-works", "pi-coding-agent");
   return fs.existsSync(path.join(root, "dist", "index.js")) ? root : undefined;
 }
 
 function resolveSubagentsRoot() {
-  const root = path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "pi-subagents");
+  const root = path.join(AGENT_DIR, "npm", "node_modules", "pi-subagents");
   return fs.existsSync(path.join(root, "src", "agents", "skills.js")) ? root : undefined;
+}
+
+/** 扩展装在用户扩展目录里，不在本项目。 */
+function resolveExtensionFile() {
+  const linked = path.join(AGENT_DIR, "extensions", "pi-subagent-only-skills", "src", "index.ts");
+  if (fs.existsSync(linked)) return linked;
+  const repo = path.join(os.homedir(), "extensions", "subagent-only-skills", "packages", "pi-plugin", "src", "index.ts");
+  return fs.existsSync(repo) ? repo : undefined;
 }
 
 const piRoot = resolvePiRoot();
 const subagentsRoot = resolveSubagentsRoot();
-if (!piRoot || !subagentsRoot) {
-  console.error("本机没有 pi / pi-subagents 安装，跳过检查");
+const extensionFile = resolveExtensionFile();
+if (!piRoot || !subagentsRoot || !extensionFile) {
+  console.error("本机没有 pi / pi-subagents / subagent-only-skills 安装，跳过检查");
   process.exit(0);
 }
 
 const pi = await import(pathToFileURL(path.join(piRoot, "dist", "index.js")).href);
 const subagentsSkills = await import(pathToFileURL(path.join(subagentsRoot, "src", "agents", "skills.js")).href);
 const subagentsFrontmatter = await import(pathToFileURL(path.join(subagentsRoot, "src", "agents", "frontmatter.js")).href);
-const agentDir = path.join(os.homedir(), ".pi", "agent");
 
-// 0. pi 启动：资源加载器（项目扩展 + 项目 skill）
+// 0. pi 启动：资源加载器（用户扩展 + 项目 skill）
 const loader = new pi.DefaultResourceLoader({
   cwd: ROOT,
-  agentDir,
+  agentDir: AGENT_DIR,
   resolveProjectTrust: async () => ({ trusted: true }),
 });
 await loader.reload();
 const extensions = loader.getExtensions();
 check(
-  "pi 启动时加载项目扩展",
-  extensions.extensions.some((extension) => extension.path.endsWith("subagent-only-skills.ts")),
+  "pi 启动时加载扩展",
+  extensions.extensions.some((extension) => extension.path.includes("pi-subagent-only-skills")),
   extensions.extensions.map((extension) => extension.path).join(", ") || "无扩展",
 );
 check(
@@ -81,23 +89,21 @@ check(
   extensions.errors.length === 0,
   extensions.errors.map((error) => `${error.path}: ${error.error}`).join("; "),
 );
+const skills = loader.getSkills().skills;
 check(
   "pi 启动时加载项目 skill",
-  loader.getSkills().skills.some((skill) => skill.name === SKILL_NAME),
-  loader.getSkills().skills.map((skill) => skill.name).join(", ") || "无",
+  skills.some((skill) => skill.name === SKILL_NAME),
+  skills.map((skill) => skill.name).join(", ") || "无",
 );
 
-// 1. pi 启动时的 skill 发现
-const { skills } = pi.loadSkills({ cwd: ROOT, agentDir, skillPaths: [], includeDefaults: true });
 const discovered = skills.find((skill) => skill.name === SKILL_NAME);
-check("pi 在项目里发现 skill", Boolean(discovered), `已发现：${skills.map((s) => s.name).join(", ") || "无"}`);
 check("skill 不带 disable-model-invocation", discovered?.disableModelInvocation !== true);
 
 const before = pi.formatSkillsForPrompt(skills, "read");
 check("未过滤时提示词包含该 skill", before.includes(SKILL_NAME));
 
-// 2. 项目扩展把 skill 从提示词选项里剔除
-const extension = (await import(pathToFileURL(path.join(HERE, "extensions", "subagent-only-skills.ts")).href)).default;
+// 1. 扩展把 skill 从提示词选项里剔除
+const extension = (await import(pathToFileURL(extensionFile).href)).default;
 let handler;
 extension({
   on(event, fn) {
@@ -111,11 +117,11 @@ await handler({ type: "before_agent_start", messageType: "user", prompt: "check"
 check("扩展剔除了该 skill", !options.skills.some((skill) => skill.name === SKILL_NAME));
 check("其它 skill 保留", options.skills.length === skills.length - 1);
 
-// 3. pi 渲染后的提示词不再出现该 skill
+// 2. pi 渲染后的提示词不再出现该 skill
 const after = pi.formatSkillsForPrompt(options.skills, "read");
 check("提示词不再包含该 skill", !after.includes(SKILL_NAME));
 
-// 4. pi-subagents 按 agent 定义解析 skill
+// 3. pi-subagents 按 agent 定义解析 skill
 const agentRaw = fs.readFileSync(AGENT_FILE, "utf8");
 // agent 定义由 pi-subagents 自己解析 frontmatter（值都是字符串），不是 pi 的 YAML 解析。
 const { frontmatter } = subagentsFrontmatter.parseFrontmatter(agentRaw);
@@ -133,11 +139,11 @@ const { resolved, missing } = subagentsSkills.resolveSkills(skillNames, ROOT, sk
 check("子代理解析到 skill", resolved.some((skill) => skill.name === SKILL_NAME), `missing：${missing.join(", ") || "无"}`);
 check("子代理没有缺失 skill", missing.length === 0, missing.join(", "));
 
-// 5. 子代理提示词里带上技能
+// 4. 子代理提示词里带上技能
 const injection = subagentsSkills.buildSkillInjection(resolved);
 check("子代理提示词包含该 skill", injection.includes(SKILL_NAME));
 
-// 6. pi-subagents 在项目里发现 agent 定义
+// 5. pi-subagents 在项目里发现 agent 定义
 const subagentsAgents = await import(pathToFileURL(path.join(subagentsRoot, "src", "agents", "agents.js")).href);
 const discoveredAgents = subagentsAgents.discoverAgents(ROOT, "project", undefined).agents ?? [];
 const jsReverse = discoveredAgents.find((agent) => agent.name === "js-reverse");
