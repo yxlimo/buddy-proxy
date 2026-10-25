@@ -214,7 +214,8 @@ export function UpstreamsPage() {
                               </span>
                               {upstream.credential.warning ? (
                                 <span className='text-xs text-destructive'>
-                                  {upstream.credential.detail || '凭据即将到期'}
+                                  {upstream.credential.detail ||
+                                    '令牌过期了，刷新没成功，要重新登录'}
                                 </span>
                               ) : null}
                             </div>

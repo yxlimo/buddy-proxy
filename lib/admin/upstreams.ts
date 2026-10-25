@@ -549,10 +549,12 @@ function fromUpstreamStatus(raw: Record<string, unknown>, kind: string, secretId
   // 说成「状态异常」会让人以为出了故障。
   let detail = String(raw.error ?? raw.hint ?? "");
   if (!detail && warning) {
+    // The warning means the token is gone and the refresh did not replace
+    // it -- that is the one case a person has to act on.
     detail =
       remainingSec > 0
         ? `令牌还有 ${Math.round(remainingSec / 60)} 分钟到期，会自动刷新`
-        : "令牌即将到期，会自动刷新";
+        : "令牌过期了，刷新没成功，要重新登录";
   }
   return {
     kind,

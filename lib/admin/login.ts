@@ -13,7 +13,8 @@
 
 import crypto from "node:crypto";
 import { deleteCached, getSecret, listCached, peekCached, setCached, setSecret, withLock } from "../store.ts";
-import { AuthError } from "../credential.ts";
+import { AuthError, authLog } from "../credential.ts";
+import { dataDir } from "../paths.ts";
 import {
   pollDeviceToken as pollMinimaxDevice,
   saveSession as saveMinimaxSession,
@@ -300,10 +301,16 @@ async function pollLoop(session: StoredLogin): Promise<void> {
       message: "登录完成。",
       credentialId,
     });
+    // 登录的结果要留痕：容器重建就没有日志了，凭据自己的日志里也只有
+    // 「刷新成功」，看不出当初是怎么登上去的。
+    authLog(dataDir(), `${session.upstreamId} 登录成功`, credentialId);
+    console.log(`[LOGIN] ${session.upstreamId} 登录成功`);
   } catch (e) {
     const current = loadLogin(session.loginId);
     if (!current || current.status === "cancelled") return;
     updateLogin(session.loginId, { status: "failed", message: errorText(e) });
+    authLog(dataDir(), `${session.upstreamId} 登录失败`, errorText(e));
+    console.warn(`[LOGIN] ${session.upstreamId} 登录失败：${errorText(e)}`);
   }
 }
 

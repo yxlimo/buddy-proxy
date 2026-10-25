@@ -45,11 +45,25 @@ export function useLoginStatus(loginId: string) {
   return useQuery({
     queryKey: loginKeys.status(loginId),
     queryFn: async () => {
-      const result = await client.getLoginStatus(
-        create(GetLoginStatusRequestSchema, { loginId })
-      )
-      assertOk(result, '查不到这次登录')
-      return result
+      // A request that gets cancelled (the page is busy, the connection is
+      // reset) is not a failure: try again instead of losing the session.
+      // Without this the first answer could be lost and the panel would show
+      // an error instead of the link the user has to click.
+      let lastError: unknown = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const result = await client.getLoginStatus(
+            create(GetLoginStatusRequestSchema, { loginId })
+          )
+          assertOk(result, '查不到这次登录')
+          return result
+        } catch (e) {
+          lastError = e
+          if (attempt === 2) break
+          await new Promise((r) => setTimeout(r, 300))
+        }
+      }
+      throw lastError
     },
     enabled: loginId !== '',
     refetchInterval: (query) => {

@@ -87,6 +87,10 @@ run = "node --experimental-strip-types test/session-check.ts"
 description = "Run the tests for the request-level usage log (no network)"
 run = "node --experimental-strip-types test/usage-check.ts"
 
+[tasks."test:zcode"]
+description = "Run the tests for the ZCode login window (no network)"
+run = "node --experimental-strip-types test/zcode-check.ts"
+
 [tasks."test:snapshot"]
 description = "Run the tests for reading the health snapshot by provider id (no network)"
 run = "node --experimental-strip-types test/snapshot-entry-check.ts"

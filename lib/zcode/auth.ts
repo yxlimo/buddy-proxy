@@ -32,7 +32,11 @@ export const ZCODE_VERSION = configString("ZCODE_VERSION", "3.16.2");
 
 /** 轮询的间隔与上限。 */
 export const ZCODE_POLL_INTERVAL_MS = configNumber("ZCODE_POLL_INTERVAL_MS", 3000);
-export const ZCODE_POLL_TIMEOUT_MS = configNumber("ZCODE_POLL_TIMEOUT_MS", 300_000);
+// How long the background poll waits for the user to finish the login in the
+// browser. The platform's own window is longer than that (about forty
+// minutes), so this is the shorter of the two: the user has to click the link
+// and approve in a quarter of an hour.
+export const ZCODE_POLL_TIMEOUT_MS = configNumber("ZCODE_POLL_TIMEOUT_MS", 900_000);
 
 /**
  * 会话在数据库里的 id。
@@ -122,8 +126,23 @@ export async function beginLogin(providerId = "zcode", platform = ZCODE_PROVIDER
     flowId,
     pollToken: String(data.poll_token ?? pollToken),
     authorizeUrl,
-    expiresAtMs: Number(data.expires_at ?? 0) || Date.now() + ZCODE_POLL_TIMEOUT_MS,
+    // The platform gives the window's end in **seconds**. Everything here
+    // works in milliseconds, and the difference is not small: read as
+    // milliseconds, the window ended in 1970 and the poll gave up at once.
+    expiresAtMs: expiresAtMs(data.expires_at),
   };
+}
+
+/**
+ * The platform's expiry, in seconds, as milliseconds.
+ *
+ * A value that is already in milliseconds (some endpoints give that) is left
+ * alone: anything past the year 2000 in seconds is a mistake.
+ */
+export function expiresAtMs(raw: unknown): number {
+  const n = Number(raw ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return Date.now() + ZCODE_POLL_TIMEOUT_MS;
+  return n < 1e11 ? n * 1000 : n;
 }
 
 /** 轮询的结果。 */

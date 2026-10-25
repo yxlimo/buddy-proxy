@@ -446,7 +446,11 @@ export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
     generation: session.generation,
     expiresAt: new Date(session.expiresAtMs).toISOString(),
     remainingSec: Math.round(remainingMs / 1000),
-    warning: remainingMs < WARN_MS,
+    // The warning means "nobody can fix this": the token is gone and the
+    // refresh did not replace it. A token that is merely about to expire is
+    // normal -- the refresh handles it (the watcher does it before the
+    // request does), so warning about it would cry wolf every hour.
+    warning: remainingMs <= 0,
     refreshBufferSec: Math.round(REFRESH_BUFFER_MS / 1000),
     loginAt: new Date(session.loginAtMs).toISOString(),
     lastRefreshAt: new Date(session.refreshedAtMs).toISOString(),
