@@ -32,7 +32,7 @@ function list(): void {
   for (const [group, items] of [...groups].sort()) {
     console.log(`\n${group}`);
     for (const s of items) {
-      const value = s.type === "string" ? s.value : String(s.value);
+      const value = String(s.value);
       console.log(`  ${s.key.padEnd(38)} ${value.padEnd(28)} [${s.source}]`);
     }
   }
