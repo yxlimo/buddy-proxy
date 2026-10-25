@@ -1,9 +1,8 @@
 // lib/ids.ts — the identifiers the upstream clients hand out.
 //
-// The WorkBuddy client is picky about the shape of the ids it sends: the
+// The WorkBuddy upstream is picky about the shape of the ids it takes: the
 // conversation request id has to be a lowercase UUIDv7 without dashes, or the
-// client itself refuses to send the request. The check in the official client
-// is
+// simulated client itself refuses to send the request. The check in it is
 //
 //   /^[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}$/
 //

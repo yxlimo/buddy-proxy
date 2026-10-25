@@ -274,7 +274,7 @@ export function buildLegacyBody(req: LegacyRequestBody): Json {
     source: 1,
     version: "3",
     chat_prompt: "",
-    // Only what the client asked for: the gateway has its own default, and a
+    // Only what the agent asked for: the gateway has its own default, and a
     // number we invented is a number that can be wrong.
     parameters: req.maxTokens ? { max_tokens: req.maxTokens } : {},
     aliyun_user_type: "personal_standard",

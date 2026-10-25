@@ -30,9 +30,9 @@ export interface WorkBuddyModel {
   onlyReasoning: boolean;
   /** Effort levels the model accepts. Empty means the level is not selectable. */
   efforts: string[];
-  /** The temperature the official client sends for this model. */
+  /** The temperature the simulated client sends for this model. */
   temperature?: number;
-  /** The top_p the official client sends for this model. */
+  /** The top_p the simulated client sends for this model. */
   topP?: number;
 }
 
@@ -478,7 +478,7 @@ export function mergeWorkBuddyCatalog(
  * the model supports.
  *
  * A model that lists no levels takes everything, except that the two levels
- * above `high` become `high` — those are the ones the client never sends.
+ * above `high` become `high` — those are the ones the simulated client never sends.
  */
 export const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 

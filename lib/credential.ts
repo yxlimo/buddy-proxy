@@ -64,7 +64,7 @@ export interface Credential {
 export class AuthError extends Error {
   status: number;
   hint: string;
-  /** The error type the client sees, when it is not the usual one for the status. */
+  /** The error type the agent sees, when it is not the usual one for the status. */
   type?: string;
 
   constructor(message: string, hint: string, status = 503, type?: string) {

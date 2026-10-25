@@ -18,10 +18,10 @@ export interface Route {
   /** The model as the server names it: prefixed, e.g. `qoder-cn/glm-5.3`. */
   model: string;
   /**
-   * The name to report back to the client.
+   * The name to report back to the agent.
    *
    * The aggregate route publishes models under names of its own, so the answer
-   * has to carry the name the client asked for rather than the upstream's.
+   * has to carry the name the agent asked for rather than the upstream's.
    */
   label?: string;
 }

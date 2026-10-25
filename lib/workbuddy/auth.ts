@@ -67,7 +67,7 @@ const AUTH_PLATFORM = configString("WORKBUDDY_AUTH_PLATFORM", "workbuddy");
  *
  * The identity is the command line client's, so the version is the client's
  * own — the version of the `@tencent-ai/codebuddy-code` package, not the
- * version of the desktop app that ships it. A request the official client
+ * version of the desktop app that ships it. A request the simulated client
  * made carried `CLI/2.161.0 WorkBuddy/2.161.0` and `X-IDE-Version: 2.161.0`.
  */
 const CLI_VERSION = configString("WORKBUDDY_CLI_VERSION", "2.161.0");
@@ -531,7 +531,7 @@ export function workbuddyStatus(providerId = "workbuddy-cn"): Record<string, unk
  * the account, the conversation, and a trace.
  */
 /**
- * The device id the official client sends.
+ * The device id the simulated client sends.
  *
  * It is the account's own fingerprint, so two accounts never look like they
  * sit on one machine.
@@ -561,7 +561,7 @@ export function accountHeaders(
     ...(deviceId ? { "X-Device-Id": deviceId } : {}),
   };
   if (opts.chat) {
-    // The model request is not the account's own API: the official client
+    // The model request is not the account's own API: the simulated client
     // sends neither the device id nor the domain there — the device id belongs
     // to the sandbox SDK.
     delete headers["X-Device-Id"];
@@ -572,9 +572,9 @@ export function accountHeaders(
 /**
  * The identity the official CLI sends with a chat request.
  *
- * Everything here was taken from a request the official client actually made
+ * Everything here was taken from a request the simulated client actually made
  * (the Linux 5.6.2 and the Windows 5.8.3 builds send the same shape, only the
- * version differs). The headers that the client does not send are not sent
+ * version differs). The headers that the simulated client does not send are not sent
  * here either.
  */
 export function chatHeaders(

@@ -2,17 +2,19 @@
 //
 // WorkBuddy speaks the OpenAI chat-completions dialect natively, so a request
 // body goes out almost unchanged. What is not native is the identity around it:
-// the upstream checks that the request looks like it came from the official
-// client, which is a set of headers describing the account, the conversation
-// and a trace (lib/workbuddy/auth.ts builds them).
+// the upstream only talks to its own closed client, so the request has to look
+// like it came from that client -- a set of headers describing the account, the
+// conversation and a trace (lib/workbuddy/auth.ts builds them). That is what
+// this module does: it is the simulated client, and the account's session is
+// kept alive so the upstream believes it.
 //
 // Two behaviours worth knowing:
 //
-//   * The upstream answers with a stream even when the client asked for none.
+//   * The upstream answers with a stream even when the agent asked for none.
 //     The official client always streams, so a non-streaming request is folded
 //     back into a single chat.completion object here.
 //   * A failure can arrive as HTTP 200 with an error object in the body. The
-//     gateway has to look, or the client sees an empty answer.
+//     gateway has to look, or the agent sees an empty answer.
 
 import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
@@ -38,7 +40,7 @@ export interface WorkBuddyChatOptions {
   providerId?: string;
   stream?: boolean;
   conversationId?: string;
-  /** The model, so the body can be built the way the official client builds it. */
+  /** The model, so the body can be built the way the simulated client builds it. */
   model?: WorkBuddyModel | null;
 }
 
@@ -49,9 +51,9 @@ export interface WorkBuddyChat {
 }
 
 /**
- * The body the upstream expects, with the pieces the official client adds.
+ * The body the upstream expects, with the pieces the simulated client adds.
  *
- * The official client does not pass the caller's parameters through: it sends
+ * The simulated client does not pass the caller's parameters through: it sends
  * the ones the model carries, clamps the thinking level to what the model
  * accepts, and leaves the tools out of a model that cannot call them.
  */
@@ -97,7 +99,7 @@ export function buildChatBody(
       delete out.tool_choice;
     }
 
-    // The model carries its own parameters, and the official client sends
+    // The model carries its own parameters, and the simulated client sends
     // them when the caller did not choose any.
     if (typeof out.temperature !== "number" && typeof model.temperature === "number") {
       out.temperature = model.temperature;
@@ -129,7 +131,7 @@ export function conversationIdFor(messages: any[], given?: string): string {
     .join("|");
   const digest = createHash("sha256").update(head).digest();
   const hex = digest.toString("hex");
-  // Shaped like a UUIDv7, because that is the shape the client checks.
+  // Shaped like a UUIDv7, because that is the shape the simulated client checks.
   const version = ((digest[6] & 0x07) | 0x07).toString(16);
   const variant = ((digest[7] & 0x03) | 0x08).toString(16);
   const id = `${hex.slice(0, 12)}${version}${hex.slice(13, 16)}${variant}${hex.slice(17, 32)}`;
@@ -290,7 +292,7 @@ export async function aggregateStream(response: Response, model: string): Promis
       if (!chunk) continue;
       // A failure can arrive as a normal frame with an error in it. The
       // official client reads the body and classifies the error; without that
-      // the client sees an empty answer and no reason.
+      // the agent sees an empty answer and no reason.
       if (chunk.error) {
         const error = chunk.error as any;
         throw new AuthError(

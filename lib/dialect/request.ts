@@ -126,7 +126,7 @@ export function anthropicToOpenAI(body: Json): Json {
 /**
  * The thinking level a request asks for.
  *
- * Several spellings reach the proxy, depending on the client and the dialect:
+ * Several spellings reach the proxy, depending on the agent and the dialect:
  *   `output_config.effort`  — the Anthropic spelling opencode and pi use
  *   `effort`                — explicit
  *   `reasoning_effort`      — the OpenAI spelling
@@ -177,7 +177,7 @@ export function budgetFromEffort(effort: unknown): number {
  * OpenAI → Anthropic messages request.
  *
  * The Anthropic dialect insists on a limit, so one has to be there; the
- * caller says which number to use when the client did not name one.
+ * caller says which number to use when the agent did not name one.
  */
 export function openaiToAnthropic(body: Json, defaultMaxTokens: number): Json {
   const out: Json = {};

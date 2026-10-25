@@ -123,7 +123,7 @@ export function UsageTable({
       {
         id: 'agent',
         accessorKey: 'agent',
-        header: '来源',
+        header: 'agent',
         cell: ({ row }) => (
           <span className='text-xs'>{row.original.agent || '—'}</span>
         ),

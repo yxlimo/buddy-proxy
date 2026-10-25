@@ -77,7 +77,7 @@ export interface AggregateTargetSpec {
 
 /** One model the root route publishes. */
 export interface AggregateEntry {
-  /** The id the clients use. */
+  /** The id the agents use. */
   id: string;
   displayName: string;
   reasoning: boolean;

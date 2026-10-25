@@ -102,7 +102,7 @@ lib/agent.ts            who sent the request: pi, opencode, dsh
 lib/aggregate.ts        the published models: the catalog, the targets, the traffic
 lib/benefits.ts         the daily credits of the China accounts
 lib/http.ts             the HTTP client (node:http, so no browser headers)
-lib/api-keys.ts         the front door: the keys the clients use
+lib/api-keys.ts         the front door: the keys the agents use
 lib/device-identity.ts  the fingerprint of an account
 lib/sse.ts              the server-sent events, in and out
 lib/sse-stream.ts       reading an event stream
@@ -111,7 +111,7 @@ lib/ids.ts             the id helpers
 lib/router/            the router's inside
   routes.ts            where a request goes: the model name and the path
   catalog.ts           the model lists, in both dialects
-  deliver.ts           how an answer reaches the client
+  deliver.ts           how an answer reaches the agent
   upstreams.ts         the upstream adapters
 lib/dialect/           the conversion between the two dialects
   request.ts           the request
@@ -140,7 +140,7 @@ lib/qoder/              Qoder: the session, the models, the two protocols
   sgsdk.ts              the machine identity (the real one, and how to get it)
 lib/workbuddy/          WorkBuddy: the session, the models, the transport
   auth.ts               the browser login, the session, the refresh
-  models.ts             the catalogue, curated the way the client shows it
+  models.ts             the catalogue, curated the way the simulated client shows it
   transport.ts          the chat endpoint
   api.ts                the account's own API
   credits.ts            what the account has left
@@ -296,10 +296,10 @@ one place.
 ### Usage
 
 Every request that reaches an upstream is written down, one row each: when,
-which upstream, which model, what the client asked for, which agent sent it
+which upstream, which model, what the agent asked for, which agent sent it
 (pi, opencode, dsh — read from the request headers), which session it belongs
-to, which parent session, which sub-agent, which desktop client we
-impersonated, whether it worked, and how many tokens it used. The 用量 tab
+to, which parent session, which sub-agent, which simulated client it went out
+through, whether it worked, and how many tokens it used. The 用量 tab
 shows the totals (per upstream, per model, per agent, per session, per main
 session, per agent name, per day), the detail rows, and a `今日` window that
 means "since local midnight" rather than "the last 24 hours".
@@ -468,13 +468,13 @@ GLM, DeepSeek's pricing table, MiniMax's documentation.
 The context windows are the gateway's own, because those are what the gateway
 enforces.
 
-What goes upstream is a separate question, and the answer is the desktop
+What goes upstream is a separate question, and the answer is the simulated
 client's own behaviour — what the Qoder CLI, the MiniMax Code client and the
 WorkBuddy app each put in their requests:
 
 | Upstream | The limit it sends |
 |---|---|
-| Qoder | 32000, whatever the agent asked for — the client's own fallback, its catalogue has no such field |
+| Qoder | 32000, whatever the agent asked for — the simulated client's own fallback, its catalogue has no such field |
 | MiniMax | the agent's, or the model's own when the agent named none |
 | WorkBuddy | the agent's, or the model's own when the agent named none |
 
@@ -523,8 +523,9 @@ user approves it in a browser, and the gateway polls for the token.
 | `GET`  | `/zcode/v1/models` | model catalog |
 
 The upstream speaks the Anthropic dialect, so an Anthropic request passes
-through; the gateway adds the headers the client sends (`authorization` and
-`x-api-key` both carry the token, plus the client's own identity headers).
+through; the gateway adds the headers the simulated client sends
+(`authorization` and `x-api-key` both carry the token, plus that client's own
+identity headers).
 
 **The token cannot be refreshed.** The Z.ai and BigModel adapters do not
 implement `refreshToken`, so when it expires the only way back is a new login
@@ -648,8 +649,8 @@ The gateway has no `/models` route (`direct_route_not_configured`), so
 
 The limits follow the desktop app's own config (`limit.output: 128000`,
 `defaultModelContextWindow: 1000000`); models.dev reports 512k output instead,
-and the client picks the lower one on purpose so a planned response is never
-cut. The gateway validates neither number up front, so both are advisory
+and the simulated client picks the lower one on purpose so a planned response
+is never cut. The gateway validates neither number up front, so both are advisory
 budgeting values.
 
 The gateway does **not** validate model ids either: an unrecognized name (say
@@ -708,7 +709,7 @@ own `event: ping` when the stream has been quiet for `MINIMAX_PING_MS`
 (default 15s), using the same payload the gateway uses, so clients ignore it.
 
 A ping is only written on an SSE frame boundary — writing one in the middle of
-an upstream frame would corrupt the client's parse — and only when the stream
+an upstream frame would corrupt the agent's parse — and only when the stream
 is actually idle, so a busy stream is not padded with useless events.
 
 ### Environment
@@ -721,7 +722,7 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_AUTH_CACHE_MS` | `5000` | how long a read of the store is reused |
 | `MINIMAX_AUTH_WARN_MS` | `600000` | warning window before expiry |
 | `MINIMAX_WATCH_MS` | `300000` | background watch interval |
-| `MINIMAX_ATTRIBUTION_HEADERS` | `true` | send the client's attribution headers |
+| `MINIMAX_ATTRIBUTION_HEADERS` | `true` | send the simulated client's attribution headers |
 | `MINIMAX_USER_AGENT` | `MiniMaxCode` | User-Agent sent upstream |
 | `MINIMAX_ANTHROPIC_VERSION` | `2023-06-01` | `anthropic-version` sent upstream |
 | `MINIMAX_BASE_URL` | `https://agent.minimax.cn/mavis/api/v1/llm/v1` | gateway base URL |
@@ -738,7 +739,7 @@ is actually idle, so a busy stream is not padded with useless events.
 ### Credentials
 
 Every secret the gateway holds is in one SQLite file: the sessions of the four
-clients, the keys the clients authenticate with, the relay station's accounts
+clients, the keys the agents authenticate with, the relay station's accounts
 and the salt the device fingerprint is derived from.
 
 One directory holds all of it — the database, the credential log and the salt:
@@ -903,8 +904,8 @@ picker says what a request costs before you pick one — `GLM-5.3 0.8×`,
 (`Cantus`, `Sonus`, and the models whose listed multiplier was cut to zero).
 
 The multiplier lives in the display name only. The request the gateway gets
-keeps the plain name, and the client's model id is unchanged, so nothing about
-the wire format depends on it.
+keeps the plain name, and the model id the upstream sees is unchanged, so
+nothing about the wire format depends on it.
 
 The tool round trip needs one extra thing on the legacy protocol: the request
 has to carry the assistant's tool calls and the tool's answer inside
@@ -1001,15 +1002,15 @@ Two things are not what they look like:
   the last good one when the server cannot be reached. The bundled snapshot is
   only the fallback.
 
-The identity around the request is the official client's, taken from a request
-the client actually made: the product version in the user agent (the command
+The identity around the request is the simulated client's, taken from a request
+that client actually made: the product version in the user agent (the command
 line client's own version, not the desktop app's), the account headers, the
 agent and IDE headers, the seven `x-stainless-*` headers the OpenAI Node SDK
-adds, the trace family, and the identifiers in the shape the client uses (a
+adds, the trace family, and the identifiers in the shape that client uses (a
 uuid v7, dashed for the conversation and plain for the requests). The headers
-the client does not send are not sent here either.
+it does not send are not sent here either.
 
-The request is built the way the official client builds it, not by passing the
+The request is built the way the simulated client builds it, not by passing the
 caller's parameters through:
 
 - the thinking level is clamped to the ones the model accepts, downwards;
@@ -1018,15 +1019,14 @@ caller's parameters through:
   them;
 - a model that thinks is also asked for a summary of its thinking and for a
   verbose answer (`reasoning_summary: "auto"` and `verbosity: "high"`), which
-  is what the client sends and what the product gateway keeps;
+  is what the simulated client sends and what the product gateway keeps;
 - the conversation keeps one id for all its turns, so the upstream sees the
   turns as one conversation instead of a new one each time.
 
-The identity around the request is the official client's: the product version
+The identity around the request is the simulated client's: the product version
 in the user agent, the account headers, the agent and IDE headers, the trace
-family, and the identifiers in the shape the client checks (a lowercase
-UUIDv7). The headers the official client does not send are not sent here
-either.
+family, and the identifiers in the shape that client checks (a lowercase
+UUIDv7). The headers it does not send are not sent here either.
 
 `docs/workbuddy/DIVERGENCES.md` and `docs/workbuddy/FINDINGS-LINUX.md` (local,
 not in the repository) list every difference between this and the official
@@ -1144,7 +1144,7 @@ the same account again — **not another account**: another account would have
 to read the prompt from the start, and the relay charges the uncached prompt,
 which is a lot more than the answer itself.
 
-After the attempts are used up the client gets a `503` with the upstream's own
+After the attempts are used up the agent gets a `503` with the upstream's own
 trace id, and the answer can simply be tried again.
 
 | Variable | Default | What |

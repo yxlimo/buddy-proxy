@@ -152,7 +152,7 @@ export function UsagePage() {
           </div>
 
           <div className='grid gap-4 lg:grid-cols-2'>
-            <BreakdownCard title='按来源' buckets={summary.data?.byAgent ?? []} />
+            <BreakdownCard title='按 agent' buckets={summary.data?.byAgent ?? []} />
             <DaySeries buckets={summary.data?.byDay ?? []} />
           </div>
 

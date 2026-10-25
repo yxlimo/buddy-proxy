@@ -4,7 +4,7 @@
 // streak and the blind box. The order matters: the tasks hand out the lottery
 // chances and the energy the later steps use.
 //
-// Only the check-in and the Buddy trip are in the official client. The others
+// Only the check-in and the Buddy trip are in the simulated client. The others
 // are the account's own API and answer when they are asked — the tasks hand
 // out credits, and the streak reports the days — so they are used as well.
 

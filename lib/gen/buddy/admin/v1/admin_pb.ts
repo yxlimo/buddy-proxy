@@ -1734,7 +1734,7 @@ export type UsageEvent = Message<"buddy.admin.v1.UsageEvent"> & {
   agent: string;
 
   /**
-   * 这次请求模拟的是哪个桌面客户端。
+   * 这次请求是由哪个模拟客户端发出去的（模拟端）。
    *
    * @generated from field: string client = 7;
    */

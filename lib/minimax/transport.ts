@@ -4,7 +4,7 @@
 // OAuth grant itself — client_id `mcode-public`, audience `agent-backend`,
 // scope `agent.default` — not a header trick. The token read from the
 // desktop app's store is already a MiniMax Code credential, so the proxy only
-// has to present it. The attribution headers below mirror what the real
+// has to present it. The attribution headers below mirror what the simulated
 // client sends (packages/tui/src/runtime/public-gateway.ts) so a request is
 // byte-for-byte a MiniMax Code request; they are wire-protocol constants, not
 // credentials, and the gateway accepts requests without them.

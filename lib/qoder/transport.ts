@@ -8,7 +8,10 @@
 //
 // The one thing the endpoint wants on top of a normal OpenAI request is a
 // metadata.context block carrying the session identity, and the machine identity
-// headers.
+// headers. The upstream only talks to its own closed client, so those headers
+// are the simulated client's part: this module and lib/qoder/legacy.ts are the
+// two protocols the simulated client speaks, and the account's session is kept
+// alive so the upstream keeps believing it.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -134,9 +137,9 @@ async function upstreamHeaders(
 }
 
 /**
- * One chat completion. Returns the upstream response as-is; the caller decides
+ * One chat completion. Returns the upstream response as-is; the agent decides
  * whether to stream it through or read it whole. A 401 triggers exactly one
- * forced refresh and retry, the way the real client does.
+ * forced refresh and retry, the way the simulated client does.
  */
 export async function qoderChatCompletion(
   body: Record<string, unknown>,

@@ -22,7 +22,7 @@ import { getSecret, setSecret } from "./store.ts";
 const SALT_ID = "salt:device";
 
 export interface DeviceIdentity {
-  /** The machine id: the official client sends a UUID here. */
+  /** The machine id: the simulated client sends a UUID here. */
   machineId: string;
   /** The machine token (Qoder): the CLI sends a base64url string. */
   machineToken: string;

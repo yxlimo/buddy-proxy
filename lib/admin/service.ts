@@ -616,7 +616,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           completionTokens: BigInt(event.completionTokens),
           reasoningTokens: BigInt(event.reasoningTokens),
           latencyMs: BigInt(event.latencyMs),
-          // The status is the HTTP code the client got: 200 for a good answer,
+          // The status is the HTTP code the agent got: 200 for a good answer,
           // the upstream's own code for a failure.
           status: String(event.status),
           error: event.error,

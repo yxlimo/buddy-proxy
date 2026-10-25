@@ -31,10 +31,10 @@ export const KEYS_FILE = readEnvValue("KEYS_FILE") || path.join(HERE, "..", "api
 
 export type KeyStore = Record<string, string>;
 
-/** Where the client keys are kept. */
+/** Where the agents' keys are kept. */
 const KEYS_ID = "keys:clients";
 
-/** Load the client keys, generating one set when there are none. */
+/** Load the agents' keys, generating one set when there are none. */
 export function loadKeys(prefix = "oc-"): KeyStore {
   let keys: KeyStore = {};
   const stored = getSecret<{ keys: KeyStore }>(KEYS_ID);

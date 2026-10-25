@@ -1,6 +1,6 @@
 // lib/minimax/checkin.ts — the daily sign-in of the MiniMax Code account.
 //
-// The protocol comes from the official client (MiniMax-AI/minimax-code):
+// The protocol comes from the simulated client (MiniMax-AI/minimax-code):
 //   packages/tui/src/checkin/http-gateway.ts        the two endpoints
 //   packages/tui/src/runtime/public-gateway.ts       how the request is built
 //
@@ -25,7 +25,7 @@ const PUBLIC_GATEWAYS: Record<string, string> = {
 const STATUS_PATH = "/minimax-cloud/api/v1/signin/status";
 const CLAIM_PATH = "/minimax-cloud/api/v1/signin/claim";
 
-/** Day states, as the official client reads them. */
+/** Day states, as the simulated client reads them. */
 export const SIGNIN_UPCOMING = 1;
 export const SIGNIN_CLAIMABLE = 2;
 export const SIGNIN_CLAIMED = 3;
@@ -59,7 +59,7 @@ export interface SigninClaim {
 
 const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 
-/** The client version the official client puts in the query string. */
+/** The client version the simulated client puts in the query string. */
 const APP_VERSION = configString("MINIMAX_APP_VERSION", "5.2.0");
 const REGION = configString("MINIMAX_REGION", "cn");
 
@@ -68,7 +68,7 @@ export function publicGatewayOrigin(region = REGION): string {
 }
 
 /**
- * The request, built the way the official client builds it.
+ * The request, built the way the simulated client builds it.
  *
  * The attribution headers (yy / x-timestamp / x-signature) are wire-protocol
  * constants shared by the first-party clients. They say "this request came
@@ -142,7 +142,7 @@ function buildRequest(
   };
 }
 
-/** The user id the official client asks for: GET /v1/api/user/info. */
+/** The user id the simulated client asks for: GET /v1/api/user/info. */
 async function fetchUserId(token: string, region: string): Promise<string> {
   const now = Date.now();
   const url = new URL(`${publicGatewayOrigin(region)}/v1/api/user/info`);

@@ -19,14 +19,9 @@
 
 背后有九个上游，每个一个开关，**默认全关**：MiniMax Code、MiniMax 开放平台、Qoder（两个独立账号，所以两个开关）、WorkBuddy 中国区、TokenRhythm、ZCode、SenseNova、书生·端砚。
 
-## 两个术语
+## 术语
 
-出自 `AGENTS.md`，到处都要分清：
-
-- **agent** —— 调网关的客户端：pi、opencode、dsh、hermes。
-- **客户端** —— 网关内部模拟的桌面客户端：MiniMax Code、Qoder、WorkBuddy、ZCode。
-
-「复刻客户端」指的是**网关按那个客户端的方式发请求**——请求头、请求体形状、模型 id——**不是**把 agent 的写法原样透传。agent 传来的 model id 只用来**识别**模型；发上游要用**客户端目录里的 id**（`MiniMax-M3.1-Flash` → `MiniMax-M3.1-Flash`，识别时忽略大小写）。
+`AGENTS.md` 里定好了，代码和文档都按那套说：**agent** 是调网关的一方，**模拟端**是网关对上游做的那件事——把请求指纹对齐上游的封闭客户端，并让那个客户端的会话保持活跃。这里不重复。
 
 ## 跑在哪
 
@@ -74,7 +69,7 @@ Provider 都在一页里：每行展开就是它的账号和凭据。有可用�
 
 根路由只服务**面板发布出来的模型**；库里没有发布模型就回 404。发布出来的模型 = 名字 + 策略 + 一个或多个目标（`{provider id}/{上游模型}`），它对外报的参数是**从目标算出来的**——上下文取最小、输出上限取最小、思考档位取交集。
 
-两种方言哪儿都能用。答复跟着来——客户端用哪种方言问，就用哪种方言答，两边 `model` 字段都是发布出来的那个名字。
+两种方言哪儿都能用。答复跟着来——agent 用哪种方言问，就用哪种方言答，两边 `model` 字段都是发布出来的那个名字。
 
 ## 方言层
 
@@ -125,9 +120,9 @@ tools/deploy-nas.sh       # 构建镜像、送过去、换容器
 - **数据库之前留下的会话文件只属于内置的那个 provider。** 给别的 id 读它，等于把同一个账号（和同一份 refresh token）交给那个 provider。
 - **平台的时间戳可能是秒。** ZCode 的登录窗口被当成毫秒读，窗口的终点落到了 1970 年，于是每次登录都超时。
 - **凭据的告警意思是「令牌没了，刷新没成功」。** 令牌只是快到期是正常的，刷新会处理。告警线以前比刷新线宽，所以面板每小时叫一次。
-- **keep-alive 的竞态。** 服务端 5 秒关掉空闲连接，客户端最多留 6 秒，落在这中间的请求写进了一个已经关掉的 socket。服务端的 `keepAliveTimeout` 现在是 30 秒。
+- **keep-alive 的竞态。** 服务端 5 秒关掉空闲连接，agent 最多留 6 秒，落在这中间的请求写进了一个已经关掉的 socket。服务端的 `keepAliveTimeout` 现在是 30 秒。
 - **凭据那一行、模型对外的参数、发布模型的元数据，是三样不同的东西。** 第一是给人看的视图，第二是告诉客户端的，第三是网关算出来的。别弄混。
-- **上游自己的答复不是客户端的。** Qoder 的 CLI 发的和 Qoder 网关收的是两个形状；调研材料在 `docs/`（不进仓库）。
+- **上游自己的答复不是模拟端的对齐目标。** Qoder 的 CLI 发的和 Qoder 网关收的是两个形状；调研材料在 `docs/`（不进仓库）。
 
 ## 调研材料
 
@@ -136,14 +131,14 @@ tools/deploy-nas.sh       # 构建镜像、送过去、换容器
 | | |
 |---|---|
 | `docs/token-rhythm/` | TokenRhythm 平台、多租户方案 |
-| `docs/qoder/` | Qoder 客户端、活动、机器身份 |
-| `docs/workbuddy/` | WorkBuddy 客户端，以及我们跟它的差异 |
-| `docs/minimax/` | MiniMax 桌面端、签到 |
+| `docs/qoder/` | Qoder 的封闭客户端、活动、机器身份 |
+| `docs/workbuddy/` | WorkBuddy 的封闭客户端，以及我们跟它的差异 |
+| `docs/minimax/` | MiniMax 的封闭客户端、签到 |
 | `docs/sensenova/` | SenseNova 的积分池 |
 | `docs/admin-panel/` | 面板的计划 |
 | `docs/bugs/` | bug 报告 |
 
-`reference/qoder/` 是抠出来的 Qoder 客户端材料（同样在本地）。
+`reference/qoder/` 是抠出来的 Qoder 封闭客户端材料（同样在本地）。
 
 ## 契约
 

@@ -6,7 +6,7 @@
 // the lock that keeps two writers from rotating a refresh token twice, and
 // the credential the upstream call is handed. That is what lives here.
 //
-// The sessions live in the database (lib/store.ts). The file names the clients
+// The sessions live in the database (lib/store.ts). The file names the simulated clients
 // pass in are the ones the sessions used to have; they are only read while the
 // migration is under way, and the first read moves the session into the
 // database.
@@ -154,9 +154,9 @@ export interface CredentialCache {
 export interface EnsureCredentialOptions<T extends SessionTokens> {
   /** The cache to read and to fill. */
   cache: CredentialCache | null;
-  /** The cache setter — the client keeps it in a module-level variable. */
+  /** The cache setter — the caller keeps it in a module-level variable. */
   setCache: (cache: CredentialCache) => void;
-  /** The region, for the clients that have more than one. */
+  /** The region, for the upstreams that have more than one. */
   key?: string;
   /** How long a cached credential is reused. */
   cacheMs: number;

@@ -34,7 +34,7 @@ import { dataDir } from "../paths.ts";
  * The environments the component knows about.
  *
  * The number is the only thing the CLI passes it on Linux: `runtime-info 0`
- * for the online environment. The numbers come out of the client's own enum
+ * for the online environment. The numbers come out of the simulated client's own enum
  * (ONLINE 0, PRE 1, DAILY 2, US_ONLINE 3, SINGAPORE 4, KOREA 5).
  */
 export type SgsdkEnvironment = "ONLINE" | "PRE" | "DAILY" | "US_ONLINE" | "SINGAPORE" | "KOREA";
@@ -60,7 +60,7 @@ export interface SgsdkMachineInfo {
   vmInfo?: Record<string, unknown>;
 }
 
-/** The machine identity as a whole: the blob plus the id the client keeps beside it. */
+/** The machine identity as a whole: the blob plus the id the simulated client keeps beside it. */
 export interface SgsdkMachineIdentity extends SgsdkMachineInfo {
   /** A uuid for this machine. The client keeps one per install. */
   machineId: string;
@@ -98,7 +98,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 /** The component talks to Alibaba; give it a moment but not an hour. */
 const RUN_TIMEOUT_MS = 30 * 1000;
 
-/** `linux-x64`, `darwin-arm64` — the same shape the client uses. */
+/** `linux-x64`, `darwin-arm64` — the same shape the simulated client uses. */
 export function sgsdkPlatform(): string {
   return `${process.platform}-${process.arch}`;
 }
@@ -129,7 +129,7 @@ export function sgsdkDir(): string {
   return path.join(dataDir(), "sgsdk");
 }
 
-/** The component the client ships, for this platform. */
+/** The component the simulated client ships, for this platform. */
 function embeddedBinaryName(): string {
   return `runtime-info-${sgsdkPlatform()}`;
 }
@@ -169,7 +169,7 @@ const B64 = /^[A-Za-z0-9+/=]$/;
 /**
  * The binaries the bundle carries.
  *
- * They are base64 strings inside the minified bundle; the client's own
+ * They are base64 strings inside the minified bundle; the simulated client's own
  * `selectBinary(platform, arch)` picks one of them and writes it out. The
  * names of the variables are obfuscated and change from release to release,
  * so they are found by what they decode to instead: an ELF for this machine.
@@ -400,9 +400,9 @@ export async function machineIdentity(
 }
 
 /**
- * The headers the client puts on a request when it has an identity.
+ * The headers the simulated client puts on a request when it has an identity.
  *
- * The names come out of the client's own code: `Cosy-MachineId` with the uuid,
+ * The names come out of the simulated client's own code: `Cosy-MachineId` with the uuid,
  * and `Cosy-MachineToken`, `Cosy-MachineType`, `Cosy-MachineCode` with what
  * the component said.
  */

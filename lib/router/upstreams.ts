@@ -251,7 +251,7 @@ export async function toQoderLegacy(
           tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
           modelKey: model.key,
           displayName: model.name,
-          // The same number the official client sends.
+          // The same number the simulated client sends.
           maxTokens: QODER_CLIENT_MAX_TOKENS,
           reasoning: model.reasoning,
           contextWindow: model.context,
