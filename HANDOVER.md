@@ -120,7 +120,7 @@ tools/deploy-nas.sh       # 构建镜像、送过去、换容器
 
 | | |
 |---|---|
-| 技能正文 | `.agents/skills/hello_js_reverse_skill/`——OpenCode 与 pi 都读这个位置，一份就够，不用软链 |
+| 技能正文 | `.agents/skills/hello-js-reverse-skill/`——OpenCode 与 pi 都读这个位置，一份就够，不用软链 |
 | agent 定义 | `.pi/agents/js-reverse.md`——`inheritSkills: false` + `skills:` + `skillPath:` |
 | 过滤扩展 | `~/extensions/subagent-only-skills/`（独立仓库，软链到 `~/.pi/agent/extensions/`） |
 | 检查 | `node .pi/check-subagent-only-skill.mjs`（不调模型） |

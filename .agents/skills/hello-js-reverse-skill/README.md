@@ -53,7 +53,7 @@
 在你的 AI 编码工具（Cursor / Claude Code / codex 等）的对话框中输入：
 
 ```
-帮我安装下这个skill：hello_js_reverse_skill
+帮我安装下这个skill：hello-js-reverse-skill
 项目地址：https://github.com/WhiteNightShadow/hello_js_reverse_skill
 ```
 
@@ -66,19 +66,19 @@ AI 会自动完成下载、配置，并在后续 JS 逆向相关任务中自动�
 **Cursor：**
 
 ```bash
-git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.cursor/skills/hello_js_reverse_skill
+git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.cursor/skills/hello-js-reverse-skill
 ```
 
 **Codex：**
 
 ```bash
-git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.codex/skills/hello_js_reverse_skill
+git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.codex/skills/hello-js-reverse-skill
 ```
 
 **VSCode（Copilot / Cline 等插件）：**
 
 ```bash
-git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.vscode/skills/hello_js_reverse_skill
+git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.vscode/skills/hello-js-reverse-skill
 ```
 
 > 安装完成后，AI Agent 会自动读取 `SKILL.md` 获取 JS 逆向分析能力。当你在对话中涉及接口签名分析、反爬对抗、动态 Cookie、混淆 JS、WASM 或浏览器环境调试等场景时，Skill 会自动激活。
@@ -87,7 +87,7 @@ git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.vsco
 
 
 ```
-hello_js_reverse_skill/
+hello-js-reverse-skill/
 ├── SKILL.md                        # 技能定义（AI Agent 读取的核心文件）
 ├── README.md                       # 项目文档
 │

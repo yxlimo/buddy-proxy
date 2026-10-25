@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const SKILL_NAME = "hello_js_reverse_skill";
+const SKILL_NAME = "hello-js-reverse-skill";
 const AGENT_FILE = path.join(ROOT, ".pi", "agents", "js-reverse.md");
 const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 

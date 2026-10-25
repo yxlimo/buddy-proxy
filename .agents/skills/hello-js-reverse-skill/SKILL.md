@@ -1,5 +1,5 @@
 ---
-name: hello_js_reverse_skill
+name: hello-js-reverse-skill
 description: >
   通用 Web API 数据采集、Node.js/Python 协议调用与前端签名分析。
   使用 Camoufox MCP 捕获请求、调试 Hook、分析混淆/JSVMP/WASM，

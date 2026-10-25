@@ -1,11 +1,11 @@
 # pi 项目配置
 
-本项目里的 skill（`hello_js_reverse_skill`）放在 `.agents/skills/`，OpenCode 与 pi 都能读到；
+本项目里的 skill（`hello-js-reverse-skill`）放在 `.agents/skills/`，OpenCode 与 pi 都能读到；
 pi 侧再配一个 agent 定义，让它只出现在 subagent 的提示里。
 
 ## skill 放哪
 
-`.agents/skills/hello_js_reverse_skill/` 是唯一一份技能正文。两个客户端都读这个位置：
+`.agents/skills/hello-js-reverse-skill/` 是唯一一份技能正文。两个客户端都读这个位置：
 
 | 宿主 | 依据 |
 | --- | --- |
@@ -19,8 +19,8 @@ pi 侧再配一个 agent 定义，让它只出现在 subagent 的提示里。
 
 | 路径 | 作用 |
 | --- | --- |
-| `.agents/skills/hello_js_reverse_skill/` | 技能正文。frontmatter 里带 `subagent-only: true`。 |
-| `.pi/agents/js-reverse.md` | pi-subagents 的 agent 定义：`inheritSkills: false` + `skills: hello_js_reverse_skill` + `skillPath: ../../.agents/skills`，所以只有这个 subagent 的提示里带该技能。 |
+| `.agents/skills/hello-js-reverse-skill/` | 技能正文。frontmatter 里带 `subagent-only: true`。 |
+| `.pi/agents/js-reverse.md` | pi-subagents 的 agent 定义：`inheritSkills: false` + `skills: hello-js-reverse-skill` + `skillPath: ../../.agents/skills`，所以只有这个 subagent 的提示里带该技能。 |
 | `.pi/check-subagent-only-skill.mjs` | 不调模型的回归检查（见下）。 |
 
 主 agent 那一侧的过滤不在本仓库：扩展装在用户目录里——
@@ -49,9 +49,9 @@ pi 的 skill 列表进提示词的路径：`loadSkills` → `systemPromptOptions
 
 - 子代理拿技能靠 pi-subagents 把技能注入子代理提示词文本；子代理的 pi 级 skill 目录是关掉的
   （`noSkills: !inheritSkills`），扩展在子代理里是空操作。
-- 想让别的 subagent 也用这个技能：在对应 agent 定义里加 `skills: hello_js_reverse_skill`
-  （+ `skillPath`），或在调用 subagent 工具时传 `skill: hello_js_reverse_skill`。
-- 人工仍可显式加载：`/skill:hello_js_reverse_skill`。
+- 想让别的 subagent 也用这个技能：在对应 agent 定义里加 `skills: hello-js-reverse-skill`
+  （+ `skillPath`），或在调用 subagent 工具时传 `skill: hello-js-reverse-skill`。
+- 人工仍可显式加载：`/skill:hello-js-reverse-skill`。
 - 扩展是全局的：所有 pi 项目都加载它，是否隐藏看每个 skill 自己的标记。
 
 ## 校验
