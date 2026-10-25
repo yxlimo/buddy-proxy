@@ -41,7 +41,7 @@ export const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
 /** What to tell the operator when the credential is unusable. */
 export const RELOGIN_HINT =
   AUTH_MODE === "oauth"
-    ? "会话被服务端拒绝。删掉 data 目录里的 minimax-session.json 再重启，会自动重新登录。"
+    ? "会话被服务端拒绝。在面板上重新登录这个账号。"
     : "MiniMax Code 的登录被服务端拒绝。打开桌面 App 重新登录，等它刷新后重试。";
 
 const md5 = (s: string) => crypto.createHash("md5").update(s).digest("hex");
