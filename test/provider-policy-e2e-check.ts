@@ -458,9 +458,15 @@ console.log("场景一：单一 —— 第一个账号接不了，不换");
     console.log("");
     console.log("场景四：这一类上游不支持的策略被拒");
 
-    const refused = await setPolicy(gw, "qoder", "PROVIDER_POLICY_FALLBACK");
-    check("只有一个账号的那一类不给设降级", refused.body?.ok === false, JSON.stringify(refused.body));
-    check("拒收的话里说清楚支持哪几个", String(refused.body?.message ?? "").includes("单一"), String(refused.body?.message));
+    // 「余额到期优先」只有中转站有（那是看赠金到期日的做法）。
+    const refused = await setPolicy(gw, "qoder", "PROVIDER_POLICY_EXPIRY_FIRST");
+    check("这个平台不支持这个策略", refused.body?.ok === false, JSON.stringify(refused.body));
+    check(
+      "拒收的话里说清楚支持哪几个",
+      String(refused.body?.message ?? "").includes("单一") &&
+        String(refused.body?.message ?? "").includes("降级"),
+      String(refused.body?.message),
+    );
     const unknown = await setPolicy(gw, "no-such-upstream", "PROVIDER_POLICY_SINGLE");
     check("没有这个上游也拒收", unknown.body?.ok === false, JSON.stringify(unknown.body));
   } finally {

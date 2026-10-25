@@ -494,7 +494,7 @@ registerKind({
   kind: "minimax",
   label: "MiniMax Code",
   login: "device",
-  policies: ["single"],
+  policies: ["single", "fallback"],
   baseUrl: () => MINIMAX_UPSTREAM.replace(/\/messages$/, ""),
   credential: (provider) => {
     const raw = minimaxCredentialStatus(provider.id);
@@ -560,7 +560,7 @@ registerKind({
   needsRegion: true,
   regions: ["global", "cn"],
   // 一行就是一个账号（两个区是两行）。
-  policies: ["single"],
+  policies: ["single", "fallback"],
   baseUrl: (provider) => {
     const region = provider.region === "cn" ? "cn" : "global";
     return QODER_ENDPOINTS[region].infer.replace(/\/model\/v1\/chat\/completions$/, "");
@@ -596,7 +596,7 @@ registerKind({
   kind: "workbuddy",
   label: "WorkBuddy",
   login: "browser",
-  policies: ["single"],
+  policies: ["single", "fallback"],
   baseUrl: () => WORKBUDDY_ENDPOINTS.cn.base,
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
   models: () => workbuddyCatalogModels(workbuddyModelList()),
@@ -649,7 +649,7 @@ registerKind({
   openPlatform: true,
   label: "SenseNova",
   login: "password",
-  policies: ["single"],
+  policies: ["single", "fallback"],
   baseUrl: () => SENSENOVA_INFER_BASE,
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
   models: () => senseNovaCatalogModels(senseNovaCatalog()),
@@ -669,7 +669,7 @@ registerKind({
   openPlatform: true,
   label: "书生·端砚",
   login: "code",
-  policies: ["single"],
+  policies: ["single", "fallback"],
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
   credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),
   models: () => internAiCatalogModels(internAiCatalog()),
@@ -691,7 +691,7 @@ registerKind({
   kind: "zcode",
   label: "ZCode",
   login: "browser",
-  policies: ["single"],
+  policies: ["single", "fallback"],
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
   credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session"),
   models: () => zcodeCatalogModels(ZCODE_MODELS),

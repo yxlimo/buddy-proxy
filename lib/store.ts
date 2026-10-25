@@ -116,6 +116,7 @@ export function store(): DatabaseSync {
     )`,
   );
   migrateProviderToAccounts(db);
+  migrateTokenRhythmTenants(db);
   return db;
 }
 
@@ -169,6 +170,76 @@ function migrateProviderToAccounts(db: DatabaseSync): void {
     if (policy && policy !== "single") setPolicy.run(platform, policy, now);
   }
   db.exec("DROP TABLE provider_old");
+}
+
+/**
+ * 中转站的旧租户凭据，归位到账号行上。
+ *
+ * 旧库把每个租户的凭据按租户号存着（`account:tokenrhythm:2`、
+ * `key:provider:tokenrhythm:tenant-2`、`session:tokenrhythm:2`），而账号模型
+ * 给它们的是账号行（`tokenrhythm`、`tokenrhythm-2`……）。
+ *
+ * 这里一次搬完：租户 N 落到 `tokenrhythm-N` 那一行，没有那一行就建一个。
+ * 搬完把旧的删掉 —— 留着它，**新建**的账号（id 恰好也是 `tokenrhythm-2`）会
+ * 继承一个旧租户的身份，那不是新建，那是接管。
+ *
+ * 每次启动都看一眼，所以旧库和已经搬了一半的库都能收拾干净。
+ */
+function migrateTokenRhythmTenants(db: DatabaseSync): void {
+  const rows = db.prepare("SELECT id, kind, data FROM secrets").all() as {
+    id?: string;
+    kind?: string;
+    data?: string;
+  }[];
+  const now = Date.now();
+  const insert = db.prepare(
+    "INSERT INTO provider (id, platform, alias, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?) " +
+      "ON CONFLICT(id) DO NOTHING",
+  );
+  const put = db.prepare(
+    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, data = excluded.data, updated_at = excluded.updated_at",
+  );
+  const drop = db.prepare("DELETE FROM secrets WHERE id = ?");
+  const read = (id: string): any => {
+    const row = db.prepare("SELECT data FROM secrets WHERE id = ?").get(id) as { data?: string } | undefined;
+    if (!row?.data) return null;
+    try {
+      return JSON.parse(row.data);
+    } catch {
+      return null;
+    }
+  };
+
+  for (const row of rows) {
+    const id = String(row.id ?? "");
+    // 旧位置的租户凭据与登录态。
+    const credential =
+      /^account:tokenrhythm:(\d+)$/.exec(id) ?? /^key:provider:tokenrhythm:tenant-(\d+)$/.exec(id);
+    const session = /^session:tokenrhythm:(\d+)$/.exec(id);
+    const matched = credential ?? session;
+    if (!matched) continue;
+    const index = Number(matched[1]);
+    if (!Number.isInteger(index) || index < 1) continue;
+    const target = index === 1 ? "tokenrhythm" : `tokenrhythm-${index}`;
+
+    insert.run(target, "tokenrhythm", `租户 ${index}`, now, now);
+    const data = row.data ?? "{}";
+    if (credential) {
+      // 新的一份不全（比如只有 key），就补上，别把已有的覆盖掉。
+      const existing = read(`key:provider:${target}:account`) ?? {};
+      const old = JSON.parse(data) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...old, ...existing };
+      for (const [k, v] of Object.entries(old)) {
+        if (merged[k] === undefined || merged[k] === "") merged[k] = v;
+      }
+      put.run(`key:provider:${target}:account`, "account", JSON.stringify(merged), now);
+    } else {
+      const existing = read(`session:provider:${target}`);
+      if (!existing) put.run(`session:provider:${target}`, row.kind ?? "session", data, now);
+    }
+    drop.run(id);
+  }
 }
 
 /** 旧行（kind + region）属于哪个平台。 */

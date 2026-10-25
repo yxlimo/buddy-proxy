@@ -58,11 +58,31 @@ function accountIdOfIndex(index: number): string {
 }
 
 /**
+ * 旧租户号（1、2、3……）的凭据存在哪。
+ *
+ * 只读：启动时归位（lib/store.ts 的 migrateTokenRhythmTenants）已经把旧的搬
+ * 到账号行上并删掉了旧的。这里留着是给还没归位的旧库兜底。
+ */
+function legacyCredentialIds(index: number): string[] {
+  return [providerSecretId(PLATFORM, `tenant-${index}`), `account:tokenrhythm:${index}`];
+}
+
+/** 旧位置的一份凭据（只读，不搬）。 */
+function legacyCredentialOf(index: number): TokenRhythmCredential | null {
+  for (const id of legacyCredentialIds(index)) {
+    const raw = getSecret<Partial<TokenRhythmCredential>>(id);
+    if (!raw) continue;
+    const credential = normalize(raw);
+    if (credential.account || credential.apiKey) return credential;
+  }
+  return null;
+}
+
+/**
  * The tenant number an account id came from.
  *
  * The old ids were numbered; the account ids the account model gives them keep
- * that number (`tokenrhythm`, `tokenrhythm-2`), which is what lets the
- * credentials of an old database be found without a migration pass of its own.
+ * that number (`tokenrhythm`, `tokenrhythm-2`).
  */
 function legacyIndex(accountId: string): number | null {
   if (accountId === PLATFORM) return 1;
@@ -72,48 +92,20 @@ function legacyIndex(accountId: string): number | null {
   return Number.isInteger(index) && index > 0 ? index : null;
 }
 
-/** Where a tenant's credentials used to be kept, newest old shape first. */
-function legacyCredentialIds(index: number): string[] {
-  return [providerSecretId(PLATFORM, `tenant-${index}`), `account:tokenrhythm:${index}`];
-}
-
 /**
  * 账号行的凭据。
  *
- * 旧库里的凭据按租户号存，这里按账号 id 读：没有新的那一份时读旧的，读到就
- * 搬过来，并把旧的那一份删掉 —— 留着它，「注销」过的账号下一次列账号就又回
- * 来了。
+ * 旧库里的凭据按租户号存着（`account:tokenrhythm:2`……）。那些在启动时已经
+ * 归位到账号行上了（见 lib/store.ts 的 migrateTokenRhythmTenants）：搬完旧的
+ * 就删掉，所以这里只读新位置。
+ *
+ * 早先这里是「读到旧的就搬过来」—— 那会让**新建**的账号继承一个旧租户的
+ * 身份（账号 id 恰好也是 `tokenrhythm-2`）：不是新建，那是接管。
  */
 export function tokenRhythmCredentialOf(accountId: string): TokenRhythmCredential | null {
   const id = tokenRhythmCredentialSecretId(accountId);
   const stored = getSecret<Partial<TokenRhythmCredential>>(id);
-  const migrated = stored ? normalize(stored) : null;
-  if (migrated && migrated.account && migrated.password) return migrated;
-
-  const index = legacyIndex(accountId);
-  const legacy = index === null ? null : legacyCredentialOf(index);
-  if (!legacy) return migrated;
-
-  // 新的一份不全（比如只有 key），就把它补上，别把已有的覆盖掉。
-  const merged: TokenRhythmCredential = {
-    account: migrated?.account || legacy.account,
-    password: migrated?.password || legacy.password,
-    apiKey: migrated?.apiKey ?? legacy.apiKey,
-  };
-  setSecret(id, "account", merged);
-  for (const legacyId of legacyCredentialIds(index!)) deleteSecret(legacyId);
-  return merged;
-}
-
-/** The old copy of a tenant's credentials, if it is still there. */
-function legacyCredentialOf(index: number): TokenRhythmCredential | null {
-  for (const id of legacyCredentialIds(index)) {
-    const raw = getSecret<Partial<TokenRhythmCredential>>(id);
-    if (!raw) continue;
-    const credential = normalize(raw);
-    if (credential.account || credential.apiKey) return credential;
-  }
-  return null;
+  return stored ? normalize(stored) : null;
 }
 
 /** 存一个账号的凭据。没给的字段保持原样。 */
@@ -138,38 +130,6 @@ function normalize(raw: Partial<TokenRhythmCredential>): TokenRhythmCredential {
     password: String(raw.password ?? ""),
     apiKey: raw.apiKey ? String(raw.apiKey) : null,
   };
-}
-
-/**
- * 旧库里按序号存的租户，给它们各建一个账号行。
- *
- * 账号模型里一行就是一个登录，而旧库只有一行（`tokenrhythm`）带着几个租户。
- * 启动时叫一次：有旧凭据的序号，1 → `tokenrhythm`、2 → `tokenrhythm-2`……
- * 已经有的行不动，所以叫几次都一样。
- *
- * 返回新建的账号 id。
- */
-export function adoptLegacyTokenRhythmAccounts(): string[] {
-  const created: string[] = [];
-  for (let index = 1; index <= 32; index++) {
-    if (!legacyCredentialOf(index)) continue;
-    const wanted = accountIdOfIndex(index);
-    // 行已经在了：凭据在读的时候搬过去，这里不用管。
-    if (accountRowExists(wanted)) continue;
-    const result = addAccount({ platform: PLATFORM });
-    if (!result.ok || !result.id) continue;
-    // 账号 id 是按序号起的（`tokenrhythm`、`tokenrhythm-2`……），所以建出来
-    // 的那一行正好是这个序号的那一行；对不上就停下，别把凭据搬错地方。
-    if (result.id !== wanted) {
-      console.warn(
-        `[TOKENRHYTHM] 账号 ${result.id} 不是旧租户 ${index} 该落的那一行（${wanted}），旧凭据没有搬`,
-      );
-      return created;
-    }
-    tokenRhythmCredentialOf(result.id);
-    created.push(result.id);
-  }
-  return created;
 }
 
 /** 这行在不在。 */

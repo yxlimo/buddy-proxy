@@ -308,6 +308,9 @@ function accountMessage(accountId: string) {
 function accountRowMessage(accountId: string) {
   const row = listAccounts().find((a) => a.id === accountId);
   if (!row) return undefined;
+  // 额度是**这个账号自己的**：平台行上那个是名下账号合起来的，账号行上要
+  // 看得见自己那份（两个 MiniMax 账号各有各的套餐）。
+  const quota = upstreamQuota(row.id);
   return create(AccountSchema, {
     id: row.id,
     // 它属于哪个平台。路径里用平台 id，不用账号 id。
@@ -318,6 +321,7 @@ function accountRowMessage(accountId: string) {
     detail: row.detail,
     enabled: row.enabled,
     createdAt: BigInt(row.createdAt),
+    quota: quota ? quotaMessage(quota) : undefined,
   });
 }
 
