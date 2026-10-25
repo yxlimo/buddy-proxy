@@ -272,6 +272,7 @@ export function UpstreamsPage() {
                           <TableCell colSpan={7} className='bg-muted/30 p-0'>
                             <ProviderAccounts
                               providerId={upstream.id}
+                              kind={upstream.kind}
                               loggingIn={login.pending}
                               loggingOutId={loggingOutId}
                               onLogin={(account) =>
@@ -332,6 +333,9 @@ export function UpstreamsPage() {
 
       <ProviderKeysDialog
         open={keysFor !== null}
+        kind={
+          list.find((u) => u.id === keysFor)?.kind ?? 'minimax-api'
+        }
         onOpenChange={(open) => {
           if (!open) setKeysFor(null)
         }}

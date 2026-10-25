@@ -154,11 +154,24 @@ const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim
 
 /** 打一个 Connect 方法。 */
 async function call(method: string, body: unknown = {}): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${base}${SERVICE}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
-  });
+  // The server closes an idle connection after a while and the client may
+  // still be holding it: that shows up as "other side closed". It is a race,
+  // not a failure, so try once more.
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      res = await fetch(`${base}${SERVICE}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      break;
+    } catch (e) {
+      if (attempt === 2) throw e;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  if (!res) throw new Error("no answer");
   const text = await res.text();
   let parsed: any = null;
   try {
@@ -430,6 +443,42 @@ const del = await call("DeletePublishedModel", { id: "regression-model" });
 check("模型删得掉", del.body?.ok === true, JSON.stringify(del.body));
 
 console.log("");
+console.log("套餐 key");
+
+// 一个用户自己加的 Code 网关：它得能拿到一把套餐 key，否则面板上只有积分，
+// 没有套餐额度 —— 跟内置的那个不一致。
+const planProvider = await call("AddProvider", {
+  id: "regression-minimax-plan",
+  kind: "minimax",
+  alias: "回归用的套餐",
+});
+check("加了一个 Code 网关", planProvider.body?.ok === true, JSON.stringify(planProvider.body));
+
+const planKey = await call("SetProviderKeys", {
+  upstreamId: "regression-minimax-plan",
+  keys: ["sk-cp-regression"],
+});
+check("写了套餐 key", planKey.body?.ok === true, JSON.stringify(planKey.body));
+
+const planCreds = await call("ListCredentials", { accountId: "regression-minimax-plan" });
+const planRows = (planCreds.body?.credentials ?? []) as any[];
+check(
+  "它的凭据里有那把套餐 key",
+  planRows.some((c: any) => c.kind === "plan_key"),
+  JSON.stringify(planRows.map((c: any) => [c.id, c.kind])),
+);
+
+// 另一个 Provider 不接受 API Key。
+const wrongKind = await call("SetProviderKeys", {
+  upstreamId: "qoder",
+  keys: ["sk-cp-nope"],
+});
+check("别的 Provider 不接受 key", wrongKind.body?.ok === false, JSON.stringify(wrongKind.body));
+
+await call("DeleteProvider", { id: "regression-minimax-plan" });
+
+console.log("");
 console.log(`pass=${pass} fail=${fail}`);
 cleanup();
 process.exit(fail ? 1 : 0);
+

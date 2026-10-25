@@ -12,6 +12,8 @@ import {
   miniMaxApiTenantSecretId,
 } from "../minimax/api.ts";
 import { deleteSecret, setSecret } from "../store.ts";
+import { providerKindOf } from "../providers.ts";
+import { providerSecretId } from "../providers.ts";
 
 /**
  * 上游报的状态 → 契约里的枚举。
@@ -25,7 +27,11 @@ import { deleteSecret, setSecret } from "../store.ts";
 /**
  * 写一个 Provider 的 API Key 列表。
  *
- * 目前只有 MiniMax 开放平台需要：它一把 key 一个租户，key 列表就是租户列表。
+ * MiniMax 开放平台：一把 key 一个租户，key 列表就是租户列表。
+ *
+ * MiniMax Code 网关：只有一把 —— 那是它的 coding plan 的 key（sk-cp-…），
+ * 用来查套餐额度。推理走的是会话，不是这把 key。
+ *
  * 环境变量里的 key 优先（那是在 .env 里轮换的，必须立刻生效），所以这里写的
  * 只是数据库那份 —— 环境变量撤掉之后才轮到它。
  */
@@ -33,6 +39,18 @@ export function setProviderKeys(
   upstreamId: string,
   keys: string[],
 ): { ok: boolean; message: string; count: number } {
+  const kind = providerKindOf(upstreamId);
+  if (kind?.kind === "minimax") {
+    // Code 网关的套餐 key：只有一把。
+    const key = (keys[0] ?? "").trim();
+    const id = providerSecretId(upstreamId, "plan");
+    if (!key) {
+      deleteSecret(id);
+      return { ok: true, message: "清掉了套餐 key", count: 0 };
+    }
+    setSecret(id, "key", { key });
+    return { ok: true, message: "写了套餐 key", count: 1 };
+  }
   if (upstreamId !== "minimax-api") {
     return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
   }

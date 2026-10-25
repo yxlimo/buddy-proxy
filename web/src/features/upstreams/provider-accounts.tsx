@@ -48,6 +48,7 @@ function isLoggedIn(account: Account): boolean {
  */
 export function ProviderAccounts({
   providerId,
+  kind,
   onLogin,
   onLogout,
   onManageKeys,
@@ -62,6 +63,8 @@ export function ProviderAccounts({
   onLogout: (account: Account) => void
   /** 管理这个 Provider 的 API Key。 */
   onManageKeys: (account: Account) => void
+  /** 这个 Provider 是哪一类：不同种类的 key 不一样。 */
+  kind: string
   /** 正在发起登录。 */
   loggingIn: boolean
   /** 正在注销的账号。 */
@@ -182,7 +185,7 @@ export function ProviderAccounts({
                 </TableCell>
                 <TableCell className='text-right'>
                   <div className='flex justify-end gap-2'>
-                    {account.upstreamId === 'minimax-api' ? (
+                    {kind === 'minimax-api' || kind === 'minimax' ? (
                       <Button
                         variant='outline'
                         size='sm'
@@ -192,7 +195,7 @@ export function ProviderAccounts({
                         }}
                       >
                         <KeyRound />
-                        API Key
+                        {kind === 'minimax' ? '套餐 key' : 'API Key'}
                       </Button>
                     ) : null}
                     {loggedIn ? (

@@ -105,9 +105,18 @@ function loginHint(providerId = "minimax"): string {
     `凭据之后每小时自动刷新。`;
 }
 
-/** Read our own session file without throwing. */
+/**
+ * Read our own session without throwing.
+ *
+ * The legacy file is the **built-in** provider's session -- it is the one that
+ * lived on disk before the credentials moved into the database. It belongs to
+ * that provider alone: reading it for any other id would hand a second
+ * provider the same account, and with it the same refresh token. One of them
+ * refreshing would then break the other.
+ */
 function loadSession(providerId = "minimax"): Session | null {
-  return readSession<Session>(sessionId(providerId), hasTokens, legacySessionPath());
+  const legacy = providerId === "minimax" ? legacySessionPath() : undefined;
+  return readSession<Session>(sessionId(providerId), hasTokens, legacy);
 }
 
 export function hasSession(providerId = "minimax"): boolean {

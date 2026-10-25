@@ -966,6 +966,18 @@ const server = app.listen(PORT, HOST, () => {
 });
 
 /**
+ * Keep the idle connections longer than the clients do.
+ *
+ * Node closes an idle connection after five seconds, and the clients (Node's
+ * own fetch, and everything built on it) keep theirs for up to six. A request
+ * that arrives in that gap is written to a socket the server has just closed,
+ * and the client sees "other side closed" instead of an answer.
+ *
+ * Thirty seconds is above the clients' six and below the headers timeout.
+ */
+server.keepAliveTimeout = 30_000;
+
+/**
  * Stop taking new work, let the running requests finish.
  *
  * A deployment replaces the container. Without this the requests that are in
