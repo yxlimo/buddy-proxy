@@ -21,7 +21,8 @@ import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import type { RefreshMode } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { getSecret } from "../store.ts";
 import { provider, providerSecretId } from "../providers.ts";
@@ -149,7 +150,7 @@ export function loadSession(providerId = "workbuddy-cn"): WorkBuddySession | nul
   // built-in provider takes it over.
   const legacy = providerId === "workbuddy-cn" ? getSecret<WorkBuddySession>(legacySessionId(region)) : null;
   if (!legacy || !hasTokens(legacy)) return null;
-  saveSession(legacy, providerId);
+  saveSession(legacy, providerId, { force: true });
   return legacy;
 }
 
@@ -158,8 +159,12 @@ export function hasSession(providerId = "workbuddy-cn"): boolean {
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
-export function saveSession(session: WorkBuddySession, providerId = "workbuddy-cn"): void {
-  writeSession(sessionId(providerId), session);
+export function saveSession(
+  session: WorkBuddySession,
+  providerId = "workbuddy-cn",
+  options: { force?: boolean } = {},
+): boolean {
+  return writeSession(sessionId(providerId), session, options);
 }
 
 /** The `sub` claim of a JWT, without verifying the signature. */
@@ -370,7 +375,7 @@ export async function login(providerId = "workbuddy-cn"): Promise<WorkBuddySessi
   console.log("");
 
   const session = await pollLogin(providerId, start.state, start.expiresAtMs);
-  saveSession(session, providerId);
+  saveSession(session, providerId, { force: true });
   console.log(
     `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`,
   );
@@ -388,7 +393,7 @@ export async function login(providerId = "workbuddy-cn"): Promise<WorkBuddySessi
 
 /** Refresh the session when it is close to expiry, or when the token was rejected. */
 export async function refreshSession(
-  force = false,
+  mode: RefreshMode = "expired",
   providerId = "workbuddy-cn",
 ): Promise<WorkBuddySession> {
   const session = loadSession(providerId);
@@ -396,7 +401,10 @@ export async function refreshSession(
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
   const dead = deadSession(sessionId(providerId));
   if (dead) throw new AuthError("session refused by the platform", dead, 503);
-  if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
+  // 谁该刷：定时器刷“快到期的”，请求只刷“已经死了的”。
+  const remainingMs = session.expiresAtMs - Date.now();
+  if (mode === "expired" && remainingMs > 0) return session;
+  if (mode === "due" && remainingMs > REFRESH_BUFFER_MS) return session;
 
   const region = session.region ?? regionOf(providerId);
   const base = ENDPOINTS[region];
@@ -475,20 +483,19 @@ function toCredential(session: WorkBuddySession, providerId: string): Credential
 
 /** Credential for the proxy. `force` means the token we sent was rejected. */
 export async function ensureCredential(
-  force = false,
+  mode: RefreshMode = "expired",
   providerId = "workbuddy-cn",
 ): Promise<Credential> {
-  return ensureCredentialShared({
+  return ensureCredentialShared<WorkBuddySession>({
     cache,
     setCache: (next) => {
       cache = next;
     },
     key: providerId,
     cacheMs: CACHE_MS,
-    force,
+    mode,
     lockId: sessionId(providerId),
-    load: () => loadSession(providerId),
-    refresh: (f) => refreshSession(f, providerId),
+    refresh: (m) => refreshSession(m, providerId),
     toCredential: (session) => toCredential(session, providerId),
     expired: (session) =>
       new AuthError(

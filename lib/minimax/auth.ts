@@ -14,6 +14,7 @@
 
 import { configString } from "../config.ts";
 import { AuthError } from "../credential.ts";
+import type { RefreshMode } from "../session.ts";
 import type { Credential } from "../credential.ts";
 import * as fileStore from "./file-store.ts";
 import * as oauth from "./oauth.ts";
@@ -26,13 +27,19 @@ export const AUTH_MODE: AuthMode = RAW_MODE === "file" ? "file" : "oauth";
 export const AUTH_WARN_MS = AUTH_MODE === "file" ? fileStore.FILE_WARN_MS : oauth.OAUTH_WARN_MS;
 
 /**
- * `force` means "the token we just sent was rejected, get a usable one now". In oauth
- * mode that refreshes unconditionally; in file mode it only bypasses the cache, since
- * this layer cannot refresh — it waits for the desktop app to have done it.
+ * The mode says who refreshes when: the timer refreshes a token that is due, a
+ * request waits for that and only refreshes a token that is already dead, and
+ * a rejected token is refreshed right away.
+ *
+ * In file mode this layer cannot refresh at all — it waits for the desktop app
+ * to have done it — so the mode only says whether the cache is bypassed.
  */
-export async function readCredential(force = false, providerId = "minimax"): Promise<Credential> {
-  if (AUTH_MODE === "file") return fileStore.readFileCredential(force);
-  return oauth.ensureCredential(force, providerId);
+export async function readCredential(
+  mode: RefreshMode = "expired",
+  providerId = "minimax",
+): Promise<Credential> {
+  if (AUTH_MODE === "file") return fileStore.readFileCredential(mode === "now");
+  return oauth.ensureCredential(mode, providerId);
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */

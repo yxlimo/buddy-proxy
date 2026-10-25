@@ -21,7 +21,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, rotatedSession, toCredential as credentialFromSession, type CredentialCache, type RefreshMode, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { provider, providerSecretId } from "../providers.ts";
 
@@ -168,8 +168,12 @@ export function deviceIdentity(providerId = "qoder"): DeviceIdentity | null {
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
-export function saveSession(session: QoderSession, providerId = "qoder"): void {
-  writeSession(sessionId(providerId), session);
+export function saveSession(
+  session: QoderSession,
+  providerId = "qoder",
+  options: { force?: boolean } = {},
+): boolean {
+  return writeSession(sessionId(providerId), session, options);
 }
 
 
@@ -250,46 +254,66 @@ function parseGrant(body: any, previous?: QoderSession | null): QoderSession {
 }
 
 /** Refresh with the stored refresh token. The token rotates, so this must persist. */
-export async function refreshSession(force = false, providerId = "qoder"): Promise<QoderSession> {
-  const session = loadSession(providerId);
-  const region = session?.region ?? regionOf(providerId);
-  if (!session) throw new AuthError("no session", loginHint(providerId), 503);
+export async function refreshSession(
+  mode: RefreshMode = "expired",
+  providerId = "qoder",
+): Promise<QoderSession> {
+  const id = sessionId(providerId);
   // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
-  const dead = deadSession(sessionId(providerId));
+  const dead = deadSession(id);
   if (dead) throw new AuthError("session refused by the platform", dead, 503);
-  if (!force && session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
+  // 每个登录态各有一份 refresh token，登录态之间互不相干。唯一的撞法是同一个
+  // 登录态被同时刷新两次：那时两个调用拿着同一份 token 去换，一个成功（轮换
+  // 了），另一个被拒——被拒的那个重读一次，拿新的 token 再换。
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const session = loadSession(providerId);
+    const region = session?.region ?? regionOf(providerId);
+    if (!session) throw new AuthError("no session", loginHint(providerId), 503);
+    // 谁该刷：定时器刷“快到期的”，请求只刷“已经死了的”。
+    const remainingMs = session.expiresAtMs - Date.now();
+    if (mode === "expired" && remainingMs > 0) return session;
+    if (mode === "due" && remainingMs > REFRESH_BUFFER_MS) return session;
 
-  const r = await postJson(
-    `${ENDPOINTS[region].openapi}/api/v1/deviceToken/refresh`,
-    { refresh_token: session.refreshToken, ...machineFields(session) },
-    session.accessToken,
-  );
-  if (r.status !== 200) {
-    const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
-    authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
-    if (r.status === 401 || r.status === 403) {
-      const hint =
-        `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
-        `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
-        `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
-      // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
-      markSessionDead(sessionId(providerId), hint);
-      throw new AuthError(`refresh rejected (${code})`, hint, 503);
+    const r = await postJson(
+      `${ENDPOINTS[region].openapi}/api/v1/deviceToken/refresh`,
+      { refresh_token: session.refreshToken, ...machineFields(session) },
+      session.accessToken,
+    );
+    if (r.status !== 200) {
+      const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
+      authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
+      if (r.status === 401 || r.status === 403) {
+        // 也许只是同一个登录态的另一个调用先刷了：重读，用新的 token 再来一次。
+        const rotated = rotatedSession(id, session);
+        if (rotated) {
+          authLog(dataDir(), `qoder ${region} refresh retried`, `另一个调用先刷新了，换成第 ${rotated.generation ?? 0} 代再试`);
+          mode = "now";
+          continue;
+        }
+        const hint =
+          `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
+          `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
+          `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
+        // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
+        markSessionDead(id, hint);
+        throw new AuthError(`refresh rejected (${code})`, hint, 503);
+      }
+      throw new AuthError(`refresh failed (${code})`, `Qoder 刷新失败（${code}），稍后重试。`, 502);
     }
-    throw new AuthError(`refresh failed (${code})`, `Qoder 刷新失败（${code}），稍后重试。`, 502);
-  }
 
-  const next = parseGrant(r.body, session);
-  saveSession(next, providerId);
-  cache = null;
-  authLog(
-    dataDir(),
-    `qoder ${region} refresh ok`,
-    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
-      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
-      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
-  );
-  return next;
+    const next = parseGrant(r.body, session);
+    saveSession(next, providerId);
+    cache = null;
+    authLog(
+      dataDir(),
+      `qoder ${region} refresh ok`,
+      `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
+        `refresh ${tokenFingerprint(next.refreshToken)}, ` +
+        `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
+    );
+    return next;
+  }
+  throw new AuthError("refresh failed", "刷新没能成功，稍后重试。", 502);
 }
 
 let cache: CredentialCache | null = null;
@@ -305,19 +329,26 @@ function toCredential(session: QoderSession): Credential {
   });
 }
 
-/** Credential for the proxy. `force` means the token we sent was rejected. */
-export async function ensureCredential(force = false, providerId = "qoder"): Promise<Credential> {
-  return ensureCredentialShared({
+/**
+ * Credential for the proxy.
+ *
+ * The mode says who refreshes when: the timer refreshes a token that is due,
+ * a request waits for that and only refreshes a token that is already dead.
+ */
+export async function ensureCredential(
+  mode: RefreshMode = "expired",
+  providerId = "qoder",
+): Promise<Credential> {
+  return ensureCredentialShared<QoderSession>({
     cache,
     setCache: (next) => {
       cache = next;
     },
     key: providerId,
     cacheMs: CACHE_MS,
-    force,
+    mode,
     lockId: sessionId(providerId),
-    load: () => loadSession(providerId),
-    refresh: (f) => refreshSession(f, providerId),
+    refresh: (m) => refreshSession(m, providerId),
     toCredential,
     expired: (session) =>
       new AuthError(
@@ -400,6 +431,9 @@ export async function pollDeviceToken(auth: DeviceAuthorization, providerId = "q
     if (body?.token) {
       // The machine identity comes from the authorization step and must survive into
       // the stored session, so the refresh call can send it back.
+      // SAFETY: parseGrant only reads the fields it needs from `previous` (the
+      // machine identity and the region); the rest of the session is filled in
+      // by the grant itself.
       const previous = {
         region,
         clientId: CLIENT_ID,
@@ -423,7 +457,7 @@ export async function login(providerId = "qoder"): Promise<QoderSession> {
   console.log(`  (waiting for approval, up to ${Math.round(POLL_TIMEOUT_MS / 60000)} min)`);
   console.log("");
   const session = await pollDeviceToken(auth, providerId);
-  saveSession(session, providerId);
+  saveSession(session, providerId, { force: true });
   console.log(`  logged in: generation ${session.generation}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`);
   console.log(`  saved to the database (${sessionId(providerId)})`);
   authLog(

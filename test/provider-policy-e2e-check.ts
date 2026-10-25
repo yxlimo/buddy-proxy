@@ -508,6 +508,41 @@ console.log("场景六：余额到期优先 —— 先用赠金最先到期的�
 }
 
 console.log("");
+console.log("场景六之二：余额到期优先 —— 那个账号没钱时，换下一个（钩子）");
+
+{
+  // 租户 2 的赠金先到期，所以它先上；但它没钱（平台 402），
+  // 于是钩子重新扫描余额，换下一个账户接手。
+  const tenant1 = richTenant("2026-11-20T00:00:00.000Z");
+  tenant1.inference = { status: 200, body: answerBody(1) };
+  const tenant2 = richTenant("2026-11-19T00:00:00.000Z");
+  tenant2.inference = {
+    status: 402,
+    body: { code: "INSUFFICIENT_BALANCE", message: "账户余额不足，请充值后重试。", traceId: "trace_fake_402" },
+  };
+  plans = { 1: tenant1, 2: tenant2 };
+  inferenceCalls.length = 0;
+
+  const gw = await startGateway();
+  try {
+    const set = await setPolicy(gw, "tokenrhythm", "PROVIDER_POLICY_EXPIRY_FIRST");
+    check("策略改成了余额到期优先", set.body?.ok === true, JSON.stringify(set.body));
+
+    const res = await chat(gw);
+    check("先试的是赠金先到期的那个账号", calledTenants().join(",") === "2,1", calledTenants().join(","));
+    check("客户端拿到了答复", res.status === 200, `${res.status} ${res.text.slice(0, 200)}`);
+    check("答复是另一个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 1"), res.text.slice(0, 200));
+    check(
+      "日志里说了余额不足所以重新扫描",
+      gw.log().includes("tenant-2 cannot serve it (no-balance HTTP 402)"),
+      gw.log().slice(-600),
+    );
+  } finally {
+    gw.stop();
+  }
+}
+
+console.log("");
 console.log("场景七：降级不是什么都换 —— 请求本身的问题不换账号");
 
 {

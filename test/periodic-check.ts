@@ -1,6 +1,6 @@
-// test/session-refresh-check.ts — 会话是按客户端的节奏自己刷新的。
+// test/periodic-check.ts — 会话是按客户端的节奏自己刷新的。
 //
-//   node --experimental-strip-types test/session-refresh-check.ts
+//   node --experimental-strip-types test/periodic-check.ts
 //
 // 官方客户端不等请求来了才换令牌：它自己按时间表换。所以网关也这样——
 // 一个定时器，令牌快到点就换掉，请求来的时候拿到的令牌一定是还能用的。
@@ -32,10 +32,12 @@ function check(name: string, ok: unknown, detail = ""): void {
 
 const { addProvider } = await import("../lib/providers.ts");
 const { registerKind } = await import("../lib/provider-kinds.ts");
-const { refreshSessionsOnce } = await import("../lib/session-refresh.ts");
+const { runPeriodicOnce } = await import("../lib/periodic.ts");
 
 let refreshed: string[] = [];
+let scanned: string[] = [];
 let failWith: Error | null = null;
+let failScanWith: Error | null = null;
 
 registerKind({
   kind: "test-kind",
@@ -59,6 +61,10 @@ registerKind({
     if (failWith) throw failWith;
     refreshed.push(provider.id);
   },
+  scan: async (provider) => {
+    if (failScanWith) throw failScanWith;
+    scanned.push(provider.id);
+  },
 });
 
 addProvider({ id: "test-one", kind: "test-kind", alias: "第一个" });
@@ -66,9 +72,10 @@ addProvider({ id: "test-two", kind: "test-kind", alias: "第二个" });
 
 console.log("定时刷新");
 
-await refreshSessionsOnce();
+await runPeriodicOnce();
 check("两个上游都刷了", refreshed.length === 2, JSON.stringify(refreshed));
 check("刷的是 provider 自己的 id", refreshed.includes("test-one") && refreshed.includes("test-two"), JSON.stringify(refreshed));
+check("余额也扫了", scanned.length === 2, JSON.stringify(scanned));
 
 console.log("");
 console.log("刷不出来的时候别刷屏");
@@ -79,9 +86,9 @@ const originalWarn = console.warn;
 console.warn = (...args: unknown[]) => {
   warnings.push(args.map(String).join(" "));
 };
-await refreshSessionsOnce();
-await refreshSessionsOnce();
-await refreshSessionsOnce();
+await runPeriodicOnce();
+await runPeriodicOnce();
+await runPeriodicOnce();
 console.warn = originalWarn;
 
 check(
@@ -96,7 +103,7 @@ console.log("刷得出来之后就不再提这件事");
 
 failWith = null;
 const before = warnings.length;
-await refreshSessionsOnce();
+await runPeriodicOnce();
 check("没有新的警告", warnings.length === before, JSON.stringify(warnings.slice(before)));
 
 console.log("");

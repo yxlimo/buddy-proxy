@@ -164,7 +164,7 @@ export async function workbuddyChat(
   const providerId = opts.providerId ?? "workbuddy-cn";
   // The session, not just the credential: the request needs the account id and
   // the domain the account belongs to as well as the token.
-  let session = await refreshSession(false, providerId);
+  let session = await refreshSession("expired", providerId);
 
   const payload = buildChatBody(body, opts.model ?? null);
   const url = `${chatBase(session)}${CHAT_PATH}`;
@@ -197,7 +197,7 @@ export async function workbuddyChat(
       // and only a 401 says that. A 403 is the account's business, and
       // refreshing for it would turn the token over for nothing.
       if (res.status === 401 && attempt === 1) {
-        session = await refreshSession(true, providerId);
+        session = await refreshSession("now", providerId);
         continue;
       }
       throw withUpstreamStatus(
@@ -270,7 +270,7 @@ export async function fetchWorkBuddyCatalog(providerId = "workbuddy-cn"): Promis
   if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.data.models;
 
   try {
-    const session = await refreshSession(false, providerId);
+    const session = await refreshSession("expired", providerId);
     const res = await cliFetch(`${chatBase(session)}${CONFIG_PATH}`, {
       headers: { ...chatHeaders(session), "Content-Type": "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),

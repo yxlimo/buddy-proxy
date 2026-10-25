@@ -32,7 +32,7 @@ import { ZCODE_MODELS } from "./lib/zcode/models.ts";
 import { ZCODE_MESSAGES_URL } from "./lib/zcode/transport.ts";
 import { zcodeStatus } from "./lib/zcode/auth.ts";
 import { credentialStatus, readCredential } from "./lib/minimax/auth.ts";
-import { startSessionRefresh } from "./lib/session-refresh.ts";
+import { startPeriodic } from "./lib/periodic.ts";
 import { MINIMAX_UPSTREAM } from "./lib/minimax/transport.ts";
 import { TOKENRHYTHM_MODELS } from "./lib/tokenrhythm/models.ts";
 import { tokenRhythmStatus, tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
@@ -838,7 +838,7 @@ const server = app.listen(PORT, HOST, () => {
   for (const provider of providersNeedingLogin("minimax")) {
     void ensureMinimaxSession(provider)
       .then(async (outcome) => {
-        const c = await readCredential(false, provider);
+        const c = await readCredential("expired", provider);
         const state = `generation ${c.generation}, expires in ${Math.round(c.remainingMs / 60000)} min`;
         console.log(
           outcome === "logged-in"
@@ -852,19 +852,11 @@ const server = app.listen(PORT, HOST, () => {
         console.warn(`         ${err.hint}`);
       });
 
-    // The live part of /health is asked for in the background, on a timer of
-    // its own, so the endpoint has something to answer with even when nobody
-    // looks at it.
-    setInterval(() => {
-      void refreshHealthSnapshot().catch((e) =>
-        console.warn(`[HEALTH] refresh failed: ${(e as Error)?.message}`),
-      );
-    }, HEALTH_CACHE_MS);
-
-    // The sessions are refreshed on a timer of their own, the way the client
-    // does it: nobody has to ask for a new token, and a request never waits
-    // for one.
-    startSessionRefresh();
+    // One timer for everything periodic: the tokens are refreshed, the
+    // check-ins are taken and the state is read, one after another (see
+    // lib/periodic.ts). The client does the same in the background, so
+    // nobody has to ask for a new token and a request never waits for one.
+    startPeriodic();
   }
 
   for (const provider of providersNeedingLogin("qoder")) {
@@ -947,9 +939,8 @@ const server = app.listen(PORT, HOST, () => {
     })().catch((e) => console.warn(`  [INTERN-AI] ${(e as Error).message}`));
   }
 
-  // The daily benefits of the China accounts: the check-in, the growth centre
-  // and the campaigns. The first run waits for the login above.
-  benefits.start();
+  // The daily benefits of the China accounts — the check-in, the growth centre
+  // and the campaigns — run on the periodic timer (lib/periodic.ts).
 
   // The usage log grows one row per request, so the old rows go. The startup
   // run does the first pass; this one catches the records that age out while

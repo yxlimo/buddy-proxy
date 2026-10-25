@@ -188,11 +188,25 @@ export interface ProviderKind {
    * 定时刷新这个上游的会话。
    *
    * 官方客户端自己按时间表换令牌，不等人来点。网关也这样：种类说得出自己
-   * 怎么刷，定时器（lib/session-refresh.ts）只管按时叫它。
+   * 怎么刷，定时器（lib/periodic.ts）只管按时叫它。
    *
    * 没有这一项的种类不刷：它的凭据不是会话（key、账号密码），不轮换。
    */
   refresh?(provider: ProviderRow): Promise<void>;
+  /**
+   * 定时扫描这个上游的状态，把「现在该用哪个账户」定下来。
+   *
+   * 中转站的赠金会过期：最先到期的那个账户该先用，而那是余额说了算。
+   * 定时器（lib/periodic.ts）按时调它。
+   */
+  scan?(provider: ProviderRow): Promise<void>;
+  /**
+   * 这个失败是不是「余额不足」。
+   *
+   * 余额到期优先是个包过的单一：钉住的账户接不了时，这个钩子说「是余额
+   * 没了」，于是重新扫描、重新钉一个别的接手。
+   */
+  isRequestMissingBalance?(error: unknown): boolean;
 }
 
 const REGISTRY = new Map<string, ProviderKind>();

@@ -14,10 +14,15 @@
 // The upstream side also knows what a failure means: the account that cannot
 // serve the request hands it to the next one, but a request that is wrong
 // does not — another account would fail the same way.
+//
+// `expiry_first` is a single with a hook: the account whose balance runs out
+// first takes the request, and when the platform says it has no credit, the
+// hook scans the balances again and the next account takes over.
 
-import { select, type SelectionCandidate, type SelectionOptions } from "./selection.ts";
+import { select, type SelectionCandidate } from "./selection.ts";
 import { AuthError } from "../credential.ts";
 import { businessCodeOf, upstreamStatusOf } from "../upstream-status.ts";
+import { TokenRhythmNoBalanceError } from "../tokenrhythm/transport.ts";
 import type { ProviderPolicy } from "../providers.ts";
 
 /** The policy of an upstream: which of its accounts takes a request. */
@@ -30,15 +35,54 @@ export type ProviderCandidate<T> = SelectionCandidate<T>;
  * Run the request under the upstream's policy.
  *
  * `single` and `fallback` go through the shared package. `expiry_first` is a
- * `single` whose candidates are already in the order the wallet says, so it
- * never moves on to another account.
+ * `single` with a hook: its candidates are already in the order the wallet
+ * says, and when one of them says it has no credit, the hook scans the
+ * balances again and the next account takes over.
  */
+/** How the upstream side picks an account. */
+export interface ProviderSelectionOptions<T> {
+  /** The failures the next account could serve instead. */
+  degradable?: (error: unknown) => boolean;
+  /**
+   * The hook of expiry_first: this failure means "this account has no money
+   * left", so the scan runs again and the next account takes the request.
+   */
+  insufficient?: (error: unknown) => boolean;
+  /** After every attempt. */
+  onAttempt?: (candidate: ProviderCandidate<T>, error: unknown | null) => void;
+  /** When every candidate is used up. */
+  failure?: (lastError: unknown, tried: string[]) => Error;
+  /**
+   * expiry_first: where the next account comes from.
+   *
+   * The policy re-orders the accounts by their balances, so which one is next
+   * is only known after a fresh scan. This asks for it.
+   */
+  next?: () => Promise<ProviderCandidate<T> | null>;
+  /**
+   * The hook of expiry_first: the account said it has no money left.
+   *
+   * The caller puts that account aside, scans the balances again and pins
+   * another one; then the next attempt goes to that one.
+   */
+  onMissingBalance?: (error: unknown) => Promise<void>;
+}
+
 export async function selectProvider<T>(
   policy: ProviderPolicy,
   candidates: ProviderCandidate<T>[],
-  options?: Pick<SelectionOptions<T>, "degradable" | "onAttempt" | "failure">,
+  options?: ProviderSelectionOptions<T>,
 ): Promise<T> {
-  if (policy === "expiry_first") {
+  // The policies are spelled out: a policy that is not in the list is a
+  // mistake, and a mistake must not turn into a quiet fallback.
+  if (policy !== "single" && policy !== "fallback" && policy !== "expiry_first") {
+    throw new AuthError(
+      "unknown provider policy",
+      `没有这个生效策略：${String(policy)}。只能选 single、fallback、expiry_first。`,
+      500,
+    );
+  }
+  if (policy === "single") {
     return select<T>({
       strategy: "single",
       candidates,
@@ -46,17 +90,49 @@ export async function selectProvider<T>(
       failure: options?.failure,
     });
   }
-  // The policies are spelled out: a policy that is not in the list is a
-  // mistake, and a mistake must not turn into a quiet fallback.
-  if (policy !== "single" && policy !== "fallback") {
-    throw new AuthError(
-      "unknown provider policy",
-      `没有这个生效策略：${String(policy)}。只能选 single、fallback、expiry_first。`,
-      500,
-    );
+  if (policy === "expiry_first") {
+    // expiry_first is a single with a hook: the account whose balance runs
+    // out first takes the request, and when it says it has no money left the
+    // hook switches to the next one. It is not a plain single — an account
+    // with no credit must not fail the request while another one still has
+    // some.
+    const insufficient = options?.insufficient ?? options?.degradable ?? (() => false);
+    const next = options?.next;
+    const tried: string[] = [];
+    let lastError: unknown;
+    for (;;) {
+      const candidate = next
+        ? await next()
+        : candidates.find((c) => !tried.includes(c.id)) ?? null;
+      if (!candidate) break;
+      // A candidate that was already tried does not get a second turn: the
+      // hook has to pin another one.
+      if (tried.includes(candidate.id)) break;
+      tried.push(candidate.id);
+      try {
+        const value = await candidate.run();
+        options?.onAttempt?.(candidate, null);
+        return value;
+      } catch (e) {
+        options?.onAttempt?.(candidate, e);
+        lastError = e;
+        // Only "no money left" moves on: anything else is either a wrong
+        // request (another account would answer the same way) or an account
+        // that can serve it right now.
+        if (!insufficient(e)) throw e;
+        // The hook: the account is put aside, the balances are scanned again
+        // and another one is pinned.
+        await options?.onMissingBalance?.(e);
+      }
+    }
+    throw options?.failure
+      ? options.failure(lastError, tried)
+      : (lastError instanceof Error
+          ? lastError
+          : new AuthError("no account left", "没有可用的账号了。", 503));
   }
   return select<T>({
-    strategy: policy,
+    strategy: "fallback",
     candidates,
     degradable: options?.degradable,
     onAttempt: options?.onAttempt,
@@ -138,6 +214,20 @@ export interface UpstreamFailure {
  */
 export function isDegradableUpstreamError(error: unknown): boolean {
   return classifyUpstreamError(error).degradable;
+}
+
+/**
+ * Is this failure "the account has no money left"?
+ *
+ * That is the hook of expiry_first: the account whose balance runs out first
+ * takes the request, and when the platform says it has no credit, the next
+ * one by the fresh scan takes over.
+ */
+export function isNoBalanceFailure(error: unknown): boolean {
+  if (error instanceof TokenRhythmNoBalanceError) return true;
+  if (upstreamStatusOf(error) === 402) return true;
+  // MiniMax's 1008 is 「余额不足」。
+  return businessCodeOf(error) === 1008;
 }
 
 /** What a failure says about the account that produced it. */

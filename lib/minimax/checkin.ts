@@ -331,7 +331,7 @@ export async function runMiniMaxBenefits(providerId = "minimax"): Promise<Benefi
   let token = "";
   let region = REGION;
   try {
-    const credential = await readCredential(false, providerId);
+    const credential = await readCredential("expired", providerId);
     token = credential.accessToken;
     region = credential.region || REGION;
   } catch {

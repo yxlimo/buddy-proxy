@@ -216,6 +216,26 @@ export function pickTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTen
 
   const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
   const pool = withGift.length ? withGift : usable;
+  return sortByExpiry(pool);
+}
+
+/**
+ * Every tenant that can serve a request, in the order they should be tried.
+ *
+ * The gift that runs out first is spent first; the money that was paid for
+ * does not expire, so it is the last resort — but it is still in the list:
+ * once the gifts are gone, the request has to go somewhere.
+ */
+export function orderedTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
+  const usable = usableTenants(statuses);
+  if (!usable.length) return [];
+  const withGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) > 0);
+  const withoutGift = usable.filter((s) => (s.wallet?.giftAvailableCny ?? 0) <= 0);
+  return [...sortByExpiry(withGift), ...withoutGift];
+}
+
+/** The ones whose gift runs out first come first. */
+function sortByExpiry(tenants: TokenRhythmTenantStatus[]): TokenRhythmTenantStatus[] {
   // The soonest expiry first, as the platform reports it: it points at the
   // gift that runs out first and moves on when that gift is spent, so an
   // account whose gift is gone sorts last and the next account takes over.
@@ -225,7 +245,7 @@ export function pickTenants(statuses: TokenRhythmTenantStatus[]): TokenRhythmTen
     const t = Date.parse(at);
     return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
   };
-  return pool.sort((a, b) => expiry(a) - expiry(b));
+  return tenants.sort((a, b) => expiry(a) - expiry(b));
 }
 
 /**

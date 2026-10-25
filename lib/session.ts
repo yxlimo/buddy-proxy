@@ -82,10 +82,34 @@ export function clearHint(id: string): string {
   return `清掉数据库里的这条凭据（node router-proxy.ts --clear ${id}）后重启，服务会重新登录`;
 }
 
-/** Write a session. */
-export function writeSession(id: string, session: unknown): void {
+/**
+ * Write a session.
+ *
+ * A session carries its generation: the higher it is, the newer the session is.
+ * A refresh rotates the refresh token, so the same session refreshed twice at
+ * the same time leaves the newer result alive and the older one spent — and
+ * the older one must not be the one that stays in the database. So a session
+ * that is older than what is already stored is not written at all.
+ *
+ * A login is a new session and always replaces what is there — that is how
+ * an operator recovers from a session the platform refused.
+ */
+export function writeSession(id: string, session: unknown, options: { force?: boolean } = {}): boolean {
   deadSessions.delete(id);
+  const stored = getSecret<{ generation?: number }>(id);
+  const mine = generationOf(session);
+  const theirs = generationOf(stored);
+  if (!options.force && stored && theirs > mine) return false;
   setSecret(id, "session", session);
+  return true;
+}
+
+/** The generation of a session, as far as it says. */
+function generationOf(session: unknown): number {
+  if (!session || typeof session !== "object") return 0;
+  const value = (session as { generation?: unknown }).generation;
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**
@@ -120,6 +144,22 @@ export function deadSession(id: string): string | null {
 /** Forget the refusal: the operator asked for another try. */
 export function clearDeadSession(id: string): void {
   deadSessions.delete(id);
+}
+
+/**
+ * The session as it is now, if somebody else has refreshed it since we read ours.
+ *
+ * The refresh token rotates on every refresh, so a token that differs from the
+ * one we used means another holder refreshed it: the answer to a refused
+ * refresh is then that holder's session — and this call refreshes again with
+ * that one. So two concurrent refreshes never send the same token, and neither
+ * of them waits for the other.
+ */
+export function rotatedSession<T extends SessionTokens>(id: string, used: T): T | null {
+  const current = getSecret<T>(id);
+  if (!current) return null;
+  if (current.refreshToken === used.refreshToken) return null;
+  return current;
 }
 
 /**
@@ -185,6 +225,15 @@ export interface CredentialCache {
   key?: string;
 }
 
+/** How a credential is wanted: now, when it is due, or only when it is dead. */
+export type RefreshMode =
+  /** Refresh right away, whatever the clock says. */
+  | "now"
+  /** Refresh when the token is about to expire — the timer wants this. */
+  | "due"
+  /** Refresh only when the token is already expired — a request wants this. */
+  | "expired";
+
 /** How `ensureCredential` gets the credential it hands out. */
 export interface EnsureCredentialOptions<T extends SessionTokens> {
   /** The cache to read and to fill. */
@@ -195,14 +244,28 @@ export interface EnsureCredentialOptions<T extends SessionTokens> {
   key?: string;
   /** How long a cached credential is reused. */
   cacheMs: number;
-  /** True means "the token we sent was rejected, get a new one". */
-  force: boolean;
+  /**
+   * Who refreshes when.
+   *
+   * The refresh rotates the refresh token, so it is single-use: two refreshes
+   * of the same session at the same time would make one of them fail. So the
+   * mode says who refreshes when: the timer refreshes a token that is due
+   * (`due`), a request waits for that and only refreshes a token that is
+   * already dead (`expired`), and a rejected token is refreshed right away
+   * (`now`).
+   */
+  mode: RefreshMode;
   /** The session id, which is also what the lock is named after. */
   lockId: string;
-  /** The session, as it is on disk. */
-  load: () => T | null;
-  /** Refresh, or return the session when it is still good. */
-  refresh: (force: boolean) => Promise<T>;
+  /**
+   * Refresh, or return the session when it is still good.
+   *
+   * The refresh rotates the refresh token, so it is single-use: two refreshes
+   * of the same session at the same time would make one of them fail. So the
+   * mode says who refreshes when: the timer refreshes when the token is due,
+   * a request waits for that and only refreshes a token that is already dead.
+   */
+  refresh: (mode: RefreshMode) => Promise<T>;
   /** The credential, built from the session. */
   toCredential: (session: T) => Credential;
   /** The error to raise when the credential is already expired. */
@@ -222,10 +285,10 @@ export async function ensureCredential<T extends SessionTokens>(
   if (dead) throw new AuthError("session refused by the platform", dead, 503);
   const cached = opts.cache;
   const sameKey = opts.key === undefined || cached?.key === opts.key;
-  if (!opts.force && cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
+  if (opts.mode !== "now" && cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
     return cached.cred;
   }
-  const session = await withSessionLock(opts.lockId, () => opts.refresh(opts.force));
+  const session = await opts.refresh(opts.mode);
   const cred = opts.toCredential(session);
   if (cred.remainingMs <= 0) throw opts.expired(session);
   opts.setCache({ at: Date.now(), cred, key: opts.key });

@@ -69,6 +69,7 @@ import { runQoderBenefits } from "./qoder/benefits.ts";
 import { workbuddyStatus } from "./workbuddy/auth.ts";
 import { refreshSession as refreshWorkBuddySession } from "./workbuddy/auth.ts";
 import { runWorkBuddyBenefits } from "./workbuddy/benefits.ts";
+import { isRequestMissingBalance, setBalanceAccount } from "./tokenrhythm/balance.ts";
 
 import { ENDPOINTS as WORKBUDDY_ENDPOINTS } from "./workbuddy/auth.ts";
 
@@ -503,9 +504,9 @@ registerKind({
   models: () => minimaxCatalogModels(MINIMAX_MODELS),
   quotas: (provider, snapshot) => minimaxQuotas(provider, snapshot),
   benefits: (provider) => runMiniMaxBenefits(provider.id),
-  // 客户端自己按时间表换令牌，网关也这样（见 lib/session-refresh.ts）。
+  // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。
   refresh: async (provider) => {
-    await refreshMiniMaxSession(false, provider.id);
+    await refreshMiniMaxSession("due", provider.id);
   },
   outOfCredits: (provider, snapshot) => {
     // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑。看 plan 的窗口。
@@ -565,9 +566,9 @@ registerKind({
   models: (provider) => qoderCatalogModels(qoderModelsForRegion(qoderRegionOf(provider.id))),
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),
   benefits: (provider) => runQoderBenefits(provider.id),
-  // 客户端自己按时间表换令牌，网关也这样（见 lib/session-refresh.ts）。
+  // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。
   refresh: async (provider) => {
-    await refreshQoderSession(false, provider.id);
+    await refreshQoderSession("due", provider.id);
   },
   outOfCredits: (provider, snapshot) => {
     // The platform's own flag decides. The plan (the free part) running out
@@ -598,9 +599,9 @@ registerKind({
   models: () => workbuddyCatalogModels(workbuddyModelList()),
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),
   benefits: (provider) => runWorkBuddyBenefits(provider.id),
-  // 客户端自己按时间表换令牌，网关也这样（见 lib/session-refresh.ts）。
+  // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。
   refresh: async (provider) => {
-    await refreshWorkBuddySession(false, provider.id);
+    await refreshWorkBuddySession("due", provider.id);
   },
   outOfCredits: (provider, snapshot) => {
     // The check-in credits: the platform reports them as "daily".
@@ -630,6 +631,12 @@ registerKind({
     if (!tenants.length) return false;
     return tenants.every((t: any) => Number(t.wallet?.availableCny ?? 0) <= 0);
   },
+  // 定时扫描余额，把「现在该用哪个账户」钉下来（赠金最先到期的那个）。
+  scan: async (provider) => {
+    await setBalanceAccount(provider.id);
+  },
+  // The hook of expiry_first: the platform says this account has no money left.
+  isRequestMissingBalance: (error) => isRequestMissingBalance(error),
 });
 
 registerKind({

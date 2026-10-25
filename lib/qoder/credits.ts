@@ -54,7 +54,7 @@ export async function fetchQoderCredits(providerId = "qoder"): Promise<QoderCred
   const session = loadSession(providerId);
   if (!session) return null;
   try {
-    const cred = await ensureCredential(false, providerId);
+    const cred = await ensureCredential("expired", providerId);
     const r = await fetch(`${ENDPOINTS[region].openapi}/api/v2/quota/usage`, {
       headers: {
         Authorization: `Bearer ${cred.accessToken}`,
@@ -89,7 +89,7 @@ export async function checkAccountHealth(providerId = "qoder"): Promise<QoderAcc
   if (!session) {
     return { region, authorized: false, usable: false, reason: "no session", hint: loginHint(providerId) };
   }
-  const cred = await ensureCredential(false, providerId);
+  const cred = await ensureCredential("expired", providerId);
   const r = await fetch(`${ENDPOINTS[region].openapi}/api/v3/user/status`, {
     headers: {
       Authorization: `Bearer ${cred.accessToken}`,

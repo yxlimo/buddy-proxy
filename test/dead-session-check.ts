@@ -97,7 +97,7 @@ console.log("平台拒绝了刷新");
 
 let thrown: any = null;
 try {
-  await refreshSession(true, providerId);
+  await refreshSession("now", providerId);
 } catch (e) {
   thrown = e;
 }
@@ -120,7 +120,7 @@ console.log("别再问平台了");
 
 thrown = null;
 try {
-  await refreshSession(true, providerId);
+  await refreshSession("now", providerId);
 } catch (e) {
   thrown = e;
 }
@@ -155,7 +155,7 @@ writeSession(id, {
   loginAtMs: Date.now(),
   refreshedAtMs: Date.now(),
 });
-const session = await refreshSession(true, providerId);
+const session = await refreshSession("now", providerId);
 check("刷新成功了", session.generation === 3, String(session.generation));
 check("平台被问了一次", tokenCalls === 2, String(tokenCalls));
 check("拿到的是新的 refresh token", session.refreshToken === "mmort_new_refresh", String(session.refreshToken));
@@ -164,12 +164,12 @@ console.log("");
 console.log("操作者点了「刷新一下」，可以再试一次");
 
 refuse = true;
-await refreshSession(true, providerId).catch(() => {});
+await refreshSession("now", providerId).catch(() => {});
 check("平台拒了", tokenCalls === 3, String(tokenCalls));
 clearDeadSession(id);
 let retried: any = null;
 try {
-  await refreshSession(true, providerId);
+  await refreshSession("now", providerId);
 } catch (e) {
   retried = e;
 }

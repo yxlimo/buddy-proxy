@@ -91,7 +91,7 @@ export async function minimaxChat(
 ): Promise<Response> {
   let cred;
   try {
-    cred = await readCredential();
+    cred = await readCredential("expired");
   } catch (e) {
     throw e as AuthError;
   }
@@ -104,7 +104,7 @@ export async function minimaxChat(
 
   if (r.status === 401) {
     try {
-      cred = await readCredential(true);
+      cred = await readCredential("now");
       r = await send(cred.accessToken);
     } catch (e) {
       throw e as AuthError;

@@ -348,10 +348,8 @@ const timer = new BenefitsRunner({
     return [];
   },
 });
-timer.start();
 accounts = ["qoder-late"];
-await new Promise((resolve) => setTimeout(resolve, 300));
-timer.stop();
+await timer.runOnce();
 check(
   "启动时没有账号，后来加的账号也会被签到",
   signed.includes("qoder-late"),

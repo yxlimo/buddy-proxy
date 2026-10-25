@@ -25,11 +25,17 @@ import type { WorkBuddyModel } from "../workbuddy/models.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
 import {
   markTenantOutOfMoney,
-  pickTenants,
+  orderedTenants,
+  resetTokenRhythmStatusCache,
   tokenRhythmStatuses,
   usableTenants,
   type TokenRhythmTenantStatus,
 } from "../tokenrhythm/wallet.ts";
+import {
+  pinnedBalanceAccount,
+  setBalanceAccount,
+} from "../tokenrhythm/balance.ts";
+import { kindOf } from "../provider-kinds.ts";
 import { zcodeChat } from "../zcode/transport.ts";
 import { zcodeMaxOutput } from "../zcode/models.ts";
 import {
@@ -60,11 +66,12 @@ import {
   classifyUpstreamError,
   describeUpstreamError,
   isDegradableUpstreamError,
+  isNoBalanceFailure,
   selectProvider,
   type ProviderPolicy,
 } from "./provider-selection.ts";
 import { businessCodeOf, upstreamStatusOf, withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
-import { policyOf } from "../providers.ts";
+import { policyOf, provider } from "../providers.ts";
 import { upstreamModel, type Route } from "./routes.ts";
 
 /** The output limit of a MiniMax model, as its own catalog says. */
@@ -274,14 +281,6 @@ function keepUpstreamTruth<T extends object>(error: T, original: unknown): T {
   const code = businessCodeOf(original);
   if (code !== null) withBusinessCode(error, code);
   return error;
-}
-
-/** 这个失败是不是「这个账号没钱了」。 */
-function isNoBalanceFailure(error: unknown): boolean {
-  if (error instanceof TokenRhythmNoBalanceError) return true;
-  if (upstreamStatusOf(error) === 402) return true;
-  // MiniMax 的 1008 是「余额不足」。
-  return businessCodeOf(error) === 1008;
 }
 
 /**
@@ -789,7 +788,10 @@ export function tokenRhythmAccounts(
   statuses: TokenRhythmTenantStatus[],
   policy: ProviderPolicy,
 ): TokenRhythmTenantStatus[] {
-  return policy === "expiry_first" ? pickTenants(statuses) : usableTenants(statuses);
+  // expiry_first：按到期重排——赠金先上（快到期的先），本金最后。
+  // single 与 fallback：按权重（租户次序），跟其它上游一个样。
+  if (policy === "expiry_first") return orderedTenants(statuses);
+  return usableTenants(statuses);
 }
 
 /**
@@ -823,9 +825,58 @@ export async function toTokenRhythm(
   openaiBody.stream = stream;
 
   const policy = policyOfUpstream(route.provider);
+  // 这一类上游自己的钩子：余额到期优先用它判断「余额不足」。
+  const missingBalance =
+    kindOf(provider(route.provider)?.kind ?? "")?.isRequestMissingBalance ?? isNoBalanceFailure;
+
+  const candidateFor = (index: number) => ({
+    id: `tenant-${index}`,
+    weight: 0,
+    run: async () => {
+      if (ctx.logRoute) {
+        console.log(
+          `[ROUTE] tokenrhythm model=${route.model} policy=${policy} tenant=${index} stream=${stream}`,
+        );
+      }
+      let response: Response;
+      try {
+        const call = await tokenRhythmChatWithRetry(
+          index,
+          openaiBody,
+          ctx.tokenRhythmMaxAttempts,
+          ctx.clientHeaders,
+        );
+        response = call.response;
+      } catch (e) {
+        // The platform said this account has no money left: it is put aside
+        // for a while, and the balances are scanned again so that another
+        // account is pinned.
+        if (missingBalance(e)) {
+          markTenantOutOfMoney(index);
+          resetTokenRhythmStatusCache(route.provider);
+        }
+        throw e;
+      }
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw upstreamStatusError(response.status, text, "TokenRhythm ");
+      }
+      return { response, tenant: index };
+    },
+  });
+
+  // expiry_first 的重排逻辑：钉住的那个账户（定时扫描时定的：赠金最先到期的
+  // 那个）接这个请求。它说余额不足时，钩子重新扫描、重新钉一个别的接手。
+  const nextByBalance = async () => {
+    const balance =
+      pinnedBalanceAccount(route.provider) ?? (await setBalanceAccount(route.provider));
+    if (!balance) return null;
+    return candidateFor(balance.index);
+  };
+
   const statuses = await tokenRhythmStatuses(route.provider);
-  const tenants = tokenRhythmAccounts(statuses, policy);
-  if (!tenants.length) {
+  const tenants = policy === "expiry_first" ? [] : tokenRhythmAccounts(statuses, policy);
+  if (policy !== "expiry_first" && !tenants.length) {
     throw new AuthError(
       "no tokenrhythm account has credit left",
       "TokenRhythm 的账号都没有可用的余额了。",
@@ -834,56 +885,42 @@ export async function toTokenRhythm(
   }
 
   const ids = tenants.map((tenant) => `tenant-${tenant.index}`);
-  const candidates = byOrder(
-    tenants.map((tenant) => ({
-      id: `tenant-${tenant.index}`,
-      run: async () => {
-        if (ctx.logRoute) {
-          console.log(
-            `[ROUTE] tokenrhythm model=${route.model} policy=${policy} tenant=${tenant.index} stream=${stream}`,
-          );
-        }
-        let response: Response;
-        try {
-          const call = await tokenRhythmChatWithRetry(
-            tenant.index,
-            openaiBody,
-            ctx.tokenRhythmMaxAttempts,
-            ctx.clientHeaders,
-          );
-          response = call.response;
-        } catch (e) {
-          // The platform said this account has no money left: the wallet the
-          // gateway cached still says it has, so it is put aside for a while.
-          if (e instanceof TokenRhythmNoBalanceError) markTenantOutOfMoney(tenant.index);
-          throw e;
-        }
-        if (!response.ok) {
-          const text = await response.text().catch(() => "");
-          throw upstreamStatusError(response.status, text, "TokenRhythm ");
-        }
-        return { response, tenant: tenant.index };
-      },
-    })),
-  );
+  const candidates = byOrder(tenants.map((tenant) => candidateFor(tenant.index)));
 
   const result = await selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,
+    // The hook of expiry_first: only "no money left" moves on.
+    insufficient: missingBalance,
+    next: policy === "expiry_first" ? nextByBalance : undefined,
+    // 余额不足时钩子重新扫描余额，重新钉一个账户。
+    onMissingBalance: async () => {
+      await setBalanceAccount(route.provider);
+    },
     onAttempt: (candidate, error) => {
       if (!error) return;
-      const at = ids.indexOf(candidate.id);
       // 只有真的要换才说「试下一个」：不可降级的错误就地抛出去。
-      const moves = isDegradableUpstreamError(error);
-      const next = moves && policy === "fallback" ? ids[at + 1] : undefined;
+      const moves =
+        policy === "expiry_first"
+          ? isNoBalanceFailure(error)
+          : isDegradableUpstreamError(error);
+      const switches = policy !== "single";
+      const at = ids.indexOf(candidate.id);
+      const next = moves && switches ? ids[at + 1] : undefined;
+      let suffix = ", not switching";
+      if (next) suffix = `, trying ${next}`;
+      else if (moves && switches) suffix = ", no account left";
+      else if (moves && policy === "expiry_first") suffix = ", rescanning the balances";
       console.log(
-        `[ROUTE] tokenrhythm ${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
-          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching"),
+        `[ROUTE] tokenrhythm ${candidate.id} cannot serve it (${describeUpstreamError(error)})${suffix}`,
       );
     },
-    failure: (lastError) =>
+    failure: (lastError, tried) =>
       accountFailure(lastError, {
         message: "no tokenrhythm account has credit left",
-        hint: "TokenRhythm 的账号都没有余额了（402 余额不足）。充值后恢复。",
+        hint:
+          tried.length > 1
+            ? `TokenRhythm 的 ${tried.length} 个账号都试过了，都没余额了（402 余额不足）。充值后恢复。`
+            : "TokenRhythm 的这个账号没有余额了（402 余额不足），但网关只试了这一个——把上游的生效策略改成「降级」，别的账号就能接手。充值后恢复。",
       }),
   });
 

@@ -115,7 +115,7 @@ async function upstreamHeaders(
   providerId: string,
   force: boolean,
 ): Promise<Record<string, string>> {
-  const cred = await ensureCredential(force, providerId);
+  const cred = await ensureCredential(force ? "now" : "expired", providerId);
   const identity = deviceIdentity(providerId);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${cred.accessToken}`,

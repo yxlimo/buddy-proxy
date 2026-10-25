@@ -40,7 +40,6 @@ export interface BenefitsState {
 
 export class BenefitsRunner {
   private state: BenefitsState = { lastRunAt: null, lastOutcome: null, running: false };
-  private timer: NodeJS.Timeout | null = null;
   private readonly options: BenefitsOptions;
 
   // The options are a plain field, not a parameter property: the code runs
@@ -79,24 +78,9 @@ export class BenefitsRunner {
   }
 
   /**
-   * Run the benefits now, and then on the timer.
+   * Take the benefits now.
    *
-   * The timer goes up even when there is no account yet: the panel can add
-   * one later, and the next tick has to know about it. runOnce returns early
-   * while the list is empty.
+   * There is no timer of its own: the periodic runner (lib/periodic.ts) calls
+   * this, so a login state has one timer over it, not two.
    */
-  start(): void {
-    this.timer = setInterval(() => void this.runOnce(), this.options.intervalMs);
-    // The login may still be waiting for an approval, so the first run waits a
-    // minute for the session to be there.
-    // The timers do not hold the process on their own: the server's listener
-    // does that, and a test must be able to finish while they are pending.
-    setTimeout(() => void this.runOnce(), 60_000).unref();
-    this.timer.unref();
-  }
-
-  stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-  }
 }

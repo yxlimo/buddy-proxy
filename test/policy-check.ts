@@ -25,6 +25,7 @@ const {
   classifyUpstreamError,
   describeUpstreamError,
   isDegradableUpstreamError,
+  isNoBalanceFailure,
   selectProvider,
 } = await import("../lib/router/provider-selection.ts");
 const { withBusinessCode, withUpstreamStatus } = await import("../lib/upstream-status.ts");
@@ -118,7 +119,7 @@ console.log("降级：不可用的换下一个");
 }
 
 console.log("");
-console.log("余额到期优先：只调一个");
+console.log("余额到期优先：包过的单一——余额不足就换");
 
 {
   const tried: string[] = [];
@@ -132,12 +133,51 @@ console.log("余额到期优先：只调一个");
   const boom = new AuthError("no credit", "没钱了", 402);
   let caught: any = null;
   try {
-    await selectProvider("expiry_first", three(tried, boom), { degradable: isDegradableUpstreamError });
+    await selectProvider("expiry_first", three(tried, boom), {
+      degradable: isDegradableUpstreamError,
+      insufficient: isNoBalanceFailure,
+    });
   } catch (e) {
     caught = e;
   }
-  check("失败了不换", caught === boom, String(caught?.message));
+  check("余额不足 → 换下一个", tried.join(",") === "first,second", tried.join(","));
+  check("答案是第二个给的", caught === null, String(caught?.message));
+}
+
+{
+  const tried: string[] = [];
+  const boom = new AuthError("the request is wrong", "参数错", 400);
+  let caught: any = null;
+  try {
+    await selectProvider("expiry_first", three(tried, boom), {
+      degradable: isDegradableUpstreamError,
+      insufficient: isNoBalanceFailure,
+    });
+  } catch (e) {
+    caught = e;
+  }
+  check("请求本身的问题 → 不换", caught === boom, String(caught?.message));
   check("只试了一个", tried.join(",") === "first", tried.join(","));
+}
+
+{
+  // 钩子：余额不足时重新扫描，扫描给出下一个账户。
+  const scans: string[] = [];
+  let pick = 0;
+  const next = async () => {
+    scans.push("scan");
+    const id = pick++ === 0 ? "first" : "second";
+    return { id, weight: 0, run: async () => {
+      if (id === "first") throw new AuthError("no credit", "没钱了", 402);
+      return "answer from second";
+    }};
+  };
+  const value = await selectProvider("expiry_first", [], {
+    insufficient: isNoBalanceFailure,
+    next,
+  });
+  check("重新扫描了一次", scans.length === 2, scans.join(","));
+  check("第二个账户接了", value === "answer from second", value);
 }
 
 console.log("");
@@ -189,6 +229,7 @@ const statuses = [
 {
   const order = tokenRhythmAccounts(statuses, "expiry_first").map((t: any) => t.index);
   check("余额到期优先：最先到期的先上", order[0] === 2, order.join(","));
+  check("余额到期优先：本金排最后", order.join(",") === "2,3,1", order.join(","));
 }
 
 {

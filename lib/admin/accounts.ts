@@ -570,7 +570,7 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
           ? { ok: true, message: `plan 额度读到了（${plan.windows.length} 个窗口）` }
           : { ok: false, message: "无法读取 plan 额度，key 可能不正确" };
       }
-      const cred = await readCredential(false, p.id);
+      const cred = await readCredential("expired", p.id);
       return {
         ok: true,
         message: `能用，第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟`,
@@ -713,18 +713,18 @@ async function refreshTarget(
     case "minimax": {
       // 会话由服务定时刷新（客户端就是这么干的），手动刷新没有意义；
       // 失效了的会话只能重新授权。
-      const cred = await readCredential(false, p.id);
+      const cred = await readCredential("expired", p.id);
       if (cred.status !== "authenticated") {
         return { ok: false, message: "这份会话已经失效，需要重新登录（面板上登录一次）", generation: cred.generation };
       }
       return { ok: true, message: `会话由服务定时刷新（第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟）`, generation: cred.generation };
     }
     case "qoder": {
-      const session = await refreshQoderSession(false, p.id);
+      const session = await refreshQoderSession("due", p.id);
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "workbuddy": {
-      const session = await refreshWorkBuddySession(false, p.id);
+      const session = await refreshWorkBuddySession("due", p.id);
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "zcode":
