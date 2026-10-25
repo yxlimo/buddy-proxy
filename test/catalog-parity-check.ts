@@ -8,20 +8,51 @@
 //
 // 这个测试起一个网关（上游只开 Qoder，用它自己那份模型目录），配几个主路由
 // 模型，然后把两边的数拿来比。
+//
+// 面板上有两个数：contextWindow 是**库里存的那个**（继承时是空的），effective
+// 是**现算出来的**（继承时就是目标合出来的那个）。根路由公布的是现算的那个，
+// 所以比的是 effective 与根路由 —— 拿 contextWindow 去比会以为两边不一致，
+// 其实面板只是把「存着的」与「算出来的」分开报。
 
 import { DatabaseSync } from "node:sqlite";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url)) + "/..";
 const DATA_DIR = "/tmp/opencode/test-catalog-parity";
-const PORT = 52311;
+
+/** A free port: the tests run in parallel, so nobody gets a fixed one. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as net.AddressInfo).port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+const PORT = await freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// The router wants a credential for every upstream it serves: without one it
+// starts the device flow, which opens a browser and asks qoder.com for a
+// challenge. The dummy sessions go into this test's own database.
+const fakeSessions = spawnSync(
+  process.execPath,
+  ["--experimental-strip-types", "test/fake-sessions.ts"],
+  { cwd: ROOT, env: { ...process.env, BUDDY_DATA_DIR: DATA_DIR }, stdio: "ignore" },
+);
+if (fakeSessions.status !== 0) {
+  throw new Error("the dummy sessions could not be written");
+}
 
 let pass = 0;
 let fail = 0;
@@ -127,13 +158,20 @@ const model = await panelModel("parity-inherit");
 check("模型列得出来", Boolean(model), JSON.stringify(model));
 check(
   "上下文是继承来的那个（GLM-5.3 的 180000）",
-  Number(model?.contextWindow) === 180000,
-  JSON.stringify({ contextWindow: model?.contextWindow }),
+  Number(model?.effective?.contextWindow) === 180000,
+  JSON.stringify({ effective: model?.effective?.contextWindow }),
 );
 check(
   "输出上限是继承来的那个（GLM-5.3 的 131072）",
-  Number(model?.maxOutputTokens) === 131072,
-  JSON.stringify({ maxOutputTokens: model?.maxOutputTokens }),
+  Number(model?.effective?.maxOutputTokens) === 131072,
+  JSON.stringify({ effective: model?.effective?.maxOutputTokens }),
+);
+// 继承就是继承：库里存的那个是空的。把现算的值写回库里，「继承」就变成了
+// 写死的数字，上游改了也不跟着动（2026-10-24 修过的那个坑）。
+check(
+  "继承时库里存的那个是空的",
+  model?.contextWindow === undefined && model?.maxOutputTokens === undefined,
+  JSON.stringify({ contextWindow: model?.contextWindow, maxOutputTokens: model?.maxOutputTokens }),
 );
 
 /* ------------------------------------------------------------------ *
@@ -147,13 +185,13 @@ const root = await rootModel("parity-inherit");
 check("根路由公布了它", Boolean(root), JSON.stringify(root));
 check(
   "根路由的上下文窗口与面板的一样",
-  Number(root?.context_window) === Number(model?.contextWindow),
-  JSON.stringify({ root: root?.context_window, panel: model?.contextWindow }),
+  Number(root?.context_window) === Number(model?.effective?.contextWindow),
+  JSON.stringify({ root: root?.context_window, panel: model?.effective?.contextWindow }),
 );
 check(
   "根路由的输出上限与面板的一样",
-  Number(root?.max_output_tokens) === Number(model?.maxOutputTokens),
-  JSON.stringify({ root: root?.max_output_tokens, panel: model?.maxOutputTokens }),
+  Number(root?.max_output_tokens) === Number(model?.effective?.maxOutputTokens),
+  JSON.stringify({ root: root?.max_output_tokens, panel: model?.effective?.maxOutputTokens }),
 );
 check(
   "显示名也一样",
@@ -162,8 +200,8 @@ check(
 );
 check(
   "思考能力也一样",
-  Boolean(root?.reasoning) === Boolean(model?.reasoning),
-  JSON.stringify({ root: root?.reasoning, panel: model?.reasoning }),
+  Boolean(root?.reasoning) === Boolean(model?.effective?.reasoning),
+  JSON.stringify({ root: root?.reasoning, panel: model?.effective?.reasoning }),
 );
 
 /* ------------------------------------------------------------------ *
@@ -188,13 +226,13 @@ await call("SavePublishedModel", {
 const minModel = await panelModel("parity-min");
 check(
   "上下文取最小的那个（180000，不是 1000000）",
-  Number(minModel?.contextWindow) === 180000,
-  JSON.stringify({ contextWindow: minModel?.contextWindow }),
+  Number(minModel?.effective?.contextWindow) === 180000,
+  JSON.stringify({ effective: minModel?.effective?.contextWindow }),
 );
 check(
   "输出上限取最小的那个（131072，不是 393216）",
-  Number(minModel?.maxOutputTokens) === 131072,
-  JSON.stringify({ maxOutputTokens: minModel?.maxOutputTokens }),
+  Number(minModel?.effective?.maxOutputTokens) === 131072,
+  JSON.stringify({ effective: minModel?.effective?.maxOutputTokens }),
 );
 
 const minRoot = await rootModel("parity-min");
@@ -228,6 +266,13 @@ check(
   Number(explicitModel?.contextWindow) === 123456 && Number(explicitModel?.maxOutputTokens) === 6543,
   JSON.stringify(explicitModel),
 );
+// 自己写死的数就是那个数，现算出来的也是它。
+check(
+  "现算出来的也是自己写的那个数",
+  Number(explicitModel?.effective?.contextWindow) === 123456 &&
+    Number(explicitModel?.effective?.maxOutputTokens) === 6543,
+  JSON.stringify(explicitModel?.effective),
+);
 const explicitRoot = await rootModel("parity-explicit");
 check(
   "根路由公布的也是自己写的数",
@@ -258,6 +303,19 @@ check(
   "根路由里没有它",
   (await rootModel("parity-off")) === undefined,
   JSON.stringify(await rootModel("parity-off")),
+);
+
+/* ------------------------------------------------------------------ *
+ * 六、这个测试不碰任何平台
+ * ------------------------------------------------------------------ */
+
+console.log("");
+console.log("这个测试不碰任何平台");
+
+check(
+  "没有启动设备登录",
+  !/device\/selectAccounts|open in a browser/.test(routerLog),
+  routerLog.slice(-400),
 );
 
 /* ------------------------------------------------------------------ *
