@@ -70,7 +70,7 @@ import {
   type ProviderPolicy,
 } from "./provider-selection.ts";
 import { businessCodeOf, upstreamStatusOf, withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
-import { accountsOfPlatform, type ProviderRow } from "../providers.ts";
+import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts";
 import { platformOf, platformPolicy } from "../platforms.ts";
 import { platformWithoutAccount, upstreamModel, type Route } from "./routes.ts";
 
@@ -302,7 +302,9 @@ async function underPolicy<T>(
   const serving = accounts.filter((row) => row.enabled);
   if (!serving.length) throw platformWithoutAccount(platform, accounts.length);
   const policy = platformPolicy(platform);
-  const candidates = byOrder(serving.map((account) => ({ id: account.id, run: () => run(account) })));
+  const candidates = byOrder(
+    serving.map((account) => ({ id: account.id, weight: account.weight, run: () => run(account) })),
+  );
   return selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {
@@ -721,6 +723,8 @@ export async function toMiniMaxApi(
   const candidates = byOrder(
     slots.map(({ account, tenant }, position) => ({
       id: ids[position],
+      // 权重是账号的：一个账号下几把 key 谁先，按 key 的次序。
+      weight: account.weight,
       run: async () => {
         if (ctx.logRoute) {
           console.log(
@@ -928,7 +932,13 @@ export async function toTokenRhythm(
   }
 
   const ids = accounts.map((account) => account.accountId);
-  const candidates = byOrder(accounts.map((account) => candidateFor(account.accountId)));
+  const candidates = byOrder(
+    accounts.map((account) => ({
+      id: account.accountId,
+      weight: provider(account.accountId)?.weight ?? 0,
+      run: candidateFor(account.accountId).run,
+    })),
+  );
 
   const result = await selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,

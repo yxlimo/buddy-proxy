@@ -22,6 +22,7 @@ import { zcodeStatus } from "../zcode/auth.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
+  forgetLegacyTenantRecords,
   forgetTokenRhythmCredential,
   loadSession as loadTokenRhythmSession,
   login as loginTokenRhythm,
@@ -29,6 +30,7 @@ import {
   tokenRhythmCredentialOf,
 } from "../tokenrhythm/accounts.ts";
 import { wallet as tokenRhythmWallet } from "../tokenrhythm/wallet.ts";
+import { forgetAccountSnapshot } from "./upstreams.ts";
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { credentialStateText, parseCredentialId } from "./credentials.ts";
 import type { ProviderRow } from "../providers.ts";
@@ -46,6 +48,8 @@ export interface AccountView {
   detail: string;
   /** 开关。关着的账号不参与选路。 */
   enabled: boolean;
+  /** 权重：大的先试。 */
+  weight: number;
   /** 建出来的时刻，Unix 毫秒。 */
   createdAt: number;
 }
@@ -320,6 +324,7 @@ export function listAccounts(): AccountView[] {
           ? "有可用的 key"
           : "暂无凭据",
       enabled: row.enabled,
+      weight: row.weight,
       createdAt: row.createdAt,
     });
   }
@@ -346,6 +351,10 @@ export function logoutAccount(accountId: string): { ok: boolean; message: string
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
   let removed = deleteProviderCredentials(id);
+  // 旧位置的记录（按租户号存的那份）也要删：留着它，启动时的归位会把账号
+  // 带回来 —— 删了又活，凭据还串着。
+  removed += forgetLegacyTenantRecords(id);
+  forgetAccountSnapshot(id);
   if (row.kind === "tokenrhythm") removed += forgetTokenRhythmCredential(id);
   if (!removed) return { ok: true, message: "这个账号本来就没有凭据", removed: 0 };
   console.log(`[ADMIN] ${id} 注销了，删掉 ${removed} 条凭据`);

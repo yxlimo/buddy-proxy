@@ -147,8 +147,20 @@ export async function selectProvider<T>(
  * the wallet says — and the first one weighs the most, so the shared package
  * tries it first.
  */
-export function byOrder<T>(items: { id: string; run: () => Promise<T> }[]): ProviderCandidate<T>[] {
-  return items.map((item, index) => ({ id: item.id, weight: items.length - index, run: item.run }));
+/**
+ * 把一组候选按次序排好。
+ *
+ * 每项可以带自己的权重（账号的权重：大的先试）。没带就用它在列表里的位置
+ * —— 后面的先试，跟从前一样。
+ */
+export function byOrder<T>(
+  items: { id: string; weight?: number; run: () => Promise<T> }[],
+): ProviderCandidate<T>[] {
+  return items.map((item, index) => ({
+    id: item.id,
+    weight: item.weight ?? items.length - index,
+    run: item.run,
+  }));
 }
 
 /* ------------------------------------------------------------------ *

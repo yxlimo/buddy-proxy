@@ -74,6 +74,7 @@ import {
 import { adminTokenSet } from "./token.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
+  forgetAccountSnapshot,
   healthSnapshot,
   setAccountEnabled,
   upstreamQuota,
@@ -88,6 +89,7 @@ import {
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
+import { forgetLegacyTenantRecords } from "../tokenrhythm/accounts.ts";
 import {
   listAccounts,
   listCredentials,
@@ -320,6 +322,8 @@ function accountRowMessage(accountId: string) {
     credentialCount: row.credentialCount,
     detail: row.detail,
     enabled: row.enabled,
+    // 权重：大的先试。面板上让人调。
+    weight: row.weight,
     createdAt: BigInt(row.createdAt),
     quota: quota ? quotaMessage(quota) : undefined,
   });
@@ -435,9 +439,10 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async updateProvider(request) {
     // 别名与开关。策略不在这里：契约里的 alias 是普通 proto3 string，没有
     // presence 位，混在一起的话「只改策略」会把别名顺手抹掉。
-    const patch: { alias?: string; enabled?: boolean } = {};
+    const patch: { alias?: string; enabled?: boolean; weight?: number } = {};
     if (request.alias !== undefined) patch.alias = String(request.alias);
     if (request.enabled !== undefined && request.enabled !== null) patch.enabled = request.enabled === true;
+    if (request.weight !== undefined && request.weight !== null) patch.weight = Number(request.weight);
     const result = updateProvider(String(request.id ?? ""), patch);
     if (result.ok) console.log(`[ADMIN] 账号 ${request.id} 改了`);
     return create(UpdateProviderResponseSchema, { ok: result.ok, message: result.message });
@@ -464,7 +469,15 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async deleteAccount(request) {
     const id = String(request.id ?? "");
     const result = deleteAccount(id);
-    if (result.ok) console.log(`[ADMIN] 删了账号 ${id}（连它的凭据一起）`);
+    if (result.ok) {
+      // 删干净：旧位置的记录（按租户号存的那份）与健康快照里的那一段，
+      // 都要一起删 —— 留着它们，启动时的归位会把账号带回来：删了又活，
+      // 凭据还串着。
+      const legacy = forgetLegacyTenantRecords(id);
+      forgetAccountSnapshot(id);
+      if (legacy) console.log(`[ADMIN] 账号 ${id} 的旧记录也清了（${legacy} 条）`);
+      console.log(`[ADMIN] 删了账号 ${id}（连它的凭据一起）`);
+    }
     return create(DeleteAccountResponseSchema, { ok: result.ok, message: result.message });
   },
 

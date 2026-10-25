@@ -4,6 +4,7 @@ import { EmptyState, ErrorState, LoadingState } from '@/components/async-state'
 import { StatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
   Table,
@@ -64,6 +65,7 @@ export function ProviderAccounts({
   onManageKeys,
   onToggleEnabled,
   onRename,
+  onWeightChange,
 }: {
   /** 这个平台的 id（路径里那一段）。 */
   platform: string
@@ -87,6 +89,8 @@ export function ProviderAccounts({
   onToggleEnabled: (account: Account, enabled: boolean) => void
   /** 改别名。 */
   onRename: (account: Account, alias: string) => void
+  /** 改权重：大的先试。 */
+  onWeightChange: (account: Account, weight: number) => void
 }) {
   const [picked, setPicked] = useState('')
   // 选中的账号：用户点过的那个；没点过就用第一个 —— 省得先点一下才看到凭据。
@@ -121,6 +125,7 @@ export function ProviderAccounts({
         <TableHeader>
           <TableRow>
             <TableHead>账号</TableHead>
+            <TableHead className='text-right'>权重</TableHead>
             <TableHead>状态</TableHead>
             <TableHead className='text-right'>凭据</TableHead>
             <TableHead className='text-right'>额度</TableHead>
@@ -154,6 +159,25 @@ export function ProviderAccounts({
                     {account.id}
                   </span>
                 </div>
+              </TableCell>
+              <TableCell className='text-right'>
+                {/* 权重：大的先试。降级时按它排先后。 */}
+                <Input
+                  type='number'
+                  className='h-8 w-20 text-right'
+                  defaultValue={account.weight}
+                  aria-label={`${account.alias || account.id} 的权重`}
+                  onClick={(event) => event.stopPropagation()}
+                  onBlur={(event) => {
+                    const next = Number(event.target.value)
+                    if (!Number.isFinite(next) || next === account.weight) return
+                    onWeightChange(account, next)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return
+                    event.currentTarget.blur()
+                  }}
+                />
               </TableCell>
               <TableCell>
                 <div className='grid gap-0.5'>

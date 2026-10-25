@@ -177,11 +177,13 @@ export function useUpdateProvider() {
   const client = useAdminClient()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { id: string; alias?: string }) => {
+    mutationFn: async (input: { id: string; alias?: string; weight?: number }) => {
       const result = await client.updateProvider(
         create(UpdateProviderRequestSchema, {
           id: input.id,
           alias: input.alias ?? '',
+          // 不给就是不改。
+          weight: input.weight,
         })
       )
       assertOk(result, '没改成')

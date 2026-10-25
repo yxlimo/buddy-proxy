@@ -30,7 +30,7 @@ run = "pnpm exec tsc --noEmit"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:balance-account", "test:concurrent-refresh"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:balance-account", "test:concurrent-refresh", "test:account-weight"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -83,6 +83,10 @@ run = "node --experimental-strip-types test/balance-account-check.ts"
 [tasks."test:concurrent-refresh"]
 description = "Check that two concurrent refreshes of one session do not kill it"
 run = "node --experimental-strip-types test/concurrent-refresh-check.ts"
+
+[tasks."test:account-weight"]
+description = "Check the account weight and that deleting an account leaves nothing behind"
+run = "node --experimental-strip-types test/account-weight-check.ts"
 
 [tasks."test:admin:contract"]
 description = "Check the panel's API against the contract, field by field"

@@ -31,6 +31,12 @@ export interface ProviderRow {
   alias: string;
   /** 开关。 */
   enabled: boolean;
+  /**
+   * 权重：大的先试。
+   *
+   * 降级时按它排：谁先、谁后。同权重按建出来的先后。
+   */
+  weight: number;
   /** 派生自平台：这个平台的生效策略。 */
   policy: ProviderPolicy;
   createdAt: number;
@@ -59,15 +65,24 @@ export function isProviderPolicy(value: unknown): value is ProviderPolicy {
   return typeof value === "string" && (PROVIDER_POLICIES as string[]).includes(value);
 }
 
-/** 全部账号，按平台与创建先后排。 */
+/**
+ * 全部账号，按平台排；同一平台里权重大的在前，同权重按建出来的先后。
+ */
 export function listProviders(): ProviderRow[] {
   const rows = store()
-    .prepare("SELECT id, platform, alias, enabled, created_at, updated_at FROM provider ORDER BY platform, created_at, id")
+    .prepare(
+      "SELECT id, platform, alias, enabled, weight, created_at, updated_at " +
+        "FROM provider ORDER BY platform, weight DESC, created_at, id",
+    )
     .all() as any[];
   return rows.map(toRow);
 }
 
-/** 某个平台下的账号，按创建先后排 —— 也就是「权重」的次序。 */
+/**
+ * 某个平台下的账号，按权重排：大的先试。
+ *
+ * 这是降级时的次序 —— 「先调谁、谁接不了换谁」。
+ */
 export function accountsOfPlatform(platform: string): ProviderRow[] {
   return listProviders().filter((row) => row.platform === platform);
 }
@@ -75,7 +90,7 @@ export function accountsOfPlatform(platform: string): ProviderRow[] {
 /** 某一个账号。 */
 export function provider(id: string): ProviderRow | null {
   const row = store()
-    .prepare("SELECT id, platform, alias, enabled, created_at, updated_at FROM provider WHERE id = ?")
+    .prepare("SELECT id, platform, alias, enabled, weight, created_at, updated_at FROM provider WHERE id = ?")
     .get(id) as any;
   return row ? toRow(row) : null;
 }
@@ -90,6 +105,7 @@ function toRow(row: any): ProviderRow {
     region: template?.region ?? "",
     alias: String(row.alias ?? ""),
     enabled: Number(row.enabled) !== 0,
+    weight: Number(row.weight ?? 100),
     policy: platformPolicy(platform),
     createdAt: Number(row.created_at ?? 0),
     updatedAt: Number(row.updated_at ?? 0),
@@ -120,15 +136,17 @@ export function policyOf(idOrPlatform: string): ProviderPolicy {
  */
 export function updateProvider(
   id: string,
-  patch: { alias?: string; enabled?: boolean },
+  patch: { alias?: string; enabled?: boolean; weight?: number },
 ): { ok: boolean; message: string } {
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}` };
   const alias = patch.alias === undefined ? row.alias : String(patch.alias).trim();
   const enabled = patch.enabled === undefined ? row.enabled : patch.enabled;
+  // 权重是整数，可以是负的（负的排最后）。太大的没有意义，收到 10000。
+  const weight = patch.weight === undefined ? row.weight : Math.max(-10000, Math.min(10000, Math.round(patch.weight)));
   store()
-    .prepare("UPDATE provider SET alias = ?, enabled = ?, updated_at = ? WHERE id = ?")
-    .run(alias, enabled ? 1 : 0, Date.now(), id);
+    .prepare("UPDATE provider SET alias = ?, enabled = ?, weight = ?, updated_at = ? WHERE id = ?")
+    .run(alias, enabled ? 1 : 0, weight, Date.now(), id);
   return { ok: true, message: "改好了" };
 }
 
@@ -150,9 +168,14 @@ export function addAccount(input: {
   const now = Date.now();
   const existing = accountsOfPlatform(platform).length;
   const alias = String(input.alias ?? "").trim() || `${platformOf(platform)?.label}${existing ? ` ${existing + 1}` : ""}`;
+  // 新账号排在现有的后面：权重比现在最小的那个再低一点。
+  const lowest = accountsOfPlatform(platform).reduce((min, row) => Math.min(min, row.weight), 100);
+  const weight = Math.max(1, lowest - 10);
   store()
-    .prepare("INSERT INTO provider (id, platform, alias, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)")
-    .run(id, platform, alias, now, now);
+    .prepare(
+      "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?)",
+    )
+    .run(id, platform, alias, weight, now, now);
   return { ok: true, message: `加好了：${alias}`, id };
 }
 

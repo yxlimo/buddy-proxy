@@ -207,7 +207,7 @@ export function UpstreamsPage() {
                       </TableRow>
                       {isExpanded ? (
                         <TableRow>
-                          <TableCell colSpan={6} className='bg-muted/30 p-0'>
+                          <TableCell colSpan={7} className='bg-muted/30 p-0'>
                             <ProviderAccounts
                               platform={upstream.id}
                               kind={upstream.kind}
@@ -234,6 +234,15 @@ export function UpstreamsPage() {
                                 updateProvider.mutate({
                                   id: account.id,
                                   alias,
+                                })
+                              }
+                              onWeightChange={(account, weight) =>
+                                updateProvider.mutate({
+                                  id: account.id,
+                                  // 契约里的别名没有 presence 位：不带它就是清掉。
+                                  // 只改权重时把现在的别名一起带上。
+                                  alias: account.alias ?? '',
+                                  weight,
                                 })
                               }
                               onManageKeys={(account) => {

@@ -277,6 +277,29 @@ export function forgetSession(accountId: string): void {
  * 旧的那一份要删，否则下一次读又把它搬冐来 —— 面板上「注销」过的账号会自己
  * 带着登录态回来。
  */
+/**
+ * 删掉一个账号在**旧位置**留下的记录。
+ *
+ * 旧库把每个租户的凭据与登录态按租户号存着（`account:tokenrhythm:2`、
+ * `session:tokenrhythm:2`、`key:provider:tokenrhythm:tenant-2`）。删账号时只
+ * 删新位置（`key:provider:<id>:…`）的话，这些尾巴会留着 —— 而启动时的归位
+ * 看到它们就会把账号带回来：删了又活，凭据还串着。
+ *
+ * 所以删账号要把旧位置一起删干净：删干净了，系统里就没有它的痕迹了。
+ */
+export function forgetLegacyTenantRecords(accountId: string): number {
+  const index = legacyIndex(accountId);
+  if (index === null) return 0;
+  const ids = [...legacyCredentialIds(index), legacySessionId(index)];
+  let removed = 0;
+  for (const id of ids) {
+    if (!getSecret(id)) continue;
+    deleteSecret(id);
+    removed++;
+  }
+  return removed;
+}
+
 export function forgetTokenRhythmCredential(accountId: string): number {
   const ids = [tokenRhythmCredentialSecretId(accountId), sessionId(accountId)];
   const index = legacyIndex(accountId);

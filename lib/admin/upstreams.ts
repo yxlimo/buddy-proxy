@@ -578,6 +578,28 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
   return merged;
 }
 
+/**
+ * 忘掉一个账号在健康快照里的那一段。
+ *
+ * 账号删掉了，快照里还留着它的余额与套餐：那是它的痕迹。删干净了，系统里
+ * 就不该再有关于它的话。
+ */
+export function forgetAccountSnapshot(accountId: string): void {
+  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data;
+  if (!snapshot) return;
+  let changed = false;
+  // 快照的每个桶都是「账号 id → 那一份」。摊成一张表就能按账号 id 找。
+  const buckets: Record<string, unknown> = { ...snapshot };
+  for (const bucket of Object.values(buckets)) {
+    if (!bucket || typeof bucket !== "object") continue;
+    const table = bucket as Record<string, unknown>;
+    if (!(accountId in table)) continue;
+    delete table[accountId];
+    changed = true;
+  }
+  if (changed) setCached(HEALTH_CACHE_ID, snapshot);
+}
+
 /** 一个上游的额度，合并成一条。上游列表用它。 */
 export function upstreamQuota(id: UpstreamId): QuotaView | null {
   return mergeQuotas(upstreamQuotasCached(id));

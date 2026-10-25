@@ -101,6 +101,7 @@ export function store(): DatabaseSync {
       platform   TEXT NOT NULL,
       alias      TEXT NOT NULL DEFAULT '',
       enabled    INTEGER NOT NULL DEFAULT 1,
+      weight     INTEGER NOT NULL DEFAULT 100,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`,
@@ -116,6 +117,7 @@ export function store(): DatabaseSync {
     )`,
   );
   migrateProviderToAccounts(db);
+  migrateProviderWeight(db);
   migrateTokenRhythmTenants(db);
   return db;
 }
@@ -149,12 +151,13 @@ function migrateProviderToAccounts(db: DatabaseSync): void {
       platform   TEXT NOT NULL,
       alias      TEXT NOT NULL DEFAULT '',
       enabled    INTEGER NOT NULL DEFAULT 1,
+      weight     INTEGER NOT NULL DEFAULT 100,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`,
   );
   const insert = db.prepare(
-    "INSERT INTO provider (id, platform, alias, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const setPolicy = db.prepare(
     "INSERT INTO platform_policy (platform, policy, updated_at) VALUES (?, ?, ?) " +
@@ -162,14 +165,48 @@ function migrateProviderToAccounts(db: DatabaseSync): void {
   );
   const policyOf = new Map(policies.map((r) => [String(r.id), String(r.policy ?? "single")]));
   const now = Date.now();
+  let order = 0;
 
   for (const row of rows) {
     const platform = platformOfLegacyRow(String(row.kind), String(row.region ?? ""));
-    insert.run(String(row.id), platform, String(row.alias ?? ""), Number(row.enabled ?? 1) ? 1 : 0, Number(row.created_at ?? now), Number(row.updated_at ?? now));
+    insert.run(
+      String(row.id),
+      platform,
+      String(row.alias ?? ""),
+      Number(row.enabled ?? 1) ? 1 : 0,
+      // 旧行没有权重：按创建先后给一个递减的，顺序跟从前一样。
+      100 - order * 10,
+      Number(row.created_at ?? now),
+      Number(row.updated_at ?? now),
+    );
+    order++;
     const policy = policyOf.get(String(row.id));
     if (policy && policy !== "single") setPolicy.run(platform, policy, now);
   }
   db.exec("DROP TABLE provider_old");
+}
+
+/**
+ * 权重这一列是后来加的：旧的账号行没有它，先补上。
+ *
+ * 补的默认值按创建先后递减（第一个 100、第二个 90……），这样顺序跟从前一样，
+ * 面板上再让人调。
+ */
+function migrateProviderWeight(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(provider)").all() as { name?: string }[];
+  if (columns.some((c) => c.name === "weight")) return;
+  db.exec("ALTER TABLE provider ADD COLUMN weight INTEGER NOT NULL DEFAULT 100");
+  const rows = db
+    .prepare("SELECT id, platform FROM provider ORDER BY platform, created_at, id")
+    .all() as { id?: string; platform?: string }[];
+  const perPlatform = new Map<string, number>();
+  const set = db.prepare("UPDATE provider SET weight = ? WHERE id = ?");
+  for (const row of rows) {
+    const platform = String(row.platform ?? "");
+    const order = perPlatform.get(platform) ?? 0;
+    perPlatform.set(platform, order + 1);
+    set.run(100 - order * 10, String(row.id));
+  }
 }
 
 /**
@@ -223,20 +260,21 @@ function migrateTokenRhythmTenants(db: DatabaseSync): void {
     if (!Number.isInteger(index) || index < 1) continue;
     const target = index === 1 ? "tokenrhythm" : `tokenrhythm-${index}`;
 
-    insert.run(target, "tokenrhythm", `租户 ${index}`, now, now);
     const data = row.data ?? "{}";
+    // 这一行已经在了？
+    const exists = db.prepare("SELECT id FROM provider WHERE id = ?").get(target);
+    if (exists) {
+      // 在了：要么它已经归位过（凭据在它自己那一格），要么它是用户后来新建的
+      // 同一个 id。两种都不该再灌 —— 灌给新建的账号，就是把旧租户的身份塞给
+      // 一个新账号，数据混了。旧记录清掉：它要么是重复的，要么没人认领。
+      drop.run(id);
+      continue;
+    }
+    insert.run(target, "tokenrhythm", `租户 ${index}`, now, now);
     if (credential) {
-      // 新的一份不全（比如只有 key），就补上，别把已有的覆盖掉。
-      const existing = read(`key:provider:${target}:account`) ?? {};
-      const old = JSON.parse(data) as Record<string, unknown>;
-      const merged: Record<string, unknown> = { ...old, ...existing };
-      for (const [k, v] of Object.entries(old)) {
-        if (merged[k] === undefined || merged[k] === "") merged[k] = v;
-      }
-      put.run(`key:provider:${target}:account`, "account", JSON.stringify(merged), now);
+      put.run(`key:provider:${target}:account`, "account", data, now);
     } else {
-      const existing = read(`session:provider:${target}`);
-      if (!existing) put.run(`session:provider:${target}`, row.kind ?? "session", data, now);
+      put.run(`session:provider:${target}`, row.kind ?? "session", data, now);
     }
     drop.run(id);
   }
