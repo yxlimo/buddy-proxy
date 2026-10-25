@@ -294,6 +294,12 @@ check(
   String(zcodeQuota?.buckets[0]?.remaining),
 );
 check(
+  "到期时刻是 ISO（平台给的是 unix 秒，不能直接 Date.parse）",
+  typeof zcodeQuota?.buckets[0]?.expiresAt === "string" &&
+    !Number.isNaN(Date.parse(zcodeQuota.buckets[0].expiresAt!)),
+  String(zcodeQuota?.buckets[0]?.expiresAt),
+);
+check(
   "额度请求带着设备 id",
   lastBalanceHeaders["x-device-mid"] === "device-1234",
   JSON.stringify(lastBalanceHeaders["x-device-mid"]),

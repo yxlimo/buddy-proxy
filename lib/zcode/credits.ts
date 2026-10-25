@@ -44,6 +44,19 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * 平台给的是 unix 秒，别的模块按 ISO 字符串收。
+ *
+ * 直接 Date.parse 一个数字串会得到 NaN（它不认 unix 时间），到后面
+ * BigInt(NaN) 就炸了。
+ */
+function isoFromSeconds(value: unknown): string | null {
+  const seconds = num(value);
+  if (!seconds) return null;
+  const date = new Date(seconds * 1000);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 /** 读额度。没有登录态就没有额度。 */
 export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota | null> {
   const session = loadSession(providerId);
@@ -71,9 +84,9 @@ export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota 
       total: num(row?.total_units),
       used: num(row?.used_units),
       remaining: num(row?.remaining_units ?? row?.available_units),
-      periodStart: row?.period_start ?? null,
-      periodEnd: row?.period_end ?? null,
-      expiresAt: row?.expires_at ?? null,
+      periodStart: isoFromSeconds(row?.period_start),
+      periodEnd: isoFromSeconds(row?.period_end),
+      expiresAt: isoFromSeconds(row?.expires_at),
     }));
     return { buckets, serverTime: data?.server_time ?? null };
   } catch {
