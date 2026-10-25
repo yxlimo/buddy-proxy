@@ -118,17 +118,39 @@ function startRouter(qoderGlobal: string): ChildProcess {
   return child;
 }
 
-async function waitHealthy(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
+async function waitHealthy(): Promise<void> {
+  // A minute, not twenty seconds: the machine may be busy with other tests,
+  // and a router that is slow to come up is not a failure.
+  for (let i = 0; i < 120; i++) {
     try {
       const res = await fetch(`${base}/health`);
-      if (res.ok) return true;
+      if (res.ok) return;
     } catch {
       /* not up yet */
     }
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 500));
   }
-  return false;
+  // Say so: otherwise the next fetch fails with a connection error and the
+  // real reason is a hundred lines up.
+  throw new Error(`the router did not come up:\n${routerLog.slice(-2000)}`);
+}
+
+/**
+ * Stop the router and wait for it to let go of the port.
+ *
+ * The next router binds the same port, so starting it before the old one is
+ * really gone means the new one dies on "address in use" — and then the test
+ * fails on a connection error that says nothing about the cause.
+ */
+async function stopRouter(): Promise<void> {
+  const child = router;
+  router = null;
+  if (!child) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill("SIGTERM");
+  const hard = setTimeout(() => child.kill("SIGKILL"), 5000);
+  await exited;
+  clearTimeout(hard);
 }
 
 function cleanup(): void {
@@ -612,8 +634,7 @@ section("上游真的关掉之后（重启过）");
 
 // 把上游开关改成关（写进数据库），再重启：这次上游是真的关着的。
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
-router?.kill("SIGTERM");
-await new Promise((r) => setTimeout(r, 500));
+await stopRouter();
 startRouter("");
 await waitHealthy();
 const offHealth = await fetch(`${base}/health`).then((r) => r.json());
@@ -636,8 +657,7 @@ check("客户端问一个公布出来的模型，答不上来", offChat.status =
 
 // 回到上游开着的状态，后面的收尾还要用。
 await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
-router?.kill("SIGTERM");
-await new Promise((r) => setTimeout(r, 500));
+await stopRouter();
 startRouter("true");
 await waitHealthy();
 
