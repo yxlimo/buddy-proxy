@@ -186,7 +186,7 @@ tools/deploy-nas.sh       # 构建镜像、送过去、换容器
 | `docs/workbuddy/` | WorkBuddy 的封闭客户端，以及我们跟它的差异 |
 | `docs/minimax/` | MiniMax 的封闭客户端、签到 |
 | `docs/sensenova/` | SenseNova 的积分池 |
-| `docs/zcode/` | ZCode 的协议调研（`FINDINGS.md` 是结论与出处，`DIVERGENCES.md` 是当初的实现清单）|
+| `docs/zcode/` | ZCode 的协议调研（`FINDINGS.md` 结论与出处，`DIVERGENCES.md` 实现清单，`405.md` 上游 405 的排查记录）|
 | `docs/intern-ai/` | 书生·端砚 |
 | `docs/admin-panel/` | 面板的计划 |
 | `docs/tasks/<任务>/context.md` | 每个任务的背景、决定与交付记录 |
