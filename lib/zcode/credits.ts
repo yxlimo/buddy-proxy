@@ -13,6 +13,7 @@
 // 依据：docs/zcode/FINDINGS.md §9。
 
 import { ZCODE_BASE, ZCODE_VERSION, loadSession } from "./auth.ts";
+import { setZcodeCapabilities } from "./models.ts";
 import { zcodePlatformHeaders } from "./transport.ts";
 
 export interface ZcodeBucket {
@@ -76,7 +77,7 @@ export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota 
     const body: any = await r.json().catch(() => null);
     if (!body || body?.code !== 0) return null;
     const data = body?.data ?? {};
-    const buckets = (Array.isArray(data.balances) ? data.balances : []).map((row: any) => ({
+    const buckets: ZcodeBucket[] = (Array.isArray(data.balances) ? data.balances : []).map((row: any) => ({
       showName: String(row?.show_name ?? ""),
       meter: String(row?.meter ?? ""),
       unitType: String(row?.unit_type ?? ""),
@@ -88,6 +89,9 @@ export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota 
       periodEnd: isoFromSeconds(row?.period_end),
       expiresAt: isoFromSeconds(row?.expires_at),
     }));
+    // 平台按账号限定能用哪些模型（每个额度桶带 capabilities）。它也是
+    // 公布目录的依据 —— 不在这份清单里的模型，上游回 3006 model not allowed。
+    setZcodeCapabilities(buckets.flatMap((b) => b.capabilities));
     return { buckets, serverTime: data?.server_time ?? null };
   } catch {
     return null;

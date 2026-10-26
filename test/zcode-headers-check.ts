@@ -17,6 +17,7 @@
 // 头少一个、多一个、或者每次都换的那些，平台那边看得见。
 
 import { zcodeHeaders, zcodePlatformHeaders, zcodeBody, ZCODE_MESSAGES_URL } from "../lib/zcode/transport.ts";
+import { setZcodeCapabilities, zcodeModelsInUse, zcodeEffortFor } from "../lib/zcode/models.ts";
 import type { ZcodeSession } from "../lib/zcode/auth.ts";
 import type { Json } from "../lib/json.ts";
 
@@ -149,17 +150,21 @@ console.log("");
 console.log("思考怎么发：按目录里的标记（官方 zcode-builtin.json 的 modelApiRules）");
 
 {
-  // GLM-5.2：官方规则 7 —— enabled + effort。
-  const body = zcodeBody({ model: "GLM-5.2", messages: [] } as Json, session, { model: "GLM-5.2" });
-  check("GLM-5.2 开着思考", (body as Json)["thinking"]?.["type"] === "enabled", JSON.stringify((body as Json)["thinking"]));
-  check("GLM-5.2 带 effort", (body as Json)["output_config"]?.["effort"] === "medium", JSON.stringify((body as Json)["output_config"]));
+  // GLM-5.3：官方规则 —— enabled + effort（它只认 low / high / max）。
+  const body = zcodeBody({ model: "GLM-5.3", messages: [] } as Json, session, { model: "GLM-5.3" });
+  check("GLM-5.3 开着思考", (body as Json)["thinking"]?.["type"] === "enabled", JSON.stringify((body as Json)["thinking"]));
+  check(
+    "GLM-5.3 的档位换成它认的",
+    (body as Json)["output_config"]?.["effort"] === "high",
+    JSON.stringify((body as Json)["output_config"]),
+  );
 }
 
 {
-  // GLM-5-Turbo：官方规则 8 —— disabled，没有 effort 这个档。
-  const body = zcodeBody({ model: "GLM-5-Turbo", messages: [] } as Json, session, { model: "GLM-5-Turbo" });
-  check("Turbo 不思考", (body as Json)["thinking"]?.["type"] === "disabled", JSON.stringify((body as Json)["thinking"]));
-  check("Turbo 没有 output_config", (body as Json)["output_config"] === undefined, JSON.stringify((body as Json)["output_config"]));
+  // 不在目录里的模型：不发思考（上游反正不让用）。
+  const body = zcodeBody({ model: "GLM-5.2", messages: [] } as Json, session, { model: "GLM-5.2" });
+  check("目录外的模型不思考", (body as Json)["thinking"]?.["type"] === "disabled", JSON.stringify((body as Json)["thinking"]));
+  check("目录外的模型没有 output_config", (body as Json)["output_config"] === undefined, JSON.stringify((body as Json)["output_config"]));
 }
 
 {
@@ -176,6 +181,34 @@ console.log("路径");
 
 {
   check("路径是官方那一套", ZCODE_MESSAGES_URL.endsWith("/api/v1/zcode-plan/anthropic/v1/messages"), ZCODE_MESSAGES_URL);
+}
+
+console.log("");
+console.log("平台说的权益决定公布哪些模型");
+
+{
+  // 这个账号的额度接口只给了这两个 capabilities —— 5.2 与 Turbo 上游回 3006。
+  setZcodeCapabilities(["model:glm-5.3", "model:glm-5.3-flash"]);
+  const ids = zcodeModelsInUse().map((m) => m.id);
+  check("只公布权益里有的", ids.join(",") === "GLM-5.3,GLM-5.3-Flash", ids.join(","));
+  check("5.2 不在目录里", !ids.includes("GLM-5.2"), ids.join(","));
+  check("Turbo 不在目录里", !ids.includes("GLM-5-Turbo"), ids.join(","));
+}
+
+{
+  // 一个都对不上时不要把目录清空。
+  setZcodeCapabilities(["model:some-new-model"]);
+  check("对不上就退回整个目录", zcodeModelsInUse().length === 2, String(zcodeModelsInUse().length));
+}
+
+console.log("");
+console.log("思考档位换成模型认的");
+
+{
+  check("flash 认 low", zcodeEffortFor("GLM-5.3-Flash", "low") === "low");
+  check("flash 不认 medium，往深处靠", zcodeEffortFor("GLM-5.3-Flash", "medium") === "high");
+  check("flash 认 max", zcodeEffortFor("GLM-5.3-Flash", "max") === "max");
+  check("glm-5.3 也只认 low/high/max", zcodeEffortFor("GLM-5.3", "minimal") === "low");
 }
 
 console.log("");

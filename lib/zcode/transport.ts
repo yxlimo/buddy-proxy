@@ -13,7 +13,7 @@ import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
-import { matchZcodeModel } from "./models.ts";
+import { matchZcodeModel, zcodeEffortFor } from "./models.ts";
 
 /** 模型端点。 */
 export const ZCODE_MESSAGES_URL = `${ZCODE_BASE}/api/v1/zcode-plan/anthropic/v1/messages`;
@@ -134,8 +134,12 @@ export function zcodeBody(
   //
   // 目录里标了 reasoning 的就是能思考的，effort 跟着客户端的要求走
   // （官方那边没指定时是 medium）。
+  //
+  // 每个模型认的档位不一样（glm-5.3 是 low/high/max，glm-5.2 是 high/max），
+  // 实测要的值不在清单里时上游也不给好脸色，所以先换成模型认的那个。
   const entry = matchZcodeModel(String(opts.model ?? ""));
-  const level = opts.effort ?? "medium";
+  const modelId = String(opts.model ?? "");
+  const level = zcodeEffortFor(modelId, opts.effort ?? "medium");
   if (entry?.reasoning) {
     out.thinking = { type: "enabled" };
     out.output_config = { effort: level };

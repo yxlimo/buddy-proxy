@@ -102,7 +102,7 @@ import { INTERN_AI_DISCOVERY_API_BASE } from "./intern-ai/config.ts";
 
 import { workbuddyModelList } from "./workbuddy/models.ts";
 import { zcodeStatus } from "./zcode/auth.ts";
-import { ZCODE_MODELS } from "./zcode/models.ts";
+import { zcodeModelsInUse } from "./zcode/models.ts";
 import { ZCODE_MESSAGES_URL } from "./zcode/transport.ts";
 
 /* ------------------------------------------------------------------ *
@@ -694,7 +694,7 @@ registerKind({
   policies: ["single", "fallback"],
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
   credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session"),
-  models: () => zcodeCatalogModels(ZCODE_MODELS),
+  models: () => zcodeCatalogModels(zcodeModelsInUse()),
   quotas: (provider, snapshot) => zcodeQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
     const mine = (snapshot.zcode?.[provider.id] ?? {}) as any;
