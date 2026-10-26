@@ -234,16 +234,10 @@ export function setProviderEnabled(id: string, enabled: boolean): { ok: boolean;
   return updateProvider(id, { enabled });
 }
 
-/**
- * 凭据在数据库里的 id。
- *
- * 每个 provider 的凭据都归它自己 —— 两个同 kind 的账号各有各的会话。
- * 这一处是唯一的算法：会话是 session:provider:<id>，多出来的东西
- * （一把 key、一个租户）往后接一段。
- */
-export function providerSecretId(providerId: string, suffix = ""): string {
-  return suffix ? `key:provider:${providerId}:${suffix}` : `session:provider:${providerId}`;
-}
+// 凭据的 id 算法在叶子模块里（lib/credential-ids.ts）：zcode/auth.ts 要用它，
+// 从这里引会把各平台都拖进来（那边有模块循环），单独 import 它就会崩。
+// 这里继续转出去，调用方不用改。
+export { providerSecretId } from "./credential-ids.ts";
 
 /** 它的 kind 在注册表里的那一条。 */
 export function providerKindOf(id: string): ProviderKind | null {

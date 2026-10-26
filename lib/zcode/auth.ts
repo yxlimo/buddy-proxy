@@ -19,7 +19,7 @@ import { configNumber, configString } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { readSession, writeSession } from "../session.ts";
 import { deleteSecret, getSecret } from "../store.ts";
-import { providerSecretId } from "../providers.ts";
+import { providerSecretId } from "../credential-ids.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
 import { dataDir } from "../paths.ts";
 
@@ -47,11 +47,6 @@ export const ZCODE_POLL_TIMEOUT_MS = configNumber("ZCODE_POLL_TIMEOUT_MS", 900_0
  */
 export function sessionId(providerId = "zcode"): string {
   return providerSecretId(providerId);
-}
-
-/** 会话以前放在这里（只有一个 ZCode 账号的时候）。 */
-function legacySessionId(): string {
-  return "session:zcode";
 }
 
 export interface ZcodeSession {
@@ -232,39 +227,46 @@ export function saveSession(session: ZcodeSession, providerId = "zcode"): void {
 export function loadSession(providerId = "zcode"): ZcodeSession | null {
   const valid = (raw: any) => {
     if (!raw?.token) return false;
-    if (typeof raw.expiresAtMs === "number" && raw.expiresAtMs < Date.now()) return false;
+    // expiresAtMs 是 0 就是「不知道什么时候过期」：官方客户端的 zcode JWT
+    // 没有 exp，到期由平台说了算，客户端也不记到期时间。不知道就当还有效，
+    // 让平台的回答来判断。
+    if (typeof raw.expiresAtMs === "number" && raw.expiresAtMs > 0 && raw.expiresAtMs < Date.now()) {
+      return false;
+    }
     return true;
   };
-  const session = readSession<ZcodeSession>(sessionId(providerId), valid);
-  if (session) return session;
-  // 会话以前是全局一份：认它一次，搬到这个 provider 名下。
-  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
-  const legacy = providerId === "zcode" ? getSecret<ZcodeSession>(legacySessionId()) : null;
-  if (!legacy || !valid(legacy)) return null;
-  saveSession(legacy, providerId);
-  return legacy;
+  // 只有这个账号名下那一份。旧位置（全局的 session:zcode）不再认：留着它，
+  // 注销的账号会带着旧身份回来。
+  return readSession<ZcodeSession>(sessionId(providerId), valid);
 }
 
-/** 忘掉会话：下一次调用会重新登录。 */
+/**
+ * 忘掉会话：下一次调用会重新登录。
+ *
+ * 旧位置（全局的 session:zcode）也清掉：留着它，注销的账号会带着旧身份
+ * 回来 —— 那份凭据还在，登录的时候会被认出来。
+ */
 export function forgetSession(providerId = "zcode"): void {
   deleteSecret(sessionId(providerId));
-  // 旧的那份也清掉：不然清完又会从它那里冒出来。
-  if (providerId === "zcode") deleteSecret(legacySessionId());
+  if (providerId === "zcode") deleteSecret("session:zcode");
 }
 
 /** 面板上用的凭据状态。 */
 export function zcodeStatus(providerId = "zcode"): Record<string, unknown> {
   const session = loadSession(providerId);
   if (!session) return { source: sessionId(providerId), status: "anonymous", error: "no session" };
-  const remainingMs = session.expiresAtMs - Date.now();
+  // 官方客户端的 zcode JWT 没有 exp，到期由平台说了算。到期时间不知道的
+  // 时候（0），不说它过期，也不编一个日子出来：面板上显示「—」。
+  const known = session.expiresAtMs > 0;
+  const remainingMs = known ? session.expiresAtMs - Date.now() : 0;
   return {
     source: sessionId(providerId),
-    status: remainingMs > 0 ? "authenticated" : "expired",
+    status: known && remainingMs <= 0 ? "expired" : "authenticated",
     provider: session.provider,
     userId: session.userId ?? "",
     generation: session.generation,
-    expiresAt: new Date(session.expiresAtMs).toISOString(),
-    remainingSec: Math.round(remainingMs / 1000),
+    expiresAt: known ? new Date(session.expiresAtMs).toISOString() : "",
+    remainingSec: known ? Math.round(remainingMs / 1000) : 0,
     warning: false,
     loginAt: new Date(session.loginAtMs).toISOString(),
   };
