@@ -141,6 +141,8 @@ export interface UpstreamContext {
  * wrong and every account would fail the same way).
  */
 function upstreamStatusError(status: number, text: string, what: string): AuthError {
+  // 正文只进 hint，日志与用量表只记 message。上游为什么拒，只能靠这一行。
+  console.warn(`[UPSTREAM] ${what}上游 ${status}：${text.slice(0, 500)}`);
   const error = new AuthError(
     `upstream HTTP ${status}`,
     `${what}上游返回 ${status}：${text.slice(0, 300)}`,
