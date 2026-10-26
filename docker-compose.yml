@@ -24,11 +24,12 @@ services:
       # with the credentials and the settings, the credential log, the salt the
       # device fingerprint is derived from. It has to survive a rebuild.
       BUDDY_DATA_DIR: /data
-      # The daily check-in of the China accounts. It runs on its own, so this is
-      # only how often it looks; the day rolls over at midnight in China.
-      BENEFITS_INTERVAL_MS: "21600000"
       TZ: Asia/Shanghai
       KEYS_FILE: /data/api-keys.json
+      # The check-in of the China accounts runs on its own timer (see
+      # lib/admin/benefits.ts). It is not pinned here: the code decides how
+      # often, because the Buddy's trip lasts one to four hours and its gift
+      # has to be picked up inside that window.
     # The TokenRhythm accounts and their keys, and the MiniMax plan key, come
     # from the .env file next to this one. The proxy reads the ones it knows
     # by name; nothing else in the file is loaded.

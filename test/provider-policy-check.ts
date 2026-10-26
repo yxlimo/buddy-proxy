@@ -339,6 +339,35 @@ check(
   calls.join(","),
 );
 
+// 一个账号出错不挡着别的账号：签到是各自的事。
+{
+  const calls2: string[] = [];
+  const broken = {
+    minimax: async (id: string) => {
+      calls2.push(`minimax:${id}`);
+      throw new Error("这个账号的会话坏了");
+    },
+    qoder: async (id: string) => {
+      calls2.push(`qoder:${id}`);
+      return outcome(id);
+    },
+  };
+  const results2 = await runBenefits(["minimax-1", "qoder-2"], broken);
+  check("出错的那个也出了结果", results2.length === 2, JSON.stringify(results2.length));
+  check(
+    "出错的那个说的是失败",
+    results2.find((r) => r.upstream === "minimax-1")?.ok === false,
+    JSON.stringify(results2.find((r) => r.upstream === "minimax-1")),
+  );
+  check(
+    "错话里有原因",
+    String(results2.find((r) => r.upstream === "minimax-1")?.report.join("")).includes("会话坏了"),
+    JSON.stringify(results2.find((r) => r.upstream === "minimax-1")?.report),
+  );
+  check("别的账号照样签了", calls2.includes("qoder:qoder-2"), calls2.join(","));
+  check("出错的那个也轮到过", calls2.includes("minimax:minimax-1"), calls2.join(","));
+}
+
 console.log("");
 console.log("签到的定时器");
 

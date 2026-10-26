@@ -66,7 +66,19 @@ export async function runBenefits(
     if (!row) continue;
     const runner = runners ? runners[row.kind] : registeredRunner(row.kind);
     if (!runner) continue;
-    out.push(await runner(id));
+    // 一个账号出错不挡着别的账号：签到是每个账号各自的事，一个账号的会话
+    // 坏了，别的账号今天也该签上。
+    try {
+      out.push(await runner(id));
+    } catch (e) {
+      out.push({
+        upstream: id,
+        ok: false,
+        credits: 0,
+        report: [`签到出错：${(e as Error)?.message ?? String(e)}`],
+        at: new Date().toISOString(),
+      });
+    }
   }
   return out;
 }
