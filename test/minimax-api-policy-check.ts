@@ -52,8 +52,6 @@ await new Promise<void>((resolve) => platform.listen(0, "127.0.0.1", resolve));
 const port = (platform.address() as any).port;
 
 process.env.MINIMAX_API_BASE = `http://127.0.0.1:${port}/v1`;
-process.env.MINIMAX_API_1_KEY = "sk_test_key_1";
-process.env.MINIMAX_API_2_KEY = "sk_test_key_2";
 
 /* ------------------------------------------------------------------ *
  * 上游自己的策略
@@ -61,7 +59,10 @@ process.env.MINIMAX_API_2_KEY = "sk_test_key_2";
 
 const { addAccount } = await import("../lib/providers.ts");
 const { setPlatformPolicy } = await import("../lib/platforms.ts");
-addAccount({ platform: "minimax-api" });
+const { setProviderKeys } = await import("../lib/admin/credentials.ts");
+const apiAccount = addAccount({ platform: "minimax-api" });
+// key 写在账号名下：这就是面板上「配 API Key」写的东西。
+setProviderKeys(apiAccount.id!, ["sk_test_key_1", "sk_test_key_2"]);
 const setPolicy = (policy: string): void => {
   setPlatformPolicy("minimax-api", policy as never);
 };

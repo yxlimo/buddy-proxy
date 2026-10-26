@@ -22,7 +22,6 @@
 // 值的读法：只按键名取（lib/env.ts 的白名单读取），不打印、不写进别处。
 
 import { configString } from "../config.ts";
-import { readEnvValue } from "../env.ts";
 
 /** openxlab 的 SSO（登录、OAuth 授权码）。 */
 export const INTERN_AI_SSO_BASE = configString("INTERN_AI_SSO_BASE", "https://sso.openxlab.org.cn").replace(
@@ -103,31 +102,30 @@ export const INTERN_AI_TOKEN_COOKIE = "uaa-token";
 /**
  * 登录用的手机号与密码。
  *
- * 谁优先：显式传进来的 > 环境变量 > 数据库里的拷贝。
- *
- * 环境变量排在拷贝前面，是因为 .env 里换过的密码必须立刻生效，不能被数据库里
- * 的旧拷贝挡住；拷贝排在最后，是为了 .env 不在的时候服务照样能登录。
+ * 谁优先：显式传进来的 > 数据库里这个账号自己的那份。
  */
 export function internAiCredentials(
   explicit?: { user?: string; password?: string },
   stored?: { user?: string; password?: string } | null,
 ): { user: string; password: string } {
-  const user = explicit?.user || readEnvValue("INTERN_AI_USER") || stored?.user || "";
-  const password = explicit?.password || readEnvValue("INTERN_AI_PASSWORD") || stored?.password || "";
+  const user = explicit?.user || stored?.user || "";
+  const password = explicit?.password || stored?.password || "";
   return { user, password };
 }
 
-/** 已经在环境里的 token（有就优先用它，不去登录）。 */
+/**
+ * token 与两把推理 key。
+ *
+ * 只有账号自己那一处：环境变量不是凭据来源（删掉的账号转眼又会有一把）。
+ */
 export function internAiToken(fallback?: string | null): string {
-  return readEnvValue("INTERN_AI_TOKEN") || fallback || "";
+  return fallback || "";
 }
 
-/** 已经在环境里的 Discovery 推理 key。 */
 export function internAiDiscoveryKey(fallback?: string | null): string {
-  return readEnvValue("INTERN_AI_DISCOVERY_API_KEY") || fallback || "";
+  return fallback || "";
 }
 
-/** 已经在环境里的 Chat 推理 key（InternLM API Token）。 */
 export function internAiChatKey(fallback?: string | null): string {
-  return readEnvValue("INTERN_AI_CHAT_API_KEY") || fallback || "";
+  return fallback || "";
 }

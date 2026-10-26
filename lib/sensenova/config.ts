@@ -16,7 +16,6 @@
 // 值的读法：只按键名取（lib/env.ts 的白名单读取），不打印、不写进别处。
 
 import { configString } from "../config.ts";
-import { readEnvValue } from "../env.ts";
 
 /** 推理端点，比如 https://token.sensenova.cn/v1 。 */
 export const SENSENOVA_INFER_BASE = configString("SENSENOVA_BASE", "https://token.sensenova.cn/v1").replace(
@@ -47,22 +46,22 @@ export const SENSENOVA_CLIENT_ID = configString("SENSENOVA_CLIENT_ID", "nova");
 /**
  * 登录用的账号与密码。
  *
- * 谁优先：显式传进来的 > 环境变量 > 数据库里的拷贝。
- *
- * 环境变量排在拷贝前面，是因为 .env 里换过的密码必须立刻生效，不能被
- * 数据库里的旧拷贝挡住；拷贝排在最后，是为了 .env 不在的时候服务照样
- * 能登录。
+ * 谁优先：显式传进来的 > 数据库里这个账号自己的那份。
  */
 export function senseNovaCredentials(
   explicit?: { user?: string; password?: string },
   stored?: { user?: string; password?: string } | null,
 ): { user: string; password: string } {
-  const user = explicit?.user || readEnvValue("SENSENOVA_USER") || stored?.user || "";
-  const password = explicit?.password || readEnvValue("SENSENOVA_PASSWORD") || stored?.password || "";
+  const user = explicit?.user || stored?.user || "";
+  const password = explicit?.password || stored?.password || "";
   return { user, password };
 }
 
-/** 已经在环境里的推理 key（有就优先用它，不去平台新建）。 */
+/**
+ * 推理 key。
+ *
+ * 只有账号自己那一处：环境变量不是凭据来源（删掉的账号转眼又会有一把）。
+ */
 export function senseNovaApiKey(fallback?: string | null): string {
-  return readEnvValue("SENSENOVA_API_KEY") || fallback || "";
+  return fallback || "";
 }

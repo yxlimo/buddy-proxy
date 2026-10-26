@@ -74,16 +74,6 @@ export const SESSION_ID = sessionId();
 /** 内置的那个 provider 的账号信息在数据库里的名字。 */
 export const ACCOUNT_ID = accountId();
 
-/** 会话以前放在这里（只有一个账号的时候）。 */
-function legacySessionId(): string {
-  return "session:intern-ai";
-}
-
-/** 账号信息以前放在这里（只有一个账号的时候）。 */
-function legacyAccountId(): string {
-  return "account:intern-ai";
-}
-
 /** 数据库里那份账号信息的样子。 */
 export interface StoredAccount {
   user?: string;
@@ -96,13 +86,10 @@ export interface StoredAccount {
 /**
  * 读这个 provider 的账号信息。
  *
- * 旧的那份也认：账号信息是在 provider 这件事之前存的，搬一次，别让人重新登。
+ * 只有账号自己那一处：旧位置不再读——那会让删掉的账号转眼又带上旧的凭据。
  */
 export function storedAccount(providerId = "intern-ai"): StoredAccount | null {
-  const stored = getSecret<StoredAccount>(accountId(providerId));
-  if (stored) return stored;
-  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
-  return providerId === "intern-ai" ? getSecret<StoredAccount>(legacyAccountId()) : null;
+  return getSecret<StoredAccount>(accountId(providerId));
 }
 
 /** 一个子站的登录结果。 */
@@ -565,13 +552,7 @@ export function sessionValid(session: InternAiSession | null): session is Intern
 export function loadSession(providerId = "intern-ai"): InternAiSession | null {
   const valid = (raw: any) => !!raw?.sites?.length && raw.sites.every((s: any) => !!s?.token);
   const session = readSession<InternAiSession>(sessionId(providerId), valid);
-  if (session) return session;
-  // 会话以前是全局一份：认它一次，搬到这个 provider 名下。
-  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
-  const legacy = providerId === "intern-ai" ? getSecret<InternAiSession>(legacySessionId()) : null;
-  if (!legacy || !valid(legacy)) return null;
-  saveSession(legacy, providerId);
-  return legacy;
+  return session;
 }
 
 /** 存会话。 */
@@ -583,8 +564,6 @@ export function saveSession(session: InternAiSession, providerId = "intern-ai"):
 export function clearSession(providerId = "intern-ai"): void {
   try {
     deleteSecret(sessionId(providerId));
-    // 旧的那份也清掉：不然清完又会从它那里冒出来。
-    if (providerId === "intern-ai") deleteSecret(legacySessionId());
   } catch {
     /* 没什么可清的了 */
   }

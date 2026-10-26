@@ -13,7 +13,6 @@
 
 import type { Json } from "../json.ts";
 import { configString } from "../config.ts";
-import { readEnvValue } from "../env.ts";
 import { getSecret, setSecret } from "../store.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
@@ -44,36 +43,27 @@ export interface MiniMaxApiTenant {
   key: string;
 }
 
-/** key 以前放在这里（只有一个开放平台账号的时候）。 */
-function legacyTenantSecretId(index: number): string {
-  return `key:minimax-api:${index}`;
-}
-
 /**
  * 配置着的租户。
  *
- * 凭据是环境优先：key 在 .env 里换过必须立刻生效。数据库存一份副本，这样
- * 没有 .env 也能跑，面板也读得到配了什么。
+ * 凭据只在账号自己的那些格子里：面板写什么就是什么，环境变量不参与。
+ */
+/**
+ * 一个账号下的几把 key。
  *
- * 环境变量只属于内置的那个 provider：别的 provider 不该拿它的 key。
+ * 只有一处：账号自己的那些格。环境变量不是凭据来源（它会在每次读的时候把
+ * 自己写回数据库），旧位置也不再读——那会让删掉的账号转眼又有一把 key。
  */
 export function miniMaxApiTenants(providerId = BUILT_IN): MiniMaxApiTenant[] {
   const out: MiniMaxApiTenant[] = [];
   for (let index = 1; index <= MAX_TENANTS; index++) {
     const id = miniMaxApiTenantSecretId(index, providerId);
     // 存的形状有两种：对象（面板写的）与裸字符串（早先写的）。都认。
-    // 旧的那份也认：key 是在 provider 这件事之前存的，搬一次，别让人重新配。
-    // 但旧的那份是全局的，所以只有内置的那个 provider 认它。
-    const raw =
-      getSecret<unknown>(id) ??
-      (providerId === BUILT_IN ? getSecret<unknown>(legacyTenantSecretId(index)) : null);
+    const raw = getSecret<unknown>(id);
     const stored =
       typeof raw === "string" ? raw : raw && typeof raw === "object" && "key" in raw ? String((raw as any).key ?? "") : "";
-    const fromEnv = providerId === BUILT_IN ? readEnvValue(`MINIMAX_API_${index}_KEY`) || "" : "";
-    const key = fromEnv || stored;
-    if (!key) continue;
-    if (fromEnv && fromEnv !== stored) setSecret(id, "key", { key: fromEnv });
-    out.push({ index, key });
+    if (!stored) continue;
+    out.push({ index, key: stored });
   }
   return out;
 }

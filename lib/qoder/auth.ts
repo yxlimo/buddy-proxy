@@ -21,7 +21,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { provider, providerSecretId } from "../providers.ts";
 
@@ -109,10 +109,6 @@ export function sessionId(providerId = "qoder"): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(region: QoderRegion = REGION): string[] {
-  return legacyPaths(`qoder-session.${region}.json`);
-}
-
 export function loginHint(providerId = "qoder"): string {
   const region = regionOf(providerId);
   return (
@@ -135,7 +131,7 @@ export function newMachineIdentity(): { machineId: string; machineToken: string;
 
 export function loadSession(providerId = "qoder"): QoderSession | null {
   const region = regionOf(providerId);
-  return readSession<QoderSession>(sessionId(providerId), hasTokens, legacySessionPath(region));
+  return readSession<QoderSession>(sessionId(providerId), hasTokens);
 }
 
 export function hasSession(providerId = "qoder"): boolean {

@@ -58,16 +58,6 @@ export const SESSION_ID = sessionId();
 /** 内置的那个 provider 的账号信息在数据库里的名字。 */
 export const ACCOUNT_ID = accountId();
 
-/** 会话以前放在这里（只有一个账号的时候）。 */
-function legacySessionId(): string {
-  return "session:sensenova";
-}
-
-/** 账号信息以前放在这里（只有一个账号的时候）。 */
-function legacyAccountId(): string {
-  return "account:sensenova";
-}
-
 /** 数据库里那份账号信息的样子。 */
 export interface StoredAccount {
   user?: string;
@@ -85,7 +75,7 @@ export function storedAccount(providerId = "sensenova"): StoredAccount | null {
   const stored = getSecret<StoredAccount>(accountId(providerId));
   if (stored) return stored;
   // 旧的那份是全局的，所以只有内置的那个 provider 认它。
-  return providerId === "sensenova" ? getSecret<StoredAccount>(legacyAccountId()) : null;
+  return null;
 }
 
 /** 多久算快到期（毫秒）。到了就用刷新换新的。 */
@@ -393,14 +383,7 @@ export function sessionValid(session: SenseNovaSession | null): session is Sense
 /** 数据库里的会话。 */
 export function loadSession(providerId = "sensenova"): SenseNovaSession | null {
   const valid = (raw: any) => !!raw?.accessToken && !!raw?.refreshToken;
-  const session = readSession<SenseNovaSession>(sessionId(providerId), valid);
-  if (session) return session;
-  // 会话以前是全局一份：认它一次，搬到这个 provider 名下。
-  // 旧的那份是全局的，所以只有内置的那个 provider 认它。
-  const legacy = providerId === "sensenova" ? getSecret<SenseNovaSession>(legacySessionId()) : null;
-  if (!legacy || !valid(legacy)) return null;
-  saveSession(legacy, providerId);
-  return legacy;
+  return readSession<SenseNovaSession>(sessionId(providerId), valid);
 }
 
 /** 存会话。 */
@@ -412,8 +395,6 @@ export function saveSession(session: SenseNovaSession, providerId = "sensenova")
 export function clearSession(providerId = "sensenova"): void {
   try {
     deleteSecret(sessionId(providerId));
-    // 旧的那份也清掉：不然清完又会从它那里冒出来。
-    if (providerId === "sensenova") deleteSecret(legacySessionId());
   } catch {
     /* 没什么可清的了 */
   }

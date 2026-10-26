@@ -28,7 +28,7 @@
 
 import { configString } from "../config.ts";
 import fs from "node:fs";
-import { legacyPaths, writeSession } from "../session.ts";
+import { writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { addAccount, provider, providerSecretId } from "../providers.ts";
@@ -65,17 +65,6 @@ function accountIdOfIndex(index: number): string {
  */
 function legacyCredentialIds(index: number): string[] {
   return [providerSecretId(PLATFORM, `tenant-${index}`), `account:tokenrhythm:${index}`];
-}
-
-/** 旧位置的一份凭据（只读，不搬）。 */
-function legacyCredentialOf(index: number): TokenRhythmCredential | null {
-  for (const id of legacyCredentialIds(index)) {
-    const raw = getSecret<Partial<TokenRhythmCredential>>(id);
-    if (!raw) continue;
-    const credential = normalize(raw);
-    if (credential.account || credential.apiKey) return credential;
-  }
-  return null;
 }
 
 /**
@@ -163,11 +152,6 @@ export function dataDir(): string {
 /** Where the session of an account lives. */
 export function sessionId(accountId: string): string {
   return providerSecretId(accountId);
-}
-
-/** Where the sessions used to live, before they moved into the database. */
-export function legacySessionPath(index: number): string[] {
-  return legacyPaths(`tokenrhythm-session.${index}.json`);
 }
 
 /** Where a tenant's session used to live, as a row of its own. */

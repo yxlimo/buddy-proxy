@@ -12,7 +12,6 @@
 // the credits being the ones that were given rather than paid for.
 
 import { configString } from "../config.ts";
-import { readEnvValue } from "../env.ts";
 import { getSecret, setSecret } from "../store.ts";
 import { providerSecretId } from "../providers.ts";
 
@@ -200,16 +199,15 @@ export async function fetchMiniMaxTokenPlan(
  * has to take effect. The database holds a copy, so the service still works
  * when the .env file is not there, and the panel can read what is configured.
  */
+/**
+ * 账号的 plan key。
+ *
+ * 只有一处：账号自己的那一格。环境变量不是凭据来源——它会在每次读的时候把
+ * 自己写回数据库，于是删掉的账号转眼又有了 key，而且面板上设的那把会被它
+ * 顶掉。
+ */
 export function miniMaxTokenPlanKey(providerId = "minimax"): string | null {
-  // The plan key belongs to the provider: two accounts have two plans.
   const id = providerSecretId(providerId, "plan");
-  const fromEnv = providerId === "minimax" ? readEnvValue("MINIMAX_TOKEN_PLAN_KEY") || "" : "";
-  if (fromEnv) {
-    if (getSecret<string>(id) !== fromEnv) {
-      setSecret(id, "key", { key: fromEnv });
-    }
-    return fromEnv;
-  }
   const stored = getSecret<unknown>(id);
   if (typeof stored === "string" && stored) return stored;
   if (stored && typeof stored === "object" && "key" in stored) return String((stored as any).key ?? "");

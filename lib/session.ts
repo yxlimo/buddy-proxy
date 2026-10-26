@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AuthError, type Credential } from "./credential.ts";
-import { dataDir, legacyDirs } from "./paths.ts";
+import { dataDir } from "./paths.ts";
 import { LockUnavailableError, getSecret, setSecret, withLock } from "./store.ts";
 
 /** The fields every session file has. */
@@ -25,17 +25,6 @@ export interface SessionTokens {
   generation?: number;
 }
 
-/**
- * Where a session file used to live, and where it may still be.
- *
- * The first entry is the current directory; the rest are the ones an older
- * version used, so a machine that has not been moved yet still finds its
- * session and does not have to log in again.
- */
-export function legacyPaths(name: string): string[] {
-  return [path.join(dataDir(), name), ...legacyDirs().map((d) => path.join(d, name))];
-}
-
 /** The default check: a session with both tokens in it. */
 export function hasTokens(raw: any): boolean {
   return !!raw?.accessToken && !!raw?.refreshToken;
@@ -44,37 +33,13 @@ export function hasTokens(raw: any): boolean {
 /**
  * Read a session.
  *
- * The database is where the session lives. The file is where it used to live:
- * it is read once — on the first read after the migration — and moved into the
- * database, so nothing has to log in again because of the move.
+ * 只有数据库这一处。会话曾经在文件里，那份文件不再认：文件在数据卷外面，
+ * 删账号时它不会被删掉，于是删掉的账号转眼又带着旧会话回来。
  */
-export function readSession<T>(
-  id: string,
-  valid: (raw: any) => boolean = hasTokens,
-  legacyFile?: string | string[],
-): T | null {
+export function readSession<T>(id: string, valid: (raw: any) => boolean = hasTokens): T | null {
   const fromDb = getSecret<T>(id);
   if (fromDb) return valid(fromDb) ? fromDb : null;
-  if (!legacyFile) return null;
-  const files = Array.isArray(legacyFile) ? legacyFile : [legacyFile];
-  for (const file of files) {
-    const raw = readLegacyFile<T>(file, valid);
-    if (!raw) continue;
-    setSecret(id, "session", raw);
-    return raw;
-  }
   return null;
-}
-
-/** Read the session from the file it used to live in. */
-function readLegacyFile<T>(file: string, valid: (raw: any) => boolean): T | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!raw || typeof raw !== "object" || !valid(raw)) return null;
-    return raw as T;
-  } catch {
-    return null;
-  }
 }
 
 /** How to get rid of a credential and log in again. */

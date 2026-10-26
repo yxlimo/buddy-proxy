@@ -34,8 +34,8 @@ import { providerKindOf, providerSecretId } from "../providers.ts";
  * MiniMax Code 网关：只有一把 —— 那是它的 coding plan 的 key（sk-cp-…），
  * 用来查套餐额度。推理走的是会话，不是这把 key。
  *
- * 环境变量里的 key 优先（那是在 .env 里轮换的，必须立刻生效），所以这里写的
- * 只是数据库那份 —— 环境变量撤掉之后才轮到它。
+ * key 写在账号自己名下：面板写什么就是什么，环境变量不参与（它会在每次读的
+ * 时候把自己写回数据库，删掉的账号转眼又有一把 key）。
  */
 export function setProviderKeys(
   upstreamId: string,

@@ -24,7 +24,7 @@ import { configString, configNumber } from "../config.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
@@ -92,10 +92,6 @@ export function sessionId(providerId = "minimax"): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(): string[] {
-  return legacyPaths("minimax-session.json");
-}
-
 function loginHint(providerId = "minimax"): string {
   return `还没有登录。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
     `${clearHint(sessionId(providerId))}（会打印一个授权链接）。` +
@@ -112,8 +108,7 @@ function loginHint(providerId = "minimax"): string {
  * refreshing would then break the other.
  */
 function loadSession(providerId = "minimax"): Session | null {
-  const legacy = providerId === "minimax" ? legacySessionPath() : undefined;
-  return readSession<Session>(sessionId(providerId), hasTokens, legacy);
+  return readSession<Session>(sessionId(providerId), hasTokens);
 }
 
 export function hasSession(providerId = "minimax"): boolean {

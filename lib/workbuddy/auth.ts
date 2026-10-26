@@ -21,7 +21,7 @@ import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, legacyPaths, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { getSecret } from "../store.ts";
 import { provider, providerSecretId } from "../providers.ts";
@@ -109,10 +109,6 @@ export function sessionId(providerId = "workbuddy-cn"): string {
 }
 
 /** Where the session used to live, while the migration is under way. */
-export function legacySessionPath(region: WorkBuddyRegion = "cn"): string[] {
-  return legacyPaths(`workbuddy-session.${region}.json`);
-}
-
 /** The session used to live here, one id per region. */
 function legacySessionId(region: WorkBuddyRegion): string {
   return `session:workbuddy:${region}`;
@@ -142,7 +138,7 @@ function loginHint(providerId = "workbuddy-cn"): string {
 
 export function loadSession(providerId = "workbuddy-cn"): WorkBuddySession | null {
   const region = regionOf(providerId);
-  const session = readSession<WorkBuddySession>(sessionId(providerId), hasTokens, legacySessionPath(region));
+  const session = readSession<WorkBuddySession>(sessionId(providerId), hasTokens);
   if (session) return session;
   // The session used to be stored per region: take it over once, so nobody has
   // to log in again because of the move. That old copy was global, so only the

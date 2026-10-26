@@ -581,22 +581,19 @@ the credential is an API key (`sk-cp-…`, the coding-plan kind).
 | `GET`  | `/minimax-api/v1/models` | model catalog |
 
 **Several tenants, one key each.** A key is a plan, so several keys are several
-plans. They are configured by key, in the environment:
-
-```
-MINIMAX_API_1_KEY=sk-cp-…
-MINIMAX_API_2_KEY=sk-cp-…
-```
+plans. They belong to the account, and they are written in the panel: the
+account "MiniMax 开放平台" has an "API Key" button; one key per line, the first
+line is the first tenant.
 
 The gateway takes the tenants in turn, and a tenant that cannot serve the
 request (the plan ran out, the key was refused, the key is rate limited) is
 skipped for the next one.
 
-**The keys are written in the panel**, on the account page: the account "MiniMax
-开放平台" has an "API Key" button; one key per line, the first line is the
-first tenant. The environment wins over the database, so a key rotated in
-`.env` takes effect at once; the database keeps a copy so the service still
-runs without the `.env` file.
+The environment is not a source for keys. It used to be, and it wrote itself
+into the database on every read — so a key that was set there survived the
+deletion of the account it belonged to, and the key set in the panel was
+overwritten by it. A key lives in the account, and deleting the account
+deletes the key.
 
 The quota of each tenant is its plan's own windows (five hours and a week) —
 the same thing the Code gateway's account has.
@@ -756,7 +753,7 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
 | `MINIMAX_REFRESH_BUFFER_MS` | `300000` | refresh this far before expiry |
 | `MINIMAX_API_BASE` | `https://api.minimax.cn` | the platform the balance is read from |
-| `MINIMAX_TOKEN_PLAN_KEY` | — | the token plan's key (`sk-cp-…`); the plan's usage is reported when it is set |
+| `MINIMAX_TOKEN_PLAN_KEY` | — | removed: the token plan's key belongs to the account, not to the environment |
 
 ### Credentials
 
@@ -1307,11 +1304,9 @@ does not report a total says so by reporting `0`.
 
 The MiniMax plan runs in two windows — five hours and a week — and what is
 left of each is a percentage. The plan's key is the API key (`sk-cp-…`), not
-the OAuth session the Code gateway uses, so it is a separate variable:
-
-| Variable | What |
-|----------|------|
-| `MINIMAX_TOKEN_PLAN_KEY` | the token plan's key; the plan's usage is left out when it is not set |
+the OAuth session the Code gateway uses, so it is a credential of its own: it
+is written in the panel, on the account row, next to the other keys. The plan's
+usage is left out when the account has no plan key.
 
 The Qoder numbers look like this:
 
