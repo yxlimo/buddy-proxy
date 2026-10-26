@@ -203,8 +203,10 @@ async function requestJson(
 ): Promise<JsonResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 30000);
+  // 调用方也可能给一个闸（刷新那一步的超时）：两个都响才算完。
+  const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
   try {
-    const res = await cliFetch(url, { ...init, signal: controller.signal });
+    const res = await cliFetch(url, { ...init, signal });
     const text = await res.text();
     let body: any = null;
     try {
@@ -416,11 +418,12 @@ export async function refreshSession(providerId = "workbuddy-cn"): Promise<WorkB
     id,
     load: () => loadSession(providerId),
     bufferMs: REFRESH_BUFFER_MS,
-    request: async (session) => {
+    request: async (session, signal) => {
       const region = session.region ?? regionOf(providerId);
       const base = ENDPOINTS[region];
       const res = await requestJson(`${base.base}${REFRESH_PATH}`, {
         method: "POST",
+        signal,
         headers: {
           ...authHeaders(),
           "X-Refresh-Token": session.refreshToken,

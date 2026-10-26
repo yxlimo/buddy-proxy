@@ -12,6 +12,7 @@
 // database.
 
 import { AuthError, authLog, tokenFingerprint, type Credential } from "./credential.ts";
+import { configNumber } from "./config.ts";
 import { dataDir } from "./paths.ts";
 import { LockUnavailableError, getSecret, setSecret, withLock } from "./store.ts";
 
@@ -99,6 +100,14 @@ const deadSessions = new Map<string, { until: number; reason: string }>();
 /** How long a refusal is remembered. */
 const DEAD_SESSION_MS = 30 * 60 * 1000;
 
+/**
+ * 问平台换一次令牌，最多花多久。
+ *
+ * 一个账号的平台卡住，不该把后面账号的令牌一起拖住 —— 那些账号是各自独立的
+ * 登录态，谁也碰不到谁。
+ */
+const REFRESH_TIMEOUT_MS = configNumber("SESSION_REFRESH_TIMEOUT_MS", 30_000);
+
 /** Remember that this session cannot be refreshed. */
 export function markSessionDead(id: string, reason: string, ms = DEAD_SESSION_MS): void {
   deadSessions.set(id, { until: Date.now() + ms, reason });
@@ -155,8 +164,12 @@ export interface RefreshFlow<T extends SessionTokens> {
   load: () => T | null;
   /** 令牌离到期还有这么多毫秒以内就该换。 */
   bufferMs: number;
-  /** 问平台要新令牌。 */
-  request: (session: T) => Promise<RefreshAnswer>;
+  /**
+   * 问平台要新令牌。
+   *
+   * signal 是超时的闸：平台那边卡住时它会响，调用方就知道该收手了。
+   */
+  request: (session: T, signal: AbortSignal) => Promise<RefreshAnswer>;
   /** 平台的答复 → 新会话。 */
   parse: (body: any, session: T) => T;
   /** 平台拒了这份令牌吗（401/403/invalid_grant 那些）。 */
@@ -173,6 +186,8 @@ export interface RefreshFlow<T extends SessionTokens> {
   invalidate?: () => void;
   /** 成功之后日志里多说的那句（各家自己那点东西）。 */
   extra?: (session: T) => string;
+  /** 这次刷新最多花多久（毫秒）。默认用全局的那个。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -198,8 +213,30 @@ export async function refreshSessionFlow<T extends SessionTokens>(flow: RefreshF
   // 3. 没到临期就不换。
   if (session.expiresAtMs - Date.now() > flow.bufferMs) return session;
 
-  // 4. 问平台。
-  const answer = await flow.request(session);
+  // 4. 问平台。挂个超时：一个账号的平台卡住，不该把后面账号的令牌一起拖住。
+  //
+  // 超时之后不重试：令牌是一次性的，平台可能已经换了令牌，再问一次就是重放，
+  // 平台会把整份会话撤掉。定时器下一轮会再来一遍，那时候再说。
+  const timeoutMs = Math.max(1, flow.timeoutMs ?? REFRESH_TIMEOUT_MS);
+  // 自己拿一个闸，不用 AbortSignal.timeout：它那个定时器不占着事件循环，
+  // 空闲的时候它可能根本不会响 —— 收手就收不成。
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let answer: RefreshAnswer;
+  try {
+    answer = await flow.request(session, controller.signal);
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw new AuthError(
+        `refresh timed out after ${timeoutMs} ms`,
+        `刷新超时（${Math.round(timeoutMs / 1000)} 秒），这一轮没成；定时器下一轮会再试。`,
+        503,
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   // 5. 平台拒了？
   if (!answer.ok) {
     flow.invalidate?.();

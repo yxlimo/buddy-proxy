@@ -179,5 +179,47 @@ console.log("操作者清了记号，又能试一次");
 }
 
 console.log("");
+console.log("平台那边卡住：到点收手，不重试");
+
+{
+  clearDeadSession("session:provider:fake");
+  const saved: Fake[] = [];
+  const due = { accessToken: "a", refreshToken: "r", expiresAtMs: Date.now() + 60_000 };
+  let asked = 0;
+  const started = Date.now();
+  let error: unknown = null;
+  try {
+    await refreshSessionFlow<Fake>({
+      id: "session:provider:fake",
+      load: () => due,
+      bufferMs: 5 * 60_000,
+      // 平台那边不答应：一直挂着。
+      request: async (_session, signal) => {
+        asked++;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+      parse: (_body, previous) => previous,
+      refused: () => false,
+      hint: () => "平台拒了",
+      save: (next) => saved.push(next),
+      label: () => "fake",
+      noSession: "没有登录",
+      timeoutMs: 200,
+    });
+  } catch (e) {
+    error = e;
+  }
+  const took = Date.now() - started;
+  check("到点就收手", took < 3000, `${took}ms`);
+  check("报了超时", error !== null && String((error as Error).message).includes("timed out"), String(error));
+  check("是 503", (error as { status?: number }).status === 503);
+  check("只问了一次（不重试）", asked === 1, String(asked));
+  check("没有记死（下一轮还能试）", deadSession("session:provider:fake") === null, String(deadSession("session:provider:fake")));
+  check("没存新的", saved.length === 0);
+}
+
+console.log("");
 console.log(fail === 0 ? `全部通过（${pass} 项）` : `FAIL: ${fail} 项`);
 process.exit(fail === 0 ? 0 : 1);

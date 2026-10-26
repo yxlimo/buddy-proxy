@@ -130,7 +130,7 @@ export function saveSession(
  * otherwise rotate the refresh token twice and one of them would be logged out.
  */
 
-async function postForm(endpoint: string, values: Record<string, string>) {
+async function postForm(endpoint: string, values: Record<string, string>, signal?: AbortSignal) {
   const r = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -138,6 +138,7 @@ async function postForm(endpoint: string, values: Record<string, string>) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(values),
+    signal,
   });
   const body = (await r.json().catch(() => undefined)) as Record<string, unknown> | undefined;
   const error = typeof body?.error === "string" ? body.error : undefined;
@@ -240,14 +241,18 @@ export async function refreshSession(providerId = "minimax"): Promise<Session> {
     id,
     load: () => loadSession(providerId),
     bufferMs: REFRESH_BUFFER_MS,
-    request: async (session) => {
-      const r = await postForm(`${ORIGIN}/oauth2/token`, {
-        grant_type: "refresh_token",
-        refresh_token: session.refreshToken,
-        client_id: CLIENT_ID,
-        scope: SCOPES.join(" "),
-        audience: AUDIENCE,
-      });
+    request: async (session, signal) => {
+      const r = await postForm(
+        `${ORIGIN}/oauth2/token`,
+        {
+          grant_type: "refresh_token",
+          refresh_token: session.refreshToken,
+          client_id: CLIENT_ID,
+          scope: SCOPES.join(" "),
+          audience: AUDIENCE,
+        },
+        signal,
+      );
       return { ok: r.ok, status: r.status, code: r.error ?? `HTTP ${r.status}`, body: r.body };
     },
     parse: (body, session) => sessionFromGrant(parseGrant(body), session),

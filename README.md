@@ -794,6 +794,14 @@ running somewhere else is a second holder: it refreshes, and the copy here
 stops working. The same is true of the desktop client's own store — it must
 not keep a session of an account the gateway holds.
 
+A refresh that does not come back in time is given up on, not retried: the
+token is one-shot, so asking again could be the replay the platform punishes.
+The timer wakes again and tries then.
+
+| Variable | Default | What |
+|----------|---------|------|
+| `SESSION_REFRESH_TIMEOUT_MS` | `30000` | how long one refresh may take before it is given up on |
+
 ### Health
 
 `/health` does not ask the upstreams. The live part — the account standing,

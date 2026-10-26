@@ -191,14 +191,19 @@ function machineFields(session: QoderSession): Record<string, string> {
   };
 }
 
-async function postJson(endpoint: string, body: unknown, token?: string): Promise<{ status: number; body: any }> {
+async function postJson(
+  endpoint: string,
+  body: unknown,
+  token?: string,
+  signal?: AbortSignal,
+): Promise<{ status: number; body: any }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
     "User-Agent": USER_AGENT,
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  const r = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal });
   const parsed = await r.json().catch(() => undefined);
   return { status: r.status, body: parsed };
 }
@@ -265,11 +270,12 @@ export async function refreshSession(providerId = "qoder"): Promise<QoderSession
     id,
     load: () => loadSession(providerId),
     bufferMs: REFRESH_BUFFER_MS,
-    request: async (session) => {
+    request: async (session, signal) => {
       const r = await postJson(
         `${ENDPOINTS[session.region ?? regionOf(providerId)].openapi}/api/v1/deviceToken/refresh`,
         { refresh_token: session.refreshToken, ...machineFields(session) },
         session.accessToken,
+        signal,
       );
       const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
       return { ok: r.status === 200, status: r.status, code: String(code), body: r.body };
