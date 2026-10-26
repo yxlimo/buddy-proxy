@@ -20,7 +20,8 @@ const check = (name: string, ok: boolean, detail = "") => {
   else fail++;
 };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** 官方桌面端的会话 id 形状：`session_` + 32 位小写 hex。 */
+const SESSION_ID = /^session_[0-9a-f]{32}$/;
 
 console.log("");
 console.log("同一个客户端会话，永远是同一个上游会话 id");
@@ -29,7 +30,7 @@ console.log("同一个客户端会话，永远是同一个上游会话 id");
   const first = upstreamSessionId("zcode", "01a14f0d-82b6-776d-b410-1e5b2fb4a79f");
   const second = upstreamSessionId("zcode", "01a14f0d-82b6-776d-b410-1e5b2fb4a79f");
   check("两次一样", first === second, `${first} vs ${second}`);
-  check("是 UUID v4（跟官方同一种）", UUID.test(first), first);
+  check("是官方那个形状", SESSION_ID.test(first), first);
 }
 
 console.log("");
@@ -39,10 +40,10 @@ console.log("不同客户端会话，不同 id");
   const pi = upstreamSessionId("zcode", "01a14f0d-82b6-776d-b410-1e5b2fb4a79f");
   const opencode = upstreamSessionId("zcode", "ses_e8a2b5f99ffesMOpvn7P21If0L");
   check("不一样", pi !== opencode, `${pi} vs ${opencode}`);
-  check("opencode 那个也是 UUID 形状", UUID.test(opencode), opencode);
-  // 客户端给什么形状都不重要：映射过去都是 UUID。
+  check("opencode 那个也是官方形状", SESSION_ID.test(opencode), opencode);
+  // 客户端给什么形状都不重要：映射过去都是同一个形状。
   const weird = upstreamSessionId("zcode", "not-a-uuid-at-all");
-  check("乱七八糟的也映射成 UUID", UUID.test(weird), weird);
+  check("乱七八糟的也映射成官方形状", SESSION_ID.test(weird), weird);
 }
 
 console.log("");

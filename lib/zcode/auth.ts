@@ -30,7 +30,7 @@ export const ZCODE_BASE = configString("ZCODE_BASE_URL", "https://zcode.z.ai").r
 export const ZCODE_PROVIDER = configString("ZCODE_PROVIDER", "zai");
 
 /** 客户端报的版本号。 */
-export const ZCODE_VERSION = configString("ZCODE_VERSION", "3.16.2");
+export const ZCODE_VERSION = configString("ZCODE_VERSION", "3.16.3");
 
 /** 轮询的间隔与上限。 */
 export const ZCODE_POLL_INTERVAL_MS = configNumber("ZCODE_POLL_INTERVAL_MS", 3000);

@@ -11,7 +11,6 @@
 
 import type { Json } from "../json.ts";
 import crypto from "node:crypto";
-import { release as osRelease } from "node:os";
 import { AuthError } from "../credential.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
 import { matchZcodeModel } from "./models.ts";
@@ -30,6 +29,24 @@ const TIMEZONE = "Asia/Shanghai";
 const LANGUAGE = "zh-CN";
 
 /**
+ * 客户端身份：桌面端（Electron）在 Windows 上的样子。
+ *
+ * 这是从客户端自己落的 model IO 里取的真值（2026-10-26T13:45Z 一次成功的
+ * start-plan 请求，`~/.zcode/cli/rollout/model-io-*.jsonl` 的 request.headers）。
+ *
+ * 以前这里报的是网关自己的真实情况（`process.platform` 拼出来的 linux-x64、
+ * `os.release()` 拼出来的 WSL 内核版本、`Z Code@cli`），三处叠加等于在头上
+ * 写「这条请求不是桌面端发的」。上游对这一点回的是 code 3012
+ * 「request has been blocked due to unusual activity」。
+ */
+const CLIENT = {
+  title: "Z Code@electron",
+  platform: "win32-x64",
+  osCategory: "windows",
+  osVersion: "10.0.26300",
+} as const;
+
+/**
  * 官方客户端发的头。
  *
  * 归因那几个头（x-request-id 之类）每次请求都不一样 —— 它们是给平台看
@@ -38,11 +55,11 @@ const LANGUAGE = "zh-CN";
 /**
  * 模型请求的头。
  *
- * 官方客户端 v3.16.2 的模型请求用的是 `buildCliZCodeSourceHeaders`（见
- * docs/zcode/FINDINGS.md §3.1）：**不带** `X-Device-Mid` —— 那一套更全的头
- * 是平台 API 与遥测用的。
+ * 与桌面端真值逐项对齐（见上 CLIENT）；**不带** `X-Device-Mid` —— 那一套
+ * 更全的头是平台 API 与遥测用的。
  *
- * sessionId 是上游会话 id：客户端的会话 id 映射过来的（见 lib/upstream-session.ts）。
+ * sessionId 是上游会话 id：客户端的会话 id 映射过来的（见 lib/upstream-session.ts），
+ * 形状是 `session_` + 32 位 hex，跟官方一致。
  * 客户端没给会话 id 时就不发这个头 —— 官方那时候也不发。
  */
 export function zcodeHeaders(
@@ -58,20 +75,21 @@ export function zcodeHeaders(
     "HTTP-Referer": ZCODE_BASE,
     "user-agent": USER_AGENT,
     "X-ZCode-App-Version": ZCODE_VERSION,
-    "X-Title": "Z Code@cli",
+    "X-Title": CLIENT.title,
     "X-Release-Channel": "production",
     "X-Client-Language": LANGUAGE,
     "X-Client-Timezone": TIMEZONE,
     "X-ZCode-Agent": "glm",
-    "X-Platform": `${process.platform}-${process.arch}`,
-    "X-Os-Category": process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux",
-    // os.release() 是操作系统的版本（客户端发的是这个）。
-    // process.release 是另一个东西：一个描述运行时的对象，不是函数。
-    "X-Os-Version": osRelease(),
+    "X-Platform": CLIENT.platform,
+    "X-Os-Category": CLIENT.osCategory,
+    "X-Os-Version": CLIENT.osVersion,
     "x-request-id": crypto.randomUUID(),
     // 主会话与子代理都当 main（我们这边不区分）。
     "x-zcode-session-type": "main",
     "x-zcode-trace-id": crypto.randomUUID(),
+    // 桌面端每个请求都带这两个：query id 每次都换，来源是固定词。
+    "x-query-id": crypto.randomUUID(),
+    "x-zcode-query-source": "main_turn",
   };
   // 客户端没给会话 id 就不发这个头 —— 官方那时候也不发。
   if (opts.sessionId) headers["x-session-id"] = opts.sessionId;
