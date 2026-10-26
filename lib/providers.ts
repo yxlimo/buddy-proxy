@@ -15,7 +15,7 @@
 
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
-import { PLATFORMS, platformOf, platformPolicy, setPlatformPolicy } from "./platforms.ts";
+import { PLATFORMS, platformOf, platformPolicy } from "./platforms.ts";
 
 /** 一个账号。 */
 export interface ProviderRow {
@@ -212,17 +212,16 @@ export function deleteProviderCredentials(id: string): number {
 }
 
 /**
- * 删一个账号。
+ * 删一个账号的行。
  *
- * 它名下的凭据一起删 —— 留着就没人认领了。平台本身删不掉：那是代码里的
- * 模板，不是数据。
+ * 只删行：凭据不归这一层管（各家平台的凭据长什么样不一样，那边知道）。
+ * 删账号要连凭据一起删的话，走 admin 层那个（lib/admin/accounts.ts）。
  */
-export function deleteAccount(id: string): { ok: boolean; message: string } {
+export function deleteProviderRow(id: string): { ok: boolean; message: string } {
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}` };
   store().prepare("DELETE FROM provider WHERE id = ?").run(id);
-  const dropped = deleteProviderCredentials(id);
-  return { ok: true, message: dropped > 0 ? `删掉了，连 ${dropped} 条凭据一起` : "删掉了" };
+  return { ok: true, message: "删掉了" };
 }
 
 /** 开关。 */

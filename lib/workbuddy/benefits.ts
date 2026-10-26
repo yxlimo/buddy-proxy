@@ -53,23 +53,44 @@ async function workbuddyTravel(session: WorkBuddySession, report: string[]): Pro
 const travel = await workbuddyApi(session, `${GROWTH}/buddy/travel/status`, "GET");
 if (travel.status === 200) {
   const state = dataOf(travel.body) ?? {};
-  if (state.state === "arrived" && state.record_id) {
+  const gift = Number(state.reward_credit ?? 0);
+  // 回来没有：平台说回来的时刻（arrive_at）。它在路上的时候也会说
+  // reward_credit —— 那是它带回来多少，不是现在有 —— 所以先看它回没回来。
+  // 状态名是平台自己起的，靠不住；回来的时刻靠得住。
+  const back = Number(state.arrive_at ?? 0);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const onTheRoad =
+    state.state === "traveling" || (back > 0 && back > nowSeconds);
+  // 有礼物等着 = 平台说有积分、有这一趟的记录，而且 Buddy 已经回来了。
+  const waiting = gift > 0 && Boolean(state.record_id) && !onTheRoad;
+  if (waiting) {
     // The official client sends an empty body here; the record id is not
-    // needed, and the server does not look for it.
+    // needed, and the server does not look at it.
     const claim = await workbuddyApi(session, `${GROWTH}/buddy/travel/claim`, "POST", {});
     if (claim.status >= 200 && claim.status < 300) {
-      const got = Number(dataOf(claim.body)?.reward_credit ?? 0);
+      const got = Number(dataOf(claim.body)?.reward_credit ?? gift);
       credits += got;
       report.push(`领旅行礼物 +${got} 积分`);
     } else {
+      // The gift is still waiting: it must not be thrown away by sending the
+      // Buddy out again.
       report.push(`领旅行礼物失败：${claim.body?.msg ?? `HTTP ${claim.status}`}`);
     }
+  } else if (onTheRoad) {
+    // Say when the Buddy is back and what it brings, so the log alone
+    // explains a gift that has not arrived yet.
+    const when = back > 0 ? new Date(back * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) : "?";
+    report.push(`Buddy 在路上，${when} 回来，礼物 ${gift} 积分`);
   } else {
     // Say where the Buddy is, so the log alone explains a missing gift.
     report.push(`Buddy 状态：${String(state.state ?? "?")}`);
   }
   // Send the Buddy out again, so there is a gift to collect tomorrow.
-  if (!state.daily_limit_reached && state.state !== "traveling") {
+  //
+  // Only from a Buddy that is idle: one that is on the road is already out,
+  // and one with a gift waiting for us must not be sent away before the gift
+  // is picked up.
+  if (!state.daily_limit_reached && state.state === "idle" && !waiting) {
     const config = await workbuddyApi(session, `${GROWTH}/buddy/travel/config`, "GET");
     const locations = dataOf(config.body)?.locations;
     if (Array.isArray(locations) && locations[0]?.id) {
@@ -86,6 +107,7 @@ if (travel.status === 200) {
 
   return credits;
 }
+
 
 /**
  * The tasks: take the ones that are not taken, then claim the finished ones.

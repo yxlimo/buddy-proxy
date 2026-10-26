@@ -21,7 +21,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, readSession, refreshSessionFlow, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { provider, providerSecretId } from "../providers.ts";
 
@@ -261,50 +261,32 @@ function parseGrant(body: any, previous?: QoderSession | null): QoderSession {
  */
 export async function refreshSession(providerId = "qoder"): Promise<QoderSession> {
   const id = sessionId(providerId);
-  // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
-  // 记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
-  const dead = deadSession(id);
-  if (dead) {
-    markSessionDead(id, dead);
-    throw new AuthError("session refused by the platform", dead, 503);
-  }
-  const session = loadSession(providerId);
-  const region = session?.region ?? regionOf(providerId);
-  if (!session) throw new AuthError("no session", loginHint(providerId), 503);
-  // 没到临期就不换。
-  if (session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
-
-  const r = await postJson(
-    `${ENDPOINTS[region].openapi}/api/v1/deviceToken/refresh`,
-    { refresh_token: session.refreshToken, ...machineFields(session) },
-    session.accessToken,
-  );
-  if (r.status !== 200) {
-    const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
-    authLog(dataDir(), `qoder ${region} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
-    if (r.status === 401 || r.status === 403) {
-      const hint =
-        `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
-        `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
-        `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
-      // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
-      markSessionDead(id, hint);
-      throw new AuthError(`refresh rejected (${code})`, hint, 503);
-    }
-    throw new AuthError(`refresh failed (${code})`, `Qoder 刷新失败（${code}），稍后重试。`, 502);
-  }
-
-  const next = parseGrant(r.body, session);
-  saveSession(next, providerId);
-  cache = null;
-  authLog(
-    dataDir(),
-    `qoder ${region} refresh ok`,
-    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
-      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
-      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
-  );
-  return next;
+  return refreshSessionFlow<QoderSession>({
+    id,
+    load: () => loadSession(providerId),
+    bufferMs: REFRESH_BUFFER_MS,
+    request: async (session) => {
+      const r = await postJson(
+        `${ENDPOINTS[session.region ?? regionOf(providerId)].openapi}/api/v1/deviceToken/refresh`,
+        { refresh_token: session.refreshToken, ...machineFields(session) },
+        session.accessToken,
+      );
+      const code = r.body?.errorCode ?? r.body?.code ?? r.body?.message ?? `HTTP ${r.status}`;
+      return { ok: r.status === 200, status: r.status, code: String(code), body: r.body };
+    },
+    parse: (body, session) => parseGrant(body, session),
+    refused: (answer) => answer.status === 401 || answer.status === 403,
+    hint: (code) =>
+      `Qoder 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
+      `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
+      `这份就失效。恢复：${clearHint(sessionId(providerId))}。`,
+    save: (next) => saveSession(next, providerId),
+    label: (session) => `qoder ${session.region ?? regionOf(providerId)}`,
+    noSession: loginHint(providerId),
+    invalidate: () => {
+      cache = null;
+    },
+  });
 }
 
 let cache: CredentialCache | null = null;

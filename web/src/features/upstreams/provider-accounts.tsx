@@ -110,7 +110,7 @@ export function ProviderAccounts({
 
   if (accounts.length === 0) {
     return (
-      <div className='p-4'>
+      <div>
         <EmptyState
           title='这个平台还没有账号'
           description='点这一行的「新增账号」加一个，加完在账号那一行登录'
@@ -119,8 +119,9 @@ export function ProviderAccounts({
     )
   }
 
+  // 外层已经留了边距，这里只管自己内部的排布。
   return (
-    <div className='grid gap-4 p-4'>
+    <div className='grid gap-4'>
       <Table>
         <TableHeader>
           <TableRow>

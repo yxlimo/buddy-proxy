@@ -89,8 +89,8 @@ import {
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
-import { forgetLegacyTenantRecords } from "../tokenrhythm/accounts.ts";
 import {
+  deleteAccount,
   listAccounts,
   listCredentials,
   logoutAccount,
@@ -111,7 +111,6 @@ import { catalogModels, deletePublishedModel, publishedModels, savePublishedMode
 import {
   accountsOfPlatform,
   addAccount,
-  deleteAccount,
   listProviders,
   provider,
   updateProvider,
@@ -470,12 +469,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     const id = String(request.id ?? "");
     const result = deleteAccount(id);
     if (result.ok) {
-      // 删干净：旧位置的记录（按租户号存的那份）与健康快照里的那一段，
-      // 都要一起删 —— 留着它们，启动时的归位会把账号带回来：删了又活，
-      // 凭据还串着。
-      const legacy = forgetLegacyTenantRecords(id);
-      forgetAccountSnapshot(id);
-      if (legacy) console.log(`[ADMIN] 账号 ${id} 的旧记录也清了（${legacy} 条）`);
       console.log(`[ADMIN] 删了账号 ${id}（连它的凭据一起）`);
     }
     return create(DeleteAccountResponseSchema, { ok: result.ok, message: result.message });

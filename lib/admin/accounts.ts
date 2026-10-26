@@ -8,7 +8,7 @@
 
 import crypto from "node:crypto";
 import { miniMaxApiTenantSecretId, miniMaxApiTenants } from "../minimax/api.ts";
-import { deleteProviderCredentials, listProviders, provider } from "../providers.ts";
+import { deleteProviderCredentials, deleteProviderRow, listProviders, provider } from "../providers.ts";
 import { getSecret, listSecrets } from "../store.ts";
 import { clearDeadSession, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
@@ -350,15 +350,43 @@ export function logoutAccount(accountId: string): { ok: boolean; message: string
   if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
-  let removed = deleteProviderCredentials(id);
-  // 旧位置的记录（按租户号存的那份）也要删：留着它，启动时的归位会把账号
-  // 带回来 —— 删了又活，凭据还串着。
-  removed += forgetLegacyTenantRecords(id);
-  forgetAccountSnapshot(id);
-  if (row.kind === "tokenrhythm") removed += forgetTokenRhythmCredential(id);
+  const removed = forgetAccountRecords(id, row.kind);
   if (!removed) return { ok: true, message: "这个账号本来就没有凭据", removed: 0 };
   console.log(`[ADMIN] ${id} 注销了，删掉 ${removed} 条凭据`);
   return { ok: true, message: `注销了，删掉 ${removed} 条凭据`, removed };
+}
+
+/**
+ * 一个账号的凭据，删干净。
+ *
+ * 三处都要删：账号自己名下那些、旧库按租户号存的那一份、健康快照里它的那段。
+ * 少删一处，那个账号就会带着旧身份回来 —— 旧记录会被搬回来，快照里的额度会
+ * 继续显示着一个已经不存在的账号。
+ */
+export function forgetAccountRecords(accountId: string, kind?: string): number {
+  let removed = deleteProviderCredentials(accountId);
+  // 旧位置的记录（按租户号存的那份）也要删：留着它，启动时的归位会把账号
+  // 带回来 —— 删了又活，凭据还串着。
+  removed += forgetLegacyTenantRecords(accountId);
+  forgetAccountSnapshot(accountId);
+  if (kind === "tokenrhythm") removed += forgetTokenRhythmCredential(accountId);
+  return removed;
+}
+
+/**
+ * 删一个账号：行与凭据一起。
+ *
+ * 凭据由 forgetAccountRecords 删干净 —— 那里知道每个平台的凭据放在哪。
+ */
+export function deleteAccount(accountId: string): { ok: boolean; message: string; removed: number } {
+  const id = String(accountId ?? "").trim();
+  if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
+  const row = provider(id);
+  if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
+  const removed = forgetAccountRecords(id, row.kind);
+  deleteProviderRow(id);
+  console.log(`[ADMIN] ${id} 删了，连 ${removed} 条凭据一起`);
+  return { ok: true, message: removed > 0 ? `删掉了，连 ${removed} 条凭据一起` : "删掉了", removed };
 }
 
 /* ------------------------------------------------------------------ *

@@ -38,13 +38,19 @@ import {
   useUpdateProvider,
 } from '@/features/upstreams/api'
 import { AddAccountDialog } from '@/features/upstreams/add-account-dialog'
+import { useBenefitStatus, useRunBenefitNow } from '@/features/upstreams/benefits'
+import { BenefitsPanel } from '@/features/upstreams/benefits-panel'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
 import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
 import { useSetProviderKeys } from '@/features/accounts/api'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
-import type { Account, Upstream } from '@/gen/buddy/admin/v1/admin_pb'
+import type {
+  Account,
+  RunBenefitNowResponse,
+  Upstream,
+} from '@/gen/buddy/admin/v1/admin_pb'
 
 const REGION_LABELS: Record<string, string> = {
   cn: '中国区',
@@ -74,6 +80,11 @@ export function UpstreamsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   /** 正在填 key 的账号 id。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
+  /** 刚才那次签到的结果：签到是全局的，结果留在页面上，换个平台也还在。 */
+  const [runResult, setRunResult] = useState<RunBenefitNowResponse | null>(null)
+  // 签到状态是所有账号一份的：展开了才去取，没展开不费那个请求。
+  const benefits = useBenefitStatus({ enabled: expanded !== null })
+  const runBenefit = useRunBenefitNow()
 
   // 正在改的是哪一个：用 mutation 的 variables 判断，不用自己存一份 busy ——
   // 两个账号一起点的时候，后一个的 finally 会把前一个的 busy 清掉。
@@ -208,54 +219,73 @@ export function UpstreamsPage() {
                       {isExpanded ? (
                         <TableRow>
                           <TableCell colSpan={7} className='bg-muted/30 p-0'>
-                            <ProviderAccounts
-                              platform={upstream.id}
-                              kind={upstream.kind}
-                              accounts={upstream.accounts}
-                              loggingIn={login.pending}
-                              busyAccountId={busyAccountId}
-                              refreshing={refreshing}
-                              onLogin={(account) =>
-                                login.start({
-                                  // 路径里走的是平台：登录也按平台 + 账号行办。
-                                  upstreamId: upstream.id,
-                                  id: account.id,
-                                  label: account.alias || account.id,
-                                })
-                              }
-                              onDelete={(account) => setDeleteTarget(account)}
-                              onToggleEnabled={(account, enabled) =>
-                                setEnabled.mutate({
-                                  accountId: account.id,
-                                  enabled,
-                                })
-                              }
-                              onRename={(account, alias) =>
-                                updateProvider.mutate({
-                                  id: account.id,
-                                  alias,
-                                })
-                              }
-                              onWeightChange={(account, weight) =>
-                                updateProvider.mutate({
-                                  id: account.id,
-                                  // 契约里的别名没有 presence 位：不带它就是清掉。
-                                  // 只改权重时把现在的别名一起带上。
-                                  alias: account.alias ?? '',
-                                  weight,
-                                })
-                              }
-                              onManageKeys={(account) => {
-                                // 账号不在列表里了：不要把 key 写到别处去。
-                                if (!findAccount(list, account.id)) {
-                                  toast.error('找不到这个账号', {
-                                    description: `${account.id} 不在上游列表里`,
+                            <div className='grid gap-4 p-4'>
+                              {/* 签到是账号的事，但跟账号表不是一回事：
+                                  单独一块，不占账号表的一列。 */}
+                              <BenefitsPanel
+                                accounts={upstream.accounts}
+                                benefits={benefits.data?.benefits ?? []}
+                                loading={benefits.isPending}
+                                error={benefits.error}
+                                running={runBenefit.isPending}
+                                runResult={runResult}
+                                onRun={() =>
+                                  runBenefit.mutate(undefined, {
+                                    onSuccess: (result) =>
+                                      setRunResult(result),
                                   })
-                                  return
                                 }
-                                setKeysFor(account.id)
-                              }}
-                            />
+                                onRetry={() => void benefits.refetch()}
+                              />
+                              <ProviderAccounts
+                                platform={upstream.id}
+                                kind={upstream.kind}
+                                accounts={upstream.accounts}
+                                loggingIn={login.pending}
+                                busyAccountId={busyAccountId}
+                                refreshing={refreshing}
+                                onLogin={(account) =>
+                                  login.start({
+                                    // 路径里走的是平台：登录也按平台 + 账号行办。
+                                    upstreamId: upstream.id,
+                                    id: account.id,
+                                    label: account.alias || account.id,
+                                  })
+                                }
+                                onDelete={(account) => setDeleteTarget(account)}
+                                onToggleEnabled={(account, enabled) =>
+                                  setEnabled.mutate({
+                                    accountId: account.id,
+                                    enabled,
+                                  })
+                                }
+                                onRename={(account, alias) =>
+                                  updateProvider.mutate({
+                                    id: account.id,
+                                    alias,
+                                  })
+                                }
+                                onWeightChange={(account, weight) =>
+                                  updateProvider.mutate({
+                                    id: account.id,
+                                    // 契约里的别名没有 presence 位：不带它就是清掉。
+                                    // 只改权重时把现在的别名一起带上。
+                                    alias: account.alias ?? '',
+                                    weight,
+                                  })
+                                }
+                                onManageKeys={(account) => {
+                                  // 账号不在列表里了：不要把 key 写到别处去。
+                                  if (!findAccount(list, account.id)) {
+                                    toast.error('找不到这个账号', {
+                                      description: `${account.id} 不在上游列表里`,
+                                    })
+                                    return
+                                  }
+                                  setKeysFor(account.id)
+                                }}
+                              />
+                            </div>
                           </TableCell>
                         </TableRow>
                       ) : null}

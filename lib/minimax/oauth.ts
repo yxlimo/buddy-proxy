@@ -24,7 +24,7 @@ import { configString, configNumber } from "../config.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { AuthError, DEFAULT_AUDIENCE, DEFAULT_CLIENT_ID, DEFAULT_REGION, DEFAULT_SCOPES, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, readSession, refreshSessionFlow, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
@@ -236,58 +236,38 @@ function toCredential(session: Session): Credential {
  */
 export async function refreshSession(providerId = "minimax"): Promise<Session> {
   const id = sessionId(providerId);
-  // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
-  // 记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
-  const dead = deadSession(id);
-  if (dead) {
-    markSessionDead(id, dead);
-    throw new AuthError("session refused by the platform", dead, 503);
-  }
-  const session = loadSession(providerId);
-  if (!session) {
-    cache = null;
-    throw new AuthError("no session", loginHint(providerId), 503);
-  }
-  // 没到临期就不换。
-  if (session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
-
-  const r = await postForm(`${ORIGIN}/oauth2/token`, {
-    grant_type: "refresh_token",
-    refresh_token: session.refreshToken,
-    client_id: CLIENT_ID,
-    scope: SCOPES.join(" "),
-    audience: AUDIENCE,
+  return refreshSessionFlow<Session>({
+    id,
+    load: () => loadSession(providerId),
+    bufferMs: REFRESH_BUFFER_MS,
+    request: async (session) => {
+      const r = await postForm(`${ORIGIN}/oauth2/token`, {
+        grant_type: "refresh_token",
+        refresh_token: session.refreshToken,
+        client_id: CLIENT_ID,
+        scope: SCOPES.join(" "),
+        audience: AUDIENCE,
+      });
+      return { ok: r.ok, status: r.status, code: r.error ?? `HTTP ${r.status}`, body: r.body };
+    },
+    parse: (body, session) => sessionFromGrant(parseGrant(body), session),
+    refused: (answer) =>
+      answer.code === "invalid_grant" || answer.code === "invalid_token" || answer.status === 401,
+    hint: (code) =>
+      `这个会话的 refresh token 被平台拒了（${code}）。刷新时 token 会轮换，所以一份 session ` +
+      `同一时间只能有一个持有者：另一台机器、另一份数据库副本、或者桌面端那份 store，` +
+      `只要有一份在刷新，这份就作废。而且平台会把**同一个账号**的其它会话一起撤掉——` +
+      `所以两个 MiniMax 账号会同时报 503。` +
+      `恢复：在面板上重新登录这个账号；或者${clearHint(sessionId(providerId))}，` +
+      `服务会重新登录。`,
+    save: (next) => saveSession(next, providerId),
+    label: () => `minimax/${providerId}`,
+    noSession: loginHint(providerId),
+    invalidate: () => {
+      cache = null;
+    },
+    extra: (next) => `scope ${next.scopes.join(",") || "?"}`,
   });
-  if (!r.ok) {
-    cache = null;
-    const code = r.error ?? `HTTP ${r.status}`;
-    authLog(dataDir(), `minimax/${providerId} refresh rejected`, `${code} (HTTP ${r.status}), body ${JSON.stringify(r.body).slice(0, 300)}`);
-    if (code === "invalid_grant" || code === "invalid_token" || r.status === 401) {
-      const hint =
-        `这个会话的 refresh token 被平台拒了（${code}）。刷新时 token 会轮换，所以一份 session ` +
-        `同一时间只能有一个持有者：另一台机器、另一份数据库副本、或者桌面端那份 store，` +
-        `只要有一份在刷新，这份就作废。而且平台会把**同一个账号**的其它会话一起撤掉——` +
-        `所以两个 MiniMax 账号会同时报 503。` +
-        `恢复：在面板上重新登录这个账号；或者${clearHint(sessionId(providerId))}，` +
-        `服务会重新登录。`;
-      // 别再拿这份会话去问平台了：每一次都是同样的拒绝，白白浪费往返。
-      markSessionDead(id, hint);
-      throw new AuthError(`refresh rejected (${code})`, hint, 503);
-    }
-    throw new AuthError(`refresh failed (${code})`, `OAuth 刷新失败（${code}），稍后重试。`, 502);
-  }
-
-  const next = sessionFromGrant(parseGrant(r.body), session);
-  saveSession(next, providerId);
-  cache = null;
-  authLog(
-    dataDir(),
-    `minimax/${providerId} refresh ok`,
-    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
-      `refresh ${tokenFingerprint(next.refreshToken)}, scope ${next.scopes.join(",") || "?"}, ` +
-      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
-  );
-  return next;
 }
 
 /**

@@ -22,6 +22,22 @@ const dateFormat = new Intl.DateTimeFormat('zh-CN', {
 
 const numberFormat = new Intl.NumberFormat('zh-CN')
 
+// 时刻与日期时刻：只到分钟，秒对签到这种事没有意义。
+const localTimeFormat = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+const localMomentFormat = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
 function toNumber(value: bigint | number | undefined | null): number | null {
   if (value === undefined || value === null) return null
   const n = typeof value === 'bigint' ? Number(value) : value
@@ -41,6 +57,29 @@ export function formatDate(value: bigint | number | undefined | null): string {
   const ms = toNumber(value)
   if (ms === null) return '—'
   return dateFormat.format(new Date(ms))
+}
+
+/**
+ * 离现在最近的那个时刻：今天的只写时刻，别的日子写上日期。
+ *
+ * 用浏览器自己的时区，不写死 UTC+8 —— 面板跑在谁那儿就按谁的时间显示。
+ */
+export function formatLocalMoment(
+  value: bigint | number | undefined | null,
+  now: number = Date.now()
+): string {
+  const ms = toNumber(value)
+  if (ms === null) return '—'
+  const date = new Date(ms)
+  const today = new Date(now)
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  if (sameDay) {
+    return `今天 ${localTimeFormat.format(date)}`
+  }
+  return localMomentFormat.format(date)
 }
 
 export function formatCount(value: bigint | number | undefined | null): string {

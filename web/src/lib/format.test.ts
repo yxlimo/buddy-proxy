@@ -4,6 +4,7 @@ import {
   formatCount,
   formatDate,
   formatDateTime,
+  formatLocalMoment,
   formatMillis,
   formatMoney,
   formatPoints,
@@ -87,6 +88,49 @@ describe('时间的单位', () => {
     expect(formatDateTime(undefined)).toBe('—')
     expect(formatUptime(0n)).toBe('—')
     expect(formatCount(undefined)).toBe('0')
+  })
+})
+
+/**
+ * 签到时间按本地时区显示：今天的只写时刻，别的日子写上日期。
+ *
+ * 用例里的日期都是本地时间构造的，所以不管机器在哪个时区都对得上。
+ */
+describe('本地时刻', () => {
+  it('今天的写「今天 时刻」', () => {
+    const now = new Date(2026, 0, 2, 12, 0, 0)
+    const moment = new Date(2026, 0, 2, 9, 19, 0)
+    const time = new Intl.DateTimeFormat('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(moment)
+    expect(formatLocalMoment(moment.getTime(), now.getTime())).toBe(
+      `今天 ${time}`
+    )
+  })
+
+  it('别的日子写上日期', () => {
+    const now = new Date(2026, 0, 2, 12, 0, 0)
+    const moment = new Date(2026, 0, 1, 9, 19, 0)
+    const text = formatLocalMoment(moment.getTime(), now.getTime())
+    expect(text).not.toContain('今天')
+    expect(text).toContain('2026')
+    expect(text).toMatch(/\d{2}:\d{2}/)
+  })
+
+  it('bigint 也一样', () => {
+    const now = new Date(2026, 0, 2, 12, 0, 0)
+    const moment = new Date(2026, 0, 2, 9, 19, 0)
+    expect(formatLocalMoment(BigInt(moment.getTime()), now.getTime())).toBe(
+      formatLocalMoment(moment.getTime(), now.getTime())
+    )
+  })
+
+  it('没有值是占位符，0 也是', () => {
+    expect(formatLocalMoment(undefined)).toBe('—')
+    expect(formatLocalMoment(0)).toBe('—')
+    expect(formatLocalMoment(0n)).toBe('—')
   })
 })
 

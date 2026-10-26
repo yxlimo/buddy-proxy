@@ -21,7 +21,7 @@ import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
-import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, markSessionDead, readSession, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
+import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, readSession, refreshSessionFlow, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { getSecret } from "../store.ts";
 import { provider, providerSecretId } from "../providers.ts";
@@ -411,61 +411,65 @@ export async function login(providerId = "workbuddy-cn"): Promise<WorkBuddySessi
  * 刷新者——定时器。请求那一条路不换令牌（它看到过期就报错）。
  */
 export async function refreshSession(providerId = "workbuddy-cn"): Promise<WorkBuddySession> {
-  const session = loadSession(providerId);
-  if (!session) throw new AuthError("no session", loginHint(providerId), 503);
-  // 平台已经拒过这份会话：再问一次也是同样的答复，直接回答。
-  // 记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
-  const dead = deadSession(sessionId(providerId));
-  if (dead) {
-    // 记的时限会续：流水线每轮都问一次，于是「坏的」这个判断一直是新的。
-    markSessionDead(sessionId(providerId), dead);
-    throw new AuthError("session refused by the platform", dead, 503);
-  }
-  // 没到临期就不换。
-  if (session.expiresAtMs - Date.now() > REFRESH_BUFFER_MS) return session;
-
-  const region = session.region ?? regionOf(providerId);
-  const base = ENDPOINTS[region];
-  const res = await requestJson(`${base.base}${REFRESH_PATH}`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "X-Refresh-Token": session.refreshToken,
-      // The official client says where the refresh came from, and the server
-      // has a strategy for each source.
-      "X-Auth-Refresh-Source": "plugin",
-      // The domain is the endpoint we are talking to, not the one the login
-      // answered with.
-      "X-Domain": hostOf(base.base),
+  const id = sessionId(providerId);
+  return refreshSessionFlow<WorkBuddySession>({
+    id,
+    load: () => loadSession(providerId),
+    bufferMs: REFRESH_BUFFER_MS,
+    request: async (session) => {
+      const region = session.region ?? regionOf(providerId);
+      const base = ENDPOINTS[region];
+      const res = await requestJson(`${base.base}${REFRESH_PATH}`, {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+          "X-Refresh-Token": session.refreshToken,
+          // The official client says where the refresh came from, and the
+          // server has a strategy for each source.
+          "X-Auth-Refresh-Source": "plugin",
+          // The domain is the endpoint we are talking to, not the one the
+          // login answered with.
+          "X-Domain": hostOf(base.base),
+        },
+        body: "{}",
+      });
+      const code = res.body?.code ?? res.body?.msg ?? `HTTP ${res.status}`;
+      return { ok: res.status === 200, status: res.status, code: String(code), body: res.body };
     },
-    body: "{}",
+    parse: (body, session) => workbuddySessionFrom(body, session),
+    refused: (answer) => answer.status === 401 || answer.status === 403,
+    hint: (code) =>
+      `WorkBuddy 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
+      `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
+      `这份就失效。恢复：${clearHint(sessionId(providerId))}。`,
+    save: (next) => saveSession(next, providerId),
+    label: (session) => `workbuddy ${session.region ?? regionOf(providerId)}`,
+    noSession: loginHint(providerId),
+    invalidate: () => {
+      cache = null;
+    },
   });
-  if (res.status !== 200) {
-    const code = res.body?.code ?? res.body?.msg ?? `HTTP ${res.status}`;
-    authLog(dataDir(), `workbuddy ${region} refresh rejected`, `${code} (HTTP ${res.status}), body ${JSON.stringify(res.body).slice(0, 300)}`);
-    if (res.status === 401 || res.status === 403) {
-      const hint =
-        `WorkBuddy 拒绝了刷新（${code}）。刷新时 token 会轮换，一份 session 同一时间只能有一个` +
-        `持有者去刷新：另一台机器、另一份数据库副本、或者桌面端那份 store，只要有一份在刷新，` +
-        `这份就失效。恢复：${clearHint(sessionId(providerId))}。`;
-      // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
-      markSessionDead(sessionId(providerId), hint);
-      throw new AuthError(`refresh rejected (${code})`, hint, 503);
-    }
-    throw new AuthError(`refresh failed (${code})`, `WorkBuddy 刷新失败（${code}），稍后重试。`, 502);
-  }
-  const data = res.body?.data?.data ?? res.body?.data ?? {};
+}
+
+/**
+ * The refreshed session, from what the platform answered.
+ *
+ * The answer keeps the shape of the login: the token is in `data.data` (or in
+ * `data`).
+ */
+function workbuddySessionFrom(body: any, session: WorkBuddySession): WorkBuddySession {
+  const data = body?.data?.data ?? body?.data ?? {};
   const token = String(data.accessToken ?? "");
   if (!token) {
     throw new AuthError(
       "refresh returned no token",
-      `WorkBuddy 刷新没有返回 token：${JSON.stringify(res.body).slice(0, 200)}`,
+      `WorkBuddy 刷新没有返回 token：${JSON.stringify(body).slice(0, 200)}`,
       503,
     );
   }
 
   const now = Date.now();
-  const next: WorkBuddySession = {
+  return {
     ...session,
     accessToken: token,
     refreshToken: String(data.refreshToken ?? session.refreshToken),
@@ -474,16 +478,6 @@ export async function refreshSession(providerId = "workbuddy-cn"): Promise<WorkB
     refreshExpiresAtMs: normalizeEpoch(data.refreshExpiresAt) || session.refreshExpiresAtMs,
     refreshedAtMs: now,
   };
-  saveSession(next, providerId);
-  cache = null;
-  authLog(
-    dataDir(),
-    `workbuddy ${region} refresh ok`,
-    `generation ${next.generation}, access ${tokenFingerprint(next.accessToken)}, ` +
-      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
-      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
-  );
-  return next;
 }
 
 let cache: CredentialCache | null = null;
