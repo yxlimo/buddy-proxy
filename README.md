@@ -81,9 +81,15 @@ front-door keys of a deployment that predates the database.
 Every setting comes from one of three places, and the first one that has an
 answer wins:
 
-1. **the database** — what a management panel writes
-2. **the environment** — what the deployment sets (`docker compose`, `.env`)
+1. **the environment** — what the deployment sets (`docker compose`, `.env`)
+2. **the database** — what a management panel writes
 3. **the default in the code**
+
+The environment wins: what the deployment pins, the deployment decides. A
+setting the panel writes still goes into the database, so removing the
+variable hands the setting back to the panel. The panel shows both — the
+value in effect and the one it wrote — and says which one is waiting for
+what.
 
 The service reads them all once, at startup, so a change in the database takes
 effect on the next restart rather than halfway through a request. The startup
@@ -104,9 +110,28 @@ node config-cli.ts clear HEALTH_CACHE_MS
 node config-cli.ts secrets          # the credentials that are configured
 ```
 
-The credentials are the exception: the environment wins for them, so a key that
-was rotated in `.env` takes effect. The database holds a copy, so the service
-still works when the `.env` file is not there.
+The credentials are the exception: they live in the account's own row and
+nowhere else (`session:provider:<id>`, `key:provider:<id>:<suffix>`). The
+environment is not a source for them — it used to be, and it wrote itself
+back into the database on every read, so a deleted account got an identity
+back within a minute.
+
+## The background timer
+
+One timer (a minute per tick) runs everything periodic, in order: refresh a
+token when it is close to expiring, take the daily check-in, scan the
+balances, and re-pick the account for the "expiring credit first" policy.
+Each login state is independent of the others — hundreds of accounts run side
+by side without waiting for each other.
+
+The timer is the only thing that refreshes a token. A request never does, and
+neither does the panel's "try it": a refresh rotates a one-shot token, and
+refreshing the same session twice makes the platform revoke the whole session.
+
+`PERIODIC_ENABLED=false` turns the timer off entirely: no token refresh, no
+check-in, no balance scan. Useful when the service should not touch a login
+state at all — reproducing a problem, running offline tests, or letting the
+official client be the only holder of a token.
 
 ## Layout
 
