@@ -13,7 +13,7 @@
 // 依据：docs/zcode/FINDINGS.md §9。
 
 import { ZCODE_BASE, ZCODE_VERSION, loadSession } from "./auth.ts";
-import { zcodeHeaders } from "./transport.ts";
+import { zcodePlatformHeaders } from "./transport.ts";
 
 export interface ZcodeBucket {
   /** 桶的名字。 */
@@ -66,7 +66,7 @@ export async function fetchZcodeQuota(providerId = "zcode"): Promise<ZcodeQuota 
       `${ZCODE_BASE}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(ZCODE_VERSION)}`,
       {
         headers: {
-          ...zcodeHeaders(session),
+          ...zcodePlatformHeaders(session),
           accept: "application/json",
         },
         signal: AbortSignal.timeout(20_000),

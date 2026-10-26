@@ -30,7 +30,7 @@ run = "pnpm exec tsc --noEmit"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:workbuddy:benefits", "test:refresh-flow", "test:balance-account", "test:timer-refresh", "test:account-weight"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:workbuddy:benefits", "test:refresh-flow", "test:zcode:headers", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -160,6 +160,14 @@ run = "node --experimental-strip-types test/usage-check.ts"
 [tasks."test:zcode"]
 description = "Run the tests for the ZCode login window (no network)"
 run = "node --experimental-strip-types test/zcode-check.ts"
+
+[tasks."test:zcode:headers"]
+description = "Check the ZCode request headers against the official client's (no network)"
+run = "node --experimental-strip-types test/zcode-headers-check.ts"
+
+[tasks."test:session-map"]
+description = "Check the client's session id mapping to the upstream's (no network)"
+run = "node --experimental-strip-types test/session-map-check.ts"
 
 [tasks."test:snapshot"]
 description = "Run the tests for reading the health snapshot by provider id (no network)"

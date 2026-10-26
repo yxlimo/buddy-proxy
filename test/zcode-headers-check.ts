@@ -1,0 +1,145 @@
+// test/zcode-headers-check.ts — ZCode 的请求头，跟官方客户端 v3.16.2 对。
+//
+//   node --experimental-strip-types test/zcode-headers-check.ts
+//
+// 离线：不问 ZCode。
+//
+// 依据是官方源码（github.com/zai-org/ZCode，v3.16.2）：
+//
+//   - 模型请求的静态头：apps/zcode-cli/packages/bootstrap/src/model-config.ts:50-72
+//     （buildCliZCodeSourceHeaders —— **不带** X-Device-Mid）
+//   - 带 X-Device-Mid 的那一套：packages/shared/src/zcode-source-headers.ts:30-70
+//     （平台 API 与遥测用的）
+//   - 归因头：apps/zcode-cli/packages/adapters/src/model/runner-attribution.ts:29-58
+//
+// 头少一个、多一个、或者每次都换的那些，平台那边看得见。
+
+import { zcodeHeaders, zcodePlatformHeaders, zcodeBody, ZCODE_MESSAGES_URL } from "../lib/zcode/transport.ts";
+import type { ZcodeSession } from "../lib/zcode/auth.ts";
+import type { Json } from "../lib/json.ts";
+
+const check = (name: string, ok: boolean, detail = "") => {
+  console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : ` — ${detail}`}`);
+  if (!ok) process.exitCode = 1;
+};
+
+const session: ZcodeSession = {
+  token: "jwt_test",
+  provider: "zai",
+  deviceId: "11111111-2222-3333-4444-555555555555",
+  generation: 1,
+  loginAtMs: Date.now(),
+  expiresAtMs: Date.now() + 3600_000,
+};
+
+/** 官方抓包里的那套头（FINDINGS §3.4）。 */
+const OFFICIAL = [
+  "authorization",
+  "x-api-key",
+  "anthropic-version",
+  "content-type",
+  "HTTP-Referer",
+  "user-agent",
+  "X-ZCode-App-Version",
+  "X-Title",
+  "X-Release-Channel",
+  "X-Client-Language",
+  "X-Client-Timezone",
+  "X-ZCode-Agent",
+  "X-Platform",
+  "X-Os-Category",
+  "X-Os-Version",
+  "x-request-id",
+  "x-zcode-session-type",
+  "x-zcode-trace-id",
+];
+
+console.log("");
+console.log("模型请求的头：就是官方那套");
+
+{
+  const headers = zcodeHeaders(session, { sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
+  const names = Object.keys(headers);
+  for (const name of OFFICIAL) {
+    check(`有 ${name}`, names.includes(name), names.join(","));
+  }
+  const extra = names.filter((n) => !OFFICIAL.includes(n) && n !== "x-session-id");
+  check("没有多余的头", extra.length === 0, extra.join(","));
+  check("没有 X-Device-Mid", !("X-Device-Mid" in headers), Object.keys(headers).join(","));
+}
+
+console.log("");
+console.log("头的值");
+
+{
+  const headers = zcodeHeaders(session, { sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
+  check("两个鉴权头都是 jwt", headers["authorization"] === "Bearer jwt_test" && headers["x-api-key"] === "jwt_test", headers["authorization"]);
+  check("时区跟官方抓包一样", headers["X-Client-Timezone"] === "Asia/Shanghai", headers["X-Client-Timezone"]);
+  check("版本头是版本号", /^ZCode\/\d+\.\d+\.\d+$/.test(headers["user-agent"]), headers["user-agent"]);
+  check("平台是 os 的形状", /^(linux|darwin|win32)-\w+$/.test(headers["X-Platform"]), headers["X-Platform"]);
+  check("系统版本是 os.release 的样子", /^[\d.]+/.test(headers["X-Os-Version"]), headers["X-Os-Version"]);
+  check("会话类型是 main", headers["x-zcode-session-type"] === "main", headers["x-zcode-session-type"]);
+  check("会话 id 是给的那个", headers["x-session-id"] === "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", headers["x-session-id"]);
+}
+
+console.log("");
+console.log("归因头每次请求都不一样，会话 id 不是");
+
+{
+  const a = zcodeHeaders(session, { sessionId: "same" });
+  const b = zcodeHeaders(session, { sessionId: "same" });
+  check("请求 id 每次不同", a["x-request-id"] !== b["x-request-id"]);
+  check("trace id 每次不同", a["x-zcode-trace-id"] !== b["x-zcode-trace-id"]);
+  check("会话 id 是稳定的", a["x-session-id"] === b["x-session-id"], `${a["x-session-id"]} vs ${b["x-session-id"]}`);
+}
+
+console.log("");
+console.log("客户端没给会话 id：那个头就不发");
+
+{
+  const headers = zcodeHeaders(session);
+  check("没有 x-session-id", !("x-session-id" in headers), Object.keys(headers).join(","));
+}
+
+console.log("");
+console.log("平台 API 多一个设备头");
+
+{
+  const headers = zcodePlatformHeaders(session);
+  check("额度那种请求带设备号", headers["X-Device-Mid"] === session.deviceId, String(headers["X-Device-Mid"]));
+  check("其余的一样", headers["authorization"] === "Bearer jwt_test");
+}
+
+console.log("");
+console.log("body 里的 metadata");
+
+{
+  const body = zcodeBody({ model: "GLM-5.3-Flash", messages: [] } as Json, session, {
+    effort: "high",
+    model: "GLM-5.3-Flash",
+    sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  });
+  const raw = String((body as Json)["metadata"]?.["user_id"] ?? "");
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    /* not JSON */
+  }
+  check("user_id 是 JSON 字符串套 JSON", parsed !== null, raw);
+  check("带设备号", parsed?.["device_id"] === session.deviceId, String(parsed?.["device_id"]));
+  check("带会话 id", parsed?.["session_id"] === "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", String(parsed?.["session_id"]));
+  check("账号 uuid 是空的（官方就是这样）", parsed?.["account_uuid"] === "", String(parsed?.["account_uuid"]));
+  check("glm-5.3 开着思考", (body as Json)["thinking"]?.["type"] === "enabled", JSON.stringify((body as Json)["thinking"]));
+  check("思考档位写进 output_config", (body as Json)["output_config"]?.["effort"] === "high", JSON.stringify((body as Json)["output_config"]));
+}
+
+console.log("");
+console.log("路径");
+
+{
+  check("路径是官方那一套", ZCODE_MESSAGES_URL.endsWith("/api/v1/zcode-plan/anthropic/v1/messages"), ZCODE_MESSAGES_URL);
+}
+
+console.log("");
+console.log(process.exitCode ? "有没过" : "全部通过");

@@ -334,10 +334,10 @@ const SNAPSHOT_BUCKET: Record<string, string> = {
 };
 
 /** 一个账号的健康快照，没有就是 null。 */
-function snapshotOf(data: unknown, kind: string, accountId: string): unknown {
+function snapshotOf(data: unknown, kind: string, accountId: string): Json | null {
   const bucket = SNAPSHOT_BUCKET[kind];
   if (!bucket) return null;
-  return snapshotEntry(data as never, bucket, accountId);
+  return snapshotEntry(data as Parameters<typeof snapshotEntry>[0], bucket, accountId);
 }
 
 /**
@@ -666,6 +666,9 @@ async function callUpstream(
   const started = Date.now();
   const agent = detectAgent(ctx.request.headers).name;
   const session = detectSession(ctx.request.headers);
+  // The simulated clients send their own session id upstream; the clients
+  // spell it differently, so the upstream id is mapped from this one.
+  uctx.clientSessionId = session.sessionId;
   // The platform says how to talk to it; its accounts are the ones the policy
   // picks from, inside the adapter.
   const template = platformOf(route.platform);

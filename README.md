@@ -254,7 +254,9 @@ The test tasks are separate so a change can be checked on its own:
 | `test:tokenrhythm` | the tenants, the wallet, the fallback |
 | `test:tokenrhythm:fallback` | the fallback between the tenants |
 | `test:usage` | the usage log |
+| `test:session-map` | the client's session id mapped to the upstream's |
 | `test:zcode` | the ZCode login window |
+| `test:zcode:headers` | the ZCode request headers against the official client's |
 
 None of them spend anything: they run against the mock or the recorded
 fixtures.
@@ -554,6 +556,29 @@ The upstream speaks the Anthropic dialect, so an Anthropic request passes
 through; the gateway adds the headers the simulated client sends
 (`authorization` and `x-api-key` both carry the token, plus that client's own
 identity headers).
+
+**The headers are the official client's, and only those.** The official CLI
+(v3.16.2) builds a model request's static headers in
+`buildCliZCodeSourceHeaders` — and that set has **no `X-Device-Mid`**. The
+fuller set that carries it is for the platform API and telemetry; the quota
+call is one of those, and it answers "parameter error" without it. So the model
+request does not send it and the quota call does.
+
+**The session id is mapped, not passed on.** The official client sends its own
+session id (an UUID, with the internal prefix stripped). The clients that call
+this gateway spell theirs differently — pi sends a bare UUID, opencode sends
+`ses_…` — so the gateway maps the client's session id to one of its own
+(`lib/upstream-session.ts`): the same client session always maps to the same
+upstream session id, and the mapping is kept in the database so it survives a
+restart. The client sending no session id means no session id upstream, which
+is what the official client does in that case.
+
+**One device per account.** The official client has one device id per
+installation (a UUID in `.zcode/v2/telemetry-state.json`), and the same id
+appears in the model request's `metadata.user_id.device_id` and in the quota
+call's `X-Device-Mid`. Here the id is derived per account, and it stays the
+same across logins — a new id on every login is what a machine that is never
+the same machine looks like.
 
 **The token cannot be refreshed.** The Z.ai and BigModel adapters do not
 implement `refreshToken`, so when it expires the only way back is a new login

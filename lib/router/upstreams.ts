@@ -36,6 +36,7 @@ import {
   setBalanceAccount,
 } from "../tokenrhythm/balance.ts";
 import { kindOf } from "../provider-kinds.ts";
+import { upstreamSessionId } from "../upstream-session.ts";
 import { zcodeChat } from "../zcode/transport.ts";
 import { zcodeMaxOutput } from "../zcode/models.ts";
 import {
@@ -103,6 +104,16 @@ export interface UpstreamContext {
    * the request as it is, so the session headers go along.
    */
   clientHeaders: Record<string, string>;
+  /**
+   * The client's session id, as the client spelled it.
+   *
+   * The simulated clients rebuild the request the way the desktop client builds
+   * it, and the desktop client sends *its own* session id. The clients here
+   * spell their session ids differently (pi sends a bare UUID, opencode sends
+   * `ses_…`), so the upstream id is mapped from this one (lib/upstream-session.ts).
+   * Empty when the client sent no session id.
+   */
+  clientSessionId?: string;
   /** The output limit of a WorkBuddy model, as its own catalogue says. */
   workbuddyMaxOutput(model: string): number;
   /** The model itself, so the request can be built the way the client builds it. */
@@ -796,8 +807,16 @@ export async function toZcode(
   anthropicBody.model = model;
   anthropicBody.stream = stream;
 
+  // The upstream's session id: the client's session id, mapped to the shape the
+  // upstream expects. The same client session always maps to the same id.
+  const sessionId = upstreamSessionId(route.platform, ctx.clientSessionId ?? "");
+
   const { response } = await underPolicy(route.platform, "zcode", (account) =>
-    zcodeChat(anthropicBody, { effort: effortOf(body), providerId: account.id }),
+    zcodeChat(anthropicBody, {
+      effort: effortOf(body),
+      providerId: account.id,
+      sessionId,
+    }),
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");

@@ -106,6 +106,20 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
+  // 客户端会话 → 上游会话的映射。
+  //
+  // 客户端给的会话 id 什么样都有（pi 给裸 UUID，opencode 给 `ses_xxx`），
+  // 而上游只认自己客户端那种形状。所以映射一次，落在这里：同一个客户端会话
+  // 永远是同一个上游会话 id。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS session_map (
+      upstream          TEXT NOT NULL,
+      client_session_id TEXT NOT NULL,
+      session_id        TEXT NOT NULL,
+      created_at        INTEGER NOT NULL,
+      PRIMARY KEY (upstream, client_session_id)
+    )`,
+  );
   // 平台层的生效策略：一行一个平台，没有行就是默认。
   //
   // 这张表要在迁移之前就存在：迁移会把旧行上的策略搬进来。

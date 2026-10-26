@@ -20,6 +20,8 @@ import { AuthError } from "../credential.ts";
 import { readSession, writeSession } from "../session.ts";
 import { deleteSecret, getSecret } from "../store.ts";
 import { providerSecretId } from "../providers.ts";
+import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
+import { dataDir } from "../paths.ts";
 
 /** ZCode 自己的站点。 */
 export const ZCODE_BASE = configString("ZCODE_BASE_URL", "https://zcode.z.ai").replace(/\/+$/, "");
@@ -183,7 +185,7 @@ export async function pollLogin(
       accessToken: String(data?.zai?.access_token ?? data?.bigmodel?.access_token ?? "") || undefined,
       userId: String(data?.user?.user_id ?? "") || undefined,
       provider: String(data?.provider ?? ZCODE_PROVIDER),
-      deviceId: crypto.randomUUID(),
+      deviceId: zcodeDeviceId(providerId),
       generation: 1,
       loginAtMs: Date.now(),
       // zcode JWT 没有刷新通道，给一个保守的时长：到了就是过期了，重登。
@@ -202,6 +204,22 @@ export async function pollLogin(
 }
 
 /** 存会话。 */
+/**
+ * 这个账号的「设备」。
+ *
+ * 官方客户端每安装一个设备 id（`.zcode/v2/telemetry-state.json` 的 deviceMid，
+ * 一个 UUID），跨登录不变；模型请求的 `metadata.user_id.device_id` 与平台 API
+ * 的 `X-Device-Mid` 是同一个。我们按账号派生（跟 Qoder / WorkBuddy 同一个做法，
+ * 派生出来也是 UUID 形状）：登录多少次都是同一个 id。
+ *
+ * 已经有的就留着：换它等于换设备，平台会看出「这台机器换人了」。
+ */
+export function zcodeDeviceId(providerId = "zcode"): string {
+  const existing = loadSession(providerId)?.deviceId;
+  if (existing) return existing;
+  return deriveDeviceIdentity(providerId, deviceSalt(dataDir())).machineId;
+}
+
 export function saveSession(session: ZcodeSession, providerId = "zcode"): void {
   writeSession(sessionId(providerId), session);
 }
