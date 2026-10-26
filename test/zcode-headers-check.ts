@@ -135,6 +135,32 @@ console.log("body 里的 metadata");
 }
 
 console.log("");
+console.log("思考怎么发：按目录里的标记（官方 zcode-builtin.json 的 modelApiRules）");
+
+{
+  // GLM-5.2：官方规则 7 —— enabled + effort。
+  const body = zcodeBody({ model: "GLM-5.2", messages: [] } as Json, session, { model: "GLM-5.2" });
+  check("GLM-5.2 开着思考", (body as Json)["thinking"]?.["type"] === "enabled", JSON.stringify((body as Json)["thinking"]));
+  check("GLM-5.2 带 effort", (body as Json)["output_config"]?.["effort"] === "medium", JSON.stringify((body as Json)["output_config"]));
+}
+
+{
+  // GLM-5-Turbo：官方规则 8 —— disabled，没有 effort 这个档。
+  const body = zcodeBody({ model: "GLM-5-Turbo", messages: [] } as Json, session, { model: "GLM-5-Turbo" });
+  check("Turbo 不思考", (body as Json)["thinking"]?.["type"] === "disabled", JSON.stringify((body as Json)["thinking"]));
+  check("Turbo 没有 output_config", (body as Json)["output_config"] === undefined, JSON.stringify((body as Json)["output_config"]));
+}
+
+{
+  // 客户端要了档位就用它（官方没指定时是 medium）。
+  const body = zcodeBody({ model: "GLM-5.3-Flash", messages: [] } as Json, session, {
+    effort: "low",
+    model: "GLM-5.3-Flash",
+  });
+  check("客户端的档位照用", (body as Json)["output_config"]?.["effort"] === "low", JSON.stringify((body as Json)["output_config"]));
+}
+
+console.log("");
 console.log("路径");
 
 {

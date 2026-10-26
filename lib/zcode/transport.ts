@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import { release as osRelease } from "node:os";
 import { AuthError } from "../credential.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
+import { matchZcodeModel } from "./models.ts";
 
 /** 模型端点。 */
 export const ZCODE_MESSAGES_URL = `${ZCODE_BASE}/api/v1/zcode-plan/anthropic/v1/messages`;
@@ -107,12 +108,22 @@ export function zcodeBody(
   opts: { effort?: string; model?: string; sessionId?: string } = {},
 ): Json {
   const out: Json = { ...body };
+  // 思考怎么发：按官方客户端的规则（config/provider/zcode-builtin.json 的
+  // modelApiRules）：
+  //
+  //   glm-5.3 / glm-5.2  → thinking enabled + output_config.effort
+  //   glm-5-turbo        → thinking disabled（它没有 effort 这个档）
+  //
+  // 目录里标了 reasoning 的就是能思考的，effort 跟着客户端的要求走
+  // （官方那边没指定时是 medium）。
+  const entry = matchZcodeModel(String(opts.model ?? ""));
   const level = opts.effort ?? "medium";
-  if (opts.model && /glm-5\.3/i.test(opts.model)) {
+  if (entry?.reasoning) {
     out.thinking = { type: "enabled" };
     out.output_config = { effort: level };
   } else {
-    out.thinking = { type: "enabled" };
+    out.thinking = { type: "disabled" };
+    delete out.output_config;
   }
   out.metadata = {
     ...(body?.metadata ?? {}),
