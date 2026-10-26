@@ -19,6 +19,7 @@ import { kindOf } from "./provider-kinds.ts";
 import { benefits } from "./admin/benefits.ts";
 import { HEALTH_CACHE_MS, refreshHealthSnapshot } from "./admin/upstreams.ts";
 import { BENEFITS_INTERVAL_MS } from "./admin/benefits.ts";
+import { configFlag } from "./config.ts";
 
 /** 定时器多久醒一次。 */
 const INTERVAL_MS = 60_000;
@@ -68,6 +69,8 @@ function done(step: string): void {
  * spent.
  */
 export async function runPeriodicOnce(): Promise<void> {
+  // 定时器关了就是什么都不做：不动任何登录态。
+  if (!periodicEnabled()) return;
   // 上一轮还没跑完就不叠着跑：令牌是一次性的，两轮同时换同一个会话，平台会
   // 当成重放，把整个会话撤掉。
   if (running) return;
@@ -136,6 +139,22 @@ async function runOnce(): Promise<void> {
 }
 
 /**
+ * 定时器开不开。
+ *
+ * 关掉它，网关就不动任何登录态：不换令牌、不签到、不扫余额。
+ *
+ * 为什么需要这个：换令牌时 refresh token 会轮换，而它是**一次性的**。同一
+ * 份会话被换两次，平台会当成重放，把整个会话的令牌一起撤掉。调试、复现、
+ * 离线测试的时候，宁可让令牌过期，也不要它自己动。
+ *
+ * 环境变量或数据库里都能设（`PERIODIC_ENABLED=false`）。设了之后要重启才
+ * 生效：这个开关是启动时读一次的。
+ */
+function periodicEnabled(): boolean {
+  return configFlag("PERIODIC_ENABLED", true);
+}
+
+/**
  * 定时做事。
  *
  * 客户端是自己在后台换令牌的，网关也这样：不需要谁来点。
@@ -144,6 +163,12 @@ async function runOnce(): Promise<void> {
  * session the platform revoked should show up as expired right then.
  */
 export function startPeriodic(intervalMs = INTERVAL_MS): void {
+  if (!periodicEnabled()) {
+    console.log(
+      "[PERIODIC] 定时器关了（PERIODIC_ENABLED=false）：不换令牌、不签到、不扫余额。",
+    );
+    return;
+  }
   void runPeriodicOnce();
   const timer = setInterval(() => void runPeriodicOnce(), intervalMs);
   timer.unref?.();

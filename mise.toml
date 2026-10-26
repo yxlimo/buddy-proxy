@@ -30,7 +30,7 @@ run = "pnpm exec tsc --noEmit"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:workbuddy:benefits", "test:refresh-flow", "test:zcode:headers", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:refresh-flow", "test:zcode:headers", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -71,6 +71,10 @@ run = "node --experimental-strip-types test/quota-readout-check.ts"
 [tasks."test:dead-session"]
 description = "Check that a refused session is not asked about again"
 run = "node --experimental-strip-types test/dead-session-check.ts"
+
+[tasks."test:periodic:off"]
+description = "Check that the timer can be turned off (no refresh, no check-in)"
+run = "node --experimental-strip-types test/periodic-off-check.ts"
 
 [tasks."test:periodic"]
 description = "Check the periodic work: the sessions are refreshed and the balances scanned on a timer"

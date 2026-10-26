@@ -858,13 +858,17 @@ const server = app.listen(PORT, HOST, () => {
         console.warn(`  [AUTH] minimax: ${err.message}`);
         console.warn(`         ${err.hint}`);
       });
-
-    // One timer for everything periodic: the tokens are refreshed, the
-    // check-ins are taken and the state is read, one after another (see
-    // lib/periodic.ts). The client does the same in the background, so
-    // nobody has to ask for a new token and a request never waits for one.
-    startPeriodic();
   }
+
+  // One timer for everything periodic: the tokens are refreshed, the
+  // check-ins are taken and the state is read, one after another (see
+  // lib/periodic.ts). The client does the same in the background, so
+  // nobody has to ask for a new token and a request never waits for one.
+  //
+  // It starts once, not once per account: two timers would ask the platform
+  // the same thing twice, and a token is one-shot (a second refresh of the
+  // same session looks like a replay, and the platform revokes the session).
+  startPeriodic();
 
   for (const provider of providersNeedingLogin("qoder")) {
     void ensureQoderSession(provider)

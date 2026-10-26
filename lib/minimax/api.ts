@@ -13,7 +13,7 @@
 
 import type { Json } from "../json.ts";
 import { configString } from "../config.ts";
-import { getSecret, setSecret } from "../store.ts";
+import { getSecret } from "../store.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
 import { providerSecretId } from "../providers.ts";
@@ -25,7 +25,7 @@ const MAX_TENANTS = 10;
 /** 最多几把 key（也就是几个租户）。 */
 export const MAX_MINIMAX_API_TENANTS = MAX_TENANTS;
 
-/** 内置的那个 provider：环境变量里的那几把 key 是它的。 */
+/** 内置的那个 provider。 */
 const BUILT_IN = "minimax-api";
 
 /**

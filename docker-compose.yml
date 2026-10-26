@@ -30,6 +30,11 @@ services:
       # lib/admin/benefits.ts). It is not pinned here: the code decides how
       # often, because the Buddy's trip lasts one to four hours and its gift
       # has to be picked up inside that window.
+      #
+      # PERIODIC_ENABLED=false turns that timer off entirely: no token
+      # refresh, no check-in, no balance scan. Uncomment it to freeze the
+      # sessions (a refresh rotates a one-shot token, and two refreshes of
+      # the same session make the platform revoke it).
     # The TokenRhythm accounts and their keys, and the MiniMax plan key, come
     # from the .env file next to this one. The proxy reads the ones it knows
     # by name; nothing else in the file is loaded.

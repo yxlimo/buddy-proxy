@@ -14,13 +14,12 @@ import {
   configOverride,
   configPendingRestart,
   configSnapshot,
-  configStartup,
   configString,
   markHotSetting,
   reloadConfig,
   type Setting,
 } from "../config.ts";
-import { parseBool } from "../env.ts";
+import { parseBool, readEnvValue } from "../env.ts";
 import { listConfig } from "../store.ts";
 import { pruneUsage } from "../usage.ts";
 
@@ -55,6 +54,13 @@ export interface ConfigItemView {
   secret: boolean;
   /** 敏感项现在有没有值。 */
   hasValue: boolean;
+  /**
+   * 面板写进数据库的那份值。
+   *
+   * 环境变量在用的时候，生效的是环境变量的值，这份在库里等：环境变量撤了
+   * 才轮到它。敏感项不给。
+   */
+  overrideValue: string;
 }
 
 /**
@@ -130,8 +136,9 @@ function labelOf(key: string, description: string): string {
 /**
  * 所有配置项。
  *
- * 值取数据库里的覆盖值（面板刚写的那份），没有就取进程启动时读的那份；
- * 来源跟着值走。
+ * 值是**现在生效**的那份：环境变量先（部署钉住的说了算），库里的覆盖其次，
+ * 代码里的默认值最后。面板刚写的那份如果被环境变量挡着，就另外放在
+ * overrideValue 里 —— 它没丢，在等环境变量撤了才轮到它。
  */
 export function configItems(): ConfigItemView[] {
   const overrides = new Map(listConfig().map((row) => [row.key, row.value]));
@@ -139,9 +146,9 @@ export function configItems(): ConfigItemView[] {
     .filter((setting) => USER_FACING.has(setting.key))
     .map((setting) => {
     const override = overrides.get(setting.key);
-    const atStart = configStartup(setting.key);
-    const raw = override ?? atStart?.raw ?? String(setting.fallback);
-    const source = override !== undefined ? "database" : atStart?.source ?? "default";
+    // 生效的值：快照里就是模块读的时候定下的那份。
+    const raw = String(setting.value);
+    const source = setting.source;
     const secret = isSecret(setting.key);
     // 敏感项只写不读：值不回给面板，掩码长得像值，容易被当成真值存回去。
     // 「有没有值」单独用 hasValue 说。
@@ -157,6 +164,8 @@ export function configItems(): ConfigItemView[] {
       description,
       secret,
       hasValue,
+      // 面板写进库的那份。环境变量在用的时候，它在等。
+      overrideValue: secret ? "" : (override ?? ""),
     };
     });
 }
@@ -208,6 +217,14 @@ export function setConfigValue(key: string, value: string, clear = false): { ok:
   configOverride(key, value);
   // 改完就重新读一遍：面板能改的那些是热的，下一个请求就是新的值。
   reloadConfig();
+  // 环境变量钉着的设置：面板写的这份在库里等着，但生效的还是环境变量那个。
+  // 说清楚，不然用户看着值没变，会以为没保存成功。
+  if (readEnvValue(key) !== null) {
+    return {
+      ok: true,
+      message: `写了 ${key}，但这个设置被环境变量钉着，现在生效的还是环境变量的值；环境变量撤了才轮到这一份。`,
+    };
+  }
   // 保留天数改了：按新的天数清一遍，不用等下一个小时。
   if (key === "USAGE_RETENTION_DAYS") {
     const days = configNumber("USAGE_RETENTION_DAYS", 30);

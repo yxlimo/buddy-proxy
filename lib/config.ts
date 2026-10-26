@@ -2,9 +2,13 @@
 //
 // Three places, in this order:
 //
-//   1. the database  — what the management panel writes
-//   2. the environment — what the deployment sets (process env, then .env)
+//   1. the environment — what the deployment sets (process env, then .env)
+//   2. the database  — what the management panel writes
 //   3. the default in the code
+//
+// The environment comes first: what the deployment pins, the deployment
+// decides. The panel's value is kept in the database all the same, so
+// removing the environment variable hands the setting back to the panel.
 //
 // The service reads every setting once, at startup: the modules ask for their
 // settings while they load, and the answers are cached from then on. A change
@@ -16,10 +20,10 @@
 // reloadConfig() picks the new value up: the panel changes one and the next
 // request sees it, with no restart.
 //
-// The environment still wins for the things it is supposed to win for: the
-// credentials (a rotated key in .env must not be shadowed by a stale copy in
-// the database) and the paths that decide where the database itself is. Those
-// are read through lib/env.ts and lib/store.ts, not through here.
+// The credentials (a rotated key in .env must not be shadowed by a stale copy
+// in the database) and the paths that decide where the database itself is are
+// read through lib/env.ts and lib/store.ts, not through here — they have
+// nowhere else to live.
 
 import { parseBool, readEnvValue } from "./env.ts";
 import { deleteConfig, getConfig, listConfig, setConfig } from "./store.ts";
@@ -106,19 +110,21 @@ function resolve(key: string, fallback: string | number | boolean): { raw: strin
 
   let raw: string;
   let source: ConfigSource;
+  // 环境变量先看：部署里钉住的，部署说了算。
+  //
+  // 面板写进库的那份留着（环境变量撤了就轮到它），但环境变量在的时候，
+  // 用的就是环境变量的值 —— 面板改不动部署钉住的东西。
+  const fromEnv = readEnvValue(key);
   const fromDb = getConfig(key);
-  if (fromDb !== null) {
+  if (fromEnv !== null) {
+    raw = fromEnv;
+    source = "environment";
+  } else if (fromDb !== null) {
     raw = fromDb;
     source = "database";
   } else {
-    const fromEnv = readEnvValue(key);
-    if (fromEnv !== null) {
-      raw = fromEnv;
-      source = "environment";
-    } else {
-      raw = String(fallback);
-      source = "default";
-    }
+    raw = String(fallback);
+    source = "default";
   }
   answers.set(key, { raw, source });
   if (!startup.has(key)) startup.set(key, { raw, source });
@@ -166,30 +172,57 @@ export function configNumber(key: string, fallback: number): number {
  * Writing
  * ------------------------------------------------------------------ */
 
+/** 一个原始的值，按设置的类型变成它该有的样子。 */
+function valueOf(setting: Setting, raw: string): string | number | boolean {
+  if (setting.type === "boolean") return parseBool(raw) ?? setting.fallback;
+  if (setting.type === "number") {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : setting.fallback;
+  }
+  return raw;
+}
+
 /**
  * Write a setting to the database.
  *
- * It wins over the environment from now on, until it is cleared again.
+ * The value is kept in the database. What is *in effect* depends on the
+ * environment: a setting the deployment pinned stays pinned — the panel's
+ * value waits for the environment variable to go away.
  */
 export function configOverride(key: string, value: string): void {
   setConfig(key, value);
   answers.delete(key);
   const setting = settings.get(key);
-  if (setting) {
-    setting.source = "database";
-    setting.value = setting.type === "boolean" ? (parseBool(value) ?? setting.fallback) : value;
+  if (!setting) return;
+  const fromEnv = readEnvValue(key);
+  if (fromEnv !== null) {
+    setting.source = "environment";
+    setting.value = valueOf(setting, fromEnv);
+    return;
   }
+  setting.source = "database";
+  setting.value = valueOf(setting, value);
 }
 
-/** Forget an override: the environment says again. */
+/**
+ * Forget the override.
+ *
+ * The environment says again if it says anything; otherwise the default in
+ * the code does.
+ */
 export function configClear(key: string): void {
   deleteConfig(key);
   answers.delete(key);
   const setting = settings.get(key);
-  if (setting) {
-    setting.source = "default";
-    setting.value = setting.fallback;
+  if (!setting) return;
+  const fromEnv = readEnvValue(key);
+  if (fromEnv !== null) {
+    setting.source = "environment";
+    setting.value = valueOf(setting, fromEnv);
+    return;
   }
+  setting.source = "default";
+  setting.value = setting.fallback;
 }
 
 /**

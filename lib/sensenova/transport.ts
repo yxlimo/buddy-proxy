@@ -3,7 +3,7 @@
 // SenseNova 的推理端点讲 OpenAI 方言：请求发过去，答案原样回来。网关这一层
 // 只做两件事：
 //
-//   1. 拿推理用的 key。账号上可能已经有（环境变量里，或者数据库里），没有就
+//   1. 拿推理用的 key。账号上可能已经有（数据库里那个账号自己的），没有就
 //      在这里建一把 —— 平台只在创建的那一次回答里给完整值，所以建它的那个
 //      函数必须负责把它存起来（见 lib/sensenova/keys.ts）。
 //   2. 记着模型清单。清单是跟着 key 走的：不同的 key 能调的模型不一样。所以
@@ -21,7 +21,7 @@ import { openAiPlatformChat } from "../router/openai-platform.ts";
 /** 清单最多放多久。模型清单变得不快，半小时问一次够了。 */
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
-/** 账号上现在有的推理 key（环境变量优先，其次数据库）。 */
+/** 账号上现在有的推理 key（就在这个账号名下）。 */
 export function senseNovaInferenceKey(providerId = "sensenova"): string {
   const stored = storedAccount(providerId);
   return senseNovaApiKey(stored?.apiKey);

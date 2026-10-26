@@ -36,7 +36,7 @@ const CATALOG_TTL_MS = 30 * 60 * 1000;
 /** 新建的 key 要等多久才能用。平台上放行要一点时间。 */
 const KEY_SETTLE_MS = 8_000;
 
-/** 账号上现在有的 Discovery 推理 key（环境变量优先，其次数据库）。 */
+/** 账号上现在有的 Discovery 推理 key（就在这个账号名下）。 */
 export function internAiInferenceKey(providerId = "intern-ai"): string {
   const stored = storedAccount(providerId);
   return internAiDiscoveryKey(stored?.discoveryKey);

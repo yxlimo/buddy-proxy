@@ -778,6 +778,7 @@ is actually idle, so a busy stream is not padded with useless events.
 | `MINIMAX_PING_MS` | `15000` | SSE heartbeat: send `event: ping` when the stream has been quiet this long (`0` disables) |
 | `MINIMAX_REFRESH_BUFFER_MS` | `300000` | refresh this far before expiry |
 | `MINIMAX_API_BASE` | `https://api.minimax.cn` | the platform the balance is read from |
+| `PERIODIC_ENABLED` | `true` | the background timer: refresh tokens near expiry, check in, scan balances (`false` turns all of it off) |
 | `MINIMAX_TOKEN_PLAN_KEY` | — | removed: the token plan's key belongs to the account, not to the environment |
 
 ### Credentials
@@ -1048,6 +1049,30 @@ used from, a disabled app, a lapsed login).
 | `QODER_EFFORT_TIERS` | — | override the thinking level → tier mapping |
 | `QODER_LOG_ROUTE` | `false` | log the model and tier each request resolved to |
 | `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
+
+### Where a setting's value comes from
+
+Three places, in this order:
+
+1. **the environment** — what the deployment sets (the process environment,
+   then the `.env` file)
+2. **the database** — what the management panel writes
+3. **the default in the code**
+
+The environment comes first: what the deployment pins, the deployment
+decides. The panel's value is kept in the database all the same, so removing
+the environment variable hands the setting back to the panel. The panel shows
+both — the value in effect and the one it wrote — and says which is which.
+
+`PERIODIC_ENABLED=false` turns the background timer off: the gateway then
+never refreshes a token, never checks in, and never scans balances. The
+reason it exists: a refresh rotates the refresh token, and that token is
+**one-shot** — two refreshes of the same session look like a replay, and the
+platform revokes the whole session. While debugging, reproducing or testing
+offline, a token that expires is better than a session that gets revoked.
+The panel's state read still works (it asks the platform, read-only), and
+the panel can still check in by hand. It is read once at startup — change it
+and restart.
 
 ## WorkBuddy (China account)
 

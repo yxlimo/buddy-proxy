@@ -246,8 +246,8 @@ export async function deleteChatToken(session: InternAiSession, token: string, i
 /**
  * 一个子站要用的推理 key。
  *
- * 谁优先：显式传进来的 > 环境变量里的 > 数据库里的 > 平台新建的。
- * 换过的 key 得算数，所以前三种都算数；只有都没有的时候才去平台建一个，
+ * 谁优先：显式传进来的 > 数据库里这个账号自己的 > 平台新建的。
+ * 换过的 key 得算数，所以前两种都算数；只有都没有的时候才去平台建一个，
  * 而且建完必须马上存——完整的 key 只在创建的那一次回答里出现。
  */
 export async function ensureApiKey(

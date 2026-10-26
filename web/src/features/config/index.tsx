@@ -178,14 +178,17 @@ export function ConfigPage() {
   // 面板能改的那几个今天都是热的，但那是服务端的事。
   const pendingRestart = config.data?.pendingRestart ?? false
   const effectText = pendingRestart
-    ? '改动会写进数据库，改完要重启才生效。'
+    ? '改动会写进数据库，改完要重启才生效。被环境变量挡着的那些，等环境变量撤了才生效。'
     : '改动会写进数据库，改完立刻生效。'
 
   const save = async (key: string, value: string, clear: boolean) => {
     setBusy(true)
     try {
-      await setConfig.mutateAsync({ key, value, clear })
+      const result = await setConfig.mutateAsync({ key, value, clear })
       setEditing(null)
+      // 服务端会说明白这次改完是什么情况（比如被环境变量钉着），
+      // 面板照它说，不自己猜。
+      if (result.message) toast.success(result.message)
     } catch {
       // 失败时 api 层已经报过了。弹窗留着，用户还要改。
     } finally {
@@ -196,7 +199,7 @@ export function ConfigPage() {
   return (
     <PageShell
       title='配置'
-      description='各设置项当前生效的值，以及值的来源：数据库覆盖、环境变量或默认值。上游的开关在「上游」页。'
+      description='各设置项当前生效的值，以及值的来源：环境变量、数据库覆盖或默认值。部署里钉住的（环境变量）说了算，面板写的值在库里等着。上游的开关在「上游」页。'
     >
 
       {groups.length === 0 ? (
@@ -273,6 +276,14 @@ export function ConfigPage() {
                                 默认值 {item.fallback}
                               </div>
                             ) : null}
+                            {item.overrideValue &&
+                            item.overrideValue !== item.value ? (
+                              // 面板写了、但环境变量在用：这份在库里等着。
+                              <div className='text-xs text-muted-foreground'>
+                                面板里的值 {item.overrideValue}
+                                （环境变量在用，等它撤了才轮到这个）
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell>
                             <Badge variant='outline'>
@@ -300,7 +311,8 @@ export function ConfigPage() {
                                 <Save />
                                 改
                               </Button>
-                              {item.source === 'database' ? (
+                              {item.source === 'database' ||
+                              (item.overrideValue && item.overrideValue !== '') ? (
                                 <Button
                                   variant='ghost'
                                   size='sm'
