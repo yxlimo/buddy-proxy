@@ -11,6 +11,11 @@
 //
 // 断言的是「请求落到了哪个账号」与「库里那一行写了什么」：假上游收到的调用
 // 序列必须是 1,2 然后 2，而不是 1,2,1,2。
+//
+// 末尾还有三条算法上的断言（在本进程里直接跑）：
+//   1. 短冷却不能盖掉长冷却；
+//   2. 额度见底的窗口说了算（周额度见底就等周窗口，不等 5 小时那个）；
+//   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个。
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -24,6 +29,11 @@ import { DatabaseSync } from "node:sqlite";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL = "MiniMax-M3.1-Flash";
+
+// 本进程里直接跑几段算法，所以给本进程一个自己的数据目录 —— 跟网关那份、
+// 跟真的那份都无关。（网关的子进程各自用自己的目录，这里不传给他们。）
+const UNIT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cooldown-unit-"));
+process.env.BUDDY_DATA_DIR = UNIT_DIR;
 
 let pass = 0;
 let fail = 0;
@@ -488,7 +498,95 @@ console.log("场景五：单一策略 —— 冷却的时候直接说，不去�
   }
 }
 
+console.log("");
+console.log("算法：冷却的三条规矩");
+
+{
+  const { setCooldown, cooldownUntil } = await import("../lib/cooldown.ts");
+  const { cooldownForFailure, planWindowEndsAt } = await import("../lib/router/account-cooldown.ts");
+  const { setCached } = await import("../lib/store.ts");
+  const { HEALTH_CACHE_ID } = await import("../lib/health-cache.ts");
+  const { withUpstreamStatus, withCooldownUntil } = await import("../lib/upstream-status.ts");
+  const { AuthError } = await import("../lib/credential.ts");
+
+  // 1. 短冷却不能盖掉长冷却。
+  const long = Date.now() + 2 * 3600_000;
+  setCooldown("acct-long", long, "rate-limit");
+  setCooldown("acct-long", Date.now() + 5 * 60_000, "server");
+  const until = cooldownUntil("acct-long");
+  const db = new DatabaseSync(path.join(UNIT_DIR, "buddy.db"));
+  const reason = String(
+    (db.prepare("SELECT reason FROM cooldown WHERE provider_id = ?").get("acct-long") as any)?.reason ?? "",
+  );
+  db.close();
+  check(
+    "短冷却没有盖掉长冷却（+2h 仍然是 +2h，理由也是长的那条）",
+    until !== null && Math.abs(until - long) <= 1000 && reason === "rate-limit",
+    `${until} 与 ${long} 差了 ${until === null ? "?" : until - long}，理由 ${reason}`,
+  );
+
+  // 2. 见底的窗口说了算：周额度见底就等周窗口，5 小时那个不算。
+  const now = Date.now();
+  const intervalEnd = now + 5 * 3600_000;
+  const weeklyEnd = now + 7 * 24 * 3600_000;
+  setCached(HEALTH_CACHE_ID, {
+    minimax: {
+      "acct-weekly": {
+        tokenPlan: {
+          windows: [
+            {
+              model: "general",
+              intervalPercent: 100,
+              weeklyPercent: 0,
+              intervalEndsAt: new Date(intervalEnd).toISOString(),
+              weeklyEndsAt: new Date(weeklyEnd).toISOString(),
+            },
+          ],
+        },
+      },
+    },
+  });
+  const endsAt = planWindowEndsAt("acct-weekly", now);
+  check(
+    "周额度见底 → 恢复时间取周窗口结束（不是 5 小时那个）",
+    endsAt === weeklyEnd,
+    `${endsAt} 与 ${weeklyEnd} 差了 ${endsAt === null ? "?" : endsAt - weeklyEnd}`,
+  );
+
+  // 3. 额度类的失败取最晚的恢复时间；别的失败取上游说的那个（短的）。
+  const bodyDate = now + 2 * 24 * 3600_000;
+  const quotaError = withCooldownUntil(
+    withUpstreamStatus(
+      new AuthError(`您的限额将在 ${platformStamp(bodyDate)} 重置`, "", 502),
+      429,
+    ),
+    now + 30_000,
+  );
+  const quotaDecision = cooldownForFailure("acct-quota", quotaError, now);
+  check(
+    "额度类失败：retry-after 30s 与正文里的重置时间 → 取更晚的那个",
+    quotaDecision !== null &&
+      quotaDecision.source === "the body" &&
+      Math.abs(quotaDecision.untilMs - (parsePlatformStamp(platformStamp(bodyDate)) + 60_000)) <= 1000,
+    JSON.stringify(quotaDecision),
+  );
+
+  const serverError = withCooldownUntil(
+    withUpstreamStatus(new AuthError("上游挂了", "", 502), 500),
+    now + 30_000,
+  );
+  const serverDecision = cooldownForFailure("acct-server", serverError, now);
+  check(
+    "非额度类失败：上游说 30 秒 → 就按 30 秒来（不取套餐窗口）",
+    serverDecision !== null &&
+      serverDecision.source === "the upstream's answer" &&
+      Math.abs(serverDecision.untilMs - (now + 30_000)) <= 1000,
+    JSON.stringify(serverDecision),
+  );
+}
+
 upstream.close();
+fs.rmSync(UNIT_DIR, { recursive: true, force: true });
 
 console.log("");
 console.log(fail === 0 ? `全部通过（${pass} 项）` : `FAIL: ${fail} 项没过，${pass} 项过了`);

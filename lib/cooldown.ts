@@ -72,6 +72,10 @@ export function isCoolingDown(providerId: string, now = Date.now()): boolean {
  *
  * 到什么时候为止由调用方算好；这里只保证写下去的是一个有限的数 —— 冷却不是
  * 封禁，超出上限的按上限算。
+ *
+ * 短冷却不覆盖长冷却：被限流到两小时的账号，不该因为三十秒后的一次 500 就
+ * 提前回到轮转（那正是它继续被限流的原因）。所以那一行记的永远是「最长的一次
+ * 冷却」，理由与时间也跟着那一次走。
  */
 export function setCooldown(providerId: string, untilMs: number, reason = ""): void {
   if (!Number.isFinite(untilMs)) return;
@@ -81,8 +85,12 @@ export function setCooldown(providerId: string, untilMs: number, reason = ""): v
   store()
     .prepare(
       "INSERT INTO cooldown (provider_id, until_ms, reason, updated_at) VALUES (?, ?, ?, ?) " +
-        "ON CONFLICT(provider_id) DO UPDATE SET until_ms = excluded.until_ms, " +
-        "reason = excluded.reason, updated_at = excluded.updated_at",
+        "ON CONFLICT(provider_id) DO UPDATE SET " +
+        // 短冷却不覆盖长冷却：取两者里更晚的那个。
+        "until_ms = MAX(cooldown.until_ms, excluded.until_ms), " +
+        // 理由与时间跟着更长的那条走：这一行说的是「最长的一次冷却」。
+        "reason = CASE WHEN excluded.until_ms > cooldown.until_ms THEN excluded.reason ELSE cooldown.reason END, " +
+        "updated_at = CASE WHEN excluded.until_ms > cooldown.until_ms THEN excluded.updated_at ELSE cooldown.updated_at END",
     )
     .run(providerId, until, String(reason ?? ""), Date.now());
 }

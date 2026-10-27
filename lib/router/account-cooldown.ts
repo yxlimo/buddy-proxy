@@ -3,15 +3,18 @@
 // 两类失败，两种冷却：
 //
 //   限流 / 额度用完（rate-limit、quota）
-//       冷却到「恢复时间 + 1 分钟」。恢复时间按这个顺序找：
+//       冷却到「恢复时间 + 1 分钟」。恢复时间取三个来源里**最晚**的：
 //         1. 错误对象上带的（传输层读到 retry-after，就挂上去）
 //         2. 错误正文里写的时间（MiniMax 的 1310：「您的限额将在
 //            2026-10-30 07:55:44 重置」）
 //         3. 账号当前的套餐窗口什么时候结束（健康快照里的 tokenPlan.windows）
+//       为什么取最晚的：上游的 retry-after 常常只有几十秒，早回来只是再失败
+//       一次；正文里的重置时间与套餐窗口才说得出账号什么时候真的有额度。
 //       都没有就用固定值。
 //
 //   别的可降级失败（server、connection、timeout、credential、no-balance）
-//       固定 5 分钟。
+//       固定 5 分钟；但上游自己说了「过多久再来」（retry-after），就照它说的
+//       来 —— 那时候一个短的等待是对的，套餐窗口跟服务挂了没关系。
 //
 // 只有可降级的失败才记冷却：请求本身的问题（400/404/413）不记 —— 一个坏请求
 // 不该把账号封掉，换一个账号也是一样的结果。
@@ -50,7 +53,7 @@ export function cooldownForFailure(
   const failure = classifyUpstreamError(error);
   const fixed = unavailableCooldownMs();
   if (failure.kind === "rate-limit" || failure.kind === "quota") {
-    const deadline = deadlineFor(accountId, error, now);
+    const deadline = latestDeadlineFor(accountId, error, now);
     // 恢复时间已经过去了（上游说的就是现在）：那就用固定值试一下。
     if (deadline && deadline.at + COOLDOWN_GRACE_MS > now) {
       return {
@@ -59,26 +62,48 @@ export function cooldownForFailure(
         source: deadline.source,
       };
     }
+  } else {
+    // 别的失败：上游自己说了「过多久再来」就照它说的来（常常几十秒）。
+    // 套餐窗口说的是额度，与服务挂不挂没关系，不参与。
+    const attached = cooldownUntilOf(error);
+    if (attached !== null && attached > now) {
+      return {
+        untilMs: Math.min(attached, now + MAX_COOLDOWN_MS),
+        reason: failure.kind,
+        source: "the upstream's answer",
+      };
+    }
   }
   return { untilMs: now + fixed, reason: failure.kind, source: "fixed" };
 }
 
-/** 恢复时间从哪儿来。 */
-function deadlineFor(
+/**
+ * 恢复时间从哪儿来 —— 额度类的失败取**最晚**的那一个。
+ *
+ * 三个来源：上游说的（retry-after）、正文里写的（MiniMax 的 1310）、账号当前
+ * 见底的套餐窗口。取最晚的，因为上游的 retry-after 常常只有几十秒 —— 早回来
+ * 只是再失败一次；正文里的重置时间与见底的窗口才说得出账号什么时候真的有
+ * 额度。
+ */
+function latestDeadlineFor(
   accountId: string,
   error: unknown,
   now: number,
 ): { at: number; source: string } | null {
-  // 1. 错误对象上带的（传输层读到的 retry-after，或者平台给的截止时间）。
-  const attached = cooldownUntilOf(error);
-  if (attached !== null) return { at: attached, source: "the upstream's answer" };
-  // 2. 正文里写的时间。
-  const parsed = parseDeadlineFromText(errorTextOf(error));
-  if (parsed !== null) return { at: parsed, source: "the body" };
-  // 3. 账号当前的套餐窗口。
-  const window = planWindowEndsAt(accountId, now);
-  if (window !== null) return { at: window, source: "the plan window" };
-  return null;
+  const candidates = [
+    // 错误对象上带的（传输层读到的 retry-after，或者平台给的截止时间）。
+    { at: cooldownUntilOf(error), source: "the upstream's answer" },
+    // 正文里写的时间。
+    { at: parseDeadlineFromText(errorTextOf(error)), source: "the body" },
+    // 见底的套餐窗口：额度用完了的那个窗口什么时候换。
+    { at: exhaustedPlanWindowEndsAt(accountId, now), source: "the plan window" },
+  ].filter((c): c is { at: number; source: string } => c.at !== null);
+  if (candidates.length === 0) {
+    // 什么也没说得出：还是按套餐窗口的下一个边界算（跟以前一样）。
+    const window = planWindowEndsAt(accountId, now);
+    return window === null ? null : { at: window, source: "the plan window" };
+  }
+  return candidates.reduce((a, b) => (b.at > a.at ? b : a));
 }
 
 /** 错误里能读到的原文：消息、提示，还有平台塞进来的那些字段。 */
@@ -125,23 +150,77 @@ function normalizeZone(zone: string): string {
 /**
  * 账号当前的套餐窗口什么时候结束。
  *
- * 健康快照里的 tokenPlan.windows：每个窗口有 5 小时与 7 天两个到期时间。已经
- * 到期的窗口不算 —— 那个额度已经用完了，要等的是还没到的那个。
+ * 健康快照里的 tokenPlan.windows：每个窗口有 5 小时与 7 天两个到期时间。
+ *
+ * 先看「见底」的窗口：额度用完了的那个窗口，账号才能真的干活，要等它结束。
+ * 见底的窗口有多个（5 小时与 7 天都见底）时取最晚的那个 —— 少一个都不行。
+ *
+ * 没有见底的窗口，就退回「还没到的最早那个到期点」：那时候额度还在，窗口
+ * 什么时候换跟恢复时间没关系，只是没有更好的说法。
  */
 export function planWindowEndsAt(accountId: string, now = Date.now()): number | null {
   const snapshot = peekCached<any>(HEALTH_CACHE_ID);
   const mine = snapshot?.data?.minimax?.[accountId];
   const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
-  let best: number | null = null;
+  // 见底的窗口：它们结束了账号才有额度。
+  let exhausted: number | null = null;
+  // 所有还没到的到期点：没有见底的窗口时的退路。
+  let soonest: number | null = null;
   for (const window of windows) {
     if (isIgnoredPlanWindow(window)) continue;
     for (const key of ["intervalEndsAt", "weeklyEndsAt"]) {
       const at = timeMs(window?.[key]);
       if (!at || at <= now) continue;
-      if (best === null || at < best) best = at;
+      if (soonest === null || at < soonest) soonest = at;
+    }
+    // 这一格见底了（百分比 0）：这一格的结束时间就是它的恢复时间。
+    const intervalAt = timeMs(window?.intervalEndsAt);
+    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
+      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
+    }
+    const weeklyAt = timeMs(window?.weeklyEndsAt);
+    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
+      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
     }
   }
-  return best;
+  return exhausted ?? soonest;
+}
+
+/**
+ * 见底的窗口什么时候结束（没有见底的窗口就是 null）。
+ *
+ * 这才是「额度什么时候回来」：窗口还有额度的时候，它的到期点跟恢复时间无关
+ * —— 那只是一个窗口边界，账号现在就能干活。
+ */
+function exhaustedPlanWindowEndsAt(accountId: string, now = Date.now()): number | null {
+  const snapshot = peekCached<any>(HEALTH_CACHE_ID);
+  const mine = snapshot?.data?.minimax?.[accountId];
+  const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
+  let exhausted: number | null = null;
+  for (const window of windows) {
+    if (isIgnoredPlanWindow(window)) continue;
+    const intervalAt = timeMs(window?.intervalEndsAt);
+    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
+      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
+    }
+    const weeklyAt = timeMs(window?.weeklyEndsAt);
+    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
+      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
+    }
+  }
+  return exhausted;
+}
+
+/**
+ * 这一格还剩多少额度（百分比）。
+ *
+ * 平台没报这个数字就当它还有额度（100）：没有数字不等于没有额度。
+ */
+function percentLeft(value: unknown): number {
+  if (value === null || value === undefined || value === "") return 100;
+  const text = String(value).replace("%", "").trim();
+  const raw = Number(text);
+  return Number.isFinite(raw) ? raw : 100;
 }
 
 /** 平台给的时间：毫秒或者 ISO 字符串。 */
