@@ -29,6 +29,7 @@ import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
 import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
 import { peekCached, setCached } from "../store.ts";
+import { HEALTH_CACHE_ID } from "../health-cache.ts";
 import {
   accountsOfPlatform,
   listProviders,
@@ -241,9 +242,11 @@ export function upstreamModelCount(id: string): number {
  * The version is part of the key: the snapshot's shape changed when the
  * upstreams arrived (each upstream has its own numbers now), and an old
  * snapshot read as a new one would say the wrong thing.
+ *
+ * The id lives in lib/health-cache.ts: the routing layer reads the snapshot
+ * too (a plan window says when a rate limit resets), and it should not have to
+ * pull this whole module in for one string.
  */
-const HEALTH_CACHE_ID = "health:upstreams:v2";
-
 /** 快照最多放多久。 */
 export const HEALTH_CACHE_MS = configNumber("HEALTH_CACHE_MS", 300_000);
 
@@ -640,27 +643,10 @@ function upstreamQuotasCached(id: string): QuotaView[] {
 /**
  * MiniMax 的套餐额度。
  *
- * 平台给的是 ISO 字符串，这里换成毫秒时间戳。到期时间没有就是 0。
+ * 就是 lib/kinds.ts 里那一份（视频窗口在那里被排掉）。这里只做转出，不再留一份
+ * 副本 —— 两份实现迟早会走样。
  */
-export function tokenPlanView(plan: unknown): TokenPlanView | undefined {
-  const raw = plan as any;
-  const windows = Array.isArray(raw?.windows) ? raw.windows : [];
-  if (!windows.length) return undefined;
-  const at = (value: unknown): number => {
-    if (!value) return 0;
-    const parsed = Date.parse(String(value));
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-  return {
-    windows: windows.map((window: any) => ({
-      label: String(window?.model ?? ""),
-      intervalPercent: Math.round(Number(window?.intervalPercent ?? 0)),
-      weeklyPercent: Math.round(Number(window?.weeklyPercent ?? 0)),
-      intervalEndsAt: at(window?.intervalEndsAt),
-      weeklyEndsAt: at(window?.weeklyEndsAt),
-    })),
-  };
-}
+export { tokenPlanView } from "../kinds.ts";
 
 /* ------------------------------------------------------------------ *
  * 上游现在能不能接

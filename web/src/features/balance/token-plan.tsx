@@ -2,10 +2,9 @@ import { type TokenPlanWindow } from '@/gen/buddy/admin/v1/admin_pb'
 import { Progress } from '@/components/ui/progress'
 import { formatDateTime } from '@/lib/format'
 
-/** 窗口的名字：general / video。 */
+/** 窗口的名字。视频窗口后端已经无视（网关只服务文本模型），这里不再有它。 */
 const WINDOW_LABELS: Record<string, string> = {
   general: '通用',
-  video: '视频',
 }
 
 /** 两个窗口的名字：interval 是 5 小时那个，weekly 是每周那个。 */
@@ -40,7 +39,7 @@ export function TokenPlanPanel({
     <div className='grid gap-4'>
       {windows.map((window, index) => {
         const name = windowLabel(window.label)
-        // 认得出的名字（general / video）旁边再写一遍原名；认不出来的
+        // 认得出的名字（general）旁边再写一遍原名；认不出来的
         // （SenseNova 的池子名）就只写一次。
         const raw = window.label && window.label !== name ? window.label : ''
         return (

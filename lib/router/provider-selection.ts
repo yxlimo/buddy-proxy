@@ -178,6 +178,7 @@ const ACCOUNT_CODES: Record<number, string> = {
   1002: "rate-limit", // 请求频率超限
   1004: "credential", // 未授权
   1008: "quota", // 余额不足
+  1310: "rate-limit", // 限额到了，重置时间写在正文里
   2049: "credential", // 无效的 API Key
   2053: "quota", // 积分不足
   2056: "quota", // 超出 M Plan 资源限制

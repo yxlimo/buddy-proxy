@@ -70,7 +70,9 @@ import {
   selectProvider,
   type ProviderPolicy,
 } from "./provider-selection.ts";
-import { businessCodeOf, upstreamStatusOf, withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
+import { businessCodeOf, upstreamStatusOf, withBusinessCode, withCooldownUntil, withUpstreamStatus, retryAfterMs } from "../upstream-status.ts";
+import { clearCooldown, cooldownUntil, isCoolingDown, setCooldown } from "../cooldown.ts";
+import { cooldownForFailure, cooldownStamp } from "./account-cooldown.ts";
 import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts";
 import { platformOf, platformPolicy } from "../platforms.ts";
 import { platformWithoutAccount, upstreamModel, type Route } from "./routes.ts";
@@ -178,6 +180,10 @@ function businessCodeOfBody(text: string): number | string | null {
  *
  * An account that is turned off is not a candidate: it is not "this account
  * failed", it is "this platform has one fewer account right now".
+ *
+ * An account that is cooling down is not a candidate either: it is known to be
+ * unable to serve the request right now, and a candidate that is tried and
+ * fails is worse than one that is not tried at all.
  */
 function servingAccounts(platform: string): ProviderRow[] {
   return accountsOfPlatform(platform).filter((row) => row.enabled);
@@ -312,28 +318,105 @@ async function underPolicy<T>(
   run: (account: ProviderRow) => Promise<T>,
 ): Promise<T> {
   const accounts = accountsOfPlatform(platform);
-  const serving = accounts.filter((row) => row.enabled);
+  const serving = servingAccounts(platform);
   if (!serving.length) throw platformWithoutAccount(platform, accounts.length);
   const policy = platformPolicy(platform);
+  const now = Date.now();
+
+  // 冷却里的账号不进候选：它现在接不了这个请求（被限流、额度用完、服务挂了）。
+  // 不是「试一次失败再换」——它根本不该被试。
+  const cooling = new Set(serving.filter((row) => isCoolingDown(row.id, now)).map((row) => row.id));
+
+  if (policy === "single") {
+    // single 只用一个账号：那个账号在冷却，就说清楚冷却到什么时候。不去打
+    // 上游（打了也是白打），也不悄悄换到别的账号身上去——面板说的是 single。
+    const only = serving[0];
+    if (cooling.has(only.id)) {
+      const until = cooldownUntil(only.id) ?? now;
+      console.log(
+        `[ROUTE] ${what} account=${only.id} cooling down (until ${cooldownStamp(until)}), not switching`,
+      );
+      throw coolingError(only.id, until);
+    }
+  }
+
+  const usable = serving.filter((row) => !cooling.has(row.id));
+  if (!usable.length) {
+    // 全都在冷却：告诉调用方最早什么时候能试。
+    const until = Math.min(...serving.map((row) => cooldownUntil(row.id) ?? now));
+    console.log(
+      `[ROUTE] ${what} every account is cooling down (until ${cooldownStamp(until)}), not switching`,
+    );
+    throw coolingError(serving[0].id, until, true);
+  }
+
+  // 被跳过的账号要说出来：为什么没轮上它。
+  const position = new Map(serving.map((row, index) => [row.id, index]));
+  for (const row of serving) {
+    if (!cooling.has(row.id)) continue;
+    const until = cooldownUntil(row.id) ?? now;
+    const after = usable.find((other) => (position.get(other.id) ?? 0) > (position.get(row.id) ?? 0));
+    if (after) {
+      console.log(
+        `[ROUTE] ${what} account=${row.id} cooling down (until ${cooldownStamp(until)}), trying ${after.id}`,
+      );
+      continue;
+    }
+    // 后面没有能用的账号了：这个账号本来也轮不到（前面有人接手），除非前面
+    // 的人也不行——那上面已经报过了。
+    const before = usable.find((other) => (position.get(other.id) ?? 0) < (position.get(row.id) ?? 0));
+    if (!before) {
+      console.log(
+        `[ROUTE] ${what} account=${row.id} cooling down (until ${cooldownStamp(until)}), no account left`,
+      );
+    }
+  }
+
   const candidates = byOrder(
-    serving.map((account) => ({ id: account.id, weight: account.weight, run: () => run(account) })),
+    usable.map((account) => ({ id: account.id, weight: account.weight, run: () => run(account) })),
   );
   return selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {
-      if (!error) return;
+      if (!error) {
+        // 服务了一次：冷却没有理由留着。
+        clearCooldown(candidate.id);
+        return;
+      }
+      // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
+      const decision = cooldownForFailure(candidate.id, error);
+      if (decision) setCooldown(candidate.id, decision.untilMs, decision.reason);
       const moves = isDegradableUpstreamError(error);
       const at = candidates.findIndex((c) => c.id === candidate.id);
       const next = moves && policy === "fallback" ? candidates[at + 1]?.id : undefined;
       console.log(
         `[ROUTE] ${what} account=${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
-          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching"),
+          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching") +
+          (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : ""),
       );
     },
     // The caller sees the error the upstream produced, not a new one.
     failure: (lastError) =>
       lastError instanceof Error ? lastError : new AuthError("upstream failed", "上游没有响应。", 502),
   });
+}
+
+/**
+ * 账号在冷却：告诉调用方到什么时候能试。
+ *
+ * 503：这是网关这边的账号接不了，不是请求本身的问题，客户端处理不了。
+ */
+function coolingError(accountId: string, untilMs: number, all = false): AuthError {
+  const minutes = Math.max(1, Math.ceil((untilMs - Date.now()) / 60_000));
+  const when = cooldownStamp(untilMs);
+  return new AuthError(
+    all ? "every upstream account is cooling down" : "upstream account is cooling down",
+    all
+      ? `网关这边所有账号都在冷却中，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试。`
+      : `网关这边的账号 ${accountId} 在冷却中，${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；` +
+        `要别的账号接手，把上游的生效策略改成「降级」。`,
+    503,
+  );
 }
 
 /**
@@ -707,6 +790,9 @@ async function minimaxRejection(res: Response): Promise<AuthError> {
   const { type, message } = gatewayErrorMessage(res.status, parsed, text);
   const error = new AuthError(message, "", res.status, type);
   withUpstreamStatus(error, res.status);
+  // 上游说的「过多久再试」：冷却到那时候为止（路由层看这个，不自己猜）。
+  const wait = retryAfterMs(res);
+  if (wait !== null) withCooldownUntil(error, Date.now() + wait);
   // 业务码：先在信封里找，再找正文末尾括号里的那个。MiniMax Code 报
   // Token Plan 用完时是 `当前已达到 Token Plan 用量上限…… (2067)`，码在
   // 正文里，不在字段上。

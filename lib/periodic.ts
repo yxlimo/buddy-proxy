@@ -20,6 +20,7 @@ import { benefits } from "./admin/benefits.ts";
 import { HEALTH_CACHE_MS, refreshHealthSnapshot } from "./admin/upstreams.ts";
 import { BENEFITS_INTERVAL_MS } from "./admin/benefits.ts";
 import { configFlag } from "./config.ts";
+import { sweepExpiredCooldowns } from "./cooldown.ts";
 
 /** 定时器多久醒一次。 */
 const INTERVAL_MS = 60_000;
@@ -32,6 +33,7 @@ const STEP_INTERVAL_MS: Record<string, number> = {
   benefits: BENEFITS_INTERVAL_MS,
   scan: 5 * 60_000,
   snapshot: HEALTH_CACHE_MS,
+  cooldown: 5 * 60_000,
 };
 
 /** 上一次失败的措辞：一样的就不重复打印了。 */
@@ -134,6 +136,20 @@ async function runOnce(): Promise<void> {
       done("snapshot");
     } catch (e) {
       noteFailure("snapshot", (e as Error)?.message ?? String(e));
+    }
+  }
+
+  // 5. 清掉过期的冷却行。
+  //
+  // 冷却的判定是惰性的（比时间就行），这一步只是让表不长毛：过期的行留着也
+  // 不碍事，但看着像还有账号在冷却。
+  if (due("cooldown")) {
+    try {
+      const swept = sweepExpiredCooldowns();
+      if (swept > 0) console.log(`[COOLDOWN] 清掉 ${swept} 条过期的冷却`);
+      done("cooldown");
+    } catch (e) {
+      noteFailure("cooldown", (e as Error)?.message ?? String(e));
     }
   }
 }

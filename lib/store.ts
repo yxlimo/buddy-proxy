@@ -130,6 +130,18 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
+  // 账号的冷却：失败之后一段时间不再路由到那个账号。
+  //
+  // 落库：网关重启以后它还在 —— 一个刚被限流的账号不该因为重启又被试一次。
+  // 过期是惰性的：判定的时候比时间就行，不需要定时器去「恢复」。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS cooldown (
+      provider_id TEXT PRIMARY KEY,
+      until_ms    INTEGER NOT NULL,
+      reason      TEXT NOT NULL DEFAULT '',
+      updated_at  INTEGER NOT NULL
+    )`,
+  );
   migrateProviderToAccounts(db);
   migrateProviderWeight(db);
   return db;

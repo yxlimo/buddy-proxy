@@ -19,7 +19,7 @@
 import type { Json } from "../json.ts";
 import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
-import { withUpstreamStatus } from "../upstream-status.ts";
+import { withCooldownUntil, withUpstreamStatus, retryAfterMs } from "../upstream-status.ts";
 import {
   chatBase,
   chatHeaders,
@@ -30,7 +30,7 @@ import {
 import { clampEffort, curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./models.ts";
 import { cliFetch } from "../http.ts";
 import { readOpenAIChunks, SSE_DONE } from "../sse-stream.ts";
-import { peekCached, setCached } from "../store.ts";
+import { catalogTtlMs, readStoredCatalog, writeStoredCatalog } from "./catalog-store.ts";
 
 export const CHAT_PATH = "/v2/chat/completions";
 
@@ -222,7 +222,7 @@ export async function workbuddyChat(
         await backoff(attempt, Number.isFinite(retryAfter) ? retryAfter : 0);
         continue;
       }
-      throw withUpstreamStatus(
+      const error = withUpstreamStatus(
         new AuthError(
           `upstream error (HTTP ${res.status})`,
           detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
@@ -230,6 +230,10 @@ export async function workbuddyChat(
         ),
         res.status,
       );
+      // 上游说的「过多久再试」：冷却到那时候为止（路由层看这个，不自己猜）。
+      const wait = retryAfterMs(res);
+      if (wait !== null) withCooldownUntil(error, Date.now() + wait);
+      throw error;
     }
 
     if (res.status >= 400) {
@@ -257,41 +261,50 @@ export interface AggregatedChoice {
   toolCalls: { id: string; type: string; function: { name: string; arguments: string } }[];
 }
 
-/** How long the catalogue is kept before it is fetched again. */
-const CATALOG_TTL_MS = 48 * 60 * 1000;
-
 /**
  * The live catalogue. The upstream publishes it at GET /v3/config and adds
- * models without a client release, so this is the source of truth; the bundled
- * snapshot is only the fallback.
+ * models without a client release, so this is the source of truth.
+ *
+ * The catalogue lives in the database (lib/workbuddy/catalog-store.ts): the
+ * last one that was fetched successfully is kept there whatever its age, and a
+ * fetch that fails answers with that one rather than with the bundled
+ * bootstrap table. The table only fills the gap of a brand-new database, and
+ * it is replaced as soon as the upstream answers for the first time.
  *
  * The official client keeps the catalogue for three quarters of an hour and
  * falls back to the last one it got when the server cannot be reached, so the
  * same is done here: the catalogue is fetched rarely, and a failure answers
  * with the last good one rather than with nothing.
  */
-export async function fetchWorkBuddyCatalog(providerId = "workbuddy-cn"): Promise<WorkBuddyModel[] | null> {
-  const cached = peekCached<{ models: WorkBuddyModel[] }>("workbuddy:catalog");
-  if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.data.models;
+export async function fetchWorkBuddyCatalog(
+  providerId = "workbuddy-cn",
+  options: { force?: boolean } = {},
+): Promise<WorkBuddyModel[] | null> {
+  const stored = readStoredCatalog();
+  // 库里那份不旧就直接用：不必问上游。
+  if (stored && !options.force && Date.now() - stored.at < catalogTtlMs()) {
+    return stored.models;
+  }
 
   try {
     // 只取现在这一份会话：换令牌是定时器的事。
     const session = loadSession(providerId);
-    if (!session) return cached?.data.models ?? null;
+    if (!session) return stored?.models ?? null;
     const res = await cliFetch(`${chatBase(session)}${CONFIG_PATH}`, {
       headers: { ...chatHeaders(session), "Content-Type": "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!res.ok) return cached?.data.models ?? null;
+    if (!res.ok) return stored?.models ?? null;
     const payload = await res.json().catch(() => null);
     const remote = parseRemoteCatalog(payload);
-    if (!remote) return cached?.data.models ?? null;
+    if (!remote) return stored?.models ?? null;
     const models = curateCatalog(remote);
-    if (!models.length) return cached?.data.models ?? null;
-    setCached("workbuddy:catalog", { models, at: Date.now() });
+    if (!models.length) return stored?.models ?? null;
+    // 抓到了新的：写进库（那是往后的事实），内存里的那份也换掉。
+    writeStoredCatalog(models);
     return models;
   } catch {
-    return cached?.data.models ?? null;
+    return stored?.models ?? null;
   }
 }
 

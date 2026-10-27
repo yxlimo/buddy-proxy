@@ -25,6 +25,7 @@ import type { InternAiBalance, InternAiCreditPack } from "./intern-ai/quota.ts";
 import type { ProviderRow } from "./providers.ts";
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
 import { tokenFingerprint } from "./credential.ts";
+import { isIgnoredPlanWindow } from "./cooldown.ts";
 import {
   internAiCatalogModels,
   minimaxCatalogModels,
@@ -449,7 +450,8 @@ const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
  */
 export function tokenPlanView(plan: unknown): TokenPlanView | undefined {
   const raw = plan as any;
-  const windows = Array.isArray(raw?.windows) ? raw.windows : [];
+  const all = Array.isArray(raw?.windows) ? raw.windows : [];
+  const windows = all.filter((w: any) => !isIgnoredPlanWindow(w));
   if (!windows.length) return undefined;
   const at = (value: unknown): number => {
     if (!value) return 0;
@@ -512,10 +514,11 @@ registerKind({
   outOfCredits: (provider, snapshot) => {
     // 账户余额不是那道闸：这个网关用的是 coding plan，余额是 0 也能跑。看 plan 的窗口。
     const mine = (snapshot.minimax?.[provider.id] ?? {}) as any;
-    const windows = (mine.tokenPlan?.windows ?? []) as any[];
+    // 快照里存的是平台原样的窗口，视频窗口（video）也在里面 —— 排掉。
+    const windows = ((mine.tokenPlan?.windows ?? []) as any[]).filter((w) => !isIgnoredPlanWindow(w));
     if (!windows.length) return false;
-    // 每个窗口管自己那批模型（general、video……）。一个窗口用完只说明那批模型
-    // 用完，账号还有别的窗口能用 —— 要所有窗口都见底才算这个账号没钱了。
+    // 视频窗口（video）已经被 IGNORED_PLAN_WINDOWS 排掉了（网关只服务文本
+    // 模型），剩下的窗口都是文本的：任一文本窗口见底，这个账号就没钱了。
     return windows.every(
       (w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0,
     );

@@ -3,8 +3,14 @@
 // WorkBuddy's own desktop client publishes the catalogue at GET /v3/config
 // (`agents[].models` holds the ids, a `models[]` array holds the metadata).
 // The upstream ships new models without a client release, so the live list is
-// the source of truth; the table below is the snapshot that was measured on
-// 2026-10-21 and the fallback when the endpoint cannot be reached.
+// the source of truth.
+//
+// **The table below is not a cache.** It is the bootstrap value: the list that
+// was measured on 2026-10-21, used only until the gateway has fetched the
+// upstream's own catalogue for the first time. The catalogue itself lives in
+// the database (lib/workbuddy/catalog-store.ts) — the last one that was
+// fetched successfully, kept there whatever its age, so a restart does not
+// fall back to a table that is missing the models the upstream added.
 //
 // The list mirrors what the official picker shows: the inline-completion models
 // and the multi-cloud variants (`-volc`, `-lkeap`, `-taiji`) are dropped, the
@@ -324,11 +330,11 @@ function isChatModel(id: string): boolean {
 }
 
 /**
- * The snapshot, trimmed like the live catalogue.
+ * The bootstrap list, trimmed like the live catalogue.
  *
- * The snapshot is what the router publishes when the upstream cannot be
- * reached, so it has to go through the same rules: a model the upstream
- * rejects must not show up there either.
+ * It is what the router publishes until the database holds a catalogue of its
+ * own, so it has to go through the same rules: a model the upstream rejects
+ * must not show up there either.
  */
 export function workBuddyFallbackModels(): WorkBuddyModel[] {
   return WORKBUDDY_CN_MODELS.filter((m) => isChatModel(m.id) && !BROKEN_MODELS.has(m.id));
@@ -497,15 +503,24 @@ export function clampEffort(requested: string | undefined, supported: string[]):
   return supported[0];
 }
 
-// The catalogue the upstream last reported. It lives here, with the thing that
-// refreshes it, so the registry and the router can both read it.
+// The catalogue the gateway is serving right now.
+//
+// It lives here, with the thing that refreshes it, so the registry and the
+// router can both read it. The copy in the database is the one that counts;
+// this is it, in memory. The gateway loads it from the database when it starts
+// (lib/workbuddy/catalog-store.ts), so the first request already sees the
+// catalogue the upstream published — not the bootstrap table.
+//
+// Until then it holds the bootstrap list: a brand-new database has no
+// catalogue of its own, and something has to answer.
 let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
 
+/** The catalogue the gateway is serving right now. */
 export function workbuddyModelList(): WorkBuddyModel[] {
   return workbuddyModels;
 }
 
-/** Replace the catalogue (the upstream reported a new one). */
+/** Replace the catalogue (the upstream reported a new one, or the database had one). */
 export function setWorkbuddyModelList(models: WorkBuddyModel[]): void {
   workbuddyModels = models;
 }

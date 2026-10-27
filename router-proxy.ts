@@ -33,6 +33,7 @@ import { tokenRhythmStatuses } from "./lib/tokenrhythm/wallet.ts";
 import { qoderStatus } from "./lib/qoder/auth.ts";
 import { workbuddyStatus } from "./lib/workbuddy/auth.ts";
 import { fetchWorkBuddyCatalog } from "./lib/workbuddy/transport.ts";
+import { initWorkBuddyCatalog } from "./lib/workbuddy/catalog-store.ts";
 import {
   ensureMinimaxSession,
   ensureQoderSession,
@@ -96,7 +97,6 @@ import {
   healthRefreshing,
   healthSnapshot,
   refreshHealthSnapshot,
-  setWorkbuddyCatalog,
   snapshotEntry,
   workbuddyCatalog,
 } from "./lib/admin/upstreams.ts";
@@ -112,33 +112,27 @@ const LEGACY_MAX_ATTEMPTS = configNumber("QODER_LEGACY_ATTEMPTS", 3);
 const LEGACY_RETRY_MS = configNumber("QODER_LEGACY_RETRY_MS", 10000);
 const QODER_MAX_ATTEMPTS = configNumber("QODER_MAX_ATTEMPTS", 3);
 const LOG_ROUTE = configFlag("QODER_LOG_ROUTE", false);
-// How long the upstream's own catalogue is trusted before it is fetched again.
-const WORKBUDDY_CATALOG_TTL_MS = configNumber("WORKBUDDY_CATALOG_TTL_MS", 30 * 60 * 1000);
 
 
 type Dialect = "anthropic" | "openai";
 
 // WorkBuddy's models are addressed by prefix only: several of them (glm-5.3,
 // kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
-// would be ambiguous. The list starts as the bundled snapshot and is replaced
-// by the upstream's own catalogue as soon as it can be fetched. The catalogue
-// itself lives in lib/admin/upstreams.ts, because the health endpoint and the
-// panel look at the same one.
-let workbuddyCatalogAt = 0;
-
-/** The upstream catalogue, refreshed at most every half hour. */
+// The catalogue itself lives in the database (lib/workbuddy/catalog-store.ts):
+// the last one the upstream published, kept there whatever its age. The
+// bundled table is only the bootstrap value — the catalogue a brand-new
+// database starts with, before the upstream answers for the first time.
+/** The upstream catalogue, refreshed when the one in the database is old. */
 async function refreshWorkBuddyCatalog(force = false): Promise<void> {
   const accounts = enabledAccounts("workbuddy-cn");
   if (!accounts.length) return;
-  const age = Date.now() - workbuddyCatalogAt;
-  if (!force && workbuddyCatalogAt && age < WORKBUDDY_CATALOG_TTL_MS) return;
   try {
     // The catalogue is the platform's, but the request that fetches it needs an
     // account's session: the first account that is on answers.
-    const models = await fetchWorkBuddyCatalog(accounts[0].id);
+    // 库里那份不旧就不必问上游（传输层自己判）。
+    const models = await fetchWorkBuddyCatalog(accounts[0].id, { force });
     if (models?.length) {
-      setWorkbuddyCatalog(models);
-      workbuddyCatalogAt = Date.now();
+      console.log(`  [WORKBUDDY] catalogue: ${models.length} models`);
     }
   } catch (e) {
     console.warn(`[WORKBUDDY] catalogue refresh failed: ${(e as Error).message}`);
@@ -201,6 +195,12 @@ if (clearAt >= 0) {
   console.log(`cleared ${id}`);
   process.exit(0);
 }
+
+// WorkBuddy 的模型目录住在数据库里（lib/workbuddy/catalog-store.ts）：那是
+// 上游最后一次发布的目录，重启以后还在。启动时把它读进内存 —— 注册表与
+// 路由读的是内存里那一份，所以这一步要在第一个请求之前做完。库里没有的
+// 时候，留着写死的那份引导值，等第一次抓取换掉它。
+initWorkBuddyCatalog();
 
 const keys = loadKeys();
 const app = new Koa();
@@ -885,6 +885,10 @@ const server = app.listen(PORT, HOST, () => {
       .catch((e) => console.warn(`  [AUTH] ${provider} login failed: ${(e as Error).message}`));
   }
 
+  // WorkBuddy 的目录：库里那份先顶着，后台按 TTL 再抓一次（全新库里没有，
+  // 抓到的第一份就写进库，写死的那张引导表也就退场了）。
+  void refreshWorkBuddyCatalog();
+
   for (const provider of providersNeedingLogin("workbuddy")) {
     void ensureWorkBuddySession(provider)
       .then(async (outcome) => {
@@ -896,7 +900,6 @@ const server = app.listen(PORT, HOST, () => {
         );
         // The catalogue needs a token, so it comes after the login.
         await refreshWorkBuddyCatalog(true);
-        console.log(`  [WORKBUDDY] catalogue: ${workbuddyCatalog().length} models`);
         // A fresh session is worth a run right away.
         void benefits.runOnce();
       })
