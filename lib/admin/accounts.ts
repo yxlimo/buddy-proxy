@@ -31,6 +31,7 @@ import {
 } from "../tokenrhythm/accounts.ts";
 import { wallet as tokenRhythmWallet } from "../tokenrhythm/wallet.ts";
 import { forgetAccountSnapshot } from "./upstreams.ts";
+import { clearCooldown } from "../cooldown.ts";
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { credentialStateText, parseCredentialId } from "./credentials.ts";
 import type { ProviderRow } from "../providers.ts";
@@ -370,6 +371,13 @@ export function forgetAccountRecords(accountId: string, kind?: string): number {
   removed += forgetLegacyTenantRecords(accountId);
   forgetAccountSnapshot(accountId);
   if (kind === "tokenrhythm") removed += forgetTokenRhythmCredential(accountId);
+  // 冷却也一起删：账号 id 会被复用（下一个账号接着排队），留着这一行，新账号
+  // 开局就在冷却里 —— 面板说它可用，网关说它冷却中。
+  try {
+    clearCooldown(accountId);
+  } catch (e) {
+    console.warn(`[ADMIN] ${accountId} 的冷却删不掉：${(e as Error)?.message}`);
+  }
   return removed;
 }
 

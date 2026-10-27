@@ -26,6 +26,7 @@ import {
 } from "../admin/upstreams.ts";
 import { sendError } from "./deliver.ts";
 import { handle } from "./handle.ts";
+import { listCooldowns, type CooldownRow } from "../cooldown.ts";
 import { modelsOfPlatform, platformServing, serveModels } from "./catalog-routes.ts";
 
 const keys = loadKeys();
@@ -90,6 +91,9 @@ const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
  */
 router.get("/health", async (ctx) => {
   const snapshot = healthSnapshot();
+  // 冷却在回答之前就要知道：面板说 READY、网关说 503「冷却中」，两边对不上，
+  // 排查的人只能猜。冷却是按账号记的，所以放在账号那一行上。
+  const cooldowns = new Map(listCooldowns().map((row) => [row.providerId, row]));
   const platforms: Record<string, unknown> = {};
   for (const template of PLATFORMS) {
     const kind = kindOf(template.kind);
@@ -113,6 +117,8 @@ router.get("/health", async (ctx) => {
         enabled: row.enabled,
         credential: kind ? safe(() => kind.credential(row)) : null,
         outOfCredits: safe(() => outOfCredits(row.id)) ?? false,
+        // 这个账号现在在不在冷却里，到什么时候为止，为什么。
+        cooldown: cooldownOf(cooldowns, row.id),
         snapshot: snapshotOf(snapshot.data, template.kind, row.id),
       })),
     };
@@ -146,6 +152,21 @@ router.get("/health", async (ctx) => {
     },
   };
 });
+/**
+ * 这个账号的冷却：到什么时候为止，为什么。
+ *
+ * 没有在冷却里就是 null。冷却的行可以在而已经过期 —— 过期是读的时候才判的，
+ * 所以这里只把还在冷却里的账号报出来。
+ */
+function cooldownOf(
+  cooldowns: Map<string, CooldownRow>,
+  accountId: string,
+): { untilMs: number; reason: string } | null {
+  const row = cooldowns.get(accountId);
+  if (!row) return null;
+  return { untilMs: row.untilMs, reason: row.reason };
+}
+
 /** 快照里一个账号的那一段：桶的名字跟 kind 不同名（minimaxApi、internAi）。 */
 const SNAPSHOT_BUCKET: Record<string, string> = {
   minimax: "minimax",

@@ -22,6 +22,7 @@ const { accountsOfPlatform, addAccount, updateProvider, provider } = await impor
 const { deleteAccount } = await import("../lib/admin/accounts.ts");
 const { selectProvider, byOrder } = await import("../lib/router/provider-selection.ts");
 const { setSecret, getSecret, listSecrets } = await import("../lib/store.ts");
+const { listCooldowns, setCooldown } = await import("../lib/cooldown.ts");
 
 let pass = 0;
 let fail = 0;
@@ -155,6 +156,30 @@ console.log("删过的账号不会被旧记录带回来");
     .all("tokenrhythm", id) as { id?: string }[];
   check("归位没有把它带回来", rows.length === 0, JSON.stringify(rows.map((r) => r.id)));
   check("它的新凭据也是空的", listSecrets(`key:provider:${id}`).length === 0);
+}
+
+console.log("");
+console.log("删账号要把冷却也删掉");
+
+{
+  // 账号 id 会被复用（下一个账号接着排队）。冷却留着，新账号开局就在冷却里：
+  // 面板说它可用，网关说它冷却中。
+  const made = addAccount({ platform: "qoder", alias: "冷却过的账号" });
+  const id = made.id!;
+  setCooldown(id, Date.now() + 10 * 60_000, "quota");
+  check(
+    "冷却写进去了",
+    listCooldowns().some((row) => row.providerId === id),
+    JSON.stringify(listCooldowns().map((row) => row.providerId)),
+  );
+
+  const result = deleteAccount(id);
+  check("账号删掉了", result.ok, result.message);
+  check(
+    "冷却也没了",
+    !listCooldowns().some((row) => row.providerId === id),
+    JSON.stringify(listCooldowns().map((row) => row.providerId)),
+  );
 }
 
 console.log("");
