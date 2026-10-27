@@ -15,6 +15,7 @@ import { cooldownForFailure, cooldownStamp } from "../account-cooldown.ts";
 import { accountsOfPlatform, type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { platformWithoutAccount } from "../routes.ts";
+import { withRetryAfter } from "../deliver.ts";
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
@@ -334,17 +335,22 @@ export async function underPolicy<T>(
 /**
  * 账号在冷却：告诉调用方到什么时候能试。
  *
- * 503：这是网关这边的账号接不了，不是请求本身的问题，客户端处理不了。
+ * 503：这是网关这边的账号接不了，不是请求本身的问题，客户端处理不了。`why`
+ * 说的是哪一种接不了 —— 冷却，还是额度用尽 —— 两种的恢复时间来源不同，提示
+ * 里得说清楚。
+ *
+ * Retry-After 跟着错误走（deliver.ts 把它写进头里）：客户端不用自己猜多久
  */
-function coolingError(accountId: string, untilMs: number, all = false): AuthError {
+export function coolingError(accountId: string, untilMs: number, all = false, why = "冷却中"): AuthError {
   const minutes = Math.max(1, Math.ceil((untilMs - Date.now()) / 60_000));
   const when = cooldownStamp(untilMs);
-  return new AuthError(
+  const error = new AuthError(
     all ? "every upstream account is cooling down" : "upstream account is cooling down",
     all
-      ? `网关这边所有账号都在冷却中，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试。`
-      : `网关这边的账号 ${accountId} 在冷却中，${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；` +
+      ? `网关这边所有账号都在${why}，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试。`
+      : `网关这边的账号 ${accountId} 在${why}，${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；` +
         `要别的账号接手，把上游的生效策略改成「降级」。`,
     503,
   );
+  return withRetryAfter(error, untilMs);
 }

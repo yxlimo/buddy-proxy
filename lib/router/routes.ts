@@ -12,6 +12,7 @@
 
 import { AuthError } from "../credential.ts";
 import { matchZcodeModel } from "../zcode/models.ts";
+import { coolingError } from "./upstreams/policy.ts";
 
 export interface Route {
   /**
@@ -38,12 +39,19 @@ export interface RoutingContext {
   /**
    * Every platform, by id.
    *
-   * `ids` is the models the platform can serve right now: at least one of its
-   * accounts is on and has something left. `accounts` is how many rows the
-   * platform has, so a request can be told "there is no account yet" apart
-   * from "every account is off".
+   * `ids` is the platform's whole catalogue — every model it serves, whatever
+   * its accounts are doing right now. `accounts` is how many rows the platform
+   * has, so a request can be told "there is no account yet" apart from "every
+   * account is off".
+   *
+   * `untilMs` says when the platform can serve again when none of its accounts
+   * can right now (out of credits, or every one of them cooling down); `null`
+   * means nothing is standing in the way.
    */
-  platforms: Map<string, { kind: string; enabled: boolean; accounts: number; ids: Set<string> }>;
+  platforms: Map<
+    string,
+    { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null }
+  >;
 }
 
 /** The model as the upstream knows it, prefix stripped. */
@@ -74,6 +82,15 @@ export function routeInGroup(platform: string, model: string, ctx: RoutingContex
   }
   if (!info.enabled) throw platformWithoutAccount(platform, info.accounts);
   const raw = String(model ?? "").trim();
+  // 目录还没拿到（账号刚加、目录还没同步）：这不是「没有这个模型」，是「这个
+  // 上游现在答不了」。400 会让客户端去改配置，503 才是它该做的事 —— 等一会儿
+  if (!info.ids.size) {
+    throw new AuthError(
+      `platform ${platform} has no model catalogue`,
+      `这个上游的模型目录还没拿到（账号刚加或者目录还没同步）。稍后再试。`,
+      503,
+    );
+  }
   const canonical = canonicalModel(raw, info.kind, info.ids);
   if (!canonical) {
     throw new AuthError(
@@ -81,6 +98,11 @@ export function routeInGroup(platform: string, model: string, ctx: RoutingContex
       `这个上游没有这个模型。可用：${[...info.ids].join("、")}。`,
       400,
     );
+  }
+  // 模型在目录里，但平台下没有一个账号能接：额度用尽或者都在冷却。这是网关
+  // 这边的状态，不是请求本身的问题 —— 503 加上什么时候恢复，客户端照着重试
+  if (info.untilMs !== null) {
+    throw coolingError(platform, info.untilMs, true, "额度用尽或者冷却中");
   }
   return { platform, model: `${platform}/${canonical}` };
 }

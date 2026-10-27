@@ -360,14 +360,41 @@ async function writeAnthropicFrames(
 
 /* ---------------- plumbing ---------------- */
 
-export function sendError(ctx: Koa.Context, e: unknown): void {
+/**
+ * 这个错误什么时候能重试。
+ *
+ * 503 说的是「现在不行」，客户端还得知道什么时候行 —— 冷却到几点、套餐窗口
+ * 什么时候换。恢复时间算在出错的地方（那里知道它从哪儿来），写头的事情在这里
+ */
+export function withRetryAfter<T extends Error>(error: T, untilMs: number): T {
+  (error as T & { retryAfterUntilMs?: number }).retryAfterUntilMs = untilMs;
+  return error;
+}
+
+/** 带恢复时间的错误，写出去的 `Retry-After`（秒）。 */
+function retryAfterHeaders(e: unknown): Record<string, string> {
+  const until = (e as { retryAfterUntilMs?: unknown })?.retryAfterUntilMs;
+  if (typeof until !== "number" || !Number.isFinite(until)) return {};
+  // 已经过点了也发 1 秒：Retry-After: 0 会被当成「别重试」。
+  return { "retry-after": String(Math.max(1, Math.ceil((until - Date.now()) / 1000))) };
+}
+
+/**
+ * Write a failure out.
+ *
+ * `headers` is for the failures that carry something the client acts on — a
+ * 503 with `Retry-After` is the one that matters today.
+ */
+export function sendError(ctx: Koa.Context, e: unknown, headers: Record<string, string> = {}): void {
   const err = e as AuthError;
+  const extra = { ...retryAfterHeaders(e), ...headers };
   if (e instanceof LimitError) {
     if (ctx.res.headersSent) {
       ctx.res.end();
       return;
     }
     ctx.status = 503;
+    if (Object.keys(extra).length) ctx.set(extra);
     ctx.body = {
       error: { type: "api_error", message: e.message },
       hint: e.detail,
@@ -380,6 +407,7 @@ export function sendError(ctx: Koa.Context, e: unknown): void {
     return;
   }
   ctx.status = status;
+  if (Object.keys(extra).length) ctx.set(extra);
   ctx.body = {
     error: {
       // 503 means the credential is the problem; everything else is the request

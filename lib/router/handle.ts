@@ -17,7 +17,9 @@ import { configFlag, configNumber } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { LimitError } from "../qoder/transport.ts";
 import { PLATFORMS, platformOf } from "../platforms.ts";
-import { accountsOfPlatform } from "../providers.ts";
+import { accountsOfPlatform, type ProviderRow } from "../providers.ts";
+import { cooldownUntil, isCoolingDown, unavailableCooldownMs } from "../cooldown.ts";
+import { planWindowEndsAt } from "./account-cooldown.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { recordAggregateUsage } from "../aggregate.ts";
 import type { AggregateEntry } from "./catalog.ts";
@@ -91,23 +93,44 @@ function upstreamContext(): UpstreamContext {
  * which of its accounts pays is the platform policy's business at call time.
  */
 function routingContext(): RoutingContext {
-  const platforms = new Map<string, { kind: string; enabled: boolean; accounts: number; ids: Set<string> }>();
+  const platforms = new Map<string, { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null }>();
+  const now = Date.now();
   for (const template of PLATFORMS) {
     const kind = kindOf(template.kind);
     if (!kind) continue;
     const accounts = accountsOfPlatform(template.id);
     const on = accounts.filter((row) => row.enabled);
-    const models = modelsOfPlatform(template.id);
-    // 没有开着的账号，或者开着的账号都没额度了：这个平台接不了请求。
-    const serving = on.some((row) => !outOfCredits(row.id));
+    // 模型目录恒为平台全量：额度用尽或者账号在冷却，说的是「这个平台现在接不了
+    // 这个请求」，不是「这个平台没有这个模型」。前者答 503 并说什么时候恢复，
+    // 后者答 400。把模型从目录里摘掉，客户端看到的是一个不存在的模型名 ——
+    // 它会去改配置，而真正该做的是等一会儿再试
+    const ids = new Set(modelsOfPlatform(template.id));
+    // 开着的账号全都接不了：算一下最早什么时候能试
+    const noCredits = on.length > 0 && outOfCredits(template.id);
+    const usable = noCredits ? [] : on.filter((row) => !isCoolingDown(row.id, now));
+    const untilMs = on.length > 0 && usable.length === 0 ? recoveryTime(on, noCredits, now) : null;
     platforms.set(template.id, {
       kind: template.kind,
       enabled: on.length > 0,
       accounts: accounts.length,
-      ids: new Set(serving ? models : []),
+      ids,
+      untilMs,
     });
   }
   return { platforms };
+}
+
+/**
+ * 这个平台的账号最早什么时候能接请求。
+ *
+ * 额度用尽的看套餐窗口什么时候结束（窗口一换就是新的额度），冷却中的看冷却到
+ * 什么时候。都算不出来就按固定冷却时长给一个 —— 客户端要的是一个能照着的数字
+ */
+function recoveryTime(rows: ProviderRow[], noCredits: boolean, now: number): number {
+  const times = rows
+    .map((row) => (noCredits ? planWindowEndsAt(row.id, now) : null) ?? cooldownUntil(row.id))
+    .filter((at): at is number => typeof at === "number" && at > now);
+  return times.length ? Math.min(...times) : now + unavailableCooldownMs();
 }
 /**
  * Send the request to the upstream behind a published model.
