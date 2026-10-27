@@ -129,7 +129,17 @@ export interface QuotaView {
  */
 export interface HealthSnapshot {
   qoder: Record<string, { account: unknown; credits: unknown; quota?: unknown }>;
-  minimax: Record<string, { balance: unknown; tokenPlan: unknown; credits: unknown }>;
+  minimax: Record<
+    string,
+    {
+      balance: unknown;
+      tokenPlan: unknown;
+      credits: unknown;
+      /** 积分，以及「plan 见底后自动扣积分」的开关：plan 窗口见底时看这两个。 */
+      points?: { amount: number | null; at: number };
+      creditFallbackEnabled?: { enabled: boolean | null; at: number };
+    }
+  >;
   /** MiniMax 开放平台：每个租户一份套餐额度。 */
   minimaxApi: Record<string, { tenants: unknown }>;
   /** ZCode 的 Start Plan 额度。 */

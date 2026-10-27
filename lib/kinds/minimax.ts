@@ -124,10 +124,21 @@ registerKind({
     const windows = ((mine.tokenPlan?.windows ?? []) as any[]).filter((w) => !isIgnoredPlanWindow(w));
     if (!windows.length) return false;
     // 视频窗口（video）已经被 IGNORED_PLAN_WINDOWS 排掉了（网关只服务文本
-    // 模型），剩下的窗口都是文本的：任一文本窗口见底，这个账号就没钱了。
-    return windows.every(
+    // 模型），剩下的窗口都是文本的：任一文本窗口见底，这个账号的 plan 就没了。
+    const planSpent = windows.every(
       (w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0,
     );
+    if (!planSpent) return false;
+    // plan 见底不等于账号不能用：平台在窗口达限后还能扣积分，前提是账号里有
+    // 积分，而且「Token Plan 达限后使用积分」那个开关是开的（开关关着就是
+    // 2067）。所以能不能用 = plan 还有额度 或（积分 > 0 且开关开）。
+    //
+    // 两个数都可能是 null（读不到）。读不到是「不知道」，不是「没有」：只有
+    // 明确读到积分 0、或者明确读到开关关，才允许判成没钱；不知道就退回旧行为
+    // （只看 plan 窗口），不因为一次读失败就把账号判死。
+    const points = mine.points?.amount;
+    const fallback = mine.creditFallbackEnabled?.enabled;
+    return !(typeof points === "number" && points > 0 && fallback === true);
   },
 });
 

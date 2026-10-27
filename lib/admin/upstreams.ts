@@ -14,6 +14,7 @@ import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
 import { fetchMiniMaxCredits } from "../minimax/checkin.ts";
+import { fetchMiniMaxCreditFallback, fetchMiniMaxPoints } from "../minimax/points.ts";
 import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
 import { type QoderRegion } from "../qoder/auth.ts";
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
@@ -308,6 +309,39 @@ export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unkn
 }
 
 /**
+ * MiniMax Code 账号上的积分，和「plan 见底后自动扣积分」的开关。
+ *
+ * 两个数要一起看才有意义：plan 窗口见底时，有积分且开关开着，平台照样会答
+ * （扣积分），不回 2067。各自单独读、单独失败：一个读不到不影响另一个。
+ *
+ * 读不到是 null —— 那是「不知道」，不是「没有」。
+ */
+export async function miniMaxPoints(
+  providerId = "minimax",
+): Promise<{ amount: number | null; at: number }> {
+  const region = MINIMAX_REGION === "en" ? "global" : "cn";
+  try {
+    const cred = await readCredential(providerId);
+    return { amount: await fetchMiniMaxPoints(cred.accessToken, region), at: Date.now() };
+  } catch {
+    return { amount: null, at: Date.now() };
+  }
+}
+
+/** 「Token Plan 达限后使用积分」这个开关，读不到是 null（不知道）。 */
+export async function miniMaxCreditFallback(
+  providerId = "minimax",
+): Promise<{ enabled: boolean | null; at: number }> {
+  const region = MINIMAX_REGION === "en" ? "global" : "cn";
+  try {
+    const cred = await readCredential(providerId);
+    return { enabled: await fetchMiniMaxCreditFallback(cred.accessToken, region), at: Date.now() };
+  } catch {
+    return { enabled: null, at: Date.now() };
+  }
+}
+
+/**
  * SenseNova 的积分池。
  *
  * 问的是控制台（要登录态），没登录就问不了 —— 那是「不知道」，不是「没有」。
@@ -383,6 +417,8 @@ export async function refreshHealthSnapshot(): Promise<void> {
           balance: await miniMaxBalance(row.id),
           tokenPlan: await miniMaxCodeTokenPlan(row.id),
           credits: await miniMaxCredits(row.id),
+          points: await miniMaxPoints(row.id),
+          creditFallbackEnabled: await miniMaxCreditFallback(row.id),
         };
         break;
       case "minimax-api":

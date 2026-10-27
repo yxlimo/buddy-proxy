@@ -93,13 +93,16 @@ export function publicGatewayOrigin(region = REGION): string {
  * talking to. If the platform ever starts keying the sign-in off them, the
  * desktop's values are the ones to copy.
  */
-function buildRequest(
+export function buildRequest(
   path: string,
   method: "GET" | "POST",
   token: string,
   userId: string,
   region: string,
   nowMs: number,
+  // 有的接口带真请求体（积分那条要 workspace_id），而签名把请求体算进去，
+  // 所以请求体得由调用方给，不能一律写 "{}"。
+  payload?: string,
 ): { url: string; body?: string; headers: Record<string, string> } {
   const origin = publicGatewayOrigin(region);
   const url = new URL(`${origin}${path}`);
@@ -122,7 +125,7 @@ function buildRequest(
     client: "mcode",
   }).toString();
 
-  const body = method === "POST" ? "{}" : undefined;
+  const body = payload ?? (method === "POST" ? "{}" : undefined);
   const signatureBody = body ?? "";
   const yyBody = body ?? "{}";
   const second = Math.floor(nowMs / 1000);
