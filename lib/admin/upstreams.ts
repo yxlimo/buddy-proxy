@@ -39,7 +39,7 @@ import {
 } from "../providers.ts";
 import { isPlatform, platformOf } from "../platforms.ts";
 // The kinds register themselves; importing the file is what makes them known.
-import "../kinds.ts";
+import "../kinds/index.ts";
 import { kindOf } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import type {
@@ -646,7 +646,7 @@ function upstreamQuotasCached(id: string): QuotaView[] {
  * 就是 lib/kinds.ts 里那一份（视频窗口在那里被排掉）。这里只做转出，不再留一份
  * 副本 —— 两份实现迟早会走样。
  */
-export { tokenPlanView } from "../kinds.ts";
+export { tokenPlanView } from "../kinds/index.ts";
 
 /* ------------------------------------------------------------------ *
  * 上游现在能不能接

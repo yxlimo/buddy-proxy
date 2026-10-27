@@ -10,6 +10,7 @@ import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../credential.ts";
+import { LimitError } from "../qoder/transport.ts";
 import { anthropicStreamToOpenAI, openaiStreamToAnthropic } from "../dialect/stream.ts";
 import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect/response.ts";
 import { parseLooseJson, readOpenAIChunks, readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
@@ -355,4 +356,39 @@ async function writeAnthropicFrames(
     if (pingTimer) clearInterval(pingTimer);
     ctx.res.end();
   }
+}
+
+/* ---------------- plumbing ---------------- */
+
+export function sendError(ctx: Koa.Context, e: unknown): void {
+  const err = e as AuthError;
+  if (e instanceof LimitError) {
+    if (ctx.res.headersSent) {
+      ctx.res.end();
+      return;
+    }
+    ctx.status = 503;
+    ctx.body = {
+      error: { type: "api_error", message: e.message },
+      hint: e.detail,
+    };
+    return;
+  }
+  const status = typeof err?.status === "number" ? err.status : 500;
+  if (ctx.res.headersSent) {
+    ctx.res.end();
+    return;
+  }
+  ctx.status = status;
+  ctx.body = {
+    error: {
+      // 503 means the credential is the problem; everything else is the request
+      // or the upstream failing. A failure that says otherwise says so.
+      type:
+        err?.type ??
+        (status === 503 ? "authentication_error" : status === 400 ? "invalid_request_error" : "api_error"),
+      message: err?.message ?? "request failed",
+    },
+    ...(err?.hint ? { hint: err.hint } : {}),
+  };
 }

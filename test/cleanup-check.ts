@@ -136,7 +136,7 @@ check(
 
 section("kind 注册表里的 label");
 
-await import("../lib/kinds.ts");
+await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
 
 check("Qoder 的 label 是 Qoder", kindOf("qoder")?.label === "Qoder", String(kindOf("qoder")?.label));

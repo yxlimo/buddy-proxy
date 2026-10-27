@@ -25,7 +25,7 @@ const { policyEnum, policyErrorText, policyFromEnum, unsupportedPolicyText } = a
 );
 const { policiesOfKind, registerKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
-await import("../lib/kinds.ts");
+await import("../lib/kinds/index.ts");
 const { upstreamAccountCount } = await import("../lib/admin/upstreams.ts");
 const { adminService } = await import("../lib/admin/service.ts");
 const { benefitUpstreams } = await import("../lib/admin/benefits.ts");

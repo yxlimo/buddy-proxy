@@ -14,7 +14,7 @@ import type { CatalogModel } from "../catalog-models.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { PLATFORMS } from "../platforms.ts";
 import { kindOf } from "../provider-kinds.ts";
-import "../kinds.ts";
+import "../kinds/index.ts";
 
 export type { CatalogModel };
 export {

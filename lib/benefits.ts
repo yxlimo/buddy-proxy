@@ -10,7 +10,7 @@
 import { kindOf, type BenefitOutcome } from "./provider-kinds.ts";
 import { provider } from "./providers.ts";
 // The kinds register themselves; importing the file is what makes them known.
-import "./kinds.ts";
+import "./kinds/index.ts";
 
 export type { BenefitOutcome };
 

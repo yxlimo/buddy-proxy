@@ -16,7 +16,7 @@ import { kindOf } from "./provider-kinds.ts";
 // 注册表要有内容，`kindOf` 才答得出「这个平台支持哪几个策略」。这条 import 会
 // 绕成 platforms → kinds → … 的环，所以环上任何模块都不能在模块求值期读别人的
 // 常量（lib/qoder/benefits.ts 就是为此改成函数内取值的）。
-import "./kinds.ts";
+import "./kinds/index.ts";
 
 /** 一个平台：代码里的模板。 */
 export interface Platform {

@@ -70,8 +70,8 @@ const plan = {
  * 1) 视图里只剩 general
  * ------------------------------------------------------------------ */
 
-await import("../lib/kinds.ts");
-const { tokenPlanView } = await import("../lib/kinds.ts");
+await import("../lib/kinds/index.ts");
+const { tokenPlanView } = await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
 const { setCached } = await import("../lib/store.ts");
 const { HEALTH_CACHE_ID } = await import("../lib/health-cache.ts");

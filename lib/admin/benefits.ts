@@ -9,7 +9,7 @@ import type { BenefitUpstream } from "../benefits.ts";
 import { listProviders } from "../providers.ts";
 import { kindOf } from "../provider-kinds.ts";
 // The kinds register themselves; importing the file is what makes them known.
-import "../kinds.ts";
+import "../kinds/index.ts";
 
 /**
  * 多久跑一次签到。

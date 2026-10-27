@@ -171,7 +171,7 @@ check(
 section("SenseNova 的积分池");
 
 // 注册表里的那一条：注册发生在 lib/kinds.ts（import 即注册）。
-await import("../lib/kinds.ts");
+await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
 const senseNova = kindOf("sensenova");
 
