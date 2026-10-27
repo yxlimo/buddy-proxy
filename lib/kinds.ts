@@ -8,6 +8,7 @@
 // upstream, so the answer can depend on which one is asking.
 
 import {
+  fromUpstreamStatus,
   registerKind,
   type BalanceLotView,
   type TokenPlanView,
@@ -17,25 +18,27 @@ import {
   type QuotaView,
 } from "./provider-kinds.ts";
 import type { TokenRhythmAccountStatus } from "./tokenrhythm/wallet.ts";
-import {
-  totalRemaining,
-  type SenseNovaPoolUsage,
-} from "./sensenova/quota.ts";
-import type { InternAiBalance, InternAiCreditPack } from "./intern-ai/quota.ts";
 import type { ProviderRow } from "./providers.ts";
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
 import { tokenFingerprint } from "./credential.ts";
 import { isIgnoredPlanWindow } from "./cooldown.ts";
 import {
-  internAiCatalogModels,
   minimaxCatalogModels,
   miniMaxApiCatalogModels,
   qoderCatalogModels,
-  senseNovaCatalogModels,
   tokenRhythmCatalogModels,
   workbuddyCatalogModels,
   zcodeCatalogModels,
 } from "./catalog-models.ts";
+
+/* ------------------------------------------------------------------ *
+ * The open platforms that are a declaration (lib/router/compatible-platform.ts)
+ * ------------------------------------------------------------------ */
+
+// 这两个种类在自己的模块里登记：接一个开放平台是写一段声明，不是在这里
+// 再加一个 registerKind 块。放在这里 import 是为了让登记在 kindOf() 之前发生。
+import "./sensenova/register.ts";
+import "./intern-ai/register.ts";
 
 /* ------------------------------------------------------------------ *
  * The MiniMax Code gateway
@@ -85,17 +88,11 @@ import { tokenRhythmStatus } from "./tokenrhythm/wallet.ts";
  * SenseNova
  * ------------------------------------------------------------------ */
 
-import { senseNovaStatus } from "./sensenova/auth.ts";
-import { senseNovaCatalog } from "./sensenova/transport.ts";
-import { SENSENOVA_INFER_BASE } from "./sensenova/config.ts";
 
 /* ------------------------------------------------------------------ *
  * 书生·端砚
  * ------------------------------------------------------------------ */
 
-import { internAiStatus } from "./intern-ai/auth.ts";
-import { internAiCatalog } from "./intern-ai/transport.ts";
-import { INTERN_AI_DISCOVERY_API_BASE } from "./intern-ai/config.ts";
 
 /* ------------------------------------------------------------------ *
  * ZCode
@@ -109,50 +106,6 @@ import { ZCODE_MESSAGES_URL } from "./zcode/transport.ts";
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
-
-/** 把上游报的状态翻成面板要的那一套。 */
-function fromUpstreamStatus(
-  raw: Record<string, unknown>,
-  kind: string,
-): CredentialView {
-  const status = String(raw.status ?? "");
-  const remainingSec = Number(raw.remainingSec ?? 0);
-  const expiresAt = raw.expiresAt ? Date.parse(String(raw.expiresAt)) : 0;
-  const warning = raw.warning === true;
-  const detail = String(raw.detail ?? "");
-  return {
-    kind,
-    status: credentialStateOf(status),
-    fingerprint: String(raw.fingerprint ?? ""),
-    expiresAt,
-    remainingSec,
-    warning,
-    detail: warning && !detail ? "凭据即将到期" : detail,
-    generation: Number(raw.generation ?? 0),
-  };
-}
-
-/** 上游的状态词 → 契约里的枚举。 */
-function credentialStateOf(status: string): CredentialState {
-  switch (status) {
-    case "authenticated":
-      return CredentialState.AUTHENTICATED;
-    case "expired":
-      return CredentialState.EXPIRED;
-    case "error":
-      return CredentialState.ERROR;
-    case "usable":
-      return CredentialState.USABLE;
-    case "anonymous":
-      // The upstreams that report "anonymous" mean it as "not logged in"
-      // (qoder, workbuddy, minimax all do): no credential, so it is missing.
-      return CredentialState.MISSING;
-    case "missing":
-      return CredentialState.MISSING;
-    default:
-      return CredentialState.MISSING;
-  }
-}
 
 /** 一把 key 就是一个租户时的凭据。 */
 function apiKeyCredential(keys: string[], detail: string): CredentialView {
@@ -212,94 +165,6 @@ function tokenrhythmQuotas(provider: ProviderRow, snapshot: HealthSnapshot): Quo
         lots,
         nextExpiryAt: Number.isFinite(nextExpiryAt) ? nextExpiryAt : 0,
         expiringCny,
-      },
-    },
-  ];
-}
-
-function senseNovaQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
-  const usage = snapshot.sensenova?.[provider.id]?.pools as SenseNovaPoolUsage | null;
-  if (!usage?.pools?.length) return [];
-  // 能服务模型的池子才算数：没有模型挂在它上面的池子，扣不到。
-  const pools = usage.pools.filter((pool) => pool.modelIds.length > 0);
-  if (!pools.length) return [];
-  // 池子里有两种都叫「积分」的东西，不是一回事：
-  //
-  //   活动积分（grant_balance）  兑换码、活动发的，到账后 30 天到期 → 积分
-  //   周期积分（window_5h/7d）  滚动窗口里的额度，5 小时重置 → 套餐额度
-  //
-  // 所以积分只报活动积分，周期积分按窗口的百分比报成套餐额度。
-  const lots: CreditLotView[] = pools
-    .filter((pool) => pool.grantBalance > 0)
-    .map((pool) => ({
-      id: pool.id,
-      sourceLabel: `${pool.name || pool.id} · 30 天到期`,
-      remaining: pool.grantBalance,
-      expiresAt: pool.nearestGrantExpiry ? pool.nearestGrantExpiry * 1000 : 0,
-      status: pool.grantBalance > 0 ? "可用" : "已用尽",
-    }));
-  const remaining = lots.reduce((sum, lot) => sum + lot.remaining, 0);
-  const windows = pools.map((pool) => ({
-    label: pool.name || pool.id,
-    intervalPercent: windowPercent(pool.window5h),
-    weeklyPercent: windowPercent(pool.window7d),
-    intervalEndsAt: pool.window5h.resetAt ? pool.window5h.resetAt * 1000 : 0,
-    weeklyEndsAt: pool.window7d.resetAt ? pool.window7d.resetAt * 1000 : 0,
-  }));
-  const plan = usage.plan?.name ? `${usage.plan.name}：` : "";
-  return [
-    {
-      upstreamId: provider.id,
-      accountId: provider.id,
-      credits: {
-        // 平台不报活动积分的总额与已用，只报还剩多少。
-        total: 0,
-        used: 0,
-        remaining,
-        lots,
-        note: `${plan}活动积分 30 天到期；周期积分按 5 小时与 7 天窗口另算`,
-      },
-      ...(windows.length ? { tokenPlan: { windows } } : {}),
-    },
-  ];
-}
-
-/** 一个滚动窗口里还剩百分之多少。 */
-function windowPercent(window: { limit: number; remaining: number }): number {
-  if (!window.limit || window.limit <= 0) return 0;
-  return Math.round((window.remaining / window.limit) * 100);
-}
-
-function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
-  const balance = snapshot.internAi?.[provider.id]?.balance as InternAiBalance | null;
-  if (!balance) return [];
-  const packs = (snapshot.internAi?.[provider.id]?.packs as InternAiCreditPack[] | null) ?? [];
-  // 只有还在的批次算数：过期与作废的不算。
-  const alive = packs.filter((pack) => pack.status === "available" || pack.status === "unused");
-  const lots: CreditLotView[] = alive.map((pack) => ({
-    id: pack.id,
-    sourceLabel: pack.remark || pack.cycleType || pack.id,
-    remaining: pack.remainingCredits,
-    expiresAt: platformTimeMs(pack.expireAt) || platformTimeMs(pack.cycleEndAt),
-    // 一批墨点用完了就是用完了，不管平台还把它算不算「还在」。
-    status:
-      pack.remainingCredits > 0
-        ? pack.status === "unused"
-          ? "未使用"
-          : "可用"
-        : "已用尽",
-  }));
-  const total = alive.reduce((sum, pack) => sum + pack.totalCredits, 0);
-  return [
-    {
-      upstreamId: provider.id,
-      accountId: provider.id,
-      credits: {
-        total,
-        used: balance.used,
-        remaining: balance.availableCredits,
-        lots,
-        note: `墨点：余额 ${balance.availableCredits}${alive.length ? `，${alive.length} 个批次` : ""}`,
       },
     },
   ];
@@ -469,19 +334,6 @@ export function tokenPlanView(plan: unknown): TokenPlanView | undefined {
   };
 }
 
-/**
- * 平台给的时间戳。
- *
- * 平台按它自己的时区报（UTC+8），没带时区就按那个算。
- */
-function platformTimeMs(value: string): number {
-  const text = String(value ?? "").trim();
-  if (!text) return 0;
-  const zoned = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text.replace(" ", "T")}+08:00`;
-  const parsed = Date.parse(zoned);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 /** The plan of one provider, out of the snapshot. */
 function minimaxTokenPlan(provider: ProviderRow, snapshot: HealthSnapshot): TokenPlanView | undefined {
   const mine = (snapshot.minimax?.[provider.id] ?? {}) as any;
@@ -644,50 +496,6 @@ registerKind({
   },
   // The hook of expiry_first: the platform says this account has no money left.
   isRequestMissingBalance: (error) => isRequestMissingBalance(error),
-});
-
-registerKind({
-  kind: "sensenova",
-  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
-  openPlatform: true,
-  label: "SenseNova",
-  login: "password",
-  policies: ["single", "fallback"],
-  baseUrl: () => SENSENOVA_INFER_BASE,
-  credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
-  models: () => senseNovaCatalogModels(senseNovaCatalog()),
-  quotas: (provider, snapshot) => senseNovaQuotas(provider, snapshot),
-  outOfCredits: (provider, snapshot) => {
-    // The pools that can serve a model: the others are not spent on anything.
-    const usage = snapshot.sensenova?.[provider.id]?.pools as SenseNovaPoolUsage | null;
-    const pools = (usage?.pools ?? []).filter((pool) => pool.modelIds.length > 0);
-    if (!pools.length) return false;
-    return pools.every((pool) => totalRemaining(pool) <= 0);
-  },
-});
-
-registerKind({
-  kind: "intern-ai",
-  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
-  openPlatform: true,
-  label: "书生·端砚",
-  login: "code",
-  policies: ["single", "fallback"],
-  baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
-  credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),
-  models: () => internAiCatalogModels(internAiCatalog()),
-  quotas: (provider, snapshot) => internAiQuotas(provider, snapshot),
-  outOfCredits: (provider, snapshot) => {
-    const mine = (snapshot.internAi?.[provider.id] ?? {}) as any;
-    const balance = mine.balance as InternAiBalance | null;
-    if (!balance) return false;
-    if (balance.availableCredits <= 0) return true;
-    // A window that is full is full: it cannot be spent this time round.
-    for (const window of [balance.window5h, balance.window7d]) {
-      if (window.enabled && window.remainingCredits <= 0) return true;
-    }
-    return false;
-  },
 });
 
 registerKind({

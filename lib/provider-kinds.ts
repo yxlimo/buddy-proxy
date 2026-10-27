@@ -11,9 +11,15 @@
 // What is NOT here: the call to the upstream. That lives with the transport it
 // belongs to (lib/router/upstreams.ts) — one dispatch, not one per question.
 
+import type Koa from "koa";
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
+import type { Json } from "./json.ts";
 import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import type { CatalogModel } from "./router/catalog.ts";
+import type { Dialect } from "./router/deliver.ts";
+import type { Route } from "./router/routes.ts";
+// 只为 `dispatch` 的参数类型：upstreams.ts 从这边取 kindOf，值上不互相引用。
+import type { UpstreamContext } from "./router/upstreams.ts";
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code";
 
@@ -210,6 +216,62 @@ export interface ProviderKind {
    * 没了」，于是重新扫描、重新钉一个别的接手。
    */
   isRequestMissingBalance?(error: unknown): boolean;
+  /**
+   * 这一类上游怎么转发。没有它就说明这个种类还没接。
+   *
+   * 请求怎么发出去、答案怎么写回客户端，是转发那一条路的事
+   * （lib/router/upstreams.ts）。写在种类里，接一个种类就是登记一次，
+   * 而不是在 `router-proxy.ts` 的 switch 里再加一个 case。
+   */
+  dispatch?(
+    ctx: UpstreamContext,
+    body: Json,
+    route: Route,
+    dialect: Dialect,
+    stream: boolean,
+    out: Koa.Context,
+  ): Promise<void>;
+}
+
+/** 把上游报的状态翻成面板要的那一套。 */
+export function fromUpstreamStatus(raw: Record<string, unknown>, kind: string): CredentialView {
+  const status = String(raw.status ?? "");
+  const remainingSec = Number(raw.remainingSec ?? 0);
+  const expiresAt = raw.expiresAt ? Date.parse(String(raw.expiresAt)) : 0;
+  const warning = raw.warning === true;
+  const detail = String(raw.detail ?? "");
+  return {
+    kind,
+    status: credentialStateOf(status),
+    fingerprint: String(raw.fingerprint ?? ""),
+    expiresAt,
+    remainingSec,
+    warning,
+    detail: warning && !detail ? "凭据即将到期" : detail,
+    generation: Number(raw.generation ?? 0),
+  };
+}
+
+/** 上游的状态词 → 契约里的枚举。 */
+function credentialStateOf(status: string): CredentialState {
+  switch (status) {
+    case "authenticated":
+      return CredentialState.AUTHENTICATED;
+    case "expired":
+      return CredentialState.EXPIRED;
+    case "error":
+      return CredentialState.ERROR;
+    case "usable":
+      return CredentialState.USABLE;
+    case "anonymous":
+      // The upstreams that report "anonymous" mean it as "not logged in"
+      // (qoder, workbuddy, minimax all do): no credential, so it is missing.
+      return CredentialState.MISSING;
+    case "missing":
+      return CredentialState.MISSING;
+    default:
+      return CredentialState.MISSING;
+  }
 }
 
 const REGISTRY = new Map<string, ProviderKind>();

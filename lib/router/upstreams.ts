@@ -1199,7 +1199,7 @@ async function tokenRhythmChatWithRetry(
  * 鉴权是一把账号上的推理 key。两个上游的差别只有三样：路由日志里的名字、
  * 错误提示里怎么称呼它、以及推理怎么发 —— 所以差别都由调用方传进来。
  */
-async function toOpenAiPlatform(
+export async function toOpenAiPlatform(
   ctx: UpstreamContext,
   body: Record<string, unknown>,
   route: Route,

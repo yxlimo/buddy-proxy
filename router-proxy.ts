@@ -690,11 +690,17 @@ async function callUpstream(
       case "tokenrhythm":
         await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
         break;
+      // The compatible platforms carry their own dispatch: registering one is
+      // a declaration (lib/router/compatible-platform.ts), not a case here.
       case "sensenova":
-        await toSenseNova(uctx, body, route, dialect, stream, ctx);
+        await (kind?.dispatch
+          ? kind.dispatch(uctx, body, route, dialect, stream, ctx)
+          : toSenseNova(uctx, body, route, dialect, stream, ctx));
         break;
       case "intern-ai":
-        await toInternAi(uctx, body, route, dialect, stream, ctx);
+        await (kind?.dispatch
+          ? kind.dispatch(uctx, body, route, dialect, stream, ctx)
+          : toInternAi(uctx, body, route, dialect, stream, ctx));
         break;
       case "minimax-api":
         await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
