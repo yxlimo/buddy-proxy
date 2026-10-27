@@ -30,7 +30,7 @@ run = "pnpm exec tsc --noEmit"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:minimax:fallback", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -51,6 +51,10 @@ run = "node --experimental-strip-types test/minimax-api-policy-check.ts"
 [tasks."test:policy:e2e"]
 description = "Check that the policy takes effect at once (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/provider-policy-e2e-check.ts"
+
+[tasks."test:minimax:fallback"]
+description = "Check that a rejected MiniMax account is left for the next one"
+run = "node --experimental-strip-types test/minimax-fallback-check.ts"
 
 [tasks."test:policy:browser"]
 description = "Check the policy in the real panel (needs the panel: cd web && pnpm build)"

@@ -665,24 +665,19 @@ export async function toMinimax(
 
   let r: Response;
   try {
-    r = await underPolicy(route.platform, "minimax", (account) => minimaxChat(anthropicBody, account.id));
+    r = await underPolicy(route.platform, "minimax", async (account) => {
+      const res = await minimaxChat(anthropicBody, account.id);
+      if (res.ok) return res;
+      // 平台的拒绝必须在策略里抛出来：策略只看得见异常，看不见 Response。
+      // 早先这里把 !ok 的判断放在 underPolicy 外面，429/402 就永远落不到
+      // 降级上 —— 账号被限了也不知道换下一个。
+      throw await minimaxRejection(res);
+    });
   } catch (e) {
     // 换掉错误对象会把上游自己的状态与业务码丢掉，日志与分类器就看不出
     // 真实发生了什么。
     const err = e as AuthError;
     throw keepUpstreamTruth(new AuthError(err.message, err.hint, err.status, err.type), e);
-  }
-
-  if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    let parsed: any = null;
-    try {
-      parsed = text ? JSON.parse(text) : null;
-    } catch {
-      /* not JSON */
-    }
-    const { type, message } = gatewayErrorMessage(r.status, parsed, text);
-    throw new AuthError(message, "", r.status, type);
   }
 
   if (!stream) {
@@ -696,7 +691,37 @@ export async function toMinimax(
 
 
 /**
- * MiniMax 开放平台，按 API Key 分租户。
+ * 平台拒了这次请求：把它变成带上游状态的异常。
+ *
+ * 必须抛，不能返回 Response——策略（underPolicy）只看得见异常。
+ * 返回一个 429 给它，等于什么都没说，账号也就不会换。
+ */
+async function minimaxRejection(res: Response): Promise<AuthError> {
+  const text = await res.text().catch(() => "");
+  let parsed: any = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    /* not JSON */
+  }
+  const { type, message } = gatewayErrorMessage(res.status, parsed, text);
+  const error = new AuthError(message, "", res.status, type);
+  withUpstreamStatus(error, res.status);
+  // 业务码：先在信封里找，再找正文末尾括号里的那个。MiniMax Code 报
+  // Token Plan 用完时是 `当前已达到 Token Plan 用量上限…… (2067)`，码在
+  // 正文里，不在字段上。
+  const code = parsed?.base_resp?.status_code ?? trailingCode(message);
+  if (typeof code === "number" && Number.isFinite(code)) withBusinessCode(error, code);
+  return error;
+}
+
+/** 正文末尾括号里的业务码：`…… 用量上限。(2067)`。 */
+function trailingCode(text: string): number | null {
+  const found = /\((\d{3,6})\)\s*$/.exec(String(text ?? "").trim());
+  return found ? Number(found[1]) : null;
+}
+
+/**
  *
  * 平台说的是 OpenAI 方言，所以 Anthropic 的请求在方言层转过去（跟别的
  * 上游一样）。哪个租户出钱由上游自己的策略定：单一只调一把 key，降级按 key
