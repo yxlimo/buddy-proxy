@@ -11,9 +11,14 @@
 //
 // 覆盖：
 //
-//   1. 两个数都读得出来（积分要签名、开关要 X-Group-Id）；
-//   2. 读不到时是 null —— 「不知道」，不是「没有」；
-//   3. 六种判定：积分与开关的四种组合、读不到退回旧行为、plan 有额度、视频窗口。
+//   1. 积分是 credit/details 第一页里未过期条目之和（千分位、小数、过期条目）；
+//   2. 满页也不翻页 —— 判定只要一个结论，明细才需要翻页；
+//   3. workspace 的 id 字段叫 workspace_id，是数字 0 也认；
+//   4. 读不到是 null ——「不知道」，不是「没有」；空明细才是 0；
+//   5. 六种判定：积分与开关的四种组合、读不到退回旧行为、plan 有额度、视频窗口。
+//
+// 假上游的答复形状照真机（2026-10-27 用只读探针录的）：get_user_extra_info 的
+// workspaces 在根级，id 叫 workspace_id；credit/details 的金额是字符串。
 
 import fs from "node:fs";
 import http from "node:http";
@@ -47,12 +52,61 @@ function section(title: string): void {
  * 假上游
  * ------------------------------------------------------------------ */
 
+const DAY = 86_400_000;
+const now = Date.now();
+
 /** 假上游怎么答：改成 error 就是「读不到」。 */
 let mode: "ok" | "error" = "ok";
-let membershipHeaders: Record<string, string> = {};
-let membershipBody: any = null;
+
+/** workspace 列表：真机在根级，id 叫 workspace_id，数字。 */
+let workspaceRows: any[] | null = [
+  {
+    workspace_id: 7,
+    workspace_name: "other",
+    op_group_id: "grp-old",
+    selected: false,
+  },
+  {
+    workspace_id: 0,
+    workspace_name: "mol",
+    workspace_type: 0,
+    selected: true,
+    personal_plan_type: 3,
+    op_group_id: "grp-1",
+    // 这两个字段是开放平台的积分，不是 MiniMax Code 的，不该被读
+    opcredit_balance: 0,
+    total_remains_credit: 0,
+    has_token_plan: true,
+    token_plan_tier: "Plus",
+  },
+];
+
+/** 积分明细：一页一行组；返回 null 就是答复里没有 details。 */
+let creditPageRows: (page: number) => any[] | null = () => [
+  {
+    credit_type: 2,
+    granted_amount: "500.00",
+    remaining_amount: "400.00",
+    expire_at_ms: now + 30 * DAY,
+  },
+  {
+    credit_type: 2,
+    granted_amount: "2,000.00",
+    remaining_amount: "1,234.50",
+    expire_at_ms: now + 30 * DAY,
+  },
+  {
+    credit_type: 2,
+    granted_amount: "999.00",
+    remaining_amount: "999.00",
+    expire_at_ms: now - DAY,
+  },
+];
+
+let creditHeaders: Record<string, string> = {};
+let creditQuery = new URLSearchParams();
+let creditPages: number[] = [];
 let fallbackHeaders: Record<string, string> = {};
-let pointsAmount = "1,234.5";
 
 const fake = http.createServer((req, res) => {
   const url = req.url ?? "";
@@ -60,16 +114,10 @@ const fake = http.createServer((req, res) => {
     res.writeHead(code, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   };
-  const collect = (then: (body: any) => void) => {
+  const collect = (then: () => void) => {
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
-    req.on("end", () => {
-      try {
-        then(raw ? JSON.parse(raw) : null);
-      } catch {
-        then(null);
-      }
-    });
+    req.on("end", then);
   };
 
   if (mode === "error") return send(500, { base_resp: { status_code: 500 } });
@@ -78,33 +126,35 @@ const fake = http.createServer((req, res) => {
   if (url.startsWith("/matrix/api/v1/user/get_user_extra_info")) {
     return collect(() =>
       send(200, {
-        data: {
-          workspaces: [
-            { id: "ws-old", op_group_id: "grp-old", selected: false },
-            { id: "ws-1", op_group_id: "grp-1", selected: true },
-          ],
-        },
-        base_resp: { status_code: 0 },
+        user_extra: {},
+        ...(workspaceRows ? { workspaces: workspaceRows } : {}),
+        base_resp: { status_code: 0, status_msg: "success" },
       }),
     );
   }
 
-  // 积分：要签名，要 workspace_id。
-  if (url.startsWith("/matrix/api/v1/commerce/get_membership_info")) {
-    membershipHeaders = req.headers as Record<string, string>;
-    return collect((body) => {
-      membershipBody = body;
-      send(200, {
-        data: { op_credit_summary: { total_remaining_amount: pointsAmount } },
-        base_resp: { status_code: 0 },
-      });
-    });
+  // 积分明细：要签名，要分页参数（判定只取第一页），金额是字符串。
+  if (url.startsWith("/minimax-cloud/api/v1/credit/details")) {
+    creditHeaders = req.headers as Record<string, string>;
+    const parsed = new URL(url, "http://fake");
+    creditQuery = parsed.searchParams;
+    const page = Number(parsed.searchParams.get("page_number") ?? "1");
+    creditPages.push(page);
+    const rows = creditPageRows(page);
+    if (rows === null) return send(200, { base_resp: { status_code: 0 } });
+    return send(200, { details: rows, base_resp: { status_code: 0, status_msg: "success" } });
   }
 
   // 开关：不要签名，要 X-Group-Id。
   if (url.startsWith("/backend/account/token_plan_credit")) {
     fallbackHeaders = req.headers as Record<string, string>;
-    return send(200, { token_plan_credit_fallback_enabled: true, base_resp: { status_code: 0 } });
+    return send(200, {
+      total_credits: 0,
+      used_credits: 0,
+      remaining_credits: 0,
+      token_plan_credit_fallback_enabled: true,
+      base_resp: { status_code: 0 },
+    });
   }
 
   send(404, { base_resp: { status_code: 404 } });
@@ -118,10 +168,10 @@ const fakeBase = `http://127.0.0.1:${(fake.address() as { port: number }).port}`
 process.env.MINIMAX_API_BASE = fakeBase;
 
 /* ------------------------------------------------------------------ *
- * 一、两个数都读得出来
+ * 一、积分求和
  * ------------------------------------------------------------------ */
 
-section("积分与开关都读得出来");
+section("积分是未过期明细之和");
 
 // 先加载注册表：minimax 那一条会把 auth / transport 的循环依赖先跑完。从
 // checkin.ts（points.ts 用它签名）先进去会在 AUTH_MODE 初始化之前取它。
@@ -130,22 +180,52 @@ const { kindOf } = await import("../lib/provider-kinds.ts");
 const { fetchMiniMaxPoints, fetchMiniMaxCreditFallback } = await import("../lib/minimax/points.ts");
 
 const points = await fetchMiniMaxPoints("session-token", "cn");
-check("积分读到了", points === 1234.5, String(points));
 check(
-  "积分请求带了签名",
-  Boolean(membershipHeaders.yy && membershipHeaders["x-timestamp"] && membershipHeaders["x-signature"]),
-  JSON.stringify(Object.keys(membershipHeaders)),
+  "未过期积分求和正确（多条、千分位、含小数）",
+  points === 1634.5,
+  String(points),
 );
 check(
-  "积分请求带了 workspace_id（取的是 selected 那条）",
-  membershipBody?.workspace_id === "ws-1",
-  JSON.stringify(membershipBody),
+  "积分请求带了签名和翻页参数",
+  Boolean(creditHeaders.yy && creditHeaders["x-timestamp"] && creditHeaders["x-signature"]) &&
+    creditQuery.get("page_number") === "1" &&
+    creditQuery.get("page_size") === "50" &&
+    creditQuery.get("include_expired") === "false",
+  JSON.stringify({ keys: Object.keys(creditHeaders), query: creditQuery.toString() }),
 );
 
-const fallback = await fetchMiniMaxCreditFallback("session-token", "cn");
-check("开关读到了", fallback === true, String(fallback));
-check("开关请求带了 X-Group-Id", fallbackHeaders["x-group-id"] === "grp-1", String(fallbackHeaders["x-group-id"]));
-check("开关请求没带签名", !fallbackHeaders.yy && !fallbackHeaders["x-signature"], JSON.stringify(Object.keys(fallbackHeaders)));
+// 全过期：能答，但一分钱都没有 —— 0，不是 null。
+creditPageRows = () => [
+  {
+    credit_type: 2,
+    granted_amount: "999.00",
+    remaining_amount: "999.00",
+    expire_at_ms: now - DAY,
+  },
+];
+const expiredOnly = await fetchMiniMaxPoints("session-token", "cn");
+check("已过期条目被跳过", expiredOnly === 0, String(expiredOnly));
+
+// 空明细：确实没有积分。
+creditPageRows = () => [];
+const empty = await fetchMiniMaxPoints("session-token", "cn");
+check("明细为空数组 → 0（不是 null）", empty === 0, String(empty));
+
+// 满页也不翻：判定只要一个布尔结论，明细才需要翻页。
+creditPageRows = () =>
+  Array.from({ length: 50 }, () => ({ remaining_amount: "1.00", expire_at_ms: now + DAY }));
+creditPages = [];
+const fullPage = await fetchMiniMaxPoints("session-token", "cn");
+check(
+  "满页时用第一页的和，不翻页",
+  fullPage === 50 && creditPages.join(",") === "1",
+  `${String(fullPage)} pages=${creditPages.join(",")}`,
+);
+
+// 答复里没有 details 数组：形状不认识，当作不知道。
+creditPageRows = () => null;
+const noDetails = await fetchMiniMaxPoints("session-token", "cn");
+check("答复里没有 details 数组 → null（不是 0）", noDetails === null, String(noDetails));
 
 /* ------------------------------------------------------------------ *
  * 二、读不到就是 null
@@ -155,19 +235,31 @@ section("读不到是「不知道」，不是「没有」");
 
 mode = "error";
 const noPoints = await fetchMiniMaxPoints("session-token", "cn");
-check("读不到积分就是 null", noPoints === null, String(noPoints));
 const noFallback = await fetchMiniMaxCreditFallback("session-token", "cn");
-check("读不到开关就是 null", noFallback === null, String(noFallback));
+check("积分或开关读不到就是 null", noPoints === null && noFallback === null, `${String(noPoints)} ${String(noFallback)}`);
 mode = "ok";
 
-// 积分答复里没有能认的字段：也是不知道，不是 0。
-pointsAmount = "";
-const blankPoints = await fetchMiniMaxPoints("session-token", "cn");
-check("答复里没有积分字段就是 null（不是 0）", blankPoints === null, String(blankPoints));
-pointsAmount = "1,234.5";
+/* ------------------------------------------------------------------ *
+ * 三、workspace 与开关
+ * ------------------------------------------------------------------ */
+
+section("workspace_id 是数字 0 也认");
+
+creditPageRows = () => [{ remaining_amount: "400.00", expire_at_ms: now + DAY }];
+const fallback = await fetchMiniMaxCreditFallback("session-token", "cn");
+check(
+  "workspace_id 为数字 0 仍取到 workspace（开关带上了选中那条的 X-Group-Id）",
+  fallback === true && fallbackHeaders["x-group-id"] === "grp-1",
+  `${String(fallback)} group=${String(fallbackHeaders["x-group-id"])}`,
+);
+check(
+  "开关请求没带签名",
+  !fallbackHeaders.yy && !fallbackHeaders["x-signature"],
+  JSON.stringify(Object.keys(fallbackHeaders)),
+);
 
 /* ------------------------------------------------------------------ *
- * 三、判定
+ * 四、判定
  * ------------------------------------------------------------------ */
 
 await import("../lib/kinds/index.ts");

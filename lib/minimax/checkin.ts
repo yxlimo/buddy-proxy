@@ -103,11 +103,16 @@ export function buildRequest(
   // 有的接口带真请求体（积分那条要 workspace_id），而签名把请求体算进去，
   // 所以请求体得由调用方给，不能一律写 "{}"。
   payload?: string,
+  // 有的接口要自己的查询参数（积分明细那条要 page_size），而这些参数也进签名，
+  // 所以必须在这里并进 url，不能在调用方拼在 path 上——下面的 url.search
+  // 会把 path 里带的查询串整个覆盖掉
+  query?: Record<string, string>,
 ): { url: string; body?: string; headers: Record<string, string> } {
   const origin = publicGatewayOrigin(region);
   const url = new URL(`${origin}${path}`);
   const language = region === "en" ? "en" : "zh";
   url.search = new URLSearchParams({
+    ...(query ?? {}),
     device_platform: "web",
     biz_id: "3",
     app_id: "3001",
