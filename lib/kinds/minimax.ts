@@ -22,6 +22,7 @@ import { credentialStatus as minimaxCredentialStatus } from "../minimax/auth.ts"
 import { refreshSession as refreshMiniMaxSession } from "../minimax/oauth.ts";
 import { runMiniMaxBenefits } from "../minimax/checkin.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
+import { isLotExpired } from "../minimax/points.ts";
 import { MINIMAX_UPSTREAM } from "../minimax/transport.ts";
 import { miniMaxApiTenants, MINIMAX_API_MODELS, miniMaxApiBase } from "../minimax/api.ts";
 
@@ -54,7 +55,11 @@ function apiKeyCredential(keys: string[], detail: string): CredentialView {
 function minimaxQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
   const balance = snapshot.minimax?.[provider.id]?.balance as any;
   const plan = minimaxTokenPlan(provider, snapshot);
-  const lots = (snapshot.minimax?.[provider.id]?.credits ?? []) as any[];
+  // 过期的不算：路由的判定（pointsFromLedger）跳过它们，面板也得跳过 ——
+  // 不然同一个账号「面板有积分、路由判没钱」，两边说的不是一回事。
+  const lots = ((snapshot.minimax?.[provider.id]?.credits ?? []) as any[]).filter(
+    (lot: any) => !isLotExpired(Number(lot?.expireAtMs ?? 0)),
+  );
   if (!balance && !plan && !lots.length) return [];
   // 积分：签到给的那种。账户余额（query_balance）说的是平台上的钱，Code
   // 账号上是零 —— 积分在明细里。
@@ -76,7 +81,7 @@ function minimaxQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaVi
           expiresAt: Number(lot?.expireAtMs ?? 0),
           status: Number(lot?.remaining ?? 0) > 0 ? "有效" : "已用完",
         })),
-        note: "签到给的积分，30 天有效",
+        note: "签到给的积分，30 天有效（只算未过期的）",
       },
       ...(plan ? { tokenPlan: plan } : {}),
     },

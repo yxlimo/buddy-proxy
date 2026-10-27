@@ -183,6 +183,16 @@ export interface CreditLot {
 }
 
 /**
+ * 这一笔积分是不是已经过期了。
+ *
+ * 面板的明细与路由的判定必须用同一把尺子：面板说有积分、路由说没钱，说的
+ * 就不该是两件事。过期的积分不能算 —— 平台不会拿它付账。
+ */
+export function isLotExpired(expireAtMs: number, now = Date.now()): boolean {
+  return expireAtMs > 0 && expireAtMs <= now;
+}
+
+/**
  * The points left in a ledger, or null when the ledger was not read.
  *
  * The platform's own answer includes lots that have already run out, so the
@@ -195,7 +205,7 @@ export function pointsFromLedger(lots: CreditLot[] | null): number | null {
   const now = Date.now();
   let total = 0;
   for (const lot of lots) {
-    if (lot.expireAtMs > 0 && lot.expireAtMs <= now) continue;
+    if (isLotExpired(lot.expireAtMs, now)) continue;
     total += lot.remaining;
   }
   return total;

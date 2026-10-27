@@ -19,6 +19,7 @@ import { LimitError } from "../qoder/transport.ts";
 import { PLATFORMS, platformOf } from "../platforms.ts";
 import { accountsOfPlatform, type ProviderRow } from "../providers.ts";
 import { cooldownUntil, isCoolingDown, unavailableCooldownMs } from "../cooldown.ts";
+import { upstreamStatusOf } from "../upstream-status.ts";
 import { planWindowEndsAt } from "./account-cooldown.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { recordAggregateUsage } from "../aggregate.ts";
@@ -205,6 +206,9 @@ async function handleAggregate(
   // it to say which target takes over.
   const ordered = byWeight(candidates);
 
+  // 试过的失败，按尝试的先后记着：给客户端看哪一个由它们决定，不由最后一个决定。
+  const failures: unknown[] = [];
+
   try {
     await select({
       strategy: entry.strategy,
@@ -216,6 +220,8 @@ async function handleAggregate(
         // The answer had already started: there is nothing to fall back to.
         const stopped = error instanceof SelectionStop;
         const reason = stopped ? error.reason : error;
+        // 答复已经开始的那个错不参与挑选：那时已经没有选择了。
+        if (!stopped) failures.push(reason);
         const at = ordered.findIndex((c) => c.id === candidate.id);
         const next = ordered[at + 1];
         console.log(
@@ -227,14 +233,63 @@ async function handleAggregate(
                 : "no target left"),
         );
       },
-      failure: (lastError) =>
-        lastError instanceof Error
-          ? lastError
-          : new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502),
+      failure: (lastError) => {
+        // 最后一个失败说了算是不对的：前面那个可能是「这个账号没额度」，最后
+        // 那个是「这个上游没有这个模型」—— 客户端拿到后者就会去改模型名，而
+        // 真正该做的是等额度恢复。所以挑最有说明力的那个。
+        const best = pickMostInformativeFailure(failures);
+        if (best) return best;
+        if (lastError instanceof Error) return lastError;
+        return new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502);
+      },
     });
   } catch (e) {
     sendError(ctx, e);
   }
+}
+
+/**
+ * 几个失败里挑一个给客户端看。
+ *
+ * 排法（先看客户端能不能据此行动，再看是不是上游自己的问题）：
+ *
+ *   1. 503 / 402：额度用尽、冷却、凭据被拒 —— 客户端等一会儿就能重试。
+ *   2. 别的 5xx：上游自己挂了。
+ *   3. 4xx：请求本身的问题 —— 换一个 target 也是这个错。
+ *   4. 说不清的：垫底。
+ *
+ * 同一档里取第一个：先试的那个 target 更接近用户真正问的那个模型。
+ */
+function pickMostInformativeFailure(failures: unknown[]): Error | undefined {
+  let best: Error | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const failure of failures) {
+    if (!(failure instanceof Error)) continue;
+    const rank = failureRank(failure);
+    if (rank >= bestRank) continue;
+    best = failure;
+    bestRank = rank;
+  }
+  return best;
+}
+
+/** 这个失败有多说明力：数字越小越说明力强。 */
+function failureRank(failure: unknown): number {
+  const status = clientStatusOf(failure);
+  if (status === 503 || status === 402) return 0;
+  if (status !== null && status >= 500) return 1;
+  if (status !== null && status >= 400) return 2;
+  return 3;
+}
+
+/** 客户端会看到的状态码：这个错写出去的时候是什么状态，就是什么。 */
+function clientStatusOf(failure: unknown): number | null {
+  // 上游在排队：客户端看到的是 503（等一会儿就好），不是上游的 429。
+  if (failure instanceof LimitError) return 503;
+  if (!failure || typeof failure !== "object") return null;
+  const status = Number((failure as { status?: unknown }).status);
+  if (Number.isFinite(status) && status > 0) return status;
+  return upstreamStatusOf(failure);
 }
 
 /**
