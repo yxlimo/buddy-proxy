@@ -21,7 +21,7 @@ import { legacyChatCompletion, readLegacyFrames } from "../../qoder/legacy.ts";
 import { deliverJson, deliverOpenAIChunks, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { platformOf } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, underPolicy } from "./policy.ts";
+import { type UpstreamContext, settlement, underPolicy } from "./policy.ts";
 
 /**
  * The thinking level a request asks for.
@@ -74,20 +74,42 @@ export async function toQoder(
   // caller asked for; the gateway ignores it and cuts the answer at the
   // model's real limit.
   openaiBody.max_tokens = QODER_CLIENT_MAX_TOKENS;
-  const upstream = await underPolicy(route.platform, "qoder", (account) =>
-    qoderWithRetry(
-      () => qoderChatCompletion(openaiBody, { stream, providerId: account.id, region }),
-      ctx.qoderMaxAttempts,
-    ),
+  // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
+  const settle = settlement();
+  const upstream = await underPolicy(
+    route.platform,
+    "qoder",
+    (account) =>
+      qoderWithRetry(
+        () => qoderChatCompletion(openaiBody, { stream, providerId: account.id, region }),
+        ctx.qoderMaxAttempts,
+      ),
+    settle,
   );
 
   if (!stream) {
     const json = await upstream.json();
     deliverJson(out, dialect, "openai", json, route.label ?? upstreamModel(route), ctx.onUsage);
+    settle.success();
     return;
   }
 
-  await deliverOpenAIStream(out, upstream.body!, dialect, route.label ?? upstreamModel(route), undefined, ctx.onUsage);
+  try {
+    await deliverOpenAIStream(
+      out,
+      upstream.body!,
+      dialect,
+      route.label ?? upstreamModel(route),
+      undefined,
+      ctx.onUsage,
+      (e) => settle.failure(e),
+    );
+    settle.success();
+  } catch (e) {
+    // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
+    settle.failure(e);
+    throw e;
+  }
 }
 
 /**
@@ -109,36 +131,55 @@ export async function toQoderLegacy(
   label?: string,
   platform = "qoder",
 ): Promise<void> {
-  const chunks = await underPolicy(platform, "qoder", async (account) =>
-    legacyWithRetry(
-      () =>
-        legacyChatCompletion(
-          {
-            messages: Array.isArray(openaiBody.messages) ? openaiBody.messages : [],
-            tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
-            modelKey: model.key,
-            displayName: model.name,
-            // The same number the simulated client sends.
-            maxTokens: QODER_CLIENT_MAX_TOKENS,
-            reasoning: model.reasoning,
-            contextWindow: model.context,
-          },
-          { providerId: account.id, region },
-        ),
-      ctx.legacyMaxAttempts,
-      ctx.legacyRetryMs,
-    ),
+  const settle = settlement();
+  const chunks = await underPolicy(
+    platform,
+    "qoder",
+    async (account) =>
+      legacyWithRetry(
+        () =>
+          legacyChatCompletion(
+            {
+              messages: Array.isArray(openaiBody.messages) ? openaiBody.messages : [],
+              tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
+              modelKey: model.key,
+              displayName: model.name,
+              // The same number the simulated client sends.
+              maxTokens: QODER_CLIENT_MAX_TOKENS,
+              reasoning: model.reasoning,
+              contextWindow: model.context,
+            },
+            { providerId: account.id, region },
+          ),
+        ctx.legacyMaxAttempts,
+        ctx.legacyRetryMs,
+      ),
+    settle,
   );
 
   if (!stream) {
     // The legacy protocol has no non-streaming answer, so the chunks are
     // collected and reassembled into one completion.
-    const completion = await collectOpenAIChunks(chunks, model.id);
+    let completion: Json;
+    try {
+      completion = await collectOpenAIChunks(chunks, model.id);
+    } catch (e) {
+      // 帧读到一半断了：那是上游的失败，账号要记冷却。
+      settle.failure(e);
+      throw e;
+    }
     deliverJson(out, dialect, "openai", completion, label ?? model.id, ctx.onUsage);
+    settle.success();
     return;
   }
 
-  await deliverOpenAIChunks(out, chunks, dialect, label ?? model.id, ctx.onUsage);
+  try {
+    await deliverOpenAIChunks(out, chunks, dialect, label ?? model.id, ctx.onUsage, (e) => settle.failure(e));
+    settle.success();
+  } catch (e) {
+    settle.failure(e);
+    throw e;
+  }
 }
 
 export function legacyError(error: { code?: string; message?: string; status?: number }): AuthError {

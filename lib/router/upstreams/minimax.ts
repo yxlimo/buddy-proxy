@@ -22,7 +22,7 @@ import { withBusinessCode, withCooldownUntil, withUpstreamStatus, retryAfterMs }
 import { accountsOfPlatform } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { platformWithoutAccount, upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, accountFailure, keepUpstreamTruth, underPolicy } from "./policy.ts";
+import { type UpstreamContext, accountFailure, keepUpstreamTruth, settlement, underPolicy } from "./policy.ts";
 
 /** The output limit of a MiniMax model, as its own catalog says. */
 function minimaxMaxOutput(model: string): number {
@@ -49,15 +49,23 @@ export async function toMinimax(
   anthropicBody.stream = stream;
 
   let r: Response;
+  // 流式答复是在这里返回之后才消费的：冷却由调用方在流结束时结算，
+  // 「响应头到了」不算成功。
+  const settle = settlement();
   try {
-    r = await underPolicy(route.platform, "minimax", async (account) => {
-      const res = await minimaxChat(anthropicBody, account.id);
-      if (res.ok) return res;
-      // 平台的拒绝必须在策略里抛出来：策略只看得见异常，看不见 Response。
-      // 早先这里把 !ok 的判断放在 underPolicy 外面，429/402 就永远落不到
-      // 降级上 —— 账号被限了也不知道换下一个。
-      throw await minimaxRejection(res);
-    });
+    r = await underPolicy(
+      route.platform,
+      "minimax",
+      async (account) => {
+        const res = await minimaxChat(anthropicBody, account.id);
+        if (res.ok) return res;
+        // 平台的拒绝必须在策略里抛出来：策略只看得见异常，看不见 Response。
+        // 早先这里把 !ok 的判断放在 underPolicy 外面，429/402 就永远落不到
+        // 降级上 —— 账号被限了也不知道换下一个。
+        throw await minimaxRejection(res);
+      },
+      settle,
+    );
   } catch (e) {
     // 换掉错误对象会把上游自己的状态与业务码丢掉，日志与分类器就看不出
     // 真实发生了什么。
@@ -68,10 +76,26 @@ export async function toMinimax(
   if (!stream) {
     const json = await r.json();
     deliverJson(out, dialect, "anthropic", json, route.label ?? upstreamModel(route), ctx.onUsage);
+    settle.success();
     return;
   }
 
-  await deliverAnthropicStream(out, r.body!, dialect, route.label ?? upstreamModel(route), PING_MS, ctx.onUsage);
+  try {
+    await deliverAnthropicStream(
+      out,
+      r.body!,
+      dialect,
+      route.label ?? upstreamModel(route),
+      PING_MS,
+      ctx.onUsage,
+      (e) => settle.failure(e),
+    );
+    settle.success();
+  } catch (e) {
+    // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
+    settle.failure(e);
+    throw e;
+  }
 }
 
 

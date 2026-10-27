@@ -10,7 +10,7 @@ import { senseNovaChat } from "../../sensenova/transport.ts";
 import { internAiChat } from "../../intern-ai/transport.ts";
 import { deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, upstreamStatusError, underPolicy } from "./policy.ts";
+import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
 
 /**
  * 开放平台的推理（OpenAI 方言）。
@@ -47,21 +47,44 @@ export async function toOpenAiPlatform(
     console.log(`[ROUTE] ${opts.log} model=${route.model} stream=${stream}`);
   }
 
-  const response = await underPolicy(route.platform, opts.log, (account) =>
-    opts.chat(openaiBody, ctx.clientHeaders, account.id),
+  // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
+  const settle = settlement();
+  const response = await underPolicy(
+    route.platform,
+    opts.log,
+    (account) => opts.chat(openaiBody, ctx.clientHeaders, account.id),
+    settle,
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw upstreamStatusError(response.status, text, opts.what);
+    const error = upstreamStatusError(response.status, text, opts.what);
+    // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。
+    settle.failure(error);
+    throw error;
   }
 
   if (!stream) {
     const json = await response.json();
     deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+    settle.success();
     return;
   }
 
-  await deliverOpenAIStream(out, response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
+  try {
+    await deliverOpenAIStream(
+      out,
+      response.body!,
+      dialect,
+      route.label ?? model,
+      undefined,
+      ctx.onUsage,
+      (e) => settle.failure(e),
+    );
+    settle.success();
+  } catch (e) {
+    settle.failure(e);
+    throw e;
+  }
 }
 
 /**

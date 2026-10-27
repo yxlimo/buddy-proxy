@@ -239,6 +239,74 @@ function errorText(error: unknown): string {
 }
 
 /**
+ * 一次调用的结算：成功就清冷却，失败就按失败记冷却。
+ *
+ * 流式答复在 underPolicy 返回之后才消费，所以「响应头到了」不能算成功：
+ * SSE 中途断了的答复，那个账号是要记冷却的，而且原来那行冷却不能被清掉。
+ * 传了这个句柄的调用方，自己负责在流结束（或失败）时结算。
+ */
+export interface Settlement {
+  /** 这次调用成功：清掉那个账号的冷却。 */
+  success(): void;
+  /** 这次调用失败：按失败给那个账号记冷却。 */
+  failure(error: unknown): void;
+  /**
+   * 内部用：把这次真正服务的账号绑上来。
+   *
+   * 只有 run() 成功的那一次会绑 —— 失败的那个账号已经由策略记过冷却了。
+   */
+  bind(accountId: string, what: string): void;
+}
+
+/**
+ * 一个空着的结算句柄，等 underPolicy 告诉它这次是哪个账号服务的。
+ *
+ * 惰性：句柄本身什么也不做，绑上账号之后才知道清哪一个的冷却。
+ * 结算只算一次：失败之后再来的 success() 不算（流断了就是断了，不能因为
+ * 「答复写完了」就把冷却清掉）。
+ */
+export function settlement(): Settlement {
+  let accountId: string | null = null;
+  let what = "";
+  let settled = false;
+  return {
+    bind(id: string, label: string): void {
+      if (settled) return;
+      accountId = id;
+      what = label;
+    },
+    success(): void {
+      if (settled || !accountId) return;
+      settled = true;
+      // 记账失败不许影响请求：冷却写不下去，也不能让已经成功的答复变成 500。
+      try {
+        clearCooldown(accountId);
+      } catch (e) {
+        console.warn(`[ROUTE] ${what} account=${accountId} cannot clear its cooldown: ${errorText(e)}`);
+      }
+    },
+    failure(error: unknown): void {
+      if (settled || !accountId) return;
+      settled = true;
+      // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
+      const decision = cooldownForFailure(accountId, error);
+      if (decision) {
+        try {
+          setCooldown(accountId, decision.untilMs, decision.reason);
+        } catch (e) {
+          // 记账失败不许顶掉上游真正的错误。
+          console.warn(`[ROUTE] ${what} account=${accountId} cannot record its cooldown: ${errorText(e)}`);
+        }
+      }
+      console.log(
+        `[ROUTE] ${what} account=${accountId} cannot serve it (${describeUpstreamError(error)})` +
+          (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : ", not cooling down"),
+      );
+    },
+  };
+}
+
+/**
  * Run one upstream call on one of the platform's accounts, under its policy.
  *
  * `single` uses the first account that is on and never moves; `fallback` hands
@@ -248,11 +316,16 @@ function errorText(error: unknown): string {
  *
  * `expiry_first` is the relay station's alone: its order comes from the
  * wallet, so it has its own adapter (toTokenRhythm) and never reaches here.
+ *
+ * `settle` is for the callers that consume the answer after this returns (the
+ * streaming ones): the headers arriving is not the answer arriving, so the
+ * cooldown of the account that served it is settled by the caller.
  */
 export async function underPolicy<T>(
   platform: string,
   what: string,
   run: (account: ProviderRow) => Promise<T>,
+  settle?: Settlement,
 ): Promise<T> {
   const accounts = accountsOfPlatform(platform);
   const serving = servingAccounts(platform);
@@ -316,7 +389,12 @@ export async function underPolicy<T>(
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {
       if (!error) {
-        // 答复已经成功：冷却没有理由留着。
+        // 答复已经成功：冷却没有理由留着 —— 除非调用方自己结算（流式答复
+        // 在这里返回之后才消费，「响应头到了」不算成功）。
+        if (settle) {
+          settle.bind(candidate.id, what);
+          return;
+        }
         // 记账失败不许影响请求 —— 冷却写不下去，也不能让已经成功的答复变成 500。
         try {
           clearCooldown(candidate.id);

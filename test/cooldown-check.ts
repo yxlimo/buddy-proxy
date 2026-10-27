@@ -56,6 +56,8 @@ function check(name: string, ok: boolean, detail = ""): void {
 interface Plan {
   status: number;
   body: unknown;
+  /** 流式答复：写完第一帧就断（socket destroy），模拟中途断流。 */
+  breakStream?: boolean;
 }
 
 let plans: Record<string, Plan> = {};
@@ -107,6 +109,26 @@ function broken(): Plan {
   };
 }
 
+/** 一个流式答复的几帧（Anthropic 方言）。 */
+function sseFrames(): string {
+  return (
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",' +
+    '"role":"assistant","model":"minimax-m3.1-flash","content":[],"usage":{"input_tokens":3,"output_tokens":0}}}\n\n' +
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,' +
+    '"delta":{"type":"text_delta","text":"ok"}}\n\n' +
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n' +
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},' +
+    '"usage":{"output_tokens":2}}\n\n' +
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+  );
+}
+
+/** 那一帧（第一个事件）—— 断流就是断在它后面。 */
+function firstFrame(): string {
+  const frames = sseFrames();
+  return frames.slice(0, frames.indexOf("\n\n") + 2);
+}
+
 const upstream = http.createServer((req, res) => {
   const chunks: Buffer[] = [];
   req.on("data", (c: Buffer) => chunks.push(c));
@@ -124,6 +146,26 @@ const upstream = http.createServer((req, res) => {
     if (!plan) {
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: `没有这个账号：${who}` } }));
+      return;
+    }
+    // 流式请求答的是帧，不是整块 JSON。
+    const raw = Buffer.concat(chunks).toString("utf8");
+    let wantsStream = false;
+    try {
+      wantsStream = JSON.parse(raw || "{}")?.stream === true;
+    } catch {
+      /* 不是 JSON */
+    }
+    if (wantsStream) {
+      res.writeHead(plan.status, { "content-type": "text/event-stream; charset=utf-8" });
+      if (plan.breakStream) {
+        // 写完第一帧就断：客户端看到的是「有头有第一帧，然后断了」。
+        res.write(firstFrame(), () => {
+          setTimeout(() => res.socket?.destroy(), 20);
+        });
+        return;
+      }
+      res.end(sseFrames());
       return;
     }
     res.writeHead(plan.status, { "content-type": "application/json" });
@@ -297,6 +339,21 @@ async function chat(gw: Gateway): Promise<{ status: number; text: string }> {
       model: MODEL,
       max_tokens: 32,
       stream: false,
+      messages: [{ role: "user", content: "say ok" }],
+    }),
+  });
+  return { status: res.status, text: await res.text() };
+}
+
+/** 发一个流式的 anthropic 请求。 */
+async function chatStream(gw: Gateway): Promise<{ status: number; text: string }> {
+  const res = await fetch(`${gw.base}/minimax/v1/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": "public" },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 32,
+      stream: true,
       messages: [{ role: "user", content: "say ok" }],
     }),
   });
@@ -499,8 +556,79 @@ console.log("场景五：单一策略 —— 冷却的时候直接说，不去�
 }
 
 console.log("");
-console.log("算法：冷却的三条规矩");
+console.log("场景六：流式答复 —— 流完了才算成功，中途断了要记冷却");
 
+{
+  // 6a：流正常结束 → 冷却被清掉（成功才清）。
+  plans = { 1: { status: 200, body: {} }, 2: { status: 200, body: {} } };
+  calls.length = 0;
+
+  const gw = await startGateway();
+  try {
+    await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
+    // 一行已经过了期的冷却：流成功一次就该没了。
+    writeCooldown(gw.dataDir, gw.accounts[0], Date.now() - 1000, "test");
+    const answered = await chatStream(gw);
+    check(
+      "流正常结束：客户端拿到了答复",
+      answered.status === 200 && answered.text.includes("message_stop"),
+      `${answered.status} ${answered.text.slice(0, 200)}`,
+    );
+    check(
+      "流正常结束：冷却那一行没了",
+      cooldownRow(gw.dataDir, gw.accounts[0]) === null,
+      "还在",
+    );
+
+    // 6c：非流式那条路没变（成功清冷却）。
+    writeCooldown(gw.dataDir, gw.accounts[0], Date.now() - 1000, "test");
+    const plain = await chat(gw);
+    check(
+      "非流式：成功还是清掉冷却",
+      plain.status === 200 && cooldownRow(gw.dataDir, gw.accounts[0]) === null,
+      `${plain.status} ${plain.text.slice(0, 200)}`,
+    );
+  } finally {
+    gw.stop();
+    fs.rmSync(gw.dataDir, { recursive: true, force: true });
+  }
+}
+
+{
+  // 6b：流在第一帧之后断了 → 那个账号要记冷却，而且原来那行冷却不能被清掉。
+  plans = { 1: { status: 200, body: {}, breakStream: true }, 2: { status: 200, body: {} } };
+  calls.length = 0;
+
+  const gw = await startGateway();
+  try {
+    await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
+    // 一行已经过了期的冷却：断流不能把它清掉。
+    writeCooldown(gw.dataDir, gw.accounts[0], Date.now() - 1000, "test");
+    const answered = await chatStream(gw);
+    check(
+      "断流：客户端看到的是错误事件",
+      answered.text.includes("error"),
+      `${answered.status} ${answered.text.slice(0, 300)}`,
+    );
+    const row = cooldownRow(gw.dataDir, gw.accounts[0]);
+    check(
+      "断流：那个账号记了冷却，理由看得出是失败",
+      row !== null && row.reason === "connection",
+      JSON.stringify(row),
+    );
+    check(
+      "断流：日志里看得见冷却",
+      /cooling down until/.test(gw.log()),
+      gw.log().slice(-600),
+    );
+  } finally {
+    gw.stop();
+    fs.rmSync(gw.dataDir, { recursive: true, force: true });
+  }
+}
+
+console.log("");
+console.log("算法：冷却的三条规矩");
 {
   const { setCooldown, cooldownUntil } = await import("../lib/cooldown.ts");
   const { cooldownForFailure, planWindowEndsAt } = await import("../lib/router/account-cooldown.ts");

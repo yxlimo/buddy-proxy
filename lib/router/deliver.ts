@@ -166,6 +166,11 @@ async function* watchFinish(
  * upstream frame can be malformed — Qoder's last frame carries a raw newline
  * inside a string — and a client that cannot parse it loses the finish reason
  * and the usage with it.
+ *
+ * `onFailure` is called when the upstream stream breaks. The client gets an
+ * error event either way; the caller is told too, because a stream that broke
+ * is a failed call — the account is the one to blame, and the caller settles
+ * it (see lib/router/upstreams/policy.ts).
  */
 export async function deliverOpenAIStream(
   ctx: Koa.Context,
@@ -174,13 +179,14 @@ export async function deliverOpenAIStream(
   model: string,
   onFinish?: (reason: string) => void,
   onUsage?: (usage: any) => void,
+  onFailure?: (error: unknown) => void,
 ): Promise<void> {
   const upstream = await peekStream(body);
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
   sseHead(ctx);
   if (dialect === "openai") {
-    await pipeOpenAIChunks(upstream, ctx, onFinish, onUsage, model);
+    await pipeOpenAIChunks(upstream, ctx, onFinish, onUsage, model, onFailure);
     return;
   }
   try {
@@ -190,6 +196,7 @@ export async function deliverOpenAIStream(
   } catch (e) {
     // The headers are already out, so the failure goes back as an error event.
     writeSafe(ctx, errorEvent((e as Error)?.message));
+    reportFailure(onFailure, e);
   }
   ctx.res.end();
 }
@@ -202,6 +209,7 @@ export async function deliverAnthropicStream(
   model: string,
   pingMs = 0,
   onUsage?: (usage: any) => void,
+  onFailure?: (error: unknown) => void,
 ): Promise<void> {
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
@@ -226,7 +234,7 @@ export async function deliverAnthropicStream(
         // The usage is a nice-to-have; the answer itself is what matters.
       }
     })();
-    await writeAnthropicFrames(toClient, ctx, model, pingMs);
+    await writeAnthropicFrames(toClient, ctx, model, pingMs, onFailure);
     return;
   }
   try {
@@ -235,8 +243,24 @@ export async function deliverAnthropicStream(
     }
   } catch (e) {
     writeSafe(ctx, errorEvent((e as Error)?.message));
+    reportFailure(onFailure, e);
   }
   ctx.res.end();
+}
+
+/**
+ * Tell the caller the upstream stream broke.
+ *
+ * The bookkeeping (the cooldown) must not turn a failed answer into another
+ * failure: if the callback throws, the error is swallowed here.
+ */
+function reportFailure(onFailure: ((error: unknown) => void) | undefined, error: unknown): void {
+  if (!onFailure) return;
+  try {
+    onFailure(error);
+  } catch {
+    /* 记账失败不许影响答复 */
+  }
 }
 
 /** A stream of OpenAI chunks that are already parsed (the legacy protocol). */
@@ -246,6 +270,7 @@ export async function deliverOpenAIChunks(
   dialect: Dialect,
   model: string,
   onUsage?: (usage: any) => void,
+  onFailure?: (error: unknown) => void,
 ): Promise<void> {
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
@@ -260,6 +285,7 @@ export async function deliverOpenAIChunks(
       writeSafe(ctx, SSE_DONE);
     } catch (e) {
       writeSafe(ctx, errorEvent((e as Error)?.message));
+      reportFailure(onFailure, e);
     }
     ctx.res.end();
     return;
@@ -270,6 +296,7 @@ export async function deliverOpenAIChunks(
     }
   } catch (e) {
     writeSafe(ctx, errorEvent((e as Error)?.message));
+    reportFailure(onFailure, e);
   }
   ctx.res.end();
 }
@@ -285,6 +312,7 @@ async function pipeOpenAIChunks(
   onFinish?: (reason: string) => void,
   onUsage?: (usage: any) => void,
   model?: string,
+  onFailure?: (error: unknown) => void,
 ): Promise<void> {
   try {
     for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish, onUsage)) {
@@ -295,6 +323,7 @@ async function pipeOpenAIChunks(
   } catch (e) {
     writeSafe(ctx, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
     writeSafe(ctx, SSE_DONE);
+    reportFailure(onFailure, e);
   } finally {
     // The response has to end, or the client waits for a connection that never
     // closes.
@@ -326,6 +355,7 @@ async function writeAnthropicFrames(
   ctx: Koa.Context,
   model: string,
   pingMs = 0,
+  onFailure?: (error: unknown) => void,
 ): Promise<void> {
   let lastActivity = Date.now();
   const writePing = () => {
@@ -352,6 +382,7 @@ async function writeAnthropicFrames(
     }
   } catch (e) {
     writeSafe(ctx, errorEvent((e as Error)?.message));
+    reportFailure(onFailure, e);
   } finally {
     if (pingTimer) clearInterval(pingTimer);
     ctx.res.end();

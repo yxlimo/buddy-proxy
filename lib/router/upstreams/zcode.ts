@@ -7,7 +7,7 @@ import { zcodeChat } from "../../zcode/transport.ts";
 import { zcodeMaxOutput } from "../../zcode/models.ts";
 import { deliverAnthropicStream, deliverJson, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, upstreamStatusError, underPolicy } from "./policy.ts";
+import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
 
 /**
  * ZCode（智谱）。
@@ -36,22 +36,46 @@ export async function toZcode(
   // upstream expects. The same client session always maps to the same id.
   const sessionId = upstreamSessionId(route.platform, ctx.clientSessionId ?? "");
 
-  const { response } = await underPolicy(route.platform, "zcode", (account) =>
-    zcodeChat(anthropicBody, {
-      effort: effortOf(body),
-      providerId: account.id,
-      sessionId,
-    }),
+  // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
+  const settle = settlement();
+  const { response } = await underPolicy(
+    route.platform,
+    "zcode",
+    (account) =>
+      zcodeChat(anthropicBody, {
+        effort: effortOf(body),
+        providerId: account.id,
+        sessionId,
+      }),
+    settle,
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw upstreamStatusError(response.status, text, "ZCode ");
+    const error = upstreamStatusError(response.status, text, "ZCode ");
+    // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。
+    settle.failure(error);
+    throw error;
   }
 
   if (!stream) {
     const json = await response.json();
     deliverJson(out, dialect, "anthropic", json, route.label ?? model, ctx.onUsage);
+    settle.success();
     return;
   }
-  await deliverAnthropicStream(out, response.body!, dialect, route.label ?? model, 0, ctx.onUsage);
+  try {
+    await deliverAnthropicStream(
+      out,
+      response.body!,
+      dialect,
+      route.label ?? model,
+      0,
+      ctx.onUsage,
+      (e) => settle.failure(e),
+    );
+    settle.success();
+  } catch (e) {
+    settle.failure(e);
+    throw e;
+  }
 }
