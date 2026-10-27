@@ -67,7 +67,7 @@ const setPolicy = (policy: string): void => {
   setPlatformPolicy("minimax-api", policy as never);
 };
 
-const { toMiniMaxApi } = await import("../lib/router/upstreams.ts");
+const { toMiniMaxApi } = await import("../lib/router/upstreams/index.ts");
 
 const ctx: any = {
   legacyMaxAttempts: 1,

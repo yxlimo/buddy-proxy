@@ -175,7 +175,7 @@ function makeAccount(n: number): string {
 makeAccount(1);
 makeAccount(2);
 
-const { toTokenRhythm } = await import("../lib/router/upstreams.ts");
+const { toTokenRhythm } = await import("../lib/router/upstreams/index.ts");
 const { resetTokenRhythmStatusCache } = await import("../lib/tokenrhythm/wallet.ts");
 const { setPlatformPolicy } = await import("../lib/platforms.ts");
 

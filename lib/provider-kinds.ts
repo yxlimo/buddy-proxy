@@ -9,7 +9,7 @@
 // one of that kind it is; the registry says how to talk to that kind.
 //
 // What is NOT here: the call to the upstream. That lives with the transport it
-// belongs to (lib/router/upstreams.ts) — one dispatch, not one per question.
+// belongs to (lib/router/upstreams/) — one dispatch, not one per question.
 
 import type Koa from "koa";
 import { CredentialState } from "./gen/buddy/admin/v1/admin_pb.ts";
@@ -18,8 +18,8 @@ import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import type { CatalogModel } from "./router/catalog.ts";
 import type { Dialect } from "./router/deliver.ts";
 import type { Route } from "./router/routes.ts";
-// 只为 `dispatch` 的参数类型：upstreams.ts 从这边取 kindOf，值上不互相引用。
-import type { UpstreamContext } from "./router/upstreams.ts";
+// 只为 `dispatch` 的参数类型：upstreams/tokenrhythm.ts 从这边取 kindOf，值上不互相引用。
+import type { UpstreamContext } from "./router/upstreams/index.ts";
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code";
 
@@ -220,7 +220,7 @@ export interface ProviderKind {
    * 这一类上游怎么转发。没有它就说明这个种类还没接。
    *
    * 请求怎么发出去、答案怎么写回客户端，是转发那一条路的事
-   * （lib/router/upstreams.ts）。写在种类里，接一个种类就是登记一次，
+   * （lib/router/upstreams/）。写在种类里，接一个种类就是登记一次，
    * 而不是在 `router-proxy.ts` 的 switch 里再加一个 case。
    */
   dispatch?(

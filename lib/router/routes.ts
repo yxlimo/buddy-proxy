@@ -8,7 +8,7 @@
 //
 // The prefix is the platform's id, not its kind: the two Qoder regions are two
 // platforms, each with its own path. Which account of the platform pays for
-// the request is the platform policy's business (lib/router/upstreams.ts).
+// the request is the platform policy's business (lib/router/upstreams/).
 
 import { AuthError } from "../credential.ts";
 import { matchZcodeModel } from "../zcode/models.ts";

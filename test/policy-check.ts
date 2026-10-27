@@ -29,7 +29,7 @@ const {
   selectProvider,
 } = await import("../lib/router/provider-selection.ts");
 const { withBusinessCode, withUpstreamStatus } = await import("../lib/upstream-status.ts");
-const { tokenRhythmAccounts } = await import("../lib/router/upstreams.ts");
+const { tokenRhythmAccounts } = await import("../lib/router/upstreams/index.ts");
 
 let pass = 0;
 let fail = 0;

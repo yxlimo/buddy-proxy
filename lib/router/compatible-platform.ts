@@ -21,7 +21,7 @@ import type { CatalogModel } from "../catalog-models.ts";
 import type { Dialect } from "./deliver.ts";
 import type { Route } from "./routes.ts";
 import { openAiPlatformChat } from "./openai-platform.ts";
-import { toOpenAiPlatform, type UpstreamContext } from "./upstreams.ts";
+import { toOpenAiPlatform, type UpstreamContext } from "./upstreams/index.ts";
 
 /** 一个「OpenAI 方言、key 鉴权、原样透传」的平台。 */
 export interface CompatiblePlatform {

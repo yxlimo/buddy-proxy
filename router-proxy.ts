@@ -65,7 +65,7 @@ import {
   toSenseNova,
   toInternAi,
   type UpstreamContext,
-} from "./lib/router/upstreams.ts";
+} from "./lib/router/upstreams/index.ts";
 import {
   routeInGroup,
   type Route,
