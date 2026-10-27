@@ -16,7 +16,7 @@
 
 import { configString, configNumber } from "../config.ts";
 import { cliFetch } from "../http.ts";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { uuidv7, uuidv7Hex } from "../ids.ts";
 import { AuthError, authLog, tokenFingerprint } from "../credential.ts";
 import type { Credential } from "../credential.ts";
@@ -63,13 +63,11 @@ const AUTH_PLATFORM = configString("WORKBUDDY_AUTH_PLATFORM", "workbuddy");
 /**
  * The version the identity headers claim to be.
  *
- * The identity is the command line client's, so the version is the client's
- * own — the version of the `@tencent-ai/codebuddy-code` package, not the
- * version of the desktop app that ships it. A request the simulated client
- * made carried `CLI/2.161.0 WorkBuddy/2.161.0` and `X-IDE-Version: 2.161.0`.
+ * The version a request reports is the desktop app's: the client's VLM gateway
+ * rewrites the CLI's version header to `app.getVersion()` before the request
+ * leaves the machine, and that is what the upstream sees.
  */
-const CLI_VERSION = configString("WORKBUDDY_CLI_VERSION", "2.161.0");
-/** The version of the desktop app, for the calls that carry it. */
+/** The version of the desktop app — the one the upstream sees. */
 const DESKTOP_VERSION_CN = configString("WORKBUDDY_VERSION", "5.8.3");
 
 const REFRESH_BUFFER_MS = configNumber("WORKBUDDY_REFRESH_BUFFER_MS", 24 * 3600 * 1000);
@@ -86,6 +84,8 @@ export interface WorkBuddySession {
   nickname: string;
   /** The domain this account belongs to; also the host we talk to. */
   domain: string;
+  /** 企业账号才有；个人账号没有这一段。 */
+  enterpriseId?: string;
   region: WorkBuddyRegion;
   generation: number;
   expiresAtMs: number;
@@ -606,64 +606,102 @@ export function accountHeaders(
 }
 
 /**
- * The identity the official CLI sends with a chat request.
+ * The headers a chat request carries.
  *
- * Everything here was taken from a request the simulated client actually made
- * (the Linux 5.6.2 and the Windows 5.8.3 builds send the same shape, only the
- * version differs). The headers that the simulated client does not send are not sent
- * here either.
+ * This is the DESK set, not the CLI set: the official client's VLM gateway
+ * rebuilds the identity before the request leaves the machine
+ * (`buildVlmGatewayHeaders` + `applyGatewayHeaders` in main/server.js), and
+ * what the upstream sees is that rebuilt set. The values, their names
+ * (including casing) and the order here come from
+ * docs/workbuddy/FINDINGS.md §1.1 — do not add a header the desktop does not
+ * send, and do not drop one it does.
+ *
+ * Session ids, and what each one belongs to:
+ *
+ *   X-Conversation-ID          the conversation, uuid v7 with dashes, the same
+ *                              on every turn of that conversation, across
+ *                              restarts
+ *   X-Conversation-Request-ID  one turn, uuid v7 without dashes (the client
+ *                              checks this shape itself)
+ *   X-Conversation-Message-ID  one request, randomUUID (v4, with dashes)
+ *   X-Request-ID               one request, randomUUID, a *different* one
+ *   acp-connection-id          one connection, fixed for as long as the
+ *                              conversation lives
  */
 export function chatHeaders(
   session: WorkBuddySession,
   opts: { conversationId?: string; turnRequestId?: string } = {},
 ): Record<string, string> {
-  const trace = uuidv7Hex();
+  const trace = randomBytes(16).toString("hex");
   const span = randomBytes(8).toString("hex");
-  const messageId = uuidv7Hex();
-  // The conversation id is the id of the conversation, not of the request: the
-  // same conversation keeps it for every turn, and the upstream counts what it
-  // is told per conversation.
+  const parentSpan = randomBytes(8).toString("hex");
+  // The official client's own generator is randomUUID for these two, and they
+  // are two different ids.
+  const messageId = randomUUID();
+  const requestId = randomUUID();
   const conversationId = opts.conversationId ?? uuidv7();
   const turnRequestId = opts.turnRequestId ?? uuidv7Hex();
+
   const headers: Record<string, string> = {
-    ...accountHeaders(session, { chat: true }),
-    "X-Agent-Intent": "craft",
-    "X-Agent-Purpose": "conversation",
-    "X-Agent-Type": "main",
-    "X-IDE-Type": "CLI",
-    "X-IDE-Name": "CLI",
-    "X-IDE-Version": CLI_VERSION,
+    // Identity: buildVlmGatewayHeaders runs first, so these come first.
+    ...(session.uid ? { "X-User-Id": session.uid } : {}),
+    ...(session.enterpriseId
+      ? { "X-Enterprise-Id": session.enterpriseId, "X-Tenant-Id": session.enterpriseId }
+      : {}),
+    ...(session.domain ? { "X-Domain": session.domain } : {}),
     "X-Product": "SaaS",
-    "User-Agent": `CLI/${CLI_VERSION} WorkBuddy/${CLI_VERSION}`,
-    "X-Requested-With": "XMLHttpRequest",
-    "X-CodeBuddy-Request": "1",
+    "X-IDE-Type": "WorkBuddy",
+    "X-IDE-Name": "WorkBuddy",
+    "X-IDE-Version": DESKTOP_VERSION_CN,
+    "X-Private-Data": "true",
+    // The desktop's own version twice, and nothing else — no CLI segment here.
+    "User-Agent": `WorkBuddy/${DESKTOP_VERSION_CN} WorkBuddy/${DESKTOP_VERSION_CN}`,
+
+    // Then applyGatewayHeaders overwrites the request identity.
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "x-requested-with": "XMLHttpRequest",
     "X-Conversation-ID": conversationId,
     "X-Conversation-Request-ID": turnRequestId,
-    // The root request id is the same id as the conversation's request id.
-    "X-Root-Request-ID": turnRequestId,
+    "acp-connection-id": acpConnectionIdFor(conversationId),
     "X-Conversation-Message-ID": messageId,
-    "X-Request-ID": messageId,
-    // The account asked not to be sent to the Yuanbao channel.
-    "X-Private-Data": "true",
-    // The OpenAI Node SDK fingerprint the official CLI carries — these seven,
-    // and no others.
-    "x-stainless-lang": "js",
-    "x-stainless-package-version": "6.25.0",
-    "x-stainless-os": process.platform === "darwin" ? "MacOS" : "Linux",
-    "x-stainless-arch": process.arch === "x64" ? "x64" : process.arch,
-    "x-stainless-runtime": "node",
-    "x-stainless-runtime-version": `v${process.versions.node}`,
-    "x-stainless-retry-count": "0",
-    // The trace family.
-    "X-Trace-ID": trace,
+    "X-Request-ID": requestId,
+    "X-Agent-Intent": "craft",
+    "X-Agent-Purpose": "conversation",
+    "x-codebuddy-request": "1",
+
+    // Then the trace family.
     traceparent: `00-${trace}-${span}-01`,
     b3: `${trace}-${span}-1-${randomBytes(8).toString("hex")}`,
     "X-B3-TraceId": trace,
+    "X-B3-ParentSpanId": parentSpan,
     "X-B3-SpanId": span,
     "X-B3-Sampled": "1",
-    "X-B3-ParentSpanId": randomBytes(8).toString("hex"),
+    "X-Trace-ID": trace,
+
+    // And the two the VLM upstream sets last.
+    "Accept-Encoding": "identity",
+    Authorization: `Bearer ${session.accessToken}`,
   };
   return headers;
+}
+
+/**
+ * The connection id of a conversation.
+ *
+ * The official client mints one uuid per VLM session and reuses it for every
+ * request of that session. A conversation is that session, so the id is
+ * derived from its id: the same conversation always gets the same connection
+ * id, and two conversations never share one.
+ */
+export function acpConnectionIdFor(conversationId: string): string {
+  const digest = createHash("sha256").update(`acp:${conversationId}`).digest();
+  const hex = digest.toString("hex");
+  // Shaped like a uuid v7, which is what randomUUID would have produced of it.
+  const version = ((digest[6] & 0x07) | 0x07).toString(16);
+  const variant = ((digest[7] & 0x03) | 0x08).toString(16);
+  const id = `${hex.slice(0, 12)}${version}${hex.slice(13, 16)}${variant}${hex.slice(17, 32)}`;
+  return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
 /** The chat endpoint of the account's own domain. */

@@ -114,28 +114,95 @@ const session = {
   accessToken: "token",
   refreshToken: "refresh",
 } as any;
-const headers = chatHeaders(session);
+const headers = chatHeaders(session, { conversationId: "01a161f0-e17f-7e62-b596-761457a59e80" });
 
-check("the user agent names the client", /^CLI\/\d+\.\d+\.\d+ WorkBuddy\/\d+\.\d+\.\d+$/.test(headers["User-Agent"]), headers["User-Agent"]);
-check(
-  "the version header carries the client's own version",
-  headers["X-IDE-Version"] === headers["User-Agent"]?.split(" ")[0]?.split("/")[1],
-  `${headers["X-IDE-Version"]} vs ${headers["User-Agent"]}`,
-);
-check("the domain is sent", headers["X-Domain"] === "www.workbuddy.cn", headers["X-Domain"]);
-check("the account is named", headers["X-User-Id"] === session.uid);
-check("the private data flag is set", headers["X-Private-Data"] === "true", headers["X-Private-Data"]);
-check("the request says what it is", headers["X-Requested-With"] === "XMLHttpRequest", headers["X-Requested-With"]);
-check("the CodeBuddy request flag is sent", headers["X-CodeBuddy-Request"] === "1", headers["X-CodeBuddy-Request"]);
-check(
-  "the root request id is the conversation's request id",
-  headers["X-Root-Request-ID"] === headers["X-Conversation-Request-ID"],
-  `${headers["X-Root-Request-ID"]} vs ${headers["X-Conversation-Request-ID"]}`,
-);
-check("the runtime header is not sent", !("X-Agent-Runtime" in headers));
+// 桌面端的头集合（docs/workbuddy/FINDINGS.md §1.1 的 DESK 表），逐字逐项。
+// 名字的大小写也是规格的一部分：服务器看到的字符串就是这个。
+const EXACT = [
+  "X-User-Id",
+  "X-Domain",
+  "X-Product",
+  "X-IDE-Type",
+  "X-IDE-Name",
+  "X-IDE-Version",
+  "X-Private-Data",
+  "User-Agent",
+  "Accept",
+  "Content-Type",
+  "x-requested-with",
+  "X-Conversation-ID",
+  "X-Conversation-Request-ID",
+  "acp-connection-id",
+  "X-Conversation-Message-ID",
+  "X-Request-ID",
+  "X-Agent-Intent",
+  "X-Agent-Purpose",
+  "x-codebuddy-request",
+  "traceparent",
+  "b3",
+  "X-B3-TraceId",
+  "X-B3-ParentSpanId",
+  "X-B3-SpanId",
+  "X-B3-Sampled",
+  "X-Trace-ID",
+  "Accept-Encoding",
+  "Authorization",
+];
 
-const stainless = Object.keys(headers).filter((k) => k.startsWith("x-stainless-"));
-check("the SDK fingerprint is exactly the seven the client sends", stainless.length === 7, stainless.join(","));
+const got = Object.keys(headers);
+const extra = got.filter((k) => !EXACT.includes(k));
+const missing = EXACT.filter((k) => !got.includes(k));
+check("没有多余的头", extra.length === 0, extra.join(","));
+check("没有缺的头", missing.length === 0, missing.join(","));
+check("头的顺序也一致", got.join(",") === EXACT.join(","), got.join(","));
+
+check("身份是桌面端，不是 CLI", headers["X-IDE-Type"] === "WorkBuddy" && headers["X-IDE-Name"] === "WorkBuddy", `${headers["X-IDE-Type"]}/${headers["X-IDE-Name"]}`);
+check(
+  "User-Agent 是桌面端版本两遍",
+  /^WorkBuddy\/\d+\.\d+\.\d+ WorkBuddy\/\d+\.\d+\.\d+$/.test(headers["User-Agent"]),
+  headers["User-Agent"],
+);
+check("X-IDE-Version 与 UA 里的版本一致", headers["User-Agent"].split("/")[1].split(" ")[0] === headers["X-IDE-Version"], headers["X-IDE-Version"]);
+check("压缩只在 DESK 这一层关掉", headers["Accept-Encoding"] === "identity", headers["Accept-Encoding"]);
+check("私有数据标记", headers["X-Private-Data"] === "true", headers["X-Private-Data"]);
+check("小写的 x-requested-with", "x-requested-with" in headers, Object.keys(headers).join(","));
+check("小写的 x-codebuddy-request", "x-codebuddy-request" in headers, Object.keys(headers).join(","));
+check("小写的 acp-connection-id", "acp-connection-id" in headers, Object.keys(headers).join(","));
+check("账号名", headers["X-User-Id"] === session.uid, headers["X-User-Id"]);
+check("域名", headers["X-Domain"] === "www.workbuddy.cn", headers["X-Domain"]);
+
+// 头的值：两种 id 形状、两种生命周期。
+const UUID_V4_DASHED = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID_V7_HEX = /^[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}$/;
+check(
+  "会话 id 是带横线的 uuid",
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(headers["X-Conversation-ID"]),
+  headers["X-Conversation-ID"],
+);
+check("会话 id 用的是传进来的那个", headers["X-Conversation-ID"] === "01a161f0-e17f-7e62-b596-761457a59e80", headers["X-Conversation-ID"]);
+check("每轮的 request id 是 uuid v7 hex（客户端自己会校验这个形状）", UUID_V7_HEX.test(headers["X-Conversation-Request-ID"]), headers["X-Conversation-Request-ID"]);
+check("message id 是带横线的 uuid v4", UUID_V4_DASHED.test(headers["X-Conversation-Message-ID"]), headers["X-Conversation-Message-ID"]);
+check("X-Request-ID 也是带横线的 uuid v4", UUID_V4_DASHED.test(headers["X-Request-ID"]), headers["X-Request-ID"]);
+check("两者不是同一个 id", headers["X-Request-ID"] !== headers["X-Conversation-Message-ID"], headers["X-Request-ID"]);
+check("acp-connection-id 是带横线的 uuid", UUID_V4_DASHED.test(headers["acp-connection-id"]) || /^[0-9a-f-]{36}$/.test(headers["acp-connection-id"]), headers["acp-connection-id"]);
+
+// 同一个会话：连接 id 固定；不同会话：不同。
+{
+  const again = chatHeaders(session, { conversationId: "01a161f0-e17f-7e62-b596-761457a59e80" });
+  check("同一会话的 acp-connection-id 固定", again["acp-connection-id"] === headers["acp-connection-id"], `${again["acp-connection-id"]} vs ${headers["acp-connection-id"]}`);
+  check("同一会话的 X-Conversation-ID 固定", again["X-Conversation-ID"] === headers["X-Conversation-ID"]);
+  check("同一会话里每轮的 request id 是新的", again["X-Conversation-Request-ID"] !== headers["X-Conversation-Request-ID"]);
+  const other = chatHeaders(session, { conversationId: "01a161f0-0000-7abc-9def-0123456789ab" });
+  check("不同会话的 acp-connection-id 不同", other["acp-connection-id"] !== headers["acp-connection-id"]);
+}
+
+check("没有 X-Agent-Type", !("X-Agent-Type" in headers));
+check("没有 X-Root-Request-ID", !("X-Root-Request-ID" in headers));
+check("没有 X-Device-Id", !("X-Device-Id" in headers));
+check("没有 X-Agent-Runtime", !("X-Agent-Runtime" in headers));
+check("没有 x-stainless-*", Object.keys(headers).filter((k) => k.toLowerCase().startsWith("x-stainless-")).length === 0);
+check("trace 是 32 位十六进制的 trace id", /^[0-9a-f]{32}$/.test(headers["X-Trace-ID"]), headers["X-Trace-ID"]);
+check("traceparent 引用了同一个 trace id", headers["traceparent"].includes(headers["X-Trace-ID"]), headers["traceparent"]);
 
 console.log("");
 console.log("the request itself");

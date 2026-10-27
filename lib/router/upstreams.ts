@@ -806,7 +806,10 @@ export async function toZcode(
   const model = upstreamModel(route);
   const anthropicBody =
     dialect === "anthropic" ? { ...body } : openaiToAnthropic(body, zcodeMaxOutput(model));
-  anthropicBody.model = model;
+  // 上游只认小写的模型名：发 `GLM-5.3` 会被当成「不认识的请求」落到风控账上，
+  // 回的是 405 + code 3012（`glm-5.3` 才是正常的 3009 并发限流那类回答）。
+  // 对外公布的 id 不变，只在发上游时转小写。
+  anthropicBody.model = model.toLowerCase();
   anthropicBody.stream = stream;
 
   // The upstream's session id: the client's session id, mapped to the shape the
