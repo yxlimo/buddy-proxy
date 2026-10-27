@@ -340,12 +340,27 @@ async function callUpstream(
       case "minimax-api":
         await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
         break;
+      // MiniMax Code 有自己的 case：它没有登记 dispatch（登记的是它的种类
+      // 模板，不是转发）。漏了它，default 会把它当成「还没接的上游」。
+      case "minimax":
+        await toMinimax(uctx, body, route, dialect, stream, ctx);
+        break;
       case "zcode":
         await toZcode(uctx, body, route, dialect, stream, ctx);
         break;
       default:
-        await toMinimax(uctx, body, route, dialect, stream, ctx);
-        break;
+        // 没有 case 的 kind 只能靠它自己登记的 dispatch（见
+        // lib/router/compatible-platform.ts）。没有 dispatch 就是这个上游还没
+        // 接 —— 不能猜：猜错了就是把请求按别的方言、别的鉴权发到别的 host 去。
+        if (kind?.dispatch) {
+          await kind.dispatch(uctx, body, route, dialect, stream, ctx);
+          break;
+        }
+        throw new AuthError(
+          `upstream kind "${kind?.kind ?? "unknown"}" has no dispatch`,
+          `这个上游还没接：${kind?.kind ?? "未知"}。`,
+          500,
+        );
     }
     recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "", kind?.label ?? route.platform);
   } catch (e) {

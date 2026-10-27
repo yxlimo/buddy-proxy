@@ -232,6 +232,12 @@ export function keepUpstreamTruth<T extends object>(error: T, original: unknown)
   return error;
 }
 
+/** 记账失败时那句话：短一点，日志里够用就行。 */
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error ?? "");
+}
+
 /**
  * Run one upstream call on one of the platform's accounts, under its policy.
  *
@@ -310,13 +316,25 @@ export async function underPolicy<T>(
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {
       if (!error) {
-        // 服务了一次：冷却没有理由留着。
-        clearCooldown(candidate.id);
+        // 答复已经成功：冷却没有理由留着。
+        // 记账失败不许影响请求 —— 冷却写不下去，也不能让已经成功的答复变成 500。
+        try {
+          clearCooldown(candidate.id);
+        } catch (e) {
+          console.warn(`[ROUTE] ${what} account=${candidate.id} cannot clear its cooldown: ${errorText(e)}`);
+        }
         return;
       }
       // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
       const decision = cooldownForFailure(candidate.id, error);
-      if (decision) setCooldown(candidate.id, decision.untilMs, decision.reason);
+      if (decision) {
+        try {
+          setCooldown(candidate.id, decision.untilMs, decision.reason);
+        } catch (e) {
+          // 记账失败不许顶掉上游真正的错误：那会让 429 变成一个没头没脑的 500。
+          console.warn(`[ROUTE] ${what} account=${candidate.id} cannot record its cooldown: ${errorText(e)}`);
+        }
+      }
       const moves = isDegradableUpstreamError(error);
       const at = candidates.findIndex((c) => c.id === candidate.id);
       const next = moves && policy === "fallback" ? candidates[at + 1]?.id : undefined;
