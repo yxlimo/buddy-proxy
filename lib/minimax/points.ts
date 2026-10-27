@@ -21,6 +21,14 @@
 // The account group comes out of get_user_extra_info: the entry the desktop
 // client has marked `selected`.
 //
+// One scan of one account sends credit/details ONCE. The panel wants the lots
+// and the availability check wants "any points left" — the same answer serves
+// both, so the ledger is read here and summed here instead of being asked for
+// twice. The request carries no paging parameters at all: that is the client's
+// own request, and anything on top of it (page_size, include_expired) is a
+// request the platform never sees a real client make. Expired lots come back in
+// that answer, so the filter is local.
+//
 // Neither answer is a hard requirement. A null means "not known" — the caller
 // must treat that as the old behaviour (look at the plan windows only), never as
 // "no points".
@@ -51,12 +59,6 @@ const WEB_HOSTS: Record<string, string> = {
 const EXTRA_PATH = "/matrix/api/v1/user/get_user_extra_info";
 const CREDIT_PATH = "/minimax-cloud/api/v1/credit/details";
 const FALLBACK_PATH = "/backend/account/token_plan_credit";
-
-// The ledger pages at 50 rows a page. Only one page is read: the caller needs a
-// yes/no on "any points left", not the breakdown, and 50 lots covers every
-// account seen so far (five rows on the real ones). Reading the rest is a detail
-// view's job, not the availability check's
-const CREDIT_PAGE_SIZE = 50;
 
 const regionKey = (region: string): string => (region === "en" || region === "global" ? "en" : "cn");
 
@@ -117,9 +119,8 @@ function signedRequest(
   token: string,
   region: string,
   payload?: string,
-  query?: Record<string, string>,
 ): { url: string; body?: string; headers: Record<string, string> } {
-  const built = buildRequest(path, method, token, "", region, Date.now(), payload, query);
+  const built = buildRequest(path, method, token, "", region, Date.now(), payload);
   const url = new URL(built.url);
   return {
     url: `${base("MINIMAX_AGENT_BASE", AGENT_HOSTS, region)}${url.pathname}${url.search}`,
@@ -165,29 +166,54 @@ async function selectedWorkspace(token: string, region: string): Promise<Workspa
   return value;
 }
 
+/** One lot of the credit ledger: given, partly spent, running out. */
+export interface CreditLot {
+  /** How much was given. */
+  granted: number;
+  /** How much of it is left. */
+  remaining: number;
+  /** How much was used. */
+  consumed: number;
+  /** When it was given. */
+  grantedAtMs: number;
+  /** When it runs out. */
+  expireAtMs: number;
+  /** 2 is the sign-in kind; the purchases are another one. */
+  creditType: number;
+}
+
 /**
- * The points left on the account, or null when the platform did not say.
+ * The points left in a ledger, or null when the ledger was not read.
  *
- * The points are the unexpired remainder of the credit ledger, so the first page
- * of the ledger is summed rather than read from a summary field. One page only:
- * the caller asks "is there anything left", and a full page already answers it —
- * paging is for the detail view, not for this check. Expired lots are skipped
- * even though the query already excludes them, because the filter is the part
- * that must not regress if the query ever stops working. A ledger that answers
- * with an empty list really is zero points; a request that fails is "not known"
- * — never zero, because zero would mark a paying account as broke.
+ * The platform's own answer includes lots that have already run out, so the
+ * expiry filter lives here — it must not depend on the request asking for the
+ * unexpired ones only. An empty ledger really is zero points; a read that failed
+ * is "not known", never zero, because zero would mark a paying account as broke.
  */
-export async function fetchMiniMaxPoints(
+export function pointsFromLedger(lots: CreditLot[] | null): number | null {
+  if (lots === null) return null;
+  const now = Date.now();
+  let total = 0;
+  for (const lot of lots) {
+    if (lot.expireAtMs > 0 && lot.expireAtMs <= now) continue;
+    total += lot.remaining;
+  }
+  return total;
+}
+
+/**
+ * The credit ledger, exactly as the client asks for it.
+ *
+ * No paging parameters: the client's own request has none, and a scan that adds
+ * them is a request the platform never sees from a real client. null means the
+ * read failed — the caller must not turn that into "no points".
+ */
+export async function fetchMiniMaxLedger(
   accessToken: string,
   region: MiniMaxRegion = "cn",
-): Promise<number | null> {
+): Promise<CreditLot[] | null> {
   try {
-    const now = Date.now();
-    const req = signedRequest(CREDIT_PATH, "GET", accessToken, region, undefined, {
-      page_number: "1",
-      page_size: String(CREDIT_PAGE_SIZE),
-      include_expired: "false",
-    });
+    const req = signedRequest(CREDIT_PATH, "GET", accessToken, region);
     const body = await ask(req.url, "GET", req.headers);
     if (!body) return null;
     const rows: any[] | null = Array.isArray(body.details) ? body.details : null;
@@ -195,18 +221,34 @@ export async function fetchMiniMaxPoints(
       console.warn("[MINIMAX] 积分明细答复里没有 details 数组，当作不知道");
       return null;
     }
-    let total = 0;
-    for (const row of rows) {
-      const expireAt = Number(row?.expire_at_ms ?? 0);
-      if (expireAt > 0 && expireAt <= now) continue;
-      const remaining = amountOf(row?.remaining_amount);
-      if (remaining !== null) total += remaining;
-    }
-    return total;
+    return rows.map((row) => ({
+      granted: amountOf(row?.granted_amount) ?? 0,
+      remaining: amountOf(row?.remaining_amount) ?? 0,
+      consumed: amountOf(row?.consumed_amount) ?? 0,
+      grantedAtMs: Number(row?.granted_at_ms ?? 0),
+      expireAtMs: Number(row?.expire_at_ms ?? 0),
+      creditType: Number(row?.credit_type ?? 0),
+    }));
   } catch (e) {
     console.warn(`[MINIMAX] 读积分失败：${(e as Error)?.message}`);
     return null;
   }
+}
+
+/**
+ * Both answers a scan needs, from one request.
+ *
+ * The panel shows the lots and the availability check only needs the sum; asking
+ * the platform twice for the same ledger is a request no real client makes, and
+ * the platform counts requests. So there is deliberately no second entry point
+ * that would read the ledger again.
+ */
+export async function fetchMiniMaxCreditsAndPoints(
+  accessToken: string,
+  region: MiniMaxRegion = "cn",
+): Promise<{ lots: CreditLot[] | null; points: number | null }> {
+  const lots = await fetchMiniMaxLedger(accessToken, region);
+  return { lots, points: pointsFromLedger(lots) };
 }
 
 /**

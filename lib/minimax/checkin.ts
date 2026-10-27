@@ -100,19 +100,15 @@ export function buildRequest(
   userId: string,
   region: string,
   nowMs: number,
-  // 有的接口带真请求体（积分那条要 workspace_id），而签名把请求体算进去，
-  // 所以请求体得由调用方给，不能一律写 "{}"。
+  // 有的接口带真请求体，而签名把请求体算进去，所以请求体得由调用方给，
+  // 不能一律写 "{}"。查询参数不放这里：客户端自己的请求就是那几个固定的
+  // 归因参数，多一个参数就是客户端不会做的事
   payload?: string,
-  // 有的接口要自己的查询参数（积分明细那条要 page_size），而这些参数也进签名，
-  // 所以必须在这里并进 url，不能在调用方拼在 path 上——下面的 url.search
-  // 会把 path 里带的查询串整个覆盖掉
-  query?: Record<string, string>,
 ): { url: string; body?: string; headers: Record<string, string> } {
   const origin = publicGatewayOrigin(region);
   const url = new URL(`${origin}${path}`);
   const language = region === "en" ? "en" : "zh";
   url.search = new URLSearchParams({
-    ...(query ?? {}),
     device_platform: "web",
     biz_id: "3",
     app_id: "3001",
@@ -284,46 +280,6 @@ export function streak(panel: SigninPanel | null): number {
     count += 1;
   }
   return count;
-}
-
-export interface CreditLot {
-  /** How much was given. */
-  granted: number;
-  /** How much of it is left. */
-  remaining: number;
-  /** How much was used. */
-  consumed: number;
-  /** When it was given. */
-  grantedAtMs: number;
-  /** When it runs out. */
-  expireAtMs: number;
-  /** 2 is the sign-in kind; the purchases are another one. */
-  creditType: number;
-}
-
-/**
- * The credit ledger.
- *
- * This is where the sign-in points show up: the account balance
- * (`query_balance`) is about the money on the platform and reads zero for a
- * code account, while the ledger holds the points the sign-in gave.
- */
-export async function fetchMiniMaxCredits(
-  token: string,
-  userId = "",
-  region = REGION,
-): Promise<CreditLot[]> {
-  const res = await call("/minimax-cloud/api/v1/credit/details", "GET", token, userId, region);
-  if (res.status !== 200) return [];
-  const rows: any[] = Array.isArray(res.body?.details) ? res.body.details : [];
-  return rows.map((row) => ({
-    granted: Number(row?.granted_amount ?? 0),
-    remaining: Number(row?.remaining_amount ?? 0),
-    consumed: Number(row?.consumed_amount ?? 0),
-    grantedAtMs: Number(row?.granted_at_ms ?? 0),
-    expireAtMs: Number(row?.expire_at_ms ?? 0),
-    creditType: Number(row?.credit_type ?? 0),
-  }));
 }
 
 /**

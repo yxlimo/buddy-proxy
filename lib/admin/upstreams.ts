@@ -13,8 +13,11 @@ import { miniMaxApiTenantPlans } from "../minimax/api.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, miniMaxTokenPlan, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
-import { fetchMiniMaxCredits } from "../minimax/checkin.ts";
-import { fetchMiniMaxCreditFallback, fetchMiniMaxPoints } from "../minimax/points.ts";
+import {
+  fetchMiniMaxCreditFallback,
+  fetchMiniMaxCreditsAndPoints,
+  type CreditLot,
+} from "../minimax/points.ts";
 import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
 import { type QoderRegion } from "../qoder/auth.ts";
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
@@ -275,17 +278,21 @@ export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
 }
 
 /**
- * MiniMax Code 账号上的积分。
+ * MiniMax Code 账号上的积分明细，和「还有没有积分」的判定值。
  *
- * 账户余额（query_balance）说的是平台上的钱，Code 账号上是零；签到给的是
- * 积分，在积分明细里。
+ * 两件事读的是同一份答复，所以只发一次请求：一轮扫描对一个账号多发一个
+ * credit/details，就是客户端不会做的事，平台看得到。
+ * 读不到时 lots 是 null，判定值也是 null —— 那是「不知道」，不是「没有」。
  */
-export async function miniMaxCredits(providerId = "minimax"): Promise<unknown> {
+export async function miniMaxCreditLedger(
+  providerId = "minimax",
+): Promise<{ lots: CreditLot[] | null; points: number | null }> {
+  const region = MINIMAX_REGION === "en" ? "global" : "cn";
   try {
     const cred = await readCredential(providerId);
-    return await fetchMiniMaxCredits(cred.accessToken, "", MINIMAX_REGION === "en" ? "global" : "cn");
+    return await fetchMiniMaxCreditsAndPoints(cred.accessToken, region);
   } catch {
-    return null;
+    return { lots: null, points: null };
   }
 }
 
@@ -306,26 +313,6 @@ export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unkn
     // 没有会话或读不到，往下走。
   }
   return miniMaxTokenPlan(300_000, providerId);
-}
-
-/**
- * MiniMax Code 账号上的积分，和「plan 见底后自动扣积分」的开关。
- *
- * 两个数要一起看才有意义：plan 窗口见底时，有积分且开关开着，平台照样会答
- * （扣积分），不回 2067。各自单独读、单独失败：一个读不到不影响另一个。
- *
- * 读不到是 null —— 那是「不知道」，不是「没有」。
- */
-export async function miniMaxPoints(
-  providerId = "minimax",
-): Promise<{ amount: number | null; at: number }> {
-  const region = MINIMAX_REGION === "en" ? "global" : "cn";
-  try {
-    const cred = await readCredential(providerId);
-    return { amount: await fetchMiniMaxPoints(cred.accessToken, region), at: Date.now() };
-  } catch {
-    return { amount: null, at: Date.now() };
-  }
 }
 
 /** 「Token Plan 达限后使用积分」这个开关，读不到是 null（不知道）。 */
@@ -412,15 +399,18 @@ export async function refreshHealthSnapshot(): Promise<void> {
         snapshot.qoder[row.id] = { account, credits: await fetchQoderCredits(row.id) };
         break;
       }
-      case "minimax":
+      case "minimax": {
+        // 明细与判定值同源：一次扫描只发一次 credit/details
+        const ledger = await miniMaxCreditLedger(row.id);
         snapshot.minimax[row.id] = {
           balance: await miniMaxBalance(row.id),
           tokenPlan: await miniMaxCodeTokenPlan(row.id),
-          credits: await miniMaxCredits(row.id),
-          points: await miniMaxPoints(row.id),
+          credits: ledger.lots,
+          points: { amount: ledger.points, at: Date.now() },
           creditFallbackEnabled: await miniMaxCreditFallback(row.id),
         };
         break;
+      }
       case "minimax-api":
         snapshot.minimaxApi[row.id] = { tenants: await miniMaxApiTenantPlans(row.id) };
         break;

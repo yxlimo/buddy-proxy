@@ -11,11 +11,12 @@
 //
 // 覆盖：
 //
-//   1. 积分是 credit/details 第一页里未过期条目之和（千分位、小数、过期条目）；
-//   2. 满页也不翻页 —— 判定只要一个结论，明细才需要翻页；
-//   3. workspace 的 id 字段叫 workspace_id，是数字 0 也认；
-//   4. 读不到是 null ——「不知道」，不是「没有」；空明细才是 0；
-//   5. 六种判定：积分与开关的四种组合、读不到退回旧行为、plan 有额度、视频窗口。
+//   1. 一轮扫描对同一账号只发一次 credit/details（明细与判定值同源）；
+//   2. 请求参数是客户端原样 —— 不带翻页参数，签名头照旧；
+//   3. 过期条目在本地被过滤（客户端的答复里就带着过期条目）；
+//   4. workspace 的 id 字段叫 workspace_id，是数字 0 也认；
+//   5. 读不到是 null ——「不知道」，不是「没有」；空明细才是 0；
+//   6. 六种判定：积分与开关的四种组合、读不到退回旧行为、plan 有额度、视频窗口。
 //
 // 假上游的答复形状照真机（2026-10-27 用只读探针录的）：get_user_extra_info 的
 // workspaces 在根级，id 叫 workspace_id；credit/details 的金额是字符串。
@@ -105,7 +106,8 @@ let creditPageRows: (page: number) => any[] | null = () => [
 
 let creditHeaders: Record<string, string> = {};
 let creditQuery = new URLSearchParams();
-let creditPages: number[] = [];
+/** 这一轮里 credit/details 被问了几次。一轮扫描只该问一次。 */
+let creditHits = 0;
 let fallbackHeaders: Record<string, string> = {};
 
 const fake = http.createServer((req, res) => {
@@ -133,13 +135,13 @@ const fake = http.createServer((req, res) => {
     );
   }
 
-  // 积分明细：要签名，要分页参数（判定只取第一页），金额是字符串。
+  // 积分明细：要签名，参数是客户端原样（没有翻页参数），金额是字符串。
   if (url.startsWith("/minimax-cloud/api/v1/credit/details")) {
     creditHeaders = req.headers as Record<string, string>;
     const parsed = new URL(url, "http://fake");
     creditQuery = parsed.searchParams;
+    creditHits += 1;
     const page = Number(parsed.searchParams.get("page_number") ?? "1");
-    creditPages.push(page);
     const rows = creditPageRows(page);
     if (rows === null) return send(200, { base_resp: { status_code: 0 } });
     return send(200, { details: rows, base_resp: { status_code: 0, status_msg: "success" } });
@@ -171,30 +173,34 @@ process.env.MINIMAX_API_BASE = fakeBase;
  * 一、积分求和
  * ------------------------------------------------------------------ */
 
-section("积分是未过期明细之和");
+section("一轮扫描只问一次 credit/details");
 
 // 先加载注册表：minimax 那一条会把 auth / transport 的循环依赖先跑完。从
 // checkin.ts（points.ts 用它签名）先进去会在 AUTH_MODE 初始化之前取它。
 await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
-const { fetchMiniMaxPoints, fetchMiniMaxCreditFallback } = await import("../lib/minimax/points.ts");
+const { fetchMiniMaxCreditsAndPoints, fetchMiniMaxCreditFallback, pointsFromLedger } = await import(
+  "../lib/minimax/points.ts"
+);
 
-const points = await fetchMiniMaxPoints("session-token", "cn");
+creditHits = 0;
+const first = await fetchMiniMaxCreditsAndPoints("session-token", "cn");
 check(
-  "未过期积分求和正确（多条、千分位、含小数）",
-  points === 1634.5,
-  String(points),
+  "明细与判定值来自一次请求（未过期求和，千分位、含小数）",
+  creditHits === 1 && first.points === 1634.5 && first.lots?.length === 3,
+  `hits=${creditHits} points=${String(first.points)} lots=${String(first.lots?.length)}`,
 );
 check(
-  "积分请求带了签名和翻页参数",
+  "请求带签名，参数是客户端原样（不带 page_number / page_size / include_expired）",
   Boolean(creditHeaders.yy && creditHeaders["x-timestamp"] && creditHeaders["x-signature"]) &&
-    creditQuery.get("page_number") === "1" &&
-    creditQuery.get("page_size") === "50" &&
-    creditQuery.get("include_expired") === "false",
+    !creditQuery.has("page_number") &&
+    !creditQuery.has("page_size") &&
+    !creditQuery.has("include_expired"),
   JSON.stringify({ keys: Object.keys(creditHeaders), query: creditQuery.toString() }),
 );
 
 // 全过期：能答，但一分钱都没有 —— 0，不是 null。
+// 客户端的答复里就带着过期条目，所以过滤必须在本地做。
 creditPageRows = () => [
   {
     credit_type: 2,
@@ -203,29 +209,37 @@ creditPageRows = () => [
     expire_at_ms: now - DAY,
   },
 ];
-const expiredOnly = await fetchMiniMaxPoints("session-token", "cn");
-check("已过期条目被跳过", expiredOnly === 0, String(expiredOnly));
+const expiredOnly = await fetchMiniMaxCreditsAndPoints("session-token", "cn");
+check(
+  "已过期条目在本地被跳过（pointsFromLedger 自己过滤，不依赖请求参数）",
+  expiredOnly.points === 0 && pointsFromLedger(expiredOnly.lots) === 0,
+  String(expiredOnly.points),
+);
 
 // 空明细：确实没有积分。
 creditPageRows = () => [];
-const empty = await fetchMiniMaxPoints("session-token", "cn");
-check("明细为空数组 → 0（不是 null）", empty === 0, String(empty));
+const empty = await fetchMiniMaxCreditsAndPoints("session-token", "cn");
+check("明细为空数组 → 0（不是 null）", empty.points === 0 && empty.lots?.length === 0, String(empty.points));
 
-// 满页也不翻：判定只要一个布尔结论，明细才需要翻页。
+// 答复再长也不翻页：判定只要一个结论，多发一个请求就是客户端不会做的事。
 creditPageRows = () =>
   Array.from({ length: 50 }, () => ({ remaining_amount: "1.00", expire_at_ms: now + DAY }));
-creditPages = [];
-const fullPage = await fetchMiniMaxPoints("session-token", "cn");
+creditHits = 0;
+const fullPage = await fetchMiniMaxCreditsAndPoints("session-token", "cn");
 check(
-  "满页时用第一页的和，不翻页",
-  fullPage === 50 && creditPages.join(",") === "1",
-  `${String(fullPage)} pages=${creditPages.join(",")}`,
+  "条目多也只发一次请求，不翻页",
+  fullPage.points === 50 && creditHits === 1,
+  `${String(fullPage.points)} hits=${creditHits}`,
 );
 
 // 答复里没有 details 数组：形状不认识，当作不知道。
 creditPageRows = () => null;
-const noDetails = await fetchMiniMaxPoints("session-token", "cn");
-check("答复里没有 details 数组 → null（不是 0）", noDetails === null, String(noDetails));
+const noDetails = await fetchMiniMaxCreditsAndPoints("session-token", "cn");
+check(
+  "答复里没有 details 数组 → null（不是 0）",
+  noDetails.points === null && noDetails.lots === null,
+  String(noDetails.points),
+);
 
 /* ------------------------------------------------------------------ *
  * 二、读不到就是 null
@@ -234,9 +248,13 @@ check("答复里没有 details 数组 → null（不是 0）", noDetails === nul
 section("读不到是「不知道」，不是「没有」");
 
 mode = "error";
-const noPoints = await fetchMiniMaxPoints("session-token", "cn");
+const noPoints = await fetchMiniMaxCreditsAndPoints("session-token", "cn");
 const noFallback = await fetchMiniMaxCreditFallback("session-token", "cn");
-check("积分或开关读不到就是 null", noPoints === null && noFallback === null, `${String(noPoints)} ${String(noFallback)}`);
+check(
+  "积分或开关读不到就是 null",
+  noPoints.points === null && noPoints.lots === null && noFallback === null,
+  `${String(noPoints.points)} ${String(noFallback)}`,
+);
 mode = "ok";
 
 /* ------------------------------------------------------------------ *
