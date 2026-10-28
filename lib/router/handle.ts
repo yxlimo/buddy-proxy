@@ -148,6 +148,7 @@ async function handleAggregate(
 ): Promise<void> {
   const stream = body.stream === true;
   const rctx = routingContext();
+  const started = Date.now();
 
   // The targets are the candidates: the heaviest one first, and `single` only
   // tries that one — the panel says single, and traffic that quietly went to
@@ -170,6 +171,9 @@ async function handleAggregate(
           upstreamModel: target.upstreamModel,
           ok: false,
         });
+        // 这一步没打到上游（账号都在冷却或者额度用尽），但用量表也要留一行：
+        // 不留的话用量页只看得到打上去的那几条，这批 503 像是没发生过。
+        recordUnroutedUsage(entry, target, e, ctx, started);
         throw e;
       }
       // The client asked for the published name; the answer says the same, even
@@ -246,6 +250,45 @@ async function handleAggregate(
   } catch (e) {
     sendError(ctx, e);
   }
+}
+
+/**
+ * 记一条没有打到上游的请求。
+ *
+ * 账号都在冷却、或者额度用尽的时候，请求根本没发出去，客户端拿到的是 503。
+ * 这种请求也要留在用量表里：打上去的那条由上游那侧记（recordRequestUsage），
+ * 这里的这一条是「连发都没发出去」，两边不重。
+ */
+function recordUnroutedUsage(
+  entry: AggregateEntry,
+  target: { group: string; upstreamModel: string },
+  error: unknown,
+  ctx: Koa.Context,
+  started: number,
+): void {
+  const err = error as AuthError;
+  const agent = detectAgent(ctx.request.headers).name;
+  const session = detectSession(ctx.request.headers);
+  // 模拟客户端的名字（面板上显示的那个）：跟打上去的那条用同一个口径。
+  const template = platformOf(target.group);
+  const kind = template ? kindOf(template.kind) : null;
+  recordUsage({
+    upstreamId: target.group,
+    upstreamModel: target.upstreamModel,
+    agentModel: entry.id,
+    agent,
+    sessionId: session.sessionId,
+    parentSessionId: session.parentSessionId,
+    agentName: session.agentName,
+    client: kind?.label ?? target.group,
+    ok: false,
+    status: clientStatusOf(error) ?? 503,
+    promptTokens: 0,
+    completionTokens: 0,
+    reasoningTokens: 0,
+    latencyMs: Date.now() - started,
+    error: String(err?.message ?? error).slice(0, 200),
+  });
 }
 
 /**
