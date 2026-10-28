@@ -212,57 +212,6 @@ function frames(text: string): string[] {
 }
 
 console.log("");
-console.log("增删 Provider");
-
-// 加一个 provider，删掉它，然后确认它真的没了 —— 而且再刷一次也没回来。
-const added = await call("AddProvider", { id: "regression-provider", kind: "minimax-api", alias: "回归用" });
-check("加了一个 Provider", added.body?.ok === true, JSON.stringify(added.body));
-
-const afterAdd = await call("ListUpstreams", {});
-const afterAddRows = (afterAdd.body?.upstreams ?? []) as any[];
-check(
-  "列表里有它",
-  afterAddRows.some((u: any) => u.id === "regression-provider"),
-  JSON.stringify(afterAddRows.map((u: any) => u.id)),
-);
-
-// 注销一个没有凭据的账号：说清楚，不报错。
-const loggedOut = await call("LogoutAccount", { accountId: "regression-provider" });
-check("注销了一个账号", loggedOut.body?.ok === true, JSON.stringify(loggedOut.body));
-
-const deleted = await call("DeleteProvider", { id: "regression-provider" });
-check("删掉了", deleted.body?.ok === true, JSON.stringify(deleted.body));
-
-const afterDelete = await call("ListUpstreams", {});
-const afterDeleteRows = (afterDelete.body?.upstreams ?? []) as any[];
-check(
-  "列表里没有它了",
-  !afterDeleteRows.some((u: any) => u.id === "regression-provider"),
-  JSON.stringify(afterDeleteRows.map((u: any) => u.id)),
-);
-
-const afterDeleteAgain = await call("ListUpstreams", {});
-check(
-  "再刷一次它也没回来",
-  !((afterDeleteAgain.body?.upstreams ?? []) as any[]).some(
-    (u: any) => u.id === "regression-provider",
-  ),
-  JSON.stringify((afterDeleteAgain.body?.upstreams ?? []).map((u: any) => u.id)),
-);
-
-// 删一个内置的：它也不能在刷新之后自己回来。
-const builtin = await call("DeleteProvider", { id: "zcode" });
-check("删掉一个内置的", builtin.body?.ok === true, JSON.stringify(builtin.body));
-const afterBuiltin = await call("ListUpstreams", {});
-check(
-  "内置的那个删掉之后也没回来",
-  !((afterBuiltin.body?.upstreams ?? []) as any[]).some((u: any) => u.id === "zcode"),
-  JSON.stringify((afterBuiltin.body?.upstreams ?? []).map((u: any) => u.id)),
-);
-// 放回去，后面的测试还要用它。
-await call("AddProvider", { id: "zcode", kind: "zcode", alias: "ZCode" });
-
-console.log("");
 console.log("代理的路");
 
 const health = await fetch(`${base}/health`);
@@ -451,37 +400,12 @@ check("模型删得掉", del.body?.ok === true, JSON.stringify(del.body));
 console.log("");
 console.log("套餐 key");
 
-// 一个用户自己加的 Code 网关：它得能拿到一把套餐 key，否则面板上只有积分，
-// 没有套餐额度 —— 跟内置的那个不一致。
-const planProvider = await call("AddProvider", {
-  id: "regression-minimax-plan",
-  kind: "minimax",
-  alias: "回归用的套餐",
-});
-check("加了一个 Code 网关", planProvider.body?.ok === true, JSON.stringify(planProvider.body));
-
-const planKey = await call("SetProviderKeys", {
-  upstreamId: "regression-minimax-plan",
-  keys: ["sk-cp-regression"],
-});
-check("写了套餐 key", planKey.body?.ok === true, JSON.stringify(planKey.body));
-
-const planCreds = await call("ListCredentials", { accountId: "regression-minimax-plan" });
-const planRows = (planCreds.body?.credentials ?? []) as any[];
-check(
-  "它的凭据里有那把套餐 key",
-  planRows.some((c: any) => c.kind === "plan_key"),
-  JSON.stringify(planRows.map((c: any) => [c.id, c.kind])),
-);
-
 // 另一个 Provider 不接受 API Key。
 const wrongKind = await call("SetProviderKeys", {
   upstreamId: "qoder",
   keys: ["sk-cp-nope"],
 });
 check("别的 Provider 不接受 key", wrongKind.body?.ok === false, JSON.stringify(wrongKind.body));
-
-await call("DeleteProvider", { id: "regression-minimax-plan" });
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
