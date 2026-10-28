@@ -55,8 +55,8 @@ const { PLATFORMS } = await import("../lib/platforms.ts");
 const builtIn = listProviders();
 check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
 check(
-  "九个平台是模板，不是表里的行",
-  PLATFORMS.length === 9 && PLATFORMS.every((p) => typeof p.id === "string"),
+  "十个平台是模板，不是表里的行",
+  PLATFORMS.length === 10 && PLATFORMS.every((p) => typeof p.id === "string"),
   PLATFORMS.map((p) => p.id).join(","),
 );
 check(
@@ -405,7 +405,7 @@ try {
 }
 check(
   "环境里的开关被忽略了（一个账号都没有）",
-  envRun_body.platforms === 9 && envRun_body.rows.length === 0,
+  envRun_body.platforms === 10 && envRun_body.rows.length === 0,
   JSON.stringify(envRun_body),
 );
 fs.rmSync(ENV_DIR, { recursive: true, force: true });

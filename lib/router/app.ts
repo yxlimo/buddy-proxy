@@ -177,6 +177,7 @@ const SNAPSHOT_BUCKET: Record<string, string> = {
   tokenrhythm: "tokenrhythm",
   sensenova: "sensenova",
   "intern-ai": "internAi",
+  qiniu: "qiniu",
 };
 
 /** 一个账号的健康快照，没有就是 null。 */

@@ -14,6 +14,7 @@
 // 再加一个 registerKind 块。放在这里 import 是为了让登记在 kindOf() 之前发生。
 import "../sensenova/register.ts";
 import "../intern-ai/register.ts";
+import "../qiniu/register.ts";
 import "./minimax.ts";
 import "./qoder.ts";
 import "./workbuddy.ts";

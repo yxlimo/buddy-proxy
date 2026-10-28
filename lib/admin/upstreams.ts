@@ -32,6 +32,7 @@ import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
 import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
 import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
+import { qiniuQuotaOf } from "../qiniu/quota.ts";
 import { peekCached, setCached } from "../store.ts";
 import { HEALTH_CACHE_ID } from "../health-cache.ts";
 import {
@@ -386,6 +387,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
     tokenrhythm: {},
     sensenova: {},
     internAi: {},
+    qiniu: {},
   };
 
   for (const row of listProviders()) {
@@ -430,6 +432,10 @@ export async function refreshHealthSnapshot(): Promise<void> {
         break;
       case "intern-ai":
         snapshot.internAi[row.id] = await internAiCredits(row.id);
+        break;
+      case "qiniu":
+        // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
+        snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
         break;
     }
   }

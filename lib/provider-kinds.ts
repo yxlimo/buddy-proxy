@@ -21,7 +21,7 @@ import type { Route } from "./router/routes.ts";
 // 只为 `dispatch` 的参数类型：upstreams/tokenrhythm.ts 从这边取 kindOf，值上不互相引用。
 import type { UpstreamContext } from "./router/upstreams/index.ts";
 /** 面板上登录的方式。 */
-export type ProviderLoginMethod = "device" | "browser" | "password" | "code";
+export type ProviderLoginMethod = "device" | "browser" | "password" | "code" | "api_key";
 
 /** 一次签到的结果。 */
 export interface BenefitOutcome {
@@ -150,6 +150,8 @@ export interface HealthSnapshot {
   sensenova: Record<string, { pools: unknown }>;
   /** 书生·端砚的墨点：余额与批次。 */
   internAi: Record<string, { balance: unknown; packs: unknown }>;
+  /** 七牛云的资源包。 */
+  qiniu: Record<string, { quota: unknown }>;
 }
 
 /* ------------------------------------------------------------------ *
