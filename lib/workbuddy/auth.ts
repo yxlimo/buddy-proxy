@@ -25,6 +25,7 @@ import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadS
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { getSecret } from "../store.ts";
 import { provider, providerSecretId } from "../providers.ts";
+import { beginLoginFlow, driveLogin, registerLoginFlow, type LoginContext } from "../login-flow.ts";
 
 export type WorkBuddyRegion = "cn";
 
@@ -371,22 +372,68 @@ export async function pollLogin(
 }
 
 /**
+ * 登录链落在哪个账号上。
+ *
+ * 面板与命令行都从账号行的 id 出发：凭据就是落在那一行上的。
+ */
+function loginContext(providerId: string): LoginContext {
+  return {
+    accountId: providerId,
+    platform: "workbuddy",
+    region: regionOf(providerId),
+  };
+}
+
+/**
+ * WorkBuddy 的登录链：建 state → 用户在浏览器里批准 → 轮询拿会话 → 落库。
+ *
+ * `pollLogin` 自己就在里头等到批准或者窗口过期，所以这一条只问一轮：返回
+ * 的是终态，抛出来的错（被拒、超时）也原样往上走。
+ */
+registerLoginFlow<WorkBuddySession>("workbuddy", {
+  method: "browser",
+  label: "workbuddy",
+  pollIntervalMs: POLL_INTERVAL_MS,
+  timeoutMs: LOGIN_TIMEOUT_MS,
+  begin: async (ctx) => {
+    const start = await startLogin(ctx.accountId);
+    return {
+      method: "browser",
+      authorizationUrl: start.authUrl,
+      userCode: "",
+      expiresAtMs: start.expiresAtMs,
+      message: "请在浏览器中打开上方链接并完成登录，之后此处会自动显示为已登录。",
+      state: { state: start.state },
+    };
+  },
+  poll: async (ctx, ticket) => {
+    const session = await pollLogin(ctx.accountId, String(ticket.state.state ?? ""), ticket.expiresAtMs);
+    return { state: "approved", session };
+  },
+  commit: (ctx, session) => {
+    saveSession(session, ctx.accountId, { force: true });
+    return providerSecretId(ctx.accountId);
+  },
+});
+
+/**
  * 登录：建 state → 用户在浏览器里登录 → 轮询 → 存会话。
  *
  * 面板上要用的是上面那两半（startLogin / pollLogin），这里是一体的。
+ * 走的都是上面登记的这条链接，与面板同一条。
  */
 export async function login(providerId = "workbuddy-cn"): Promise<WorkBuddySession> {
   const region = regionOf(providerId);
-  const start = await startLogin(providerId);
+  const ctx = loginContext(providerId);
+  const ticket = await beginLoginFlow("workbuddy", ctx);
 
   console.log("");
   console.log(`  region: ${region}  base: ${ENDPOINTS[region].base}`);
-  console.log(`  open in a browser: ${start.authUrl}`);
+  console.log(`  open in a browser: ${ticket.authorizationUrl}`);
   console.log(`  (waiting for approval, up to ${Math.round(LOGIN_TIMEOUT_MS / 60000)} min)`);
   console.log("");
 
-  const session = await pollLogin(providerId, start.state, start.expiresAtMs);
-  saveSession(session, providerId, { force: true });
+  const { session } = await driveLogin<WorkBuddySession>("workbuddy", ctx, ticket, ticket.expiresAtMs);
   console.log(
     `  logged in: ${session.nickname}, token good for ${Math.round(session.expiresAtMs / 1000 - Date.now() / 1000)}s`,
   );

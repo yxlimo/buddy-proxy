@@ -35,11 +35,9 @@ import {
   pollLogin as pollZcodeLogin,
   type ZcodeLogin,
 } from "../zcode/auth.ts";
-import {
-  pollLogin as pollWorkBuddyLogin,
-  saveSession as saveWorkBuddySession,
-  startLogin as startWorkBuddyLogin,
-} from "../workbuddy/auth.ts";
+import { beginLoginFlow, driveLogin, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
+export type { LoginMethod };
+import { regionOf as workBuddyRegionOf } from "../workbuddy/auth.ts";
 import { loginWithCredentials, tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
 import { ensureApiKey } from "../tokenrhythm/keys.ts";
 import { login as loginSenseNova } from "../sensenova/auth.ts";
@@ -56,8 +54,7 @@ import { exchangeCode as exchangeInternAiCode } from "../intern-ai/auth.ts";impo
 /** 一次登录的状态。 */
 export type LoginStatus = "pending" | "approved" | "failed" | "expired" | "cancelled";
 
-/** 面板按它决定画什么。 */
-export type LoginMethod = "device" | "browser" | "password" | "code" | "token";
+/** 面板按它决定画什么。定义在 lib/login-flow.ts，这里只是转出去。 */
 
 /** 一次登录会话，存进 cache 表的那一行。 */
 export interface StoredLogin {
@@ -182,16 +179,25 @@ async function startZcode(): Promise<Started> {
   };
 }
 
-/** WorkBuddy：浏览器流，state 在服务端。 */
-async function startWorkBuddy(): Promise<Started> {
-  const start = await startWorkBuddyLogin("cn");
+/** WorkBuddy：浏览器流，state 在服务端。
+ *
+ * 登录链本身登记在 lib/workbuddy/auth.ts 的 registerLoginFlow 里，这里只要把
+ * 账号行的 id 交给它。 */
+async function startWorkBuddy(accountId: string): Promise<Started> {
+  const ctx: LoginContext = {
+    accountId,
+    platform: "workbuddy",
+    region: workBuddyRegionOf(accountId),
+  };
+  const ticket = await beginLoginFlow("workbuddy", ctx);
   return {
-    method: "browser",
-    authorizationUrl: start.authUrl,
-    userCode: "",
-    expiresAt: start.expiresAtMs,
-    message: "请在浏览器中打开上方链接并完成登录，之后此处会自动显示为已登录。",
-    poll: { kind: "workbuddy", state: start.state },
+    method: ticket.method,
+    authorizationUrl: ticket.authorizationUrl,
+    userCode: ticket.userCode,
+    expiresAt: ticket.expiresAtMs,
+    message: ticket.message,
+    // 半凭据照旧摊进这一层再存：形状没变，重启前还在等的登录照旧能接上。
+    poll: { kind: "workbuddy", ...ticket.state },
   };
 }
 
@@ -258,7 +264,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       case "zcode":
         return startZcode();
       case "workbuddy":
-        return startWorkBuddy();
+        return startWorkBuddy(row.id);
       case "tokenrhythm":
       case "sensenova":
         return startPassword();
@@ -341,9 +347,21 @@ async function runPoll(session: StoredLogin): Promise<string> {
     }
     case "workbuddy": {
       const state = String(poll.state ?? "");
-      const result = await pollWorkBuddyLogin(providerId, state, session.expiresAt);
-      saveWorkBuddySession(result, providerId, { force: true });
-      return `session:provider:${providerId}`;
+      const ctx: LoginContext = {
+        accountId: providerId,
+        platform: session.upstreamId,
+        region: workBuddyRegionOf(providerId),
+      };
+      const ticket: LoginTicket = {
+        method: "browser",
+        authorizationUrl: session.authorizationUrl,
+        userCode: session.userCode,
+        expiresAtMs: session.expiresAt,
+        message: session.message,
+        state: { state },
+      };
+      const { credentialId } = await driveLogin("workbuddy", ctx, ticket, session.expiresAt);
+      return credentialId;
     }
     case "zcode": {
       const login = poll.login as unknown as ZcodeLogin;
