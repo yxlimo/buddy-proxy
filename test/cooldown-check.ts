@@ -26,6 +26,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
@@ -207,15 +208,24 @@ function freePort(): Promise<number> {
  * 账号是两个：凭据直接写进这个测试自己的库 —— 与真的那台机器无关。
  * 同一个数据目录可以再起一个：那是「重启」，冷却得还在。
  */
+/** 这个测试自己建的目录：它要跨「重启」活着，所以收尾也归它。 */
+const temps: string[] = [];
+process.on("exit", () => {
+  for (const dir of temps) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 async function startGateway(dataDir?: string): Promise<Gateway> {
-  const port = await freePort();
   const dir = dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "cooldown-"));
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+  if (!dataDir) temps.push(dir);
+  // 重启时目录是复用的：可能已经被上一次 stop 收走过，补建回来。
+  fs.mkdirSync(dir, { recursive: true });
+  // 起网关交给共用的 helper：端口被抢就换号重试，失败一定收尾。
+  // 同一个数据目录可以再起一次 —— 那就是「重启」，冷却得还在。
+  const running = await startHarness({
+    dataDir: dir,
+    // 目录归这个测试：重启要用同一个，helper 不许删。
+    keepDataDir: true,
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: dir,
-      ROUTER_PORT: String(port),
       BENEFITS_DISABLED: "1",
       MINIMAX_BASE_URL: upstreamBase,
       // 健康快照要问余额与套餐：也指到本机的假服务，别碰真的平台。
@@ -224,51 +234,15 @@ async function startGateway(dataDir?: string): Promise<Gateway> {
       // 日志里要看见「为什么换了账号」。
       QODER_LOG_ROUTE: "true",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  let log = "";
-  child.stdout?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 80; i++) {
-    if (child.exitCode !== null) break;
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        up = true;
-        break;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!up) {
-    child.kill("SIGTERM");
-    console.log(log.slice(-1500));
-    throw new Error("网关没起来");
-  }
 
   const tokenFile = path.join(dir, "admin-token");
   const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
   const gw: Gateway = {
-    base,
+    base: running.base,
     token,
-    log: () => log,
-    stop: () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* 已经走了 */
-      }
-    },
+    log: () => running.log(),
+    stop: () => running.stop(),
     accounts: [],
     dataDir: dir,
   };
