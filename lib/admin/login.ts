@@ -460,13 +460,13 @@ async function runPoll(session: StoredLogin): Promise<string> {
 export function loginActivity(accountId: string): { loggingIn: boolean; rejected: boolean } {
   let loggingIn = false;
   let latest: LoginStatus | null = null;
-  // listCached 按时间排，所以最后一个就是最近的那次。
-  for (const row of listCached("login:")) {
-    const session = peekCached<StoredLogin>(row.id)?.data;
-    if (!session || session.accountId !== accountId) continue;
+  // loginsOf 按时间排，所以最后一个就是最近的那次。
+  for (const session of loginsOf(accountId)) {
     // 还在等、但窗口已经过了，就不是「正在登录」了 —— 那次登录早就没戏了。
     // 留着这个状态，面板会一直说「正在登录」，而实际上什么都没在等。
     if (session.status === "pending" && session.expiresAt > 0 && Date.now() > session.expiresAt) {
+      // 顺手把它标成过期：下一次来看的人看到的也是「过期」，不是「在等」。
+      updateLogin(session.loginId, { status: "expired", message: "登录窗口已过期。" });
       latest = "expired";
       continue;
     }
@@ -474,6 +474,42 @@ export function loginActivity(accountId: string): { loggingIn: boolean; rejected
     latest = session.status;
   }
   return { loggingIn, rejected: latest === "failed" };
+}
+
+/**
+ * 这个账号名下的登录记录，按时间排。
+ *
+ * 登录会话都在 cache 表里，多进程共享：面板那个进程读到的和网关这个进程写下
+ * 的是同一批行。
+ */
+function loginsOf(accountId: string): StoredLogin[] {
+  const sessions: StoredLogin[] = [];
+  for (const row of listCached("login:")) {
+    const session = peekCached<StoredLogin>(row.id)?.data;
+    if (!session || session.accountId !== accountId) continue;
+    sessions.push(session);
+  }
+  return sessions;
+}
+
+/**
+ * 密码这条路不开轮询：登录结束在这里把记录合上，否则面板一直说「正在登录」。
+ *
+ * 设备流那条路（pollLoop）会自己把记录合上；密码这条路没有轮询，没人替它
+ * 合。记录留着 pending，面板就永远停在「正在登录」，额度栏也空着。
+ */
+function closePendingLogins(
+  accountId: string,
+  outcome: { ok: true; credentialId: string } | { ok: false; message: string },
+): void {
+  for (const session of loginsOf(accountId)) {
+    if (session.status !== "pending") continue;
+    updateLogin(session.loginId, {
+      status: outcome.ok ? "approved" : "failed",
+      message: outcome.ok ? "登录完成。" : outcome.message,
+      credentialId: outcome.ok ? outcome.credentialId : session.credentialId,
+    });
+  }
 }
 
 /**
@@ -559,78 +595,94 @@ export async function loginWithPassword(input: {
       accountId: "",
     };
   }
-  switch (row.kind) {
-    case "tokenrhythm": {
-      const session = await loginWithCredentials(row.id, input.username, input.password, input.remember);
-      // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。
-      // 账号上没有就建一把（平台只给一次完整值）。
-      await ensureApiKey(session, row.id, tokenRhythmCredentialOf(row.id)?.apiKey ?? null);
-      return {
-        ok: true,
-        message: `${row.alias || row.id} 登录完成。`,
-        credentialId: `session:provider:${row.id}`,
-        accountId: row.id,
-      };
+  try {
+    switch (row.kind) {
+      case "tokenrhythm": {
+        const session = await loginWithCredentials(row.id, input.username, input.password, input.remember);
+        // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。
+        // 账号上没有就建一把（平台只给一次完整值）。
+        await ensureApiKey(session, row.id, tokenRhythmCredentialOf(row.id)?.apiKey ?? null);
+        const credentialId = `session:provider:${row.id}`;
+        closePendingLogins(row.id, { ok: true, credentialId });
+        return {
+          ok: true,
+          message: `${row.alias || row.id} 登录完成。`,
+          credentialId,
+          accountId: row.id,
+        };
+      }
+      case "sensenova": {
+        const session = await loginSenseNova(input.username, input.password, row.id);
+        // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整
+        // 值，建它的那个函数负责存下来）。登录完了上游才是 READY 的。
+        const keyReady = await ensureKeySafe("SENSENOVA", () => ensureSenseNovaKey(session, row.id));
+        // cookie 必然要存 —— 它就是登录态，没有它就没有会话。所以不提供「要不要
+        // 记住」这个选择：cookie 留着，密码不留（下次要密码的时候再问一次）。
+        const accountSecret = `key:provider:${row.id}:account`;
+        const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(accountSecret);
+        setSecret(accountSecret, "account", {
+          user: stored?.user ?? input.username,
+          password: "",
+          apiKey: stored?.apiKey ?? null,
+        });
+        const credentialId = `session:provider:${row.id}`;
+        closePendingLogins(row.id, { ok: true, credentialId });
+        return {
+          ok: true,
+          message: keyReady
+            ? "SenseNova 登录完成，推理用的 key 已就绪。"
+            : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
+          credentialId,
+          accountId: row.id,
+        };
+      }
+      case "intern-ai": {
+        const captcha =
+          input.captchaVerifyParam && input.captchaSceneId && input.captchaPrefix
+            ? {
+                captchaVerifyParam: input.captchaVerifyParam,
+                sceneId: input.captchaSceneId,
+                prefix: input.captchaPrefix,
+              }
+            : undefined;
+        // 契约里这个请求没有「登哪个子站」这一项，所以两个子站都登。
+        const session = await loginInternAi(
+          {
+            user: input.username,
+            password: input.password,
+            captcha,
+          },
+          row.id,
+        );
+        // 推理端点认的是 Discovery 子站那把 key：账号上没有就建一把。
+        const keyReady = await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session, row.id));
+        const credentialId = `session:provider:${row.id}`;
+        closePendingLogins(row.id, { ok: true, credentialId });
+        return {
+          ok: true,
+          message: keyReady
+            ? "intern-ai 登录完成，推理用的 key 已就绪。"
+            : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
+          credentialId,
+          accountId: row.id,
+        };
+      }
+      default: {
+        const message = `这个账号不用账号密码登录：${row.alias || row.id}`;
+        closePendingLogins(row.id, { ok: false, message });
+        return {
+          ok: false,
+          message,
+          credentialId: "",
+          accountId: "",
+        };
+      }
     }
-    case "sensenova": {
-      const session = await loginSenseNova(input.username, input.password, row.id);
-      // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整
-      // 值，建它的那个函数负责存下来）。登录完了上游才是 READY 的。
-      const keyReady = await ensureKeySafe("SENSENOVA", () => ensureSenseNovaKey(session, row.id));
-      // cookie 必然要存 —— 它就是登录态，没有它就没有会话。所以不提供「要不要
-      // 记住」这个选择：cookie 留着，密码不留（下次要密码的时候再问一次）。
-      const accountSecret = `key:provider:${row.id}:account`;
-      const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(accountSecret);
-      setSecret(accountSecret, "account", {
-        user: stored?.user ?? input.username,
-        password: "",
-        apiKey: stored?.apiKey ?? null,
-      });
-      return {
-        ok: true,
-        message: keyReady
-          ? "SenseNova 登录完成，推理用的 key 已就绪。"
-          : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
-        credentialId: `session:provider:${row.id}`,
-        accountId: row.id,
-      };
-    }
-    case "intern-ai": {
-      const captcha =
-        input.captchaVerifyParam && input.captchaSceneId && input.captchaPrefix
-          ? {
-              captchaVerifyParam: input.captchaVerifyParam,
-              sceneId: input.captchaSceneId,
-              prefix: input.captchaPrefix,
-            }
-          : undefined;
-      // 契约里这个请求没有「登哪个子站」这一项，所以两个子站都登。
-      const session = await loginInternAi(
-        {
-          user: input.username,
-          password: input.password,
-          captcha,
-        },
-        row.id,
-      );
-      // 推理端点认的是 Discovery 子站那把 key：账号上没有就建一把。
-      const keyReady = await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session, row.id));
-      return {
-        ok: true,
-        message: keyReady
-          ? "intern-ai 登录完成，推理用的 key 已就绪。"
-          : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
-        credentialId: `session:provider:${row.id}`,
-        accountId: row.id,
-      };
-    }
-    default:
-      return {
-        ok: false,
-        message: `这个账号不用账号密码登录：${row.alias || row.id}`,
-        credentialId: "",
-        accountId: "",
-      };
+  } catch (e) {
+    // 登录没成，那条「正在登录」的记录也得合上：不然面板会一直等一个已经
+    // 不会有结果的人。
+    closePendingLogins(row.id, { ok: false, message: errorText(e) });
+    throw e;
   }
 }
 
