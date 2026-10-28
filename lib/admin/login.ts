@@ -18,12 +18,9 @@ import { dataDir } from "../paths.ts";
 // Side-effect import: this module registers minimax's login flow
 import "../minimax/oauth.ts";
 import type { DeviceAuthorization as MinimaxDeviceAuthorization } from "../minimax/oauth.ts";
-import {
-  buildDeviceAuthorization,
-  pollDeviceToken as pollQoderDevice,
-  saveSession as saveQoderSession,
-  type DeviceAuthorization as QoderDeviceAuthorization,
-} from "../qoder/auth.ts";
+// Side-effect import: this module registers qoder's login flow
+import "../qoder/auth.ts";
+import type { DeviceAuthorization as QoderDeviceAuthorization } from "../qoder/auth.ts";
 import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts";
 // Side-effect import: this module registers zcode's login flow
 import "../zcode/auth.ts";
@@ -157,16 +154,28 @@ async function startMinimax(accountId: string): Promise<Started> {
   };
 }
 
-/** Qoder：设备流，但没有大字码（挑战是本地算的）。 */
-async function startQoder(providerId: string): Promise<Started> {
-  const auth = buildDeviceAuthorization(providerId);
+/** Qoder：设备流，但没有大字码（挑战是本地算的）。
+ *
+ * 登录链本身登记在 lib/qoder/auth.ts 的 registerLoginFlow 里，这里只要把
+ * 账号行的 id 交给它。 */
+async function startQoder(accountId: string): Promise<Started> {
+  const ctx: LoginContext = {
+    accountId,
+    platform: "qoder",
+    region: "",
+  };
+  const ticket = await beginLoginFlow("qoder", ctx);
+  // SAFETY: the ticket comes from the qoder flow's begin, which puts the
+  // DeviceAuthorization it built under state.auth
+  const auth = ticket.state.auth as unknown as Record<string, unknown>;
   return {
-    method: "device",
-    authorizationUrl: auth.authUrl,
-    userCode: "",
-    expiresAt: auth.expiresAtMs,
-    message: "请在浏览器中打开上方链接，选择账号并完成授权，之后此处会自动显示为已登录。",
-    poll: { kind: "qoder", auth: auth as unknown as Record<string, unknown> },
+    method: ticket.method,
+    authorizationUrl: ticket.authorizationUrl,
+    userCode: ticket.userCode,
+    expiresAt: ticket.expiresAtMs,
+    message: ticket.message,
+    // 半凭据照旧摊进这一层再存：形状没变，重启前还在等的登录照旧能接上。
+    poll: { kind: "qoder", auth },
   };
 }
 
@@ -373,10 +382,24 @@ async function runPoll(session: StoredLogin): Promise<string> {
       return credentialId;
     }
     case "qoder": {
+      // SAFETY: rows with poll.kind === "qoder" are written by startQoder alone
+      // and its auth field is the DeviceAuthorization that begin built
       const auth = poll.auth as unknown as QoderDeviceAuthorization;
-      const result = await pollQoderDevice(auth, providerId);
-      saveQoderSession(result, providerId, { force: true });
-      return `session:provider:${providerId}`;
+      const ctx: LoginContext = {
+        accountId: providerId,
+        platform: session.upstreamId,
+        region: "",
+      };
+      const ticket: LoginTicket = {
+        method: "device",
+        authorizationUrl: session.authorizationUrl,
+        userCode: session.userCode,
+        expiresAtMs: session.expiresAt,
+        message: session.message,
+        state: { auth },
+      };
+      const { credentialId } = await driveLogin("qoder", ctx, ticket, session.expiresAt);
+      return credentialId;
     }
     case "workbuddy": {
       const state = String(poll.state ?? "");

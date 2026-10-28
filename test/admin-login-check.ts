@@ -48,6 +48,15 @@ let deviceCodeRequests = 0;
 let zcodePollRequests = 0;
 /** 发了第几次 minimax token 请求：第一次还在等，第二次才批。 */
 let minimaxTokenRequests = 0;
+/** 发了第几次 qoder 的 deviceToken poll。 */
+let qoderPollRequests = 0;
+/**
+ * 自测放行的那一次登录的 nonce。
+ *
+ * 上游的 poll 端点用 404 说「用户还没点」：那是等待，不是失败。只有 nonce
+ * 对得上的那一次登录才会被批，别的登录（取消、过期那些）一直 404。
+ */
+let qoderApproveNonce = "";
 
 const mock = http.createServer(async (req, res) => {
   const chunks: Buffer[] = [];
@@ -92,6 +101,26 @@ const mock = http.createServer(async (req, res) => {
     }
     // 用户拒绝了。
     res.end(JSON.stringify({ error: "access_denied", error_description: "the user denied it" }));
+    return;
+  }
+  if (req.url?.startsWith("/api/v1/deviceToken/poll")) {
+    qoderPollRequests++;
+    const nonce = new URL(req.url, "http://127.0.0.1").searchParams.get("nonce") ?? "";
+    if (nonce !== qoderApproveNonce) {
+      // 上游说「用户还没点」：这是等待，不是失败。
+      res.statusCode = 404;
+      res.end("{}");
+      return;
+    }
+    res.end(
+      JSON.stringify({
+        token: "qoder-at-test",
+        refresh_token: "qoder-rt-test",
+        user_id: "qoder-u-1",
+        expire_time: 3600,
+        refresh_token_expire_time: 86400,
+      }),
+    );
     return;
   }
   if (req.url?.startsWith("/v2/plugin/auth/state")) {
@@ -175,9 +204,13 @@ const router = spawn(process.execPath, ["router-proxy.ts"], {
     MINIMAX_OAUTH_ORIGIN: mockBase,
     WORKBUDDY_CN_BASE: mockBase,
     ZCODE_BASE_URL: mockBase,
-    // 轮询快一点：自测不用等上游那三秒。
+    // Qoder 的 poll 也指到假上游：自测不碰真平台。
+    QODER_GLOBAL_OPENAPI_BASE: mockBase,
+    QODER_CN_OPENAPI_BASE: mockBase,
+    // 轮询快一点：自测不用等上游那一秒。
     ZCODE_POLL_INTERVAL_MS: "200",
     MINIMAX_POLL_INTERVAL_MS: "200",
+    QODER_POLL_INTERVAL_MS: "200",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -289,6 +322,11 @@ check(
   String(qoder.body?.session?.authorizationUrl ?? "").includes("challenge="),
   JSON.stringify(qoder.body?.session?.authorizationUrl),
 );
+check(
+  "Qoder 的链接带机器 token",
+  String(qoder.body?.session?.authorizationUrl ?? "").includes("machine_token="),
+  JSON.stringify(qoder.body?.session?.authorizationUrl),
+);
 
 const qoderCn = await call("BeginLogin", { upstreamId: "qoder-cn" });
 check("Qoder 中国区开始了", qoderCn.body?.ok === true, JSON.stringify(qoderCn.body));
@@ -373,6 +411,21 @@ check(
   typeof stored.poll?.auth?.codeVerifier === "string" && stored.poll.auth.codeVerifier.length > 0,
 );
 
+// Qoder 的半凭据：挑战、nonce 与机器 token 都在这一行里。
+const qoderRow = db.prepare("SELECT data FROM cache WHERE id = ?").get(`login:${qoder.body?.session?.loginId}`) as any;
+check("Qoder 的会话在 cache 表里", Boolean(qoderRow), JSON.stringify(rows.map((r) => r.id)));
+const qoderStored = JSON.parse(String(qoderRow?.data ?? "{}"));
+check(
+  "Qoder 的轮询材料里有 nonce",
+  String(qoderStored?.poll?.auth?.nonce ?? "").length > 0,
+  JSON.stringify(Object.keys(qoderStored?.poll?.auth ?? {})),
+);
+check(
+  "Qoder 的轮询材料里有机器 token",
+  String(qoderStored?.poll?.auth?.machineToken ?? "").length > 0,
+  JSON.stringify(Object.keys(qoderStored?.poll?.auth ?? {})),
+);
+
 console.log("");
 console.log("日志里没有材料");
 
@@ -448,6 +501,47 @@ const zcodeApproved = await waitFor(async () => {
 check("ZCode 轮询同意会变成 approved", zcodeApproved, "没有变成 approved");
 const zcodeSecret = db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:provider:zcode") as any;
 check("ZCode 的凭据落进了 secrets 表", Boolean(zcodeSecret?.data), JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
+
+// Qoder：上游用 404 说「用户还没批」，那是等待，不是失败。
+const qoderAsked = await waitFor(() => qoderPollRequests >= 1);
+check("Qoder 的上游被问过了", qoderAsked, String(qoderPollRequests));
+const qoderPending = await call("GetLoginStatus", { loginId: qoder.body?.session?.loginId });
+check(
+  "上游回 404 时还是 pending",
+  qoderPending.body?.session?.status === "pending",
+  JSON.stringify(qoderPending.body?.session?.status),
+);
+check(
+  "上游回 404 时不是 failed",
+  qoderPending.body?.session?.status !== "failed",
+  JSON.stringify(qoderPending.body?.session?.status),
+);
+
+// 放行：上游批了这一次登录。
+qoderApproveNonce = String(qoderStored?.poll?.auth?.nonce ?? "");
+const qoderApproved = await waitFor(async () => {
+  const res = await call("GetLoginStatus", { loginId: qoder.body?.session?.loginId });
+  return res.body?.session?.status === "approved";
+});
+check("Qoder 轮询同意会变成 approved", qoderApproved, "没有变成 approved");
+const qoderAccountId = String(qoderStored?.accountId ?? "");
+const qoderSecretAppeared = await waitFor(() =>
+  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get(`session:provider:${qoderAccountId}`) as any)?.data),
+);
+check("Qoder 的凭据落进了 secrets 表", qoderSecretAppeared, JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
+const qoderSecret = db
+  .prepare("SELECT id, data FROM secrets WHERE id = ?")
+  .get(`session:provider:${qoderAccountId}`) as any;
+check(
+  "Qoder 的凭据 id 是 session:provider:<账号>",
+  String(qoderSecret?.id ?? "") === `session:provider:${qoderAccountId}`,
+  String(qoderSecret?.id),
+);
+check(
+  "落库的 Qoder 凭据里有 access token",
+  String(qoderSecret?.data ?? "").includes("qoder-at-test"),
+  String(qoderSecret?.data).slice(0, 80),
+);
 
 // 取消。
 const cancelTarget = await call("BeginLogin", { upstreamId: "qoder" });

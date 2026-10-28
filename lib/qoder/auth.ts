@@ -24,6 +24,7 @@ import { deriveDeviceIdentity, deviceSalt, type DeviceIdentity } from "../device
 import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadSession, readSession, refreshSessionFlow, toCredential as credentialFromSession, type CredentialCache, writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { provider, providerSecretId } from "../providers.ts";
+import { registerLoginFlow, type LoginContext, type LoginTicket, type PollResult } from "../login-flow.ts";
 
 export type QoderRegion = "cn" | "global";
 
@@ -379,48 +380,80 @@ export function buildDeviceAuthorization(providerId = "qoder"): DeviceAuthorizat
   };
 }
 
-/** Poll until the browser approval lands, then persist the session. */
-export async function pollDeviceToken(auth: DeviceAuthorization, providerId = "qoder"): Promise<QoderSession> {
+/** What one question to the upstream says. */
+export type DevicePoll =
+  | { state: "pending" }
+  | { state: "approved"; session: QoderSession }
+  | { state: "failed"; message: string; code: string; httpStatus: number }
+  | { state: "expired"; message: string };
+
+/**
+ * Ask the upstream once: has the browser approved this device flow yet?
+ *
+ * The waiting belongs to the caller (lib/login-flow.ts drives it with a rhythm
+ * and a window); here we only answer what the upstream said.
+ *
+ * A 404 is the upstream's way of saying "the user has not approved yet" -- it
+ * is a wait, not an error. That is the one thing about this flow that differs
+ * from every other platform, so it stays visible here.
+ */
+export async function pollDeviceTokenOnce(auth: DeviceAuthorization, providerId = "qoder"): Promise<DevicePoll> {
   const region = regionOf(providerId);
-  const deadline = Math.min(auth.expiresAtMs, Date.now() + POLL_TIMEOUT_MS);
+  if (Date.now() >= auth.expiresAtMs) {
+    return { state: "expired", message: "授权超时，请重新发起登录。" };
+  }
   const url =
     `${ENDPOINTS[region].openapi}/api/v1/deviceToken/poll?` +
     new URLSearchParams({ nonce: auth.nonce, verifier: auth.verifier, challenge_method: "S256" });
 
+  let r: Response;
+  try {
+    r = await fetch(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT } });
+  } catch {
+    // The network hiccuped; the caller asks again.
+    return { state: "pending" };
+  }
+  if (r.status === 404) {
+    // Designed-in "still waiting for the user to approve".
+    return { state: "pending" };
+  }
+  if (!r.ok) {
+    const body = await r.json().catch(() => undefined);
+    const code = body?.errorCode ?? body?.code ?? `HTTP ${r.status}`;
+    return {
+      state: "failed",
+      code: `device poll failed (${code})`,
+      message: `轮询授权结果被服务端拒绝（${code}）。`,
+      httpStatus: 502,
+    };
+  }
+  const body = await r.json();
+  if (body?.token) {
+    // The machine identity comes from the authorization step and must survive into
+    // the stored session, so the refresh call can send it back.
+    // SAFETY: parseGrant only reads the fields it needs from `previous` (the
+    // machine identity and the region); the rest of the session is filled in
+    // by the grant itself.
+    const previous = {
+      region,
+      clientId: CLIENT_ID,
+      machineId: auth.machineId,
+      machineToken: auth.machineToken,
+      machineType: auth.machineType,
+    } as unknown as QoderSession;
+    return { state: "approved", session: parseGrant(body, previous) };
+  }
+  return { state: "pending" };
+}
+
+/** Poll until the browser approval lands, then persist the session. */
+export async function pollDeviceToken(auth: DeviceAuthorization, providerId = "qoder"): Promise<QoderSession> {
+  const deadline = Math.min(auth.expiresAtMs, Date.now() + POLL_TIMEOUT_MS);
   while (Date.now() < deadline) {
-    let r: Response;
-    try {
-      r = await fetch(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT } });
-    } catch {
-      await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
-      continue;
-    }
-    if (r.status === 404) {
-      // Designed-in "still waiting for the user to approve".
-      await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
-      continue;
-    }
-    if (!r.ok) {
-      const body = await r.json().catch(() => undefined);
-      const code = body?.errorCode ?? body?.code ?? `HTTP ${r.status}`;
-      throw new AuthError(`device poll failed (${code})`, `轮询授权结果被服务端拒绝（${code}）。`, 502);
-    }
-    const body = await r.json();
-    if (body?.token) {
-      // The machine identity comes from the authorization step and must survive into
-      // the stored session, so the refresh call can send it back.
-      // SAFETY: parseGrant only reads the fields it needs from `previous` (the
-      // machine identity and the region); the rest of the session is filled in
-      // by the grant itself.
-      const previous = {
-        region,
-        clientId: CLIENT_ID,
-        machineId: auth.machineId,
-        machineToken: auth.machineToken,
-        machineType: auth.machineType,
-      } as unknown as QoderSession;
-      return parseGrant(body, previous);
-    }
+    const r = await pollDeviceTokenOnce(auth, providerId);
+    if (r.state === "approved") return r.session;
+    if (r.state === "failed") throw new AuthError(r.code, r.message, r.httpStatus);
+    if (r.state === "expired") throw new AuthError("expired_token", r.message, 503);
     await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
   }
   throw new AuthError("expired_token", "授权超时，请重新发起登录。", 503);
@@ -489,6 +522,52 @@ export function qoderStatus(providerId = "qoder"): Record<string, unknown> {
     lastRefreshAt: new Date(session.refreshedAtMs).toISOString(),
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * 登录链
+ * ------------------------------------------------------------------ */
+
+/**
+ * Qoder 的登录链，登记给 lib/login-flow.ts。
+ *
+ * 与别家不同的地方有两处：挑战与 nonce 是本地算的（上游没有 device code
+ * 端点），所以「开始」这一段不用问上游；轮询时上游用 404 说「用户还没点」，
+ * 那是等待，不是失败。
+ */
+registerLoginFlow<QoderSession>("qoder", {
+  method: "device",
+  label: "qoder",
+  timeoutMs: POLL_TIMEOUT_MS,
+  pollIntervalMs: POLL_INTERVAL_MS,
+  begin: async (ctx: LoginContext): Promise<LoginTicket> => {
+    const auth = buildDeviceAuthorization(ctx.accountId);
+    return {
+      method: "device",
+      authorizationUrl: auth.authUrl,
+      // Qoder 没有大字码：挑战本身就是那个码。
+      userCode: "",
+      expiresAtMs: auth.expiresAtMs,
+      message: "请在浏览器中打开上方链接，选择账号并完成授权，之后此处会自动显示为已登录。",
+      // The half-credential travels as it is: the row the panel stores keeps
+      // the old shape, so a login that was still waiting survives a restart.
+      state: { auth },
+    };
+  },
+  poll: async (ctx: LoginContext, ticket: LoginTicket): Promise<PollResult<QoderSession>> => {
+    const auth = ticket.state.auth as DeviceAuthorization;
+    const r = await pollDeviceTokenOnce(auth, ctx.accountId);
+    if (r.state === "approved") return { state: "approved", session: r.session };
+    if (r.state === "failed") return { state: "failed", message: r.message };
+    if (r.state === "expired") return { state: "expired", message: r.message };
+    return { state: "pending" };
+  },
+  // The session is stored here: this is the one moment a login finishes, so
+  // it may overwrite the older one.
+  commit: (ctx: LoginContext, session: QoderSession) => {
+    saveSession(session, ctx.accountId, { force: true });
+    return providerSecretId(ctx.accountId);
+  },
+});
 
 /**
  * What the account itself says about its standing.
