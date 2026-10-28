@@ -103,6 +103,51 @@ function minimaxTokenPlan(provider: ProviderRow, snapshot: HealthSnapshot): Toke
   return tokenPlanView(mine.tokenPlan);
 }
 
+/** 平台给的时间：毫秒或者 ISO 字符串。 */
+function timeMs(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : 0;
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** 窗口里还剩百分之多少。读不到就是「还有」（100）。 */
+function percentLeft(value: unknown): number {
+  if (value === null || value === undefined || value === "") return 100;
+  const raw = Number(String(value).replace("%", "").trim());
+  return Number.isFinite(raw) ? raw : 100;
+}
+
+/**
+ * 套餐窗口什么时候恢复额度。
+ *
+ * 与 lib/router/account-cooldown.ts 的 planWindowEndsAt 同一套取舍：先看见底的
+ * 窗口（那一格结束了账号才有额度），多个见底窗口取最晚的那个 —— 少一个都不行；
+ * 没有见底的窗口就退回还没到的最早到期点。
+ */
+function planRecovery(windows: any[], now = Date.now()): number | null {
+  let exhausted: number | null = null;
+  let soonest: number | null = null;
+  for (const window of windows) {
+    if (isIgnoredPlanWindow(window)) continue;
+    for (const key of ["intervalEndsAt", "weeklyEndsAt"]) {
+      const at = timeMs(window?.[key]);
+      if (!at || at <= now) continue;
+      if (soonest === null || at < soonest) soonest = at;
+    }
+    const intervalAt = timeMs(window?.intervalEndsAt);
+    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
+      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
+    }
+    const weeklyAt = timeMs(window?.weeklyEndsAt);
+    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
+      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
+    }
+  }
+  return exhausted ?? soonest;
+}
+
 registerKind({
   kind: "minimax",
   label: "MiniMax Code",
@@ -145,6 +190,11 @@ registerKind({
     const fallback = mine.creditFallbackEnabled?.enabled;
     return !(typeof points === "number" && points > 0 && fallback === true);
   },
+  recoverAt: (provider, snapshot) => {
+    const mine = (snapshot.minimax?.[provider.id] ?? {}) as any;
+    const windows = (mine.tokenPlan?.windows ?? []) as any[];
+    return planRecovery(windows);
+  },
 });
 
 registerKind({
@@ -175,5 +225,11 @@ registerKind({
     return windows.some(
       (w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0,
     );
+  },
+  recoverAt: (provider, snapshot) => {
+    const mine = (snapshot.minimaxApi?.[provider.id] ?? {}) as any;
+    const tenants = (mine.tenants ?? []) as any[];
+    const windows = tenants.flatMap((t: any) => (t.plan?.windows ?? []) as any[]);
+    return planRecovery(windows);
   },
 });

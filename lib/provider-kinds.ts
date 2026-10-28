@@ -194,6 +194,12 @@ export interface ProviderKind {
   /** 额度用尽了吗（读不到就说不知道）。 */
   outOfCredits(provider: ProviderRow, snapshot: HealthSnapshot): boolean;
   /**
+   * 额度什么时候回来（Unix 毫秒）。null = 不知道。
+   *
+   * 只在账号确实见底时有意义：这是「等多久能再用」，不是「下次重置」。
+   */
+  recoverAt?(provider: ProviderRow, snapshot: HealthSnapshot): number | null;
+  /**
    * 这一类上游的每日签到。
    *
    * 没有这一项的种类不签到：签到是账号的事，写在种类里，加一个种类就是

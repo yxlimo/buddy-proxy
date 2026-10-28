@@ -12,7 +12,11 @@
 //   2. 冷却中：COOLING + 截止时刻 + 理由 + 恢复时间 + 一句话；
 //   3. 两个账号只有一个在冷却：平台还是 READY，但账号那一行带冷却；
 //   4. 额度用尽 + 冷却：额度优先（OUT_OF_CREDITS），冷却字段仍然填；
-//   5. 冷却已过期：回到 READY。
+//   5. 冷却已过期：回到 READY；
+//   6. 平台还能接：原因句说清是几个账号里的几个在冷却；
+//   7. 额度用尽：平台自己说得出什么时候回来（Qoder 的重置时间）；
+//   8. 额度用尽但平台说不出来（WorkBuddy）：恢复时间留空，不猜；
+//   9. 冷却与额度同时存在：恢复时间取早的那个。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -62,6 +66,11 @@ function qoderSession(id: string, region = "global") {
     loginAtMs: now,
     refreshedAtMs: now,
   };
+}
+
+/** 面板上那个时刻的写法（UTC+8，只到分钟）。 */
+function stampOf(ms: number): string {
+  return new Date(ms + 8 * 3600_000).toISOString().slice(11, 16);
 }
 
 /** 平台在面板上的那一条。 */
@@ -170,6 +179,86 @@ console.log("两个账号只有一个在冷却：平台还是就绪，账号看�
   check("在冷却的那个账号带理由", cooling.cooldownReason === "connection", cooling.cooldownReason);
   check("没在冷却的账号没有冷却时刻", fine.cooldownUntilMs === 0n, String(fine.cooldownUntilMs));
   clearCooldown(cnTwo.id!);
+}
+
+console.log("");
+console.log("平台还能接：一个账号冷却、另一个正常");
+
+{
+  const until = now + 7 * 60_000;
+  setCooldown(cnOne.id!, until, "connection");
+  const upstream = await upstreamOf("qoder-cn");
+  check("平台还是就绪", upstream.state === UpstreamState.READY, String(upstream.state));
+  check("原因句说清是几个账号里的几个", upstream.stateReason.includes("个账号"), upstream.stateReason);
+  check("原因句里有那个冷却时刻", upstream.stateReason.includes(stampOf(until)), upstream.stateReason);
+  check("冷却时刻还是那个", upstream.cooldownUntilMs === BigInt(until), String(upstream.cooldownUntilMs));
+  clearCooldown(cnOne.id!);
+}
+
+console.log("");
+console.log("额度用尽：平台自己说得出什么时候回来");
+
+{
+  clearCooldown(firstId);
+  const resetsAtMs = now + 45 * 60_000;
+  setCached(HEALTH_CACHE_ID, {
+    qoder: { [firstId]: { credits: { quotaExceeded: true, resetsAt: new Date(resetsAtMs).toISOString() } } },
+  });
+  const upstream = await upstreamOf("qoder");
+  check("状态是额度用尽", upstream.state === UpstreamState.OUT_OF_CREDITS, String(upstream.state));
+  check("恢复时间就是平台说的那个", upstream.recoversAtMs === BigInt(resetsAtMs), String(upstream.recoversAtMs));
+  check("原因句里有那个时刻", upstream.stateReason.includes(stampOf(resetsAtMs)), upstream.stateReason);
+}
+
+console.log("");
+console.log("额度用尽：平台说不出来的时候就说不知道");
+
+{
+  const wb = addAccount({ platform: "workbuddy-cn" });
+  const wbId = wb.id!;
+  setSecret(`session:provider:${wbId}`, "session", {
+    accessToken: "wb-test-token",
+    refreshToken: "wb-test-refresh",
+    uid: "test-user",
+    nickname: "tester",
+    domain: "127.0.0.1",
+    region: "cn",
+    generation: 1,
+    expiresAtMs: year,
+    refreshExpiresAtMs: year,
+    loginAtMs: now,
+    refreshedAtMs: now,
+  });
+  setCached(HEALTH_CACHE_ID, { workbuddy: { [wbId]: { credits: { daily: 0 } } } });
+  const upstream = await upstreamOf("workbuddy-cn");
+  check("状态是额度用尽", upstream.state === UpstreamState.OUT_OF_CREDITS, String(upstream.state));
+  check("算不出恢复时间", upstream.recoversAtMs === 0n, String(upstream.recoversAtMs));
+  check("原因句只有额度用尽", upstream.stateReason === "额度用尽", upstream.stateReason);
+}
+
+console.log("");
+console.log("冷却与额度同时存在：恢复时间取早的那个");
+
+{
+  const until = now + 10 * 60_000;
+  const resetsAtMs = now + 45 * 60_000;
+  setCooldown(firstId, until, "quota");
+  setCached(HEALTH_CACHE_ID, {
+    qoder: { [firstId]: { credits: { quotaExceeded: true, resetsAt: new Date(resetsAtMs).toISOString() } } },
+  });
+  const upstream = await upstreamOf("qoder");
+  check("冷却更早：恢复时间是冷却结束", upstream.recoversAtMs === BigInt(until), String(upstream.recoversAtMs));
+
+  const later = now + 60 * 60_000;
+  const soon = now + 5 * 60_000;
+  setCooldown(firstId, later, "quota");
+  setCached(HEALTH_CACHE_ID, {
+    qoder: { [firstId]: { credits: { quotaExceeded: true, resetsAt: new Date(soon).toISOString() } } },
+  });
+  const again = await upstreamOf("qoder");
+  check("额度更早：恢复时间是额度回来的时刻", again.recoversAtMs === BigInt(soon), String(again.recoversAtMs));
+  clearCooldown(firstId);
+  setCached(HEALTH_CACHE_ID, {});
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

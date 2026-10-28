@@ -94,4 +94,12 @@ registerKind({
     if (planLeft !== null && addOnLeft !== null) return planLeft <= 0 && addOnLeft <= 0;
     return false;
   },
+  recoverAt: (provider, snapshot) => {
+    // 套餐额度的重置时间：平台自己报的那个。
+    const mine = (snapshot.qoder?.[provider.id] ?? {}) as any;
+    const credits = mine.credits as any;
+    if (!credits?.resetsAt) return null;
+    const at = Date.parse(String(credits.resetsAt));
+    return Number.isFinite(at) && at > Date.now() ? at : null;
+  },
 });

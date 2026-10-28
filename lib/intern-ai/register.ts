@@ -87,4 +87,18 @@ export const internAiKind = registerCompatiblePlatform({
     }
     return false;
   },
+  recoverAt: (provider, snapshot) => {
+    // 墨点批次的到期时间：最早到期的那批先走。
+    const mine = (snapshot.internAi?.[provider.id] ?? {}) as any;
+    const packs = (mine.packs ?? []) as InternAiCreditPack[];
+    const alive = packs.filter((pack) => pack.status === "available" || pack.status === "unused");
+    const now = Date.now();
+    let soonest: number | null = null;
+    for (const pack of alive) {
+      const at = platformTimeMs(pack.expireAt) || platformTimeMs(pack.cycleEndAt);
+      if (!at || at <= now) continue;
+      if (soonest === null || at < soonest) soonest = at;
+    }
+    return soonest;
+  },
 });

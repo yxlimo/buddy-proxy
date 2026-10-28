@@ -57,6 +57,8 @@ export interface CompatiblePlatform {
   quotas?(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[];
   /** 额度用尽了吗。不给就是不知道（false）。 */
   outOfCredits?(provider: ProviderRow, snapshot: HealthSnapshot): boolean;
+  /** 额度什么时候回来（Unix 毫秒）。不给就是不知道（null）。 */
+  recoverAt?(provider: ProviderRow, snapshot: HealthSnapshot): number | null;
   /** 凭据状态。不给就按 key 类的默认来。 */
   credential?(provider: ProviderRow): CredentialView;
 }
@@ -81,6 +83,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     models: platform.models,
     quotas: platform.quotas ?? (() => []),
     outOfCredits: platform.outOfCredits ?? (() => false),
+    ...(platform.recoverAt ? { recoverAt: platform.recoverAt } : {}),
     dispatch: (ctx, body, route, dialect, stream, out) =>
       toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
         log: platform.kind,

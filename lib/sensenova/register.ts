@@ -90,4 +90,26 @@ export const senseNovaKind = registerCompatiblePlatform({
     if (!pools.length) return false;
     return pools.every((pool) => totalRemaining(pool) <= 0);
   },
+  recoverAt: (provider, snapshot) => {
+    // 滚动窗口什么时候重置：见底的窗口先算（与 MiniMax 同一套取舍），
+    // 没有见底的窗口就退回最早的那个重置点。
+    const usage = snapshot.sensenova?.[provider.id]?.pools as SenseNovaPoolUsage | null;
+    const pools = (usage?.pools ?? []).filter((pool) => pool.modelIds.length > 0);
+    if (!pools.length) return null;
+    const now = Date.now();
+    let exhausted: number | null = null;
+    let soonest: number | null = null;
+    for (const pool of pools) {
+      const windows = [pool.window5h, pool.window7d];
+      for (const window of windows) {
+        const at = window.resetAt ? window.resetAt * 1000 : 0;
+        if (!at || at <= now) continue;
+        if (soonest === null || at < soonest) soonest = at;
+        if (window.limit > 0 && window.remaining <= 0) {
+          if (exhausted === null || at > exhausted) exhausted = at;
+        }
+      }
+    }
+    return exhausted ?? soonest;
+  },
 });

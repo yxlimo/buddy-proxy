@@ -77,6 +77,25 @@ registerKind({
     if (!tenants.length) return false;
     return tenants.every((t: any) => Number(t.wallet?.availableCny ?? 0) <= 0);
   },
+  recoverAt: (provider, snapshot) => {
+    // 钱包里的余额什么时候到期：先到期的那一批先走。
+    const all = ((snapshot.tokenrhythm?.[provider.id]?.tenants ?? []) as unknown) as TokenRhythmAccountStatus[];
+    const status = all.find((entry) => entry.accountId === provider.id);
+    const wallet = status?.wallet;
+    if (!wallet) return null;
+    const now = Date.now();
+    const lots = status?.credits?.list ?? [];
+    // 还有钱的那批先算：空了的那批到期也变不出钱来。
+    const live = lots.filter((lot) => Number(lot.remainingCny ?? 0) > 0);
+    const candidates = (live.length ? live : lots)
+      .map((lot) => (lot.expiresAt ? Date.parse(String(lot.expiresAt)) : 0))
+      .filter((at) => at > now);
+    if (candidates.length) return Math.min(...candidates);
+    const next = status?.credits?.summary?.nextExpiryAt
+      ? Date.parse(String(status.credits.summary.nextExpiryAt))
+      : 0;
+    return next > now ? next : null;
+  },
   // 定时扫描余额，把「现在该用哪个账户」钉下来（赠金最先到期的那个）。
   // 钉住的单位是平台：一副账号里哪个先用是平台的事。
   scan: async (provider) => {

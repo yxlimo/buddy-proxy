@@ -10,7 +10,8 @@
 //   cooldownReason   那条冷却的理由（平台给的说法：quota / rate-limit / connection）。
 //   recoversAtMs     最早什么时候能再接（0 = 现在就能接，或者算不出来）。
 //
-// 「能再接」看的是两件事：冷却什么时候结束，额度什么时候回来（套餐窗口结束）。
+// 「能再接」看的是两件事：冷却什么时候结束，额度什么时候回来（每个平台自己说，
+// 它的窗口/批次什么时候满；说不出来就说不知道）。
 // 有一个账号现在就能接，这个上游就能接 —— 恢复时间就是现在（0）。
 
 import { listCooldowns } from "../cooldown.ts";
@@ -97,27 +98,34 @@ export function platformCooling(options: {
   let foundRecovery = false;
   let exhaustedCount = 0;
   let enabledCount = 0;
+  let coolingCount = 0;
   for (const row of options.rows) {
     if (!row.enabled) continue;
     enabledCount++;
     const kind = kindOf(row.kind);
     const exhausted = Boolean(snapshot && kind && kind.outOfCredits(row, snapshot));
+    const info = cooling.get(row.id);
+    if (info) coolingCount++;
+    // 额度什么时候回来：平台自己说（每个种类知道自己的窗口/批次什么时候满）。
+    // 说不出来就说不知道 —— 猜一个时间比空着更坏。
+    let creditEndsAt: number | null = null;
+    if (exhausted && snapshot) {
+      const said = kind?.recoverAt?.(row, snapshot) ?? planWindowEndsAt(row.id, now);
+      if (said !== null && said > now) creditEndsAt = said;
+    }
     if (exhausted) {
       exhaustedCount++;
-      // 额度什么时候回来 = 套餐窗口结束。
-      const endsAt = planWindowEndsAt(row.id, now);
-      if (endsAt !== null && (creditsRecoverAtMs === null || endsAt < creditsRecoverAtMs)) {
-        creditsRecoverAtMs = endsAt;
+      if (creditEndsAt !== null && (creditsRecoverAtMs === null || creditEndsAt < creditsRecoverAtMs)) {
+        creditsRecoverAtMs = creditEndsAt;
       }
     }
-    const info = cooling.get(row.id);
     const candidates: number[] = [];
     if (info) candidates.push(info.untilMs);
-    if (exhausted) {
-      const endsAt = planWindowEndsAt(row.id, now);
-      if (endsAt !== null) candidates.push(endsAt);
-    }
+    if (creditEndsAt !== null) candidates.push(creditEndsAt);
     if (!candidates.length) {
+      // 额度见底但算不出什么时候回来：这个账号现在就是接不了（说得出恢复
+      // 时间与说不出，都是接不了 —— 不知道的是「等多久」，不是「能不能用」）。
+      if (exhausted) continue;
       // 这个账号既不在冷却也没有额度问题：它现在就能接（凭据的问题看凭据状态）。
       canServeNow = true;
       continue;
@@ -133,11 +141,24 @@ export function platformCooling(options: {
   if (canServeNow) recoversAtMs = 0;
 
   const parts: string[] = [];
-  if (enabledCount > 0 && exhaustedCount === enabledCount) {
-    parts.push(creditsRecoverAtMs === null ? "额度用尽" : `额度用尽，窗口 ${stamp(creditsRecoverAtMs)} 结束`);
-  }
-  if (cooldownUntilMs > 0) {
-    parts.push(`冷却到 ${stamp(cooldownUntilMs)}${cooldownReason ? `（${cooldownReason}）` : ""}`);
+  if (canServeNow) {
+    // 平台还能接，但有的账号在冷却或见底：说清楚是几个账号里的几个，
+    // 别让人读成「整个平台在冷却」。
+    const details: string[] = [];
+    if (coolingCount > 0) {
+      details.push(
+        `${coolingCount} 个冷却到 ${stamp(cooldownUntilMs)}${cooldownReason ? `（${cooldownReason}）` : ""}`,
+      );
+    }
+    if (exhaustedCount > 0) details.push(`${exhaustedCount} 个额度用尽`);
+    if (details.length) parts.push(`${enabledCount} 个账号里 ${details.join("，")}`);
+  } else {
+    if (enabledCount > 0 && exhaustedCount === enabledCount) {
+      parts.push(creditsRecoverAtMs === null ? "额度用尽" : `额度用尽，窗口 ${stamp(creditsRecoverAtMs)} 结束`);
+    }
+    if (cooldownUntilMs > 0) {
+      parts.push(`冷却到 ${stamp(cooldownUntilMs)}${cooldownReason ? `（${cooldownReason}）` : ""}`);
+    }
   }
 
   return {
