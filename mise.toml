@@ -27,6 +27,10 @@ description = "Type-check the router"
 # pnpm exec：node_modules/.bin 不在 mise 任务的 PATH 里，直接调 tsc 会找不到。
 run = "pnpm exec tsc --noEmit"
 
+[tasks."lint:size"]
+description = "Name the source files that grew past 400 lines (a warning; --strict makes it fail)"
+run = "node --experimental-strip-types check-file-size.ts"
+
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
