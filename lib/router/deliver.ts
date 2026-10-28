@@ -56,6 +56,90 @@ function writeSafe(ctx: Koa.Context, chunk: string | Uint8Array): boolean {
 }
 
 /**
+ * The JSON payload in the first chunk of an answer, if there is one.
+ *
+ * The upstreams answer either with a plain JSON body or with SSE frames, so
+ * the payload may sit behind a `data:` prefix, and the chunk may be cut in the
+ * middle of it. A chunk that does not parse yields nothing: the answer is
+ * then passed through and the stream reports the failure itself.
+ */
+function payloadIn(text: string): any | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  let candidate = trimmed;
+  if (!trimmed.startsWith("{")) {
+    // SSE: the payload sits behind a `data:` prefix, and the frame may carry
+    // an event name in front of it.
+    const line = trimmed.split("\n").find((l) => l.trimStart().startsWith("data:"));
+    if (line) candidate = line.trimStart().slice(5).trim();
+  }
+  if (!candidate.startsWith("{")) return undefined;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the first chunk is the upstream saying it failed.
+ *
+ * The shape is parsed, not searched for: a normal answer may carry the word
+ * "error" inside a tool argument or a code snippet.
+ */
+function looksLikeErrorPayload(head: string): boolean {
+  const parsed = payloadIn(head);
+  if (!parsed || typeof parsed !== "object") return false;
+  // Anthropic dialect: { type: "error", error: {...} }
+  if (parsed.type === "error") return true;
+  // OpenAI dialect: { error: {...} }
+  if (parsed.error && typeof parsed.error === "object") return true;
+  if (typeof parsed.error === "string" && parsed.error.length > 0) return true;
+  // Business codes: the string is the name, the number is the code. A zero
+  // code means no error, so only a non-zero number counts.
+  if (typeof parsed.errorCode === "string") return true;
+  if (typeof parsed.errorCode === "number" && parsed.errorCode !== 0) return true;
+  if (typeof parsed.error_code === "string") return true;
+  if (typeof parsed.error_code === "number" && parsed.error_code !== 0) return true;
+  return false;
+}
+
+/**
+ * Read what is left of the answer with the reader that already holds it.
+ *
+ * The stream was locked by `getReader()`, so wrapping it in another Response
+ * throws "Response body object should not be disturbed or locked". The body is
+ * only read for one sentence, so 8KB is enough; some upstreams answer an
+ * error with the whole response body.
+ */
+async function drainText(reader: ReadableStreamDefaultReader<Uint8Array>, head: string): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = head;
+  try {
+    while (text.length < 8192) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    /* keep what we have */
+  }
+  try {
+    // The rest of the body is not read, so the upstream connection is closed
+    // here instead of hanging on to a socket nobody reads.
+    await reader.cancel();
+  } catch {
+    /* already closed */
+  }
+  try {
+    reader.releaseLock();
+  } catch {
+    /* already closed */
+  }
+  return text;
+}
+
+/**
  * Look at the first chunk before committing to a 200 response.
  *
  * The gateway can report a failure inside a 200 response (an SSE error event, or
@@ -70,17 +154,24 @@ export async function peekStream(body: ReadableStream<Uint8Array>): Promise<Read
     return body;
   }
   const head = new TextDecoder().decode(first.value);
-  if (head.includes('"error"') || head.includes("errorCode")) {
-    const rest = await new Response(body).text();
-    let message = rest.slice(0, 300);
-    try {
-      const parsed = JSON.parse(rest);
+  if (looksLikeErrorPayload(head)) {
+    const text = await drainText(reader, head);
+    const raw = text.slice(0, 300);
+    let message = raw;
+    const parsed = payloadIn(text);
+    let hint = raw;
+    if (parsed) {
+      // The upstream's own body, without the SSE framing around it.
+      hint = JSON.stringify(parsed).slice(0, 300);
       const detail = parsed?.error ?? parsed;
-      message = detail?.message ?? parsed?.message ?? message;
-    } catch {
-      /* keep the raw text */
+      // An empty sentence is no sentence: fall back to the raw body.
+      const said = typeof detail === "string" ? detail : detail?.message || parsed?.message;
+      if (typeof said === "string" && said) message = said;
     }
-    throw new AuthError("upstream rejected the request", message, 502);
+    console.warn("[DELIVER] 上游在正文里报错：" + message.slice(0, 200));
+    // The message is the upstream's own words: the client asked a question and
+    // the upstream refused it, so that sentence is the answer.
+    throw new AuthError(message, hint, 502);
   }
   return new ReadableStream<Uint8Array>({
     start(controller) {
