@@ -56,6 +56,13 @@ export function cooldownForFailure(
 ): CooldownDecision | null {
   if (!isDegradableUpstreamError(error)) return null;
   const failure = classifyUpstreamError(error);
+  // 上游 5xx 不是账号的错。
+  //
+  // 它说的是「这个请求这次没成事」：可能就那一个模型挂了，也可能是上游抽了
+  // 一下。算到账号头上，同一个平台上别的模型会跟着下线 5 分钟，fallback 的
+  // 第二个目标也会被跳过（2026-10-28 实测：一个模型回 500，整个平台 503、
+  // 第二个目标没被试）。换下一个目标、下一个账号就够了，不写冷却。
+  if (failure.kind === "server") return null;
   if (failure.kind === "rate-limit" || failure.kind === "quota") {
     const deadline = latestDeadlineFor(accountId, error, now);
     // 恢复时间已经过去了（上游说的就是现在）：那就用固定值试一下。

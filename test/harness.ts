@@ -18,6 +18,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -175,6 +176,31 @@ async function waitForHealth(child: ChildProcess, base: string, healthPath: stri
   return false;
 }
 
+/**
+ * 等网关把表建出来。
+ *
+ * /health 在 bootstrap 之前就能答，而建表是懒的：测试紧接着往库里直接插
+ * `secrets`，就会撞上「no such table: secrets」（并行跑时真的会发生 ——
+ * 2026-10-28 全套红过两次）。所以启动完成之后再等这张表。
+ */
+async function waitForSchema(dataDir: string): Promise<void> {
+  const file = path.join(dataDir, "buddy.db");
+  for (let i = 0; i < 200; i++) {
+    try {
+      const db = new DatabaseSync(file);
+      const row = db
+        .prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'secrets'")
+        .get() as { n?: number } | undefined;
+      db.close();
+      if (Number(row?.n ?? 0) > 0) return;
+    } catch {
+      /* 还没有文件、或者正被建着 */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("网关起来了，但库里一直没有 secrets 表");
+}
+
 /** 子进程是不是在这段时间里走了。 */
 function died(child: ChildProcess, ms: number): Promise<boolean> {
   if (exited(child)) return Promise.resolve(true);
@@ -303,6 +329,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     if (ready && (await died(child, 200))) ready = false;
 
     if (ready) {
+      await waitForSchema(dataDir);
       const state: GatewayState = {
         child,
         dataDir,

@@ -104,6 +104,15 @@ function rateLimited(resetAtMs: number): Plan {
 }
 
 /** 服务挂了。 */
+/** 账号级失败：凭据被拒（401）。这个算账号的错，要冷却。 */
+function refused(): Plan {
+  return {
+    status: 401,
+    body: { type: "error", error: { type: "api_error", message: "invalid api key" } },
+  };
+}
+
+/** 上游 5xx：不是账号的错，不冷却 —— 只让这次请求换下一个目标/账号。 */
 function broken(): Plan {
   return {
     status: 500,
@@ -416,10 +425,10 @@ console.log("场景一：限流 —— 换到下一个账号，冷却到「重�
 }
 
 console.log("");
-console.log("场景二：不可用 —— 固定的 5 分钟");
+console.log("场景二：账号级失败（凭据被拒）—— 固定的 5 分钟");
 
 {
-  plans = { 1: broken(), 2: { status: 200, body: answerBody("second account") } };
+  plans = { 1: refused(), 2: { status: 200, body: answerBody("second account") } };
   calls.length = 0;
 
   const gw = await startGateway();
@@ -438,7 +447,7 @@ console.log("场景二：不可用 —— 固定的 5 分钟");
       row !== null && Math.abs(row.untilMs - expected) <= 5_000,
       row ? `${row.untilMs} 与 ${expected} 差了 ${row.untilMs - expected}` : "没有那一行",
     );
-    check("理由是服务挂了", row?.reason === "server", String(row?.reason));
+    check("理由是凭据被拒", row?.reason === "credential", String(row?.reason));
   } finally {
     gw.stop();
     fs.rmSync(gw.dataDir, { recursive: true, force: true });
@@ -679,13 +688,9 @@ console.log("算法：冷却的四条规矩");
     now + 30_000,
   );
   const serverDecision = cooldownForFailure("acct-server", serverError, now);
-  check(
-    "非额度类失败：上游说 30 秒 → 就按 30 秒来（不取套餐窗口）",
-    serverDecision !== null &&
-      serverDecision.source === "the upstream's answer" &&
-      Math.abs(serverDecision.untilMs - (now + 30_000)) <= 1000,
-    JSON.stringify(serverDecision),
-  );
+  // 5xx 不冷却账号：它说的是「这个请求这次没成事」，不是账号不能用了。
+  // 冷却的话，同一平台上别的模型会跟着下线，fallback 的第二个目标也被跳过。
+  check("上游 5xx → 不冷却账号（哪怕它给了 retry-after）", serverDecision === null, JSON.stringify(serverDecision));
 
   // 4. 连接与超时不是账号的错：只冷却 1 分钟；上游自己说了就照它说的来。
   const connectionError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
@@ -708,15 +713,10 @@ console.log("算法：冷却的四条规矩");
     JSON.stringify(timeoutDecision),
   );
 
+  // 上游 5xx（没给 retry-after）同样不冷却账号：账号本身没毛病。
   const plainServerError = withUpstreamStatus(new AuthError("上游挂了", "", 502), 500);
   const plainServerDecision = cooldownForFailure("acct-server-500", plainServerError, now);
-  check(
-    "服务类失败（上游没给 retry-after）→ 仍是固定 5 分钟",
-    plainServerDecision !== null &&
-      plainServerDecision.source === "fixed" &&
-      Math.abs(plainServerDecision.untilMs - (now + 5 * 60_000)) <= 1000,
-    JSON.stringify(plainServerDecision),
-  );
+  check("上游 5xx（没给 retry-after）→ 也不冷却账号", plainServerDecision === null, JSON.stringify(plainServerDecision));
 
   const connectionWithRetryAfter = withCooldownUntil(
     Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
