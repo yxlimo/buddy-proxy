@@ -18,6 +18,7 @@ export const UPSTREAM_STATE_LABELS: Record<UpstreamState, string> = {
   [UpstreamState.CREDENTIAL_REJECTED]: '登录被拒了',
   [UpstreamState.OUT_OF_CREDITS]: '额度用完',
   [UpstreamState.LOGGING_IN]: '正在登录',
+  [UpstreamState.COOLING]: '冷却中',
 }
 
 /**
@@ -34,6 +35,7 @@ export const UPSTREAM_STATE_HINTS: Record<UpstreamState, string> = {
   [UpstreamState.CREDENTIAL_REJECTED]: '登录被拒了',
   [UpstreamState.OUT_OF_CREDITS]: '额度用完了',
   [UpstreamState.LOGGING_IN]: '正在登录',
+  [UpstreamState.COOLING]: '正在冷却',
 }
 
 /** 凭据状态的人话。 */
@@ -70,6 +72,8 @@ export function upstreamStateVariant(
   switch (state) {
     case UpstreamState.READY:
       return 'default'
+    case UpstreamState.COOLING:
+      return 'outline'
     case UpstreamState.DISABLED:
     case UpstreamState.LOGGING_IN:
     case UpstreamState.UNSPECIFIED:
@@ -81,6 +85,21 @@ export function upstreamStateVariant(
       return 'destructive'
     default:
       return 'outline'
+  }
+}
+
+/**
+ * 徽章上再叠的颜色。
+ *
+ * 冷却中是暂时的绕开，跟额度用完（红色，不行）不是一回事：黄色，说的
+ * 是等一会儿就好。
+ */
+export function upstreamStateClass(state: UpstreamState): string {
+  switch (state) {
+    case UpstreamState.COOLING:
+      return 'border-amber-500/60 text-amber-700 dark:text-amber-300'
+    default:
+      return ''
   }
 }
 

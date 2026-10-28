@@ -37,34 +37,75 @@ function upstream(
 }
 
 /**
- * 上游组下拉只列能用的上游。
+ * 上游组下拉把全部上游都列出来。
  *
- * 能不能接由后端说（Upstream.state）。前端不再自己拼
- * 「开着 && 登录了」——后端知道的事情比面板多（额度用尽、正在登录）。
+ * 能不能接由后端说（Upstream.state）。面板不再自己拼
+ * 「开着 && 登录了」——后端知道的事情比面板多（额度用尽、正在冷却）。
+ * 不能用的也选得到：已经不可用的目标有时候就是要改。
  */
 describe('上游组下拉', () => {
-  it('只列 state 是 READY 的上游', async () => {
+  it('全部上游都列出来，能用的排前面', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [
+            upstream('qoder-cn', 'Qoder 中国区', {
+              enabled: false,
+              state: UpstreamState.DISABLED,
+            }),
+            upstream('qoder', 'Qoder 全球区', { modelCount: 6 }),
+            upstream('workbuddy-cn', 'WorkBuddy 中国区', {
+              state: UpstreamState.NO_CREDENTIAL,
+              credential: CredentialState.MISSING,
+            }),
+            upstream('tokenrhythm', 'TokenRhythm', { modelCount: 2 }),
+          ],
+        }),
+    })
+
+    renderWithClient({
+      client,
+      children: <GroupPicker value='' onChange={() => {}} />,
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeEnabled()
+    })
+    await user.click(screen.getByRole('combobox'))
+
+    // 不能用的也在下拉里。
+    expect(
+      await screen.findByRole('option', { name: /Qoder 中国区/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('option', { name: /WorkBuddy 中国区/ })
+    ).toBeInTheDocument()
+
+    // 能用的排在前面。
+    const options = screen.getAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Qoder 全球区（6 个模型）',
+      'TokenRhythm（2 个模型）',
+      'Qoder 中国区（开关关着，没有模型）',
+      'WorkBuddy 中国区（没登录，没有模型）',
+    ])
+  })
+
+  it('行里说清楚为什么现在不能选', async () => {
     const user = userEvent.setup({ delay: null })
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
             upstream('qoder', 'Qoder 全球区', { modelCount: 6 }),
-            upstream('minimax', 'MiniMax Code', { modelCount: 2 }),
-            // 开关关着
-            upstream('qoder-cn', 'Qoder 中国区', {
-              enabled: false,
-              state: UpstreamState.DISABLED,
+            upstream('sensenova', 'Sensenova', {
+              state: UpstreamState.COOLING,
+              modelCount: 3,
             }),
-            // 没登录
-            upstream('workbuddy-cn', 'WorkBuddy 中国区', {
-              state: UpstreamState.NO_CREDENTIAL,
-              credential: CredentialState.MISSING,
-            }),
-            // 登录过期了
             upstream('tokenrhythm', 'TokenRhythm', {
-              state: UpstreamState.CREDENTIAL_EXPIRED,
-              credential: CredentialState.EXPIRED,
+              state: UpstreamState.OUT_OF_CREDITS,
+              modelCount: 1,
             }),
           ],
         }),
@@ -80,49 +121,66 @@ describe('上游组下拉', () => {
     })
     await user.click(screen.getByRole('combobox'))
 
-    // 能用的两个在
     expect(
-      await screen.findByRole('option', { name: /Qoder 全球区/ })
-    ).toBeInTheDocument()
+      await screen.findByRole('option', { name: /Sensenova/ })
+    ).toHaveTextContent('Sensenova（正在冷却，3 个模型）')
     expect(
-      screen.getByRole('option', { name: /MiniMax Code/ })
-    ).toBeInTheDocument()
-    // 模型数也带上了
-    expect(screen.getByText('Qoder 全球区（6 个模型）')).toBeInTheDocument()
-
-    // 不能用的不在选项里（下面那几行只是说明为什么不能用）
+      screen.getByRole('option', { name: /TokenRhythm/ })
+    ).toHaveTextContent('TokenRhythm（额度用完了，1 个模型）')
+    // 能用的那一行还是老样子。
     expect(
-      screen.queryByRole('option', { name: /Qoder 中国区/ })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('option', { name: /WorkBuddy/ })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('option', { name: /TokenRhythm/ })
-    ).not.toBeInTheDocument()
-    // 但说得出为什么不能用。
-    expect(screen.getByText('Qoder 中国区：开关关着')).toBeInTheDocument()
-    expect(screen.getByText('WorkBuddy 中国区：没登录')).toBeInTheDocument()
-    expect(screen.getByText('TokenRhythm：登录过期了')).toBeInTheDocument()
+      screen.getByRole('option', { name: /Qoder 全球区/ })
+    ).toHaveTextContent('Qoder 全球区（6 个模型）')
   })
 
-  it('说得出每个上游为什么不能选', async () => {
+  it('不能用的上游也选得到', async () => {
+    const user = userEvent.setup({ delay: null })
+    const picked: string[] = []
     const client = mockAdminClient({
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
-            upstream('qoder-cn', 'Qoder 中国区', {
-              state: UpstreamState.DISABLED,
+            upstream('qoder', 'Qoder 全球区', { modelCount: 6 }),
+            upstream('sensenova', 'Sensenova', {
+              state: UpstreamState.COOLING,
+              modelCount: 3,
             }),
-            upstream('minimax', 'MiniMax Code', {
-              state: UpstreamState.NO_CREDENTIAL,
-              credential: CredentialState.MISSING,
+          ],
+        }),
+    })
+
+    renderWithClient({
+      client,
+      children: (
+        <GroupPicker value='' onChange={(value) => picked.push(value)} />
+      ),
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeEnabled()
+    })
+    await user.click(screen.getByRole('combobox'))
+    await user.click(await screen.findByRole('option', { name: /Sensenova/ }))
+
+    await waitFor(() => {
+      expect(picked).toEqual(['sensenova'])
+    })
+  })
+
+  it('一个模型都没有的上游说清楚没有模型', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [
+            upstream('sensenova', 'Sensenova', {
+              state: UpstreamState.COOLING,
+              modelCount: 0,
             }),
-            upstream('tokenrhythm', 'TokenRhythm', {
-              state: UpstreamState.OUT_OF_CREDITS,
-            }),
-            upstream('workbuddy-cn', 'WorkBuddy 中国区', {
-              state: UpstreamState.LOGGING_IN,
+            // 目录空着的上游：就绪，但一个模型也没有。
+            upstream('intern-ai', 'InternAI', {
+              state: UpstreamState.READY,
+              modelCount: 0,
             }),
           ],
         }),
@@ -133,14 +191,33 @@ describe('上游组下拉', () => {
       children: <GroupPicker value='' onChange={() => {}} />,
     })
 
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeEnabled()
+    })
+    await user.click(screen.getByRole('combobox'))
+
+    expect(
+      await screen.findByRole('option', { name: /Sensenova/ })
+    ).toHaveTextContent('Sensenova（正在冷却，没有模型）')
+    expect(
+      screen.getByRole('option', { name: /InternAI/ })
+    ).toHaveTextContent('InternAI（没有模型）')
+  })
+
+  it('一个上游都没有时下拉是灰的', async () => {
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, { upstreams: [] }),
+    })
+
+    renderWithClient({
+      client,
+      children: <GroupPicker value='' onChange={() => {}} />,
+    })
+
     expect(
       await screen.findByText(/先在 Provider 页登录并打开一个 Provider/)
     ).toBeInTheDocument()
-    expect(screen.getByText('Qoder 中国区：开关关着')).toBeInTheDocument()
-    expect(screen.getByText('MiniMax Code：没登录')).toBeInTheDocument()
-    expect(screen.getByText('TokenRhythm：额度用完了')).toBeInTheDocument()
-    expect(screen.getByText('WorkBuddy 中国区：正在登录')).toBeInTheDocument()
-    // 一个可用上游都没有：下拉是灰的。
     expect(screen.getByRole('combobox')).toBeDisabled()
   })
 

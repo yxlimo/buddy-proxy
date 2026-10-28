@@ -44,6 +44,7 @@ import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
 import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
 import { useSetProviderKeys } from '@/features/accounts/api'
+import { formatLocalMoment } from '@/lib/format'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
 import type {
@@ -186,7 +187,21 @@ export function UpstreamsPage() {
                         </TableCell>
                         <TableCell>
                           {/* 能不能接由后端说：有开着的账号就是开着的。 */}
-                          <UpstreamStateBadge state={upstream.state} />
+                          <div className='grid gap-0.5'>
+                            <UpstreamStateBadge state={upstream.state} />
+                            {/* 后端拼好的一句话：为什么现在不能接。 */}
+                            {upstream.stateReason ? (
+                              <span className='text-xs text-muted-foreground'>
+                                {upstream.stateReason}
+                              </span>
+                            ) : null}
+                            {/* 冷却到什么时候：stateReason 里已经说了的时候不重复。 */}
+                            {!upstream.stateReason && upstream.cooldownUntilMs > 0n ? (
+                              <span className='text-xs text-muted-foreground'>
+                                {`冷却到 ${formatLocalMoment(upstream.cooldownUntilMs)}`}
+                              </span>
+                            ) : null}
+                          </div>
                         </TableCell>
                         <TableCell>
                           {/* 策略在这一格自己处理点击：改策略不该顺带把这一行

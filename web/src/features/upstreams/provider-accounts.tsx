@@ -20,7 +20,7 @@ import {
 } from '@/features/accounts/api'
 import { ProviderAliasCell } from '@/features/upstreams/provider-alias'
 import { QuotaSummary } from '@/features/balance/quota'
-import { formatDateTime } from '@/lib/format'
+import { formatDateTime, formatLocalMoment } from '@/lib/format'
 import type { Account, Credential } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
@@ -190,6 +190,15 @@ export function ProviderAccounts({
                   {account.detail ? (
                     <span className='text-xs text-destructive'>
                       {account.detail}
+                    </span>
+                  ) : null}
+                  {/* 路由暂时绕开这个账号：说清楚到什么时候、因为什么。 */}
+                  {account.cooldownUntilMs > 0n ? (
+                    <span className='text-xs text-muted-foreground'>
+                      冷却到 {formatLocalMoment(account.cooldownUntilMs)}
+                      {account.cooldownReason
+                        ? `（${account.cooldownReason}）`
+                        : ''}
                     </span>
                   ) : null}
                 </div>

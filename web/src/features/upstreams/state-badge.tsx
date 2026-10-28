@@ -7,6 +7,7 @@ import {
   CREDENTIAL_STATE_LABELS,
   UPSTREAM_STATE_LABELS,
   credentialStateVariant,
+  upstreamStateClass,
   upstreamStateVariant,
 } from '@/features/upstreams/state'
 
@@ -19,7 +20,12 @@ export function UpstreamStateBadge({
   className?: string
 }) {
   return (
-    <Badge variant={upstreamStateVariant(state)} className={className}>
+    <Badge
+      variant={upstreamStateVariant(state)}
+      className={[upstreamStateClass(state), className]
+        .filter(Boolean)
+        .join(' ')}
+    >
       {UPSTREAM_STATE_LABELS[state] ?? '未知'}
     </Badge>
   )

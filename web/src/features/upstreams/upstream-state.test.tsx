@@ -74,6 +74,40 @@ describe('上游页的状态徽章', () => {
     expect(screen.getByText('正在登录')).toBeInTheDocument()
   })
 
+  it('冷却中：徽章说冷却中，还说为什么、到什么时候', async () => {
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [
+            create(UpstreamSchema, {
+              id: 'qoder',
+              label: 'Qoder 全球区',
+              state: UpstreamState.COOLING,
+              policy: ProviderPolicy.SINGLE,
+              policies: [ProviderPolicy.SINGLE],
+              accountCount: 1,
+              hasEnabledAccount: true,
+              cooldownUntilMs: 1793160000000n,
+              cooldownReason: 'rate-limit',
+              stateReason: '冷却到 12:23（rate-limit）',
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    expect(await screen.findByText('冷却中')).toBeInTheDocument()
+    // 冷却中是黄色，跟额度用完（红色，不行）区分开。
+    expect(screen.getByText('冷却中').className).toContain('amber')
+    // 后端拼好的一句话：为什么现在不能接。
+    expect(
+      screen.getByText('冷却到 12:23（rate-limit）')
+    ).toBeInTheDocument()
+    // 冷却到什么时候。
+    expect(screen.getAllByText(/^冷却到 /).length).toBeGreaterThan(0)
+  })
+
   it('面板不自己拼状态：后端说没登录，就显示没登录', async () => {
     // 平台下有开着的账号，但后端说 state 是没登录 —— 面板照后端说。
     const client = mockAdminClient({

@@ -167,6 +167,24 @@ describe('平台下的账号', () => {
     ).toBeInTheDocument()
   })
 
+  it('账号在冷却中：说清楚冷却到什么时候、因为什么', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([
+      account({
+        cooldownUntilMs: 1793160000000n,
+        cooldownReason: 'rate-limit',
+      }),
+    ])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await expand(user)
+
+    const cell = await screen.findByText('主账号')
+    const row = cell.closest('tr') as HTMLElement
+    expect(within(row).getByText(/冷却到 .*（rate-limit）/)).toBeInTheDocument()
+  })
+
   it('点「登录」按平台与账号行发起一次登录，login_id 记在 hash 里', async () => {
     const user = userEvent.setup({ delay: null })
     const began: { upstreamId: string; accountId: string }[] = []
