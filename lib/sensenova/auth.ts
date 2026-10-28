@@ -33,6 +33,8 @@ import { readSession, withSessionLock, writeSession } from "../session.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { providerSecretId } from "../providers.ts";
+import { registerLoginFlow, type LoginContext, type LoginTicket, type SubmitInput } from "../login-flow.ts";
+import { ensureSenseNovaKey } from "./transport.ts";
 
 /**
  * 会话在数据库里的名字。
@@ -226,6 +228,26 @@ export function classify(status: number, body: any, what: string): SenseNovaErro
 
 /** 登录。用账号密码换一份会话，并把会话存进数据库。 */
 export async function login(user?: string, password?: string, providerId = "sensenova"): Promise<SenseNovaSession> {
+  const session = await loginSession(user, password, providerId);
+  saveSession(session, providerId);
+  return session;
+}
+
+/**
+ * 换一份会话，不落库。
+ *
+ * 落库是登录链的 commit 那一件事（见 lib/login-flow.ts）：面板那条路登录成了
+ * 才写会话，只写一次。自动登录那条路（lib/router/bootstrap.ts）自己写。
+ *
+ * `remember` 说的是密码留不留：面板那条路不留（下次要密码的时候再问一次），
+ * 自动登录那条路留（不然 .env 不在了就登不上）。
+ */
+async function loginSession(
+  user?: string,
+  password?: string,
+  providerId = "sensenova",
+  remember = true,
+): Promise<SenseNovaSession> {
   const creds = senseNovaCredentials({ user, password }, storedAccount(providerId));
   if (!creds.user || !creds.password) {
     throw new SenseNovaError("config", "没有配置 SenseNova 的账号密码（SENSENOVA_USER / SENSENOVA_PASSWORD）", 500);
@@ -288,12 +310,11 @@ export async function login(user?: string, password?: string, providerId = "sens
     obtainedAtMs: Date.now(),
     username: creds.user,
   };
-  saveSession(session, providerId);
-  // 账号密码也存一份：.env 不在了还能登录。
+  // 账号密码也存一份：.env 不在了还能登录。面板那条路不留密码。
   const stored = storedAccount(providerId);
   setSecret(accountId(providerId), "account", {
     user: creds.user,
-    password: creds.password,
+    password: remember ? creds.password : "",
     apiKey: stored?.apiKey ?? null,
   });
   return session;
@@ -508,3 +529,54 @@ async function readJson(res: Response): Promise<any> {
     return { message: text.slice(0, 200) };
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 登录链
+ * ------------------------------------------------------------------ */
+
+/** 一次密码登录换回来的东西：会话，加上推理用的 key 建出来没有。 */
+export interface SenseNovaLogin {
+  session: SenseNovaSession;
+  /** 推理用的 key 建出来没有。没建出来不算登录失败（见 lib/admin/login.ts）。 */
+  keyReady: boolean;
+}
+
+/**
+ * SenseNova 的登录链（登记给 lib/login-flow.ts）。
+ *
+ * 面板上就是账号密码：没有链接，没有轮询，一次提交就完事。会话在 commit 那
+ * 一步落库 —— 那是唯一写它的地方。
+ */
+registerLoginFlow<SenseNovaLogin>("sensenova", {
+  method: "password",
+  label: "账号密码",
+  begin: async (_ctx: LoginContext): Promise<LoginTicket> => ({
+    method: "password",
+    authorizationUrl: "",
+    userCode: "",
+    expiresAtMs: Date.now() + 5 * 60_000,
+    message: "在面板中填写账号与密码，然后点击「登录」。",
+    state: {},
+  }),
+  submit: async (ctx: LoginContext, input: SubmitInput): Promise<SenseNovaLogin> => {
+    // 密码不留：会话留着（它就是登录态，没有它就没有会话），下次要密码的时候
+    // 再问一次。
+    const session = await loginSession(input.username ?? "", input.password ?? "", ctx.accountId, false);
+    // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整值，
+    // 建它的那个函数负责存下来）。建不出来不算登录失败：上游暂时接不了请求，
+    // 但登录不是白做。
+    let keyReady = false;
+    try {
+      await ensureSenseNovaKey(session, ctx.accountId);
+      keyReady = true;
+    } catch (e) {
+      console.warn(`[SENSENOVA] 推理 key 没建出来：${(e as Error)?.message}`);
+    }
+    return { session, keyReady };
+  },
+  // 会话在这里落库：面板那条路只写这一次。
+  commit: (ctx: LoginContext, result: SenseNovaLogin): string => {
+    saveSession(result.session, ctx.accountId);
+    return providerSecretId(ctx.accountId);
+  },
+});

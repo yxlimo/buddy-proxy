@@ -32,6 +32,8 @@ import { writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { addAccount, provider, providerSecretId } from "../providers.ts";
+import { registerLoginFlow, type LoginContext, type LoginTicket, type SubmitInput } from "../login-flow.ts";
+import { ensureApiKey } from "./keys.ts";
 
 export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
 export const TOKENRHYTHM_INFER_BASE = configString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
@@ -309,11 +311,16 @@ export async function login(accountId: string): Promise<TokenRhythmSession> {
   if (!credential?.account || !credential.password) {
     throw new TokenRhythmError(`账号 ${accountId} 没有配置登录账号`, 500);
   }
-  return loginWithCredentials(accountId, credential.account, credential.password);
+  const session = await loginWithCredentials(accountId, credential.account, credential.password);
+  // 会话在这里落库：自动登录这条路不走登录链（没有 commit 那一步）。
+  saveSession(session, { force: true });
+  return session;
 }
 
 /**
- * 用面板给的账号密码登录。
+ * 用面板给的账号密码登录，换一份会话并记住账号。
+ *
+ * 不写会话：写会话是登录链的 commit 那一件事（见 lib/login-flow.ts）。
  *
  * 「记住密码」：记住了就把密码也存进 secrets（新部署没有 .env 也能自动登录），
  * 没记住就只记账号 —— 密码不进数据库。
@@ -325,7 +332,6 @@ export async function loginWithCredentials(
   remember = true,
 ): Promise<TokenRhythmSession> {
   const session = await requestLogin(accountId, account, password);
-  saveSession(session, { force: true });
   const stored = tokenRhythmCredentialOf(accountId);
   saveTokenRhythmCredential(accountId, {
     account,
@@ -369,3 +375,47 @@ export async function sessionFor(accountId: string): Promise<TokenRhythmSession>
   if (stored) return stored;
   return login(accountId);
 }
+
+/* ------------------------------------------------------------------ *
+ * 登录链
+ * ------------------------------------------------------------------ */
+
+/**
+ * TokenRhythm 的登录链（登记给 lib/login-flow.ts）。
+ *
+ * 面板上就是账号密码：没有链接，没有轮询，一次提交就完事。会话在 commit 那
+ * 一步落库 —— 那是唯一写它的地方。
+ */
+registerLoginFlow<TokenRhythmSession>("tokenrhythm", {
+  method: "password",
+  label: "账号密码",
+  begin: async (_ctx: LoginContext): Promise<LoginTicket> => ({
+    method: "password",
+    authorizationUrl: "",
+    userCode: "",
+    expiresAtMs: Date.now() + 5 * 60_000,
+    message: "在面板中填写账号与密码，然后点击「登录」。",
+    state: {},
+  }),
+  submit: async (ctx: LoginContext, input: SubmitInput): Promise<TokenRhythmSession> => {
+    // 「记住密码」是面板上的那个勾：没勾就只记账号，密码不进数据库。
+    const remember = input.extra?.remember !== "false";
+    return loginWithCredentials(
+      ctx.accountId,
+      input.username ?? "",
+      input.password ?? "",
+      remember,
+    );
+  },
+  // 会话在这里落库：面板那条路只写这一次。
+  //
+  // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。账号上没有
+  // 就建一把（平台只给一次完整值）。建不出来就是登录失败 —— 这个上游没有 key
+  // 就一个请求也发不出去；会话已经落库了（既有语义：失败的那次登录也把会话
+  // 存下来）。
+  commit: async (ctx: LoginContext, session: TokenRhythmSession): Promise<string> => {
+    saveSession(session, { force: true });
+    await ensureApiKey(session, ctx.accountId, tokenRhythmCredentialOf(ctx.accountId)?.apiKey ?? null);
+    return providerSecretId(ctx.accountId);
+  },
+});

@@ -12,7 +12,7 @@
 // 这一行里，一个都不进日志。
 
 import crypto from "node:crypto";
-import { deleteCached, getSecret, listCached, peekCached, setCached, setSecret, withLock } from "../store.ts";
+import { deleteCached, listCached, peekCached, setCached, withLock } from "../store.ts";
 import { AuthError, authLog } from "../credential.ts";
 import { dataDir } from "../paths.ts";
 // Side-effect import: this module registers minimax's login flow
@@ -25,13 +25,14 @@ import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts"
 // Side-effect import: this module registers zcode's login flow
 import "../zcode/auth.ts";
 import type { ZcodeLogin } from "../zcode/auth.ts";
-import { beginLoginFlow, driveLogin, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
+import { beginLoginFlow, driveLogin, submitLogin, submitLoginResult, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
 export type { LoginMethod };
 import { regionOf as workBuddyRegionOf } from "../workbuddy/auth.ts";
-import { loginWithCredentials, tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
-import { ensureApiKey } from "../tokenrhythm/keys.ts";
-import { login as loginSenseNova } from "../sensenova/auth.ts";
-import { ensureSenseNovaKey } from "../sensenova/transport.ts";
+// Side-effect import: this module registers tokenrhythm's login flow
+import "../tokenrhythm/accounts.ts";
+// Side-effect import: this module registers sensenova's login flow
+import "../sensenova/auth.ts";
+import type { SenseNovaLogin } from "../sensenova/auth.ts";
 import {
   importToken as importInternAiToken,
   internAiSite,
@@ -568,6 +569,15 @@ export interface PasswordLoginResult {
 }
 
 /**
+ * 账号行 → 登录链要的那三样。
+ *
+ * 凭据落在哪一行（accountId）、它是哪个平台（platform）、哪个区域（region）。
+ */
+function contextOf(row: ProviderRow): LoginContext {
+  return { accountId: row.id, platform: row.platform, region: row.region ?? "" };
+}
+
+/**
  * 用账号密码登录。
  *
  * TokenRhythm 与 SenseNova 的密码登录是纯服务端的；intern-ai 还要人机校验的
@@ -598,11 +608,14 @@ export async function loginWithPassword(input: {
   try {
     switch (row.kind) {
       case "tokenrhythm": {
-        const session = await loginWithCredentials(row.id, input.username, input.password, input.remember);
-        // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。
-        // 账号上没有就建一把（平台只给一次完整值）。
-        await ensureApiKey(session, row.id, tokenRhythmCredentialOf(row.id)?.apiKey ?? null);
-        const credentialId = `session:provider:${row.id}`;
+        // 登录链在 lib/tokenrhythm/accounts.ts 里登记：怎么换凭据、怎么落库，
+        // 都在那边写着，这里只管把账号与密码递进去。
+        const credentialId = await submitLogin(row.kind, contextOf(row), {
+          username: input.username,
+          password: input.password,
+          // 「记住密码」是面板上的那个勾：没勾就只记账号，密码不进数据库。
+          extra: { remember: input.remember ? "true" : "false" },
+        });
         closePendingLogins(row.id, { ok: true, credentialId });
         return {
           ok: true,
@@ -612,24 +625,16 @@ export async function loginWithPassword(input: {
         };
       }
       case "sensenova": {
-        const session = await loginSenseNova(input.username, input.password, row.id);
-        // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整
-        // 值，建它的那个函数负责存下来）。登录完了上游才是 READY 的。
-        const keyReady = await ensureKeySafe("SENSENOVA", () => ensureSenseNovaKey(session, row.id));
-        // cookie 必然要存 —— 它就是登录态，没有它就没有会话。所以不提供「要不要
-        // 记住」这个选择：cookie 留着，密码不留（下次要密码的时候再问一次）。
-        const accountSecret = `key:provider:${row.id}:account`;
-        const stored = getSecret<{ user?: string; password?: string; apiKey?: string | null }>(accountSecret);
-        setSecret(accountSecret, "account", {
-          user: stored?.user ?? input.username,
-          password: "",
-          apiKey: stored?.apiKey ?? null,
+        // 登录链在 lib/sensenova/auth.ts 里登记。
+        // 推理用的 key 建出来没有，只有提交的结果里知道 —— 凭据 id 里没有它。
+        const { credentialId, result } = await submitLoginResult<SenseNovaLogin>(row.kind, contextOf(row), {
+          username: input.username,
+          password: input.password,
         });
-        const credentialId = `session:provider:${row.id}`;
         closePendingLogins(row.id, { ok: true, credentialId });
         return {
           ok: true,
-          message: keyReady
+          message: result.keyReady
             ? "SenseNova 登录完成，推理用的 key 已就绪。"
             : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
           credentialId,

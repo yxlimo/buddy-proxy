@@ -132,6 +132,39 @@ export async function beginLoginFlow(kind: string, ctx: LoginContext): Promise<L
 }
 
 /**
+ * 阶段二'：一次性提交（密码 / 贴 token / 贴 key）。
+ *
+ * `submit` 只负责换凭据，落库仍在 `commit` 里 —— 那是唯一写会话的地方。
+ */
+export async function submitLogin<T = unknown>(
+  kind: string,
+  ctx: LoginContext,
+  input: SubmitInput,
+): Promise<string> {
+  const { credentialId } = await submitLoginResult<T>(kind, ctx, input);
+  return credentialId;
+}
+
+/**
+ * 与 submitLogin 一样，但把平台交回来的东西也带出去。
+ *
+ * 有些平台提交完还要说一句自己的话（SenseNova：推理用的 key 建出来没有）。
+ * 那句话只在提交的结果里 —— 凭据 id 里没有它，落库之后也没地方找。
+ */
+export async function submitLoginResult<T = unknown>(
+  kind: string,
+  ctx: LoginContext,
+  input: SubmitInput,
+): Promise<{ credentialId: string; result: T }> {
+  const flow = loginFlowOf(kind) as LoginFlow<T> | null;
+  if (!flow) throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${kind}`, 400);
+  if (!flow.submit) throw new AuthError("no login", `${flow.label} 不需要提交账号密码。`, 400);
+  const result = await flow.submit(ctx, input);
+  const credentialId = await flow.commit(ctx, result);
+  return { credentialId, result };
+}
+
+/**
  * 等结果，然后落库。
  *
  * `poll` 抛出来的错原样往上抛：面板上那句话是平台自己的意思（「被拒了」与
