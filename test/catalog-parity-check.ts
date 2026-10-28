@@ -14,29 +14,14 @@
 // 所以比的是 effective 与根路由 —— 拿 contextWindow 去比会以为两边不一致，
 // 其实面板只是把「存着的」与「算出来的」分开报。
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url)) + "/..";
 const DATA_DIR = "/tmp/opencode/test-catalog-parity";
-
-/** A free port: the tests run in parallel, so nobody gets a fixed one. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-const PORT = await freePort();
-const BASE = `http://127.0.0.1:${PORT}`;
 
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -69,37 +54,15 @@ function check(name: string, ok: unknown, detail = ""): void {
  * 网关
  * ------------------------------------------------------------------ */
 
-const router: ChildProcess = spawn(process.execPath, ["router-proxy.ts"], {
-  cwd: ROOT,
-  env: {
-    ...process.env,
-    BUDDY_DATA_DIR: DATA_DIR,
-    ROUTER_PORT: String(PORT),
-    BENEFITS_DISABLED: "1",
-    // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
-    // 下面用面板的 SetUpstreamEnabled 把 Qoder 打开（它用自己那份模型目录，
-    // 参数是现成的）。
-  },
-  stdio: ["ignore", "pipe", "pipe"],
+// 起网关这件事交给共用的 helper：端口被抢就换号重试，退出时一定收尾。
+const gw: HarnessGateway = await startHarness({
+  dataDir: DATA_DIR,
+  cleanupDataDir: true,
+  env: { BENEFITS_DISABLED: "1" },
 });
-let routerLog = "";
-router.stdout?.on("data", (c) => (routerLog += c.toString()));
-router.stderr?.on("data", (c) => (routerLog += c.toString()));
-
-process.on("exit", () => router.kill());
-
-async function waitForRouter(): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    try {
-      const r = await fetch(`${BASE}/health`);
-      if (r.status) return;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error(`the router did not come up:\n${routerLog.slice(-2000)}`);
-}
+const BASE = gw.base;
+/** helper 收集的子进程输出。 */
+const routerLog = () => gw.log();
 
 async function adminToken(): Promise<string> {
   return fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
@@ -127,7 +90,6 @@ async function rootModel(id: string): Promise<any> {
   return (body.data ?? []).find((m: any) => m.id === id);
 }
 
-await waitForRouter();
 
 /**
  * 启动不再插行：新库里一个账号都没有。面板上做的是「加一个账号」，这里照做。
@@ -321,7 +283,7 @@ console.log("这个测试不碰任何平台");
 check(
   "没有启动设备登录",
   !/device\/selectAccounts|open in a browser/.test(routerLog),
-  routerLog.slice(-400),
+  routerLog().slice(-400),
 );
 
 /* ------------------------------------------------------------------ *
@@ -332,7 +294,7 @@ console.log("");
 console.log("结果");
 console.log(`pass=${pass} fail=${fail}`);
 if (fail) {
-  console.log(routerLog.slice(-3000));
+  console.log(routerLog().slice(-3000));
   process.exit(1);
 }
 process.exit(0);

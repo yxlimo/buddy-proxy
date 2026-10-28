@@ -17,8 +17,9 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
 import { DatabaseSync } from "node:sqlite";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -237,50 +238,18 @@ if (seeded.status !== 0) {
   throw new Error(`the dummy session could not be written: ${seeded.stderr}`);
 }
 
-const ROUTER_PORT = await freePort();
-const BASE = `http://127.0.0.1:${ROUTER_PORT}`;
-
-const router: ChildProcess = spawn(process.execPath, ["router-proxy.ts"], {
-  cwd: ROOT,
+// 起网关交给共用的 helper：端口被抢就换号重试，退出时一定收尾。
+const gw: HarnessGateway = await startHarness({
+  dataDir: ROUTER_DIR,
+  cleanupDataDir: true,
   env: {
-    ...process.env,
-    BUDDY_DATA_DIR: ROUTER_DIR,
-    ROUTER_PORT: String(ROUTER_PORT),
     BENEFITS_DISABLED: "1",
     // 中国区上游指到本机的假上游：一个字都不出机器。
     QODER_CN_INFER_BASE: `http://127.0.0.1:${UPSTREAM_PORT}`,
     QODER_CN_OPENAPI_BASE: `http://127.0.0.1:${UPSTREAM_PORT}`,
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-let routerLog = "";
-router.stdout?.on("data", (c) => routerLog += c.toString());
-router.stderr?.on("data", (c) => routerLog += c.toString());
-process.on("exit", () => {
-  try {
-    router.kill("SIGTERM");
-  } catch {
-    /* 已经走了 */
-  }
-});
-
-async function waitHealthy(): Promise<void> {
-  for (let i = 0; i < 120; i++) {
-    try {
-      const res = await fetch(`${BASE}/health`);
-      if (res.ok) {
-        await res.text();
-        return;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error(`the router did not come up:\n${routerLog.slice(-2000)}`);
-}
-
-await waitHealthy();
+const BASE = gw.base;
 
 // 面板的令牌：启动不再插行，所以先用面板给 qoder-cn 加一个账号（新账号就是
 // 开着的），再让面板把它打开。
@@ -327,13 +296,8 @@ check(
   `${row?.client} vs ${row?.upstream_id}`,
 );
 
-try {
-  router.kill("SIGTERM");
-} catch {
-  /* 已经走了 */
-}
+gw.stop();
 upstream.close();
-fs.rmSync(ROUTER_DIR, { recursive: true, force: true });
 
 /* ------------------------------------------------------------------ *
  * 四、三家平台的 key 管理是一个接口
