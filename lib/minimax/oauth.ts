@@ -28,6 +28,7 @@ import { clearHint, ensureCredential as ensureCredentialShared, hasTokens, deadS
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
+import { registerLoginFlow, type LoginContext, type LoginTicket, type PollResult } from "../login-flow.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
 export const OAUTH_ORIGINS: Record<string, string> = {
@@ -45,6 +46,11 @@ const WARN_MS = configNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 // Refresh when this much life is left. The real client uses 5 min; a 1-hour token
 // means the proxy refreshes roughly once an hour.
 const REFRESH_BUFFER_MS = configNumber("MINIMAX_REFRESH_BUFFER_MS", 5 * 60 * 1000);
+// How often the device flow asks the upstream, and how long it may keep asking.
+// The upstream's own numbers win (the ticket carries them); these are the floor
+// the framework falls back to.
+const DEVICE_POLL_INTERVAL_MS = configNumber("MINIMAX_POLL_INTERVAL_MS", 5000);
+const DEVICE_POLL_TIMEOUT_MS = configNumber("MINIMAX_POLL_TIMEOUT_MS", 300_000);
 
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -352,44 +358,57 @@ export async function startDeviceAuthorization(): Promise<DeviceAuthorization> {
   };
 }
 
+/** What one question to the upstream can answer. */
+export type DevicePoll =
+  | { state: "pending" }
+  | { state: "slow_down" }
+  | { state: "approved"; session: Session }
+  | { state: "denied"; message: string }
+  | { state: "expired"; message: string };
+
+/**
+ * Ask the upstream once: has the browser approved this device code yet?
+ *
+ * The waiting belongs to the caller (lib/login-flow.ts drives it with a
+ * rhythm and a window); here we only answer what the upstream said.
+ */
+export async function pollDeviceTokenOnce(auth: DeviceAuthorization): Promise<DevicePoll> {
+  const r = await postForm(`${ORIGIN}/oauth2/token`, {
+    grant_type: DEVICE_GRANT,
+    ...(auth.pollingParameter === "user_code" ? { user_code: auth.userCode } : { device_code: auth.deviceCode }),
+    client_id: CLIENT_ID,
+    code_verifier: auth.codeVerifier,
+  });
+  const status = typeof r.body.status === "string" ? r.body.status : "";
+  if (r.ok && status === "pending") return { state: "pending" };
+  if (r.ok && status === "slow_down") return { state: "slow_down" };
+  if (r.ok && (status === "denied" || status === "access_denied")) {
+    return { state: "denied", message: "授权被拒绝或在浏览器里取消了。" };
+  }
+  if (r.ok && (status === "expired" || status === "expired_token")) {
+    return { state: "expired", message: "device code 已超时，请重新发起登录。" };
+  }
+  if (r.ok) return { state: "approved", session: sessionFromGrant(parseGrant(r.body)) };
+  if (r.error === "authorization_pending") return { state: "pending" };
+  if (r.error === "slow_down") return { state: "slow_down" };
+  throw new AuthError(r.error ?? "device_authorization_failed", `轮询被服务端拒绝（${r.error ?? `HTTP ${r.status}`}）。`, 502);
+}
+
 /** Poll until the browser approval lands, then persist the session. */
 export async function pollDeviceToken(auth: DeviceAuthorization): Promise<Session> {
   const deadline = Date.now() + auth.expiresInSec * 1000;
   let intervalMs = auth.intervalSec * 1000;
   while (Date.now() < deadline) {
-    const r = await postForm(`${ORIGIN}/oauth2/token`, {
-      grant_type: DEVICE_GRANT,
-      ...(auth.pollingParameter === "user_code" ? { user_code: auth.userCode } : { device_code: auth.deviceCode }),
-      client_id: CLIENT_ID,
-      code_verifier: auth.codeVerifier,
-    });
-    const status = typeof r.body.status === "string" ? r.body.status : "";
-    if (r.ok && status === "pending") {
-      await new Promise((res) => setTimeout(res, intervalMs));
-      continue;
-    }
-    if (r.ok && status === "slow_down") {
+    const r = await pollDeviceTokenOnce(auth);
+    if (r.state === "approved") return r.session;
+    if (r.state === "denied") throw new AuthError("access_denied", r.message, 503);
+    if (r.state === "expired") throw new AuthError("expired_token", r.message, 503);
+    if (r.state === "slow_down") {
       intervalMs += 5000;
       await new Promise((res) => setTimeout(res, intervalMs));
       continue;
     }
-    if (r.ok && (status === "denied" || status === "access_denied")) {
-      throw new AuthError("access_denied", "授权被拒绝或在浏览器里取消了。", 503);
-    }
-    if (r.ok && (status === "expired" || status === "expired_token")) {
-      throw new AuthError("expired_token", "device code 已超时，请重新发起登录。", 503);
-    }
-    if (r.ok) return sessionFromGrant(parseGrant(r.body));
-    if (r.error === "authorization_pending") {
-      await new Promise((res) => setTimeout(res, intervalMs));
-      continue;
-    }
-    if (r.error === "slow_down") {
-      intervalMs += 5000;
-      await new Promise((res) => setTimeout(res, intervalMs));
-      continue;
-    }
-    throw new AuthError(r.error ?? "device_authorization_failed", `轮询被服务端拒绝（${r.error ?? `HTTP ${r.status}`}）。`, 502);
+    await new Promise((res) => setTimeout(res, intervalMs));
   }
   throw new AuthError("expired_token", "device code 已超时，请重新发起登录。", 503);
 }
@@ -481,3 +500,52 @@ export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
 
 export const OAUTH_WARN_MS = WARN_MS;
 export const OAUTH_REFRESH_BUFFER_MS = REFRESH_BUFFER_MS;
+
+/* ------------------------------------------------------------------ *
+ * Login flow
+ * ------------------------------------------------------------------ */
+
+/**
+ * MiniMax Code's login flow (registered for lib/login-flow.ts).
+ *
+ * The waiting belongs to the framework: this only hands out a link and
+ * answers one question at a time.
+ */
+registerLoginFlow<Session>("minimax", {
+  method: "device",
+  label: "minimax",
+  timeoutMs: DEVICE_POLL_TIMEOUT_MS,
+  pollIntervalMs: DEVICE_POLL_INTERVAL_MS,
+  begin: async (_ctx: LoginContext): Promise<LoginTicket> => {
+    const auth = await startDeviceAuthorization();
+    return {
+      method: "device",
+      authorizationUrl: auth.verificationUriComplete ?? `${auth.verificationUri}?code=${auth.userCode}`,
+      userCode: auth.userCode,
+      expiresAtMs: Date.now() + auth.expiresInSec * 1000,
+      message: "请在浏览器中打开上方链接并完成授权，之后此处会自动显示为已登录。",
+      // The half-credential travels as it is: the row the panel stores keeps
+      // the old shape, so a login that was still waiting survives a restart.
+      state: { auth },
+    };
+  },
+  poll: async (_ctx: LoginContext, ticket: LoginTicket): Promise<PollResult<Session>> => {
+    const auth = ticket.state.auth as DeviceAuthorization;
+    const r = await pollDeviceTokenOnce(auth);
+    if (r.state === "approved") return { state: "approved", session: r.session };
+    if (r.state === "denied") return { state: "failed", message: r.message };
+    if (r.state === "expired") return { state: "expired", message: r.message };
+    if (r.state === "slow_down") {
+      // The upstream asks us to back off: wait five more seconds, the same
+      // way the device flow handles slow_down.
+      await new Promise((res) => setTimeout(res, 5000));
+    }
+    return { state: "pending" };
+  },
+  // The session is stored here: this is the one moment a login finishes, so
+  // it may overwrite the older one.
+  commit: (ctx: LoginContext, session: Session) => {
+    saveSession(session, ctx.accountId, { force: true });
+    return providerSecretId(ctx.accountId);
+  },
+});

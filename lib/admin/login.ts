@@ -15,12 +15,9 @@ import crypto from "node:crypto";
 import { deleteCached, getSecret, listCached, peekCached, setCached, setSecret, withLock } from "../store.ts";
 import { AuthError, authLog } from "../credential.ts";
 import { dataDir } from "../paths.ts";
-import {
-  pollDeviceToken as pollMinimaxDevice,
-  saveSession as saveMinimaxSession,
-  startDeviceAuthorization,
-  type DeviceAuthorization as MinimaxDeviceAuthorization,
-} from "../minimax/oauth.ts";
+// Side-effect import: this module registers minimax's login flow
+import "../minimax/oauth.ts";
+import type { DeviceAuthorization as MinimaxDeviceAuthorization } from "../minimax/oauth.ts";
 import {
   buildDeviceAuthorization,
   pollDeviceToken as pollQoderDevice,
@@ -135,17 +132,28 @@ interface Started {
   poll: Record<string, unknown> | null;
 }
 
-/** MiniMax：设备流，有大字码。 */
-async function startMinimax(): Promise<Started> {
-  const auth = await startDeviceAuthorization();
-  const url = auth.verificationUriComplete ?? `${auth.verificationUri}?code=${auth.userCode}`;
+/** MiniMax：设备流，有大字码。
+ *
+ * 登录链本身登记在 lib/minimax/oauth.ts 的 registerLoginFlow 里，这里只要把
+ * 账号行的 id 交给它。 */
+async function startMinimax(accountId: string): Promise<Started> {
+  const ctx: LoginContext = {
+    accountId,
+    platform: "minimax",
+    region: "",
+  };
+  const ticket = await beginLoginFlow("minimax", ctx);
+  // SAFETY: the ticket comes from the minimax flow's begin, which puts the
+  // DeviceAuthorization it fetched under state.auth
+  const auth = ticket.state.auth as unknown as Record<string, unknown>;
   return {
-    method: "device",
-    authorizationUrl: url,
-    userCode: auth.userCode,
-    expiresAt: Date.now() + auth.expiresInSec * 1000,
-    message: "请在浏览器中打开上方链接并完成授权，之后此处会自动显示为已登录。",
-    poll: { kind: "minimax", auth: auth as unknown as Record<string, unknown> },
+    method: ticket.method,
+    authorizationUrl: ticket.authorizationUrl,
+    userCode: ticket.userCode,
+    expiresAt: ticket.expiresAtMs,
+    message: ticket.message,
+    // 半凭据照旧摊进这一层再存：形状没变，重启前还在等的登录照旧能接上。
+    poll: { kind: "minimax", auth },
   };
 }
 
@@ -266,7 +274,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
     // The provider says which kind it is; the kind says how to log in.
     switch (row.kind) {
       case "minimax":
-        return startMinimax();
+        return startMinimax(row.id);
       case "qoder":
         return startQoder(row.id);
       case "zcode":
@@ -278,6 +286,9 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
         return startPassword();
       case "intern-ai":
         return startInternAi();
+      case "minimax-api":
+        // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
+        throw new AuthError("no login", "MiniMax 开放平台不扫码登录，用「API Key」按钮贴一把 key。", 400);
       default:
         throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${upstreamId}`, 400);
     }
@@ -342,10 +353,24 @@ async function runPoll(session: StoredLogin): Promise<string> {
   const providerId = session.accountId;
   switch (poll.kind) {
     case "minimax": {
+      // SAFETY: rows with poll.kind === "minimax" are written by startMinimax
+      // alone and its auth field is the DeviceAuthorization that begin fetched
       const auth = poll.auth as unknown as MinimaxDeviceAuthorization;
-      const result = await pollMinimaxDevice(auth);
-      saveMinimaxSession(result, providerId, { force: true });
-      return `session:provider:${providerId}`;
+      const ctx: LoginContext = {
+        accountId: providerId,
+        platform: session.upstreamId,
+        region: "",
+      };
+      const ticket: LoginTicket = {
+        method: "device",
+        authorizationUrl: session.authorizationUrl,
+        userCode: session.userCode,
+        expiresAtMs: session.expiresAt,
+        message: session.message,
+        state: { auth },
+      };
+      const { credentialId } = await driveLogin("minimax", ctx, ticket, session.expiresAt);
+      return credentialId;
     }
     case "qoder": {
       const auth = poll.auth as unknown as QoderDeviceAuthorization;

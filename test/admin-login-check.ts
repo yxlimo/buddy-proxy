@@ -46,6 +46,8 @@ function check(name: string, ok: boolean, detail = ""): void {
 let deviceCodeRequests = 0;
 /** 发了第几次 zcode poll 请求：第一次 pending，第二次 ready。 */
 let zcodePollRequests = 0;
+/** 发了第几次 minimax token 请求：第一次还在等，第二次才批。 */
+let minimaxTokenRequests = 0;
 
 const mock = http.createServer(async (req, res) => {
   const chunks: Buffer[] = [];
@@ -70,6 +72,12 @@ const mock = http.createServer(async (req, res) => {
   }
   if (req.url?.startsWith("/oauth2/token")) {
     if (body.includes(GOOD_DEVICE_CODE)) {
+      minimaxTokenRequests++;
+      if (minimaxTokenRequests === 1) {
+        // 用户还没点：上游还在等。
+        res.end(JSON.stringify({ status: "pending" }));
+        return;
+      }
       // 同意了。
       res.end(
         JSON.stringify({
@@ -169,6 +177,7 @@ const router = spawn(process.execPath, ["router-proxy.ts"], {
     ZCODE_BASE_URL: mockBase,
     // 轮询快一点：自测不用等上游那三秒。
     ZCODE_POLL_INTERVAL_MS: "200",
+    MINIMAX_POLL_INTERVAL_MS: "200",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -233,7 +242,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
 // 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
-for (const platform of ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
+for (const platform of ["minimax", "minimax-api", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
   if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
@@ -325,6 +334,20 @@ const unknown = await call("BeginLogin", { upstreamId: "nope" });
 check("不认识的上游不开始", unknown.body?.ok !== true, JSON.stringify(unknown.body));
 check("说的是人话", typeof unknown.body?.message === "string" && unknown.body.message.length > 0);
 
+// 开放平台没有登录：它用 API Key。点它的时候要说清楚，别让人以为是坏了。
+const minimaxApi = await call("BeginLogin", { upstreamId: "minimax-api" });
+check("开放平台不开始登录", minimaxApi.body?.ok !== true, JSON.stringify(minimaxApi.body));
+check(
+  "开放平台说该用 API Key",
+  String(minimaxApi.body?.message ?? "").includes("API Key"),
+  JSON.stringify(minimaxApi.body?.message),
+);
+check(
+  "开放平台不再说「没有登录的办法」",
+  !String(minimaxApi.body?.message ?? "").includes("还没有登录的办法"),
+  JSON.stringify(minimaxApi.body?.message),
+);
+
 console.log("");
 console.log("cache 表与会话");
 
@@ -392,6 +415,11 @@ const becameApproved = await waitFor(async () => {
   return res.body?.session?.status === "approved";
 });
 check("轮询同意会变成 approved", becameApproved, "没有变成 approved");
+check(
+  "上游先说还在等，再批（框架自己问的）",
+  minimaxTokenRequests >= 2,
+  String(minimaxTokenRequests),
+);
 const approvedStatus = await call("GetLoginStatus", { loginId: approved.body?.session?.loginId });
 check(
   "成功时带着凭据的摘要",
