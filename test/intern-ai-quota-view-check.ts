@@ -196,6 +196,12 @@ console.log("平台说账号不可用，就不再往它发请求");
   const normal = internAiKind.outOfCredits(PROVIDER, snapshotWith(balance()));
   check("access_status = 1 且有余额 → 有钱", normal === false, String(normal));
 
+  // 平台没报这个字段时是 null，不是 0。「没说」不能当成「说不行」—— 0 会被
+  // 当成账号不可用，把整条路的请求全拦死。
+  const unreported = balance({ accessStatus: null });
+  const unreportedOut = internAiKind.outOfCredits(PROVIDER, snapshotWith(unreported));
+  check("平台没报 access_status（null）→ 不拦", unreportedOut === false, String(unreportedOut));
+
   const legacy = balance();
   delete legacy.accessStatus;
   const legacyOut = internAiKind.outOfCredits(PROVIDER, snapshotWith(legacy));

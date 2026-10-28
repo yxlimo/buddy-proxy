@@ -193,6 +193,13 @@ check("恢复时刻是字符串", bal.window5h.nextRecoverAt === "2026-10-22 19:
 check("7 天窗口读到了", bal.window7d.window === "7d");
 check("限流读到了", bal.rpmLimit === 50 && bal.decisionRpmLimit === 200 && bal.tpmLimit === 2000000);
 check("账号能用", bal.accessStatus === 1);
+// 平台没报 access_status 时是 null，不是 0：0 会被当成账号不可用。
+const noAccess = parseBalance({ ...balanceBody, access_status: undefined });
+check("没报 access_status → null（不是 0）", noAccess.accessStatus === null, String(noAccess.accessStatus));
+const nullAccess = parseBalance({ ...balanceBody, access_status: null });
+check("access_status 报 null → null", nullAccess.accessStatus === null, String(nullAccess.accessStatus));
+const zeroAccess = parseBalance({ ...balanceBody, access_status: 0 });
+check("access_status 报 0 → 0（跟「没报」不是一回事）", zeroAccess.accessStatus === 0, String(zeroAccess.accessStatus));
 check("计算时刻读到了", bal.calculatedAt === "2026-10-22 16:28:14");
 check("没开窗口的窗口 enabled 是 false", parseCreditWindow("x", {}).enabled === false);
 check("空的回答不炸", parseBalance(null).availableCredits === 0);

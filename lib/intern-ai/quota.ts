@@ -60,8 +60,14 @@ export interface InternAiBalance {
   window7d: InternAiCreditWindow;
   /** 已经用掉的墨点。 */
   used: number;
-  /** 账号能不能用（1 = 能）。 */
-  accessStatus: number;
+  /**
+   * 账号能不能用（1 = 能）。
+   *
+   * null = 平台没报这个字段，不是 0。「没报」和「报了 0」是两件事：没报的时候
+   * 说「不知道」，别把「没说」当成「说不行」—— 0 会被当成账号不可用，把整条
+   * 路的请求拦死。
+   */
+  accessStatus: number | null;
   /** 每分钟请求数上限。 */
   rpmLimit: number;
   /** 决策模型单独的 RPM 上限。 */
@@ -191,7 +197,10 @@ export function parseBalance(body: any): InternAiBalance {
     window5h: parseCreditWindow("5h", windows["5h"]),
     window7d: parseCreditWindow("7d", windows["7d"]),
     used: num(body?.used),
-    accessStatus: num(body?.access_status),
+    accessStatus:
+      body?.access_status === undefined || body?.access_status === null
+        ? null
+        : num(body.access_status),
     rpmLimit: num(body?.rpm_limit),
     decisionRpmLimit: num(body?.decision_rpm_limit),
     tpmLimit: num(body?.tpm_limit),

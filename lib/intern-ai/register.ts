@@ -115,10 +115,11 @@ export const internAiKind = registerCompatiblePlatform({
     const raw = mine.balance as any;
     const balance = raw as InternAiBalance | null;
     if (!balance) return false;
-    // 平台自己说这个账号不能用（access_status 的正常值是 1）：不再往它发请求。
-    // 老数据里没有这个字段时当作正常，不误判。
-    const access = raw.accessStatus;
-    if (access !== undefined && access !== null && access !== 1) return true;
+    // 平台说不能用才拦；没报就照常发，别把「没说」当成「说不行」。
+    // access_status 的正常值是 1。null = 平台没报这个字段（老快照里压根没这个
+    // 键时也是 undefined），那不是「账号没钱」。
+    const access: number | null | undefined = balance.accessStatus;
+    if (access !== null && access !== undefined && access !== 1) return true;
     if (balance.availableCredits <= 0) return true;
     // A window that is full is full: it cannot be spent this time round.
     for (const window of [balance.window5h, balance.window7d]) {
