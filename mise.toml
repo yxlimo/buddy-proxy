@@ -34,7 +34,7 @@ run = "node --experimental-strip-types check-file-size.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:dialect:stream"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -123,6 +123,10 @@ run = "node --experimental-strip-types test/deliver-frames-check.ts"
 [tasks."test:peek:stream"]
 description = "Check the first frame of an upstream answer (a locked stream is read once, and the error frame is parsed)"
 run = "node --experimental-strip-types test/peek-stream-check.ts"
+
+[tasks."test:dialect:stream"]
+description = "Check that a `data: null` frame from an upstream does not break the answer (it used to throw while reading .usage)"
+run = "node --experimental-strip-types test/dialect-stream-check.ts"
 
 [tasks."test:cooldown"]
 description = "Check the cooldown: a failed account is set aside, and how long (a fake upstream, no tokens spent)"

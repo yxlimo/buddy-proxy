@@ -59,6 +59,10 @@ export async function* openaiStreamToAnthropic(
   }
 
   for await (const chunk of chunks) {
+    // 上游偶尔发 `data: null` 这一帧（流末尾的哨兵）。它的意思是「没有内容」，
+    // 不是失败：在这里放行。否则下一行读 `chunk.usage` 会抛 TypeError，整条
+    // 答复变成一个 api_error（线上就是这样，一秒断流）。
+    if (!chunk) continue;
     if (chunk.usage) {
       inputTokens = chunk.usage.prompt_tokens ?? inputTokens;
       outputTokens = chunk.usage.completion_tokens ?? outputTokens;
