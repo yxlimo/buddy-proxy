@@ -139,8 +139,21 @@ export function conversationIdFor(messages: any[], given?: string): string {
 
 /** How often a failed request is tried again. */
 const MAX_ATTEMPTS = 2;
-/** How long a request may take before it is given up on. */
-const TIMEOUT_MS = 120_000;
+/**
+ * How long a request may take before it is given up on.
+ *
+ * 300 seconds, like MiniMax and ZCode: 120 seconds cut long generations off
+ * (the client saw ECONNRESET), and a cut-off request is not the account's
+ * fault — it used to cool the account down for five minutes.
+ */
+const TIMEOUT_MS = 300_000;
+/**
+ * How long the catalogue fetch may take.
+ *
+ * The catalogue is a background action at startup, not a chat: it must not
+ * hold a chat's budget, so it keeps its own short limit.
+ */
+const CATALOG_TIMEOUT_MS = 30_000;
 
 /** Wait before the next try: the server's own advice, or a backoff. */
 async function backoff(attempt: number, retryAfterSec = 0): Promise<void> {
@@ -292,7 +305,7 @@ export async function fetchWorkBuddyCatalog(
     if (!session) return stored?.models ?? null;
     const res = await cliFetch(`${chatBase(session)}${CONFIG_PATH}`, {
       headers: { ...chatHeaders(session), "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
     });
     if (!res.ok) return stored?.models ?? null;
     const payload = await res.json().catch(() => null);
