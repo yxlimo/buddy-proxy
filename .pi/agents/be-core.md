@@ -4,7 +4,7 @@ description: 流量转发核心链路编码与单测：路由、选路、策略�
 inheritSkills: false
 inheritProjectContext: true
 tools: read, grep, find, ls, bash, write, edit
-thinking: high
+thinking: medium
 systemPromptMode: replace
 ---
 

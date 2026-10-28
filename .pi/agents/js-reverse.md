@@ -6,7 +6,7 @@ inheritProjectContext: true
 skills: hello-js-reverse-skill
 skillPath: ../../.agents/skills
 tools: read, grep, find, ls, bash, write, edit
-thinking: high
+thinking: medium
 systemPromptMode: replace
 ---
 

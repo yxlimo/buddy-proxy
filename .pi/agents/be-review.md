@@ -4,7 +4,7 @@ description: 后端代码与后端单测的 code review：只读，输出问题�
 inheritSkills: false
 inheritProjectContext: true
 tools: read, grep, find, ls, bash
-thinking: high
+thinking: medium
 systemPromptMode: replace
 ---
 
