@@ -239,14 +239,20 @@ export function ProviderAccounts({
                     iconOnly
                     onSave={(alias) => onRename(account, alias)}
                   />
-                  {kind === 'minimax-api' || kind === 'minimax' ? (
+                  {kind === 'minimax-api' ||
+                  kind === 'minimax' ||
+                  kind === 'qiniu' ? (
                     <Button
                       variant='outline'
                       size='sm'
                       onClick={() => onManageKeys(account)}
                     >
                       <KeyRound />
-                      {kind === 'minimax' ? '套餐 key' : 'API Key'}
+                      {kind === 'minimax'
+                        ? '套餐 key'
+                        : kind === 'qiniu'
+                          ? '凭据'
+                          : 'API Key'}
                     </Button>
                   ) : null}
                   {/* 登录一直在：登录会覆盖这个账号的旧会话，不需要先注销。 */}

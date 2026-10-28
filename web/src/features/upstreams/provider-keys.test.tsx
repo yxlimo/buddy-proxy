@@ -223,3 +223,147 @@ describe('账号的 API Key', () => {
     expect(sent).toEqual([])
   })
 })
+
+/** 七牛云的账号：一段推理 key 加一段门户 cookie。 */
+function qiniuAccount(): Account {
+  return create(AccountSchema, {
+    id: 'qiniu-1',
+    platform: 'qiniu',
+    alias: '七牛一',
+    enabled: true,
+    status: 'missing',
+    credentialCount: 0,
+  })
+}
+
+/**
+ * 七牛云要两段凭据：推理 API Key 与门户 cookie。
+ *
+ * 两段各有位置：哪一段留空就是清掉哪一段，所以空串也要传上去，不能滤掉。
+ */
+describe('七牛云的凭据', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  /** 只列一个七牛云上游，把每次提交的两段记下来。 */
+  function qiniuClient(sent: string[][]) {
+    return mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [
+            create(UpstreamSchema, {
+              id: 'qiniu',
+              kind: 'qiniu',
+              label: '七牛云',
+              state: UpstreamState.NO_CREDENTIAL,
+              policy: ProviderPolicy.SINGLE,
+              policies: [ProviderPolicy.SINGLE],
+              accountCount: 1,
+              accounts: [qiniuAccount()],
+            }),
+          ],
+        }),
+      ListAccounts: () =>
+        create(ListAccountsResponseSchema, { accounts: [qiniuAccount()] }),
+      ListCredentials: () =>
+        create(ListCredentialsResponseSchema, { credentials: [] }),
+      SetProviderKeys: (input) => {
+        const keys = input.keys ?? []
+        sent.push(keys)
+        return create(SetProviderKeysResponseSchema, {
+          ok: true,
+          message: '写好了',
+          count: keys.length,
+        })
+      },
+    })
+  }
+
+  it('点「凭据」打开的是两个输入框的弹窗', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: qiniuClient(sent),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 qiniu 的账号与凭据' })
+    )
+    await user.click(await screen.findByRole('button', { name: '凭据' }))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('门户 Cookie')).toBeInTheDocument()
+  })
+
+  it('只填门户 cookie：推理 key 留空也要占着位置', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: qiniuClient(sent),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 qiniu 的账号与凭据' })
+    )
+    await user.click(await screen.findByRole('button', { name: '凭据' }))
+
+    await user.type(await screen.findByLabelText('门户 Cookie'), 'c=1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['', 'c=1']])
+    })
+  })
+
+  it('两段都填：推理 key 在前，门户 cookie 在后', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: qiniuClient(sent),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 qiniu 的账号与凭据' })
+    )
+    await user.click(await screen.findByRole('button', { name: '凭据' }))
+
+    await user.type(await screen.findByLabelText('推理 API Key'), 'k1')
+    await user.type(await screen.findByLabelText('门户 Cookie'), 'c=1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['k1', 'c=1']])
+    })
+  })
+
+  it('两段都空：两段都传空串上去，清不清理由后端决定', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: qiniuClient(sent),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 qiniu 的账号与凭据' })
+    )
+    await user.click(await screen.findByRole('button', { name: '凭据' }))
+
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['', '']])
+    })
+  })
+})
