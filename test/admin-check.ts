@@ -6,15 +6,12 @@
 // 端点：令牌对不对、二十个方法答不答得上、老的 JSON 路由没了没有、/health
 // 还是不是公开的。
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness, type Gateway } from "./harness.ts";
 import { tokenPlanView } from "../lib/admin/upstreams.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = "/tmp/opencode/test-admin-check";
 const SERVICE = "/buddy.admin.v1.AdminService";
 
@@ -29,18 +26,6 @@ function check(name: string, ok: boolean, detail = ""): void {
     fail++;
     console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
   }
-}
-
-/** 一个没人用的端口。 */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
 }
 
 let base = "";
@@ -87,20 +72,22 @@ async function healthOf(root: string): Promise<any> {
   return res.json();
 }
 
-const port = await freePort();
-base = `http://127.0.0.1:${port}`;
+/** 当前这个网关。重启以后它会换成下一个。 */
+let router: Gateway | undefined;
 
 /** 网关的日志。自测要看令牌打没打出来。 */
-let log = "";
+const log = () => router?.log() ?? "";
 
-function startRouter(): ReturnType<typeof spawn> {
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+/**
+ * 起网关交给共用的 helper：端口被抢就换号重试，失败一定收尾。
+ *
+ * base 与 router 都跟着换：重启以后看到的是新那个网关。
+ */
+async function startRouter(): Promise<Gateway> {
+  const gw = await startHarness({
+    dataDir: DATA_DIR,
+    keepDataDir: true,
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: DATA_DIR,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
       // 上游全关：自测不碰任何平台。
       MINIMAX_CODE: "",
       QODER_GLOBAL: "",
@@ -108,15 +95,10 @@ function startRouter(): ReturnType<typeof spawn> {
       WORKBUDDY_CN: "",
       TOKENRHYTHM: "",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", (chunk: Buffer) => {
-    log += chunk.toString();
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    log += chunk.toString();
-  });
-  return child;
+  base = gw.base;
+  router = gw;
+  return gw;
 }
 
 // 上一次跑留下的库会让「改完要重启才生效」这类断言失去意义：启动时读到的
@@ -124,45 +106,14 @@ function startRouter(): ReturnType<typeof spawn> {
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
-const router = startRouter();
+router = await startRouter();
 
 const cleanup = () => {
-  try {
-    router.kill("SIGTERM");
-  } catch {
-    /* 已经走了 */
-  }
+  router?.stop();
 };
 process.on("exit", cleanup);
 
-async function waitForHealth(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        return true;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
-
-try {
-  // 端口上面已经挑好了。
-} catch {
-  /* 只是占位 */
-}
-
 console.log("");
-if (!(await waitForHealth())) {
-  console.log("  FAIL 网关没起来");
-  process.exit(1);
-}
-
 console.log("令牌");
 
 const tokenFile = path.join(DATA_DIR, "admin-token");
@@ -173,8 +124,8 @@ const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim
 
 // 第一次起来的时候，日志里要看得见完整的令牌：人不在机器前，这是唯一的
 // 一次机会。
-check("日志里有令牌", log.includes(`[ADMIN] 面板令牌已生成：${token}`), log.slice(0, 200));
-check("日志里说了令牌写在哪", log.includes(`写到了 ${tokenFile}（0600）`), log.slice(0, 200));
+check("日志里有令牌", log().includes(`[ADMIN] 面板令牌已生成：${token}`), log().slice(0, 200));
+check("日志里说了令牌写在哪", log().includes(`写到了 ${tokenFile}（0600）`), log().slice(0, 200));
 check("令牌没有出现在 /health 里", !JSON.stringify(healthOf(base)).includes(token));
 
 const noToken = await call("GetSystemStatus");
@@ -908,15 +859,14 @@ console.log("");
 console.log("重启以后");
 
 // 再起一个：令牌文件已经在那里了，日志里不该再打一次。
-router.kill("SIGTERM");
+router?.stop();
 await new Promise((r) => setTimeout(r, 500));
-log = "";
-const second = startRouter();
-const up = await waitForHealth();
+const second = await startRouter();
+const up = Boolean(second.base);
 check("第二个网关起来了", up);
-check("令牌没有再打一遍", !log.includes("[ADMIN] 面板令牌已生成"), log.slice(0, 300));
+check("令牌没有再打一遍", !log().includes("[ADMIN] 面板令牌已生成"), log().slice(0, 300));
 check("令牌还是同一个", fs.readFileSync(tokenFile, "utf8").trim() === token);
-second.kill("SIGTERM");
+second.stop();
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);

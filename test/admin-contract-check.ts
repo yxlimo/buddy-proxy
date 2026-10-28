@@ -9,12 +9,12 @@
 // 跟 admin-check.ts 的分工：那边看「方法答不答得上」，这边看「答的那份东西跟
 // 契约是不是一回事」。
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startGateway as startHarness, type Gateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = "/tmp/opencode/test-admin-contract";
@@ -217,75 +217,31 @@ function messageError(message: Message, value: unknown, where: string): string |
  * 网关
  * ------------------------------------------------------------------ */
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
-
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
-const router = spawn(process.execPath, ["router-proxy.ts"], {
-  cwd: ROOT,
-  env: {
-    ...process.env,
-    BUDDY_DATA_DIR: DATA_DIR,
-    ROUTER_PORT: String(port),
-    BENEFITS_DISABLED: "1",
-    // 上游全关：不碰任何平台，也不花 token。
-    MINIMAX_CODE: "",
-    QODER_GLOBAL: "",
-    QODER_CN: "",
-    WORKBUDDY_CN: "",
-    TOKENRHYTHM: "",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = "";
-router.stdout.on("data", (c: Buffer) => {
-  log += c.toString();
-});
-router.stderr.on("data", (c: Buffer) => {
-  log += c.toString();
-});
-process.on("exit", () => {
-  try {
-    router.kill("SIGTERM");
-  } catch {
-    /* 已经走了 */
-  }
-});
-
-async function waitForHealth(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        return true;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
-
-if (!(await waitForHealth())) {
+// 起网关交给共用的 helper：端口被抢就换号重试，失败一定收尾。
+let router: Gateway;
+try {
+  router = await startHarness({
+    dataDir: DATA_DIR,
+    keepDataDir: true,
+    env: {
+      // 上游全关：不碰任何平台，也不花 token。
+      MINIMAX_CODE: "",
+      QODER_GLOBAL: "",
+      QODER_CN: "",
+      WORKBUDDY_CN: "",
+      TOKENRHYTHM: "",
+    },
+  });
+} catch (e) {
+  // helper 的错里带着子进程的输出：起不来的原因就在里面。
   console.log("  FAIL 网关没起来");
-  console.log(log.slice(-800));
+  console.log(String(e));
   process.exit(1);
 }
+const base = router.base;
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
@@ -817,7 +773,7 @@ check("目录穿越被挡住", traversal.includes("403"), traversal.split("\r\n"
 /** 不让库把路径改掉：自己发一个请求。 */
 function rawSocket(request: string): Promise<string> {
   return new Promise((resolve) => {
-    const socket = net.connect(port, "127.0.0.1", () => {
+    const socket = net.connect(router.port, "127.0.0.1", () => {
       socket.write(`${request}\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
     });
     let text = "";
@@ -837,42 +793,25 @@ console.log("");
 console.log("重启");
 
 // RestartSystem 会让进程退出去，所以另起一个网关来试。
-const restartPort = await freePort();
 const restartData = "/tmp/opencode/test-admin-contract-restart";
 fs.rmSync(restartData, { recursive: true, force: true });
 fs.mkdirSync(restartData, { recursive: true, mode: 0o700 });
-const restartRouter = spawn(process.execPath, ["router-proxy.ts"], {
-  cwd: ROOT,
+const restartRouter = await startHarness({
+  dataDir: restartData,
+  // 这个目录本来就是临时的：helper 收尾的时候一起删掉。
+  cleanupDataDir: true,
   env: {
-    ...process.env,
-    BUDDY_DATA_DIR: restartData,
-    ROUTER_PORT: String(restartPort),
-    BENEFITS_DISABLED: "1",
     MINIMAX_CODE: "",
     QODER_GLOBAL: "",
     QODER_CN: "",
     WORKBUDDY_CN: "",
     TOKENRHYTHM: "",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const restartBase = `http://127.0.0.1:${restartPort}`;
-let up = false;
-for (let i = 0; i < 60; i++) {
-  try {
-    const res = await fetch(`${restartBase}/health`);
-    if (res.ok) {
-      await res.text();
-      up = true;
-      break;
-    }
-  } catch {
-    /* 还没起来 */
-  }
-  await new Promise((r) => setTimeout(r, 250));
-}
-check("另一个网关起来了", up);
-if (up) {
+const restartBase = restartRouter.base;
+// helper 等到健康才返回，所以它一定起来了。
+check("另一个网关起来了", Boolean(restartRouter.base));
+{
   const restartToken = fs.readFileSync(path.join(restartData, "admin-token"), "utf8").trim();
   const res = await fetch(`${restartBase}${SERVICE}/RestartSystem`, {
     method: "POST",
@@ -882,27 +821,22 @@ if (up) {
   const body = await res.json().catch(() => null);
   check("RestartSystem 答得上来", res.status === 200, String(res.status));
   check("RestartSystem 说接下了", body?.accepted === true, JSON.stringify(body));
-  // 进程会自己退出去。
+  // 进程会自己退出去：/health 不再答就是走了。
   let exited = false;
-  restartRouter.on("exit", () => {
-    exited = true;
-  });
   for (let i = 0; i < 40 && !exited; i++) {
     await new Promise((r) => setTimeout(r, 250));
+    try {
+      const alive = await fetch(`${restartBase}/health`, { signal: AbortSignal.timeout(1000) });
+      await alive.text();
+    } catch {
+      exited = true;
+    }
   }
   check("RestartSystem 之后进程退了出去", exited);
 }
-try {
-  restartRouter.kill("SIGTERM");
-} catch {
-  /* 已经走了 */
-}
+restartRouter.stop();
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
-try {
-  router.kill("SIGTERM");
-} catch {
-  /* 已经走了 */
-}
+router.stop();
 process.exit(fail ? 1 : 0);
