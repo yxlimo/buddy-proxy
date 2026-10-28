@@ -156,22 +156,19 @@ export async function peekStream(body: ReadableStream<Uint8Array>): Promise<Read
   const head = new TextDecoder().decode(first.value);
   if (looksLikeErrorPayload(head)) {
     const text = await drainText(reader, head);
-    const raw = text.slice(0, 300);
-    let message = raw;
+    // 上游原话进 hint：它才是「为什么拒」，客户端与状态原因都读 hint。
+    // message 保持通用 —— 它被当成「哪一类失败」的标签，塞进上游正文会把
+    // 分类和面板文案一起搅乱。
+    let said = text.trim().slice(0, 300);
     const parsed = payloadIn(text);
-    let hint = raw;
     if (parsed) {
-      // The upstream's own body, without the SSE framing around it.
-      hint = JSON.stringify(parsed).slice(0, 300);
       const detail = parsed?.error ?? parsed;
       // An empty sentence is no sentence: fall back to the raw body.
-      const said = typeof detail === "string" ? detail : detail?.message || parsed?.message;
-      if (typeof said === "string" && said) message = said;
+      const words = typeof detail === "string" ? detail : detail?.message || parsed?.message;
+      if (typeof words === "string" && words) said = words;
     }
-    console.warn("[DELIVER] 上游在正文里报错：" + message.slice(0, 200));
-    // The message is the upstream's own words: the client asked a question and
-    // the upstream refused it, so that sentence is the answer.
-    throw new AuthError(message, hint, 502);
+    console.warn("[DELIVER] 上游在正文里报错：" + said.slice(0, 200));
+    throw new AuthError("upstream rejected the request", said, 502);
   }
   return new ReadableStream<Uint8Array>({
     start(controller) {

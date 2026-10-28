@@ -93,7 +93,9 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
     caught = e;
   }
   check("上游在正文里报错 → 抛 AuthError", caught instanceof AuthError, String(caught));
-  check("错误文案是上游那句", caught?.message === "boom", String(caught?.message));
+  // 上游原话进 hint：分类读 message，客户端读 hint，两边都不能串。
+  check("上游原话进了 hint", caught?.hint === "boom", String(caught?.hint));
+  check("message 仍是通用那句", caught?.message === "upstream rejected the request", String(caught?.message));
   check("状态是 502", caught?.status === 502, String(caught?.status));
 }
 
@@ -110,7 +112,7 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
     caught = e;
   }
   check("Anthropic 的 error 帧 → 抛 AuthError", caught instanceof AuthError, String(caught));
-  check("Anthropic 的错误文案带 overloaded", String(caught?.message ?? "").includes("overloaded"), String(caught?.message));
+  check("Anthropic 的原话进了 hint", String(caught?.hint ?? "").includes("overloaded"), String(caught?.hint));
   check("Anthropic 的错误状态是 502", caught?.status === 502, String(caught?.status));
 }
 
