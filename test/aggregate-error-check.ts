@@ -10,16 +10,12 @@
 //
 //   503（额度/冷却/凭据） > 其它 5xx > 4xx，同一档里取第一个。
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
 /** 假上游对它答 400（这个上游没有这个模型）。 */
 const MODEL_A = "MiniMax-M3.1-Flash";
@@ -85,35 +81,18 @@ const upstreamBase = `http://127.0.0.1:${(upstream.address() as any).port}`;
  * 网关
  * ------------------------------------------------------------------ */
 
-interface Gateway {
-  base: string;
+interface Gateway extends HarnessGateway {
   token: string;
-  stop: () => void;
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
+/**
+ * 起一个真的网关，上游指着本机的假服务。
+ *
+ * 起网关这件事交给共用的 helper：端口被抢就换号重试，退出时一定收尾。
+ */
 async function startGateway(): Promise<Gateway> {
-  const port = await freePort();
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "aggregate-error-"));
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+  const gw = await startHarness({
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: dataDir,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
-      // 定时器关着：不换令牌、不签到、不扫余额 —— 自测不碰任何平台。
-      PERIODIC_ENABLED: "false",
       MINIMAX_BASE_URL: upstreamBase,
       MINIMAX_API_BASE: upstreamBase,
       MINIMAX_REGION: "cn",
@@ -122,63 +101,21 @@ async function startGateway(): Promise<Gateway> {
       // 上游说在排队时网关会等一下再试。自测不等。
       QODER_MAX_ATTEMPTS: "1",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  let log = "";
-  child.stdout?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 80; i++) {
-    if (child.exitCode !== null) break;
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        up = true;
-        break;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!up) {
-    child.kill("SIGTERM");
-    console.log(log.slice(-1500));
-    throw new Error("网关没起来");
-  }
-
-  const tokenFile = path.join(dataDir, "admin-token");
+  const tokenFile = path.join(gw.dataDir, "admin-token");
   const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
 
   // 两个账号：一个 MiniMax Code（答 400），一个 Qoder（上游说在排队）。
-  const seed = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  const seed = new DatabaseSync(path.join(gw.dataDir, "buddy.db"));
   seed.exec("PRAGMA busy_timeout = 5000");
   const insertSecret = seed.prepare(
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   );
   const now = Date.now();
-  const gw: Gateway = {
-    base,
-    token,
-    stop: () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* 已经走了 */
-      }
-      fs.rmSync(dataDir, { recursive: true, force: true });
-    },
-  };
+  const local: Gateway = { ...gw, token };
 
-  const minimax = await call(gw, "AddAccount", { platform: "minimax", alias: "MiniMax" });
+  const minimax = await call(local, "AddAccount", { platform: "minimax", alias: "MiniMax" });
   const minimaxId = String(minimax.body?.id ?? "");
   check("MiniMax 的账号建出来了", Boolean(minimaxId), JSON.stringify(minimax.body));
   insertSecret.run(
@@ -201,7 +138,7 @@ async function startGateway(): Promise<Gateway> {
     now,
   );
 
-  const qoder = await call(gw, "AddAccount", { platform: "qoder", alias: "Qoder" });
+  const qoder = await call(local, "AddAccount", { platform: "qoder", alias: "Qoder" });
   const qoderId = String(qoder.body?.id ?? "");
   check("Qoder 的账号建出来了", Boolean(qoderId), JSON.stringify(qoder.body));
   insertSecret.run(
@@ -226,7 +163,7 @@ async function startGateway(): Promise<Gateway> {
     now,
   );
   seed.close();
-  return gw;
+  return local;
 }
 
 /** 打一个面板的方法（Connect over HTTP）。 */

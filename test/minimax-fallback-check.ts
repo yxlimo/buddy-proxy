@@ -11,16 +11,12 @@
 //
 // 断言的是「请求落到了哪个账号」：第一个账号被拒之后必须换下一个。
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL = "MiniMax-M3.1-Flash";
 
@@ -104,23 +100,9 @@ const upstreamBase = `http://127.0.0.1:${(upstream.address() as any).port}`;
  * 网关
  * ------------------------------------------------------------------ */
 
-interface Gateway {
-  base: string;
+interface Gateway extends HarnessGateway {
   token: string;
-  log: () => string;
-  stop: () => void;
   accounts: string[];
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
 }
 
 /**
@@ -128,82 +110,33 @@ function freePort(): Promise<number> {
  *
  * 账号是两个：第一个的套餐用完了（429 + 2067），第二个还能用。凭据直接写进
  * 这个测试自己的库 —— 与真的那台机器无关。
+ *
+ * 起网关这件事交给共用的 helper：端口被抢就换号重试，退出时一定收尾。
  */
 async function startGateway(): Promise<Gateway> {
-  const port = await freePort();
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "minimax-fallback-"));
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+  const gw = await startHarness({
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: dataDir,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
       MINIMAX_BASE_URL: upstreamBase,
       MINIMAX_REGION: "cn",
       // 日志里要看见「为什么换了账号」。
       QODER_LOG_ROUTE: "true",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  let log = "";
-  child.stdout?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 80; i++) {
-    if (child.exitCode !== null) break;
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        up = true;
-        break;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!up) {
-    child.kill("SIGTERM");
-    console.log(log.slice(-1500));
-    throw new Error("网关没起来");
-  }
-
-  const tokenFile = path.join(dataDir, "admin-token");
+  const tokenFile = path.join(gw.dataDir, "admin-token");
   const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
-  const gw: Gateway = {
-    base,
-    token,
-    log: () => log,
-    stop: () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* 已经走了 */
-      }
-      fs.rmSync(dataDir, { recursive: true, force: true });
-    },
-    accounts: [],
-  };
+  const local: Gateway = { ...gw, token, accounts: [] };
 
-  const seed = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  const seed = new DatabaseSync(path.join(gw.dataDir, "buddy.db"));
   seed.exec("PRAGMA busy_timeout = 5000");
   const insertSecret = seed.prepare(
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   );
   for (const index of [1, 2]) {
-    const made = await call(gw, "AddAccount", { platform: "minimax", alias: `MiniMax ${index}` });
+    const made = await call(local, "AddAccount", { platform: "minimax", alias: `MiniMax ${index}` });
     const id = String(made.body?.id ?? "");
     if (!id) throw new Error(`加不了 MiniMax 的账号：${JSON.stringify(made.body)}`);
-    gw.accounts.push(id);
+    local.accounts.push(id);
     const now = Date.now();
     insertSecret.run(
       `session:provider:${id}`,
@@ -227,7 +160,7 @@ async function startGateway(): Promise<Gateway> {
     );
   }
   seed.close();
-  return gw;
+  return local;
 }
 
 /** 打一个面板的方法（Connect over HTTP）。 */

@@ -40,6 +40,13 @@ export interface GatewayOptions {
   healthPath?: string;
   /** true：stop() 不删数据目录（调用方后面还要读那个库）。 */
   keepDataDir?: boolean;
+  /**
+   * true：连调用方自己给的 dataDir 也由 helper 删。
+   *
+   * 为什么需要：自己建的目录是临时的，留着只是垃圾；但删它要等子进程死了
+   * 之后，否则它还在写的 SQLite 会把文件写回来。
+   */
+  cleanupDataDir?: boolean;
 }
 
 export interface Gateway {
@@ -55,8 +62,9 @@ export interface Gateway {
 interface GatewayState {
   child: ChildProcess;
   dataDir: string;
-  /** 目录是不是 helper 自己建的：只有自己建的才删。 */
+  /** 这个目录该不该由 helper 删：自己建的，或者调用方点名要的。 */
   owned: boolean;
+  /** 调用方要求留着：true 就不删。 */
   keepDataDir: boolean;
   /** 子进程的输出。用对象装着，后来的输出也进得来。 */
   output: { text: string };
@@ -139,7 +147,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** 从内核拿一个空端口（拿完就放开，让子进程去绑）。 */
-function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.on("error", reject);
@@ -258,6 +266,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   const healthPath = options.healthPath ?? "/health";
   const owned = !options.dataDir;
   const dataDir = options.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "buddy-gateway-"));
+  // 调用方自己给的目录也可以由 helper 收：它同样是临时的。
+  const removable = owned || options.cleanupDataDir === true;
   let lastOutput = "";
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -296,7 +306,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       const state: GatewayState = {
         child,
         dataDir,
-        owned,
+        owned: removable,
         keepDataDir: options.keepDataDir === true,
         output,
         stopped: false,
@@ -317,12 +327,12 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     await terminate(child);
     // 只有「端口被抢」才换号重试。
     if (!output.text.includes("EADDRINUSE")) {
-      removeTempDir(dataDir, owned);
+      removeTempDir(dataDir, removable);
       throw new Error(`网关没起来（端口 ${port}）：\n${output.text.slice(-LOG_TAIL)}`);
     }
   }
 
-  removeTempDir(dataDir, owned);
+  removeTempDir(dataDir, removable);
   throw new Error(
     `网关没起来（试了 ${MAX_ATTEMPTS} 个端口，端口一直被抢）：\n${lastOutput.slice(-LOG_TAIL)}`,
   );

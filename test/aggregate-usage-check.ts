@@ -100,8 +100,8 @@ interface Gateway extends HarnessGateway {
  */
 async function startGateway(): Promise<Gateway> {
   const gw = await startHarness({
-    // 数据目录由这个测试自己收（它还要读里面的库）。
-    keepDataDir: true,
+    // 数据目录由 helper 收：它在子进程死了之后才删，所以不会跟还在写的
+    // SQLite 抢目录，也不用这个测试自己记着删。
     env: {
       MINIMAX_BASE_URL: upstreamBase,
       MINIMAX_API_BASE: upstreamBase,
@@ -114,10 +114,6 @@ async function startGateway(): Promise<Gateway> {
     ...gw,
     token,
     account: "",
-    stop: () => {
-      gw.stop();
-      fs.rmSync(gw.dataDir, { recursive: true, force: true });
-    },
   };
 
   // 一个 MiniMax Code 账号：凭据写进这个测试自己的库，与真的那台机器无关。

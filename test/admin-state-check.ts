@@ -13,16 +13,17 @@
 // 状态与原因都是「读数据库算出来的」：所以测试直接往数据库里写会话、写
 // 登录会话、写 /health 的缓存，然后问网关。
 
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway } from "./harness.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DATA_DIR = "/tmp/opencode/test-admin-state";
+// 每一趟一个自己的目录（mkdtemp 建的，已经干净）：几个测试同时跑时
+// 不能共用一个 SQLite。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "admin-state-"));
 const SERVICE = "/buddy.admin.v1.AdminService";
 
 let pass = 0;
@@ -85,92 +86,42 @@ check(
  * 网关
  * ------------------------------------------------------------------ */
 
-const fakeUpstream = http.createServer((req, res) => {
+const fakeUpstream = http.createServer((_req, res) => {
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
 });
 await new Promise<void>((resolve) => fakeUpstream.listen(0, "127.0.0.1", () => resolve()));
 const fakeBase = `http://127.0.0.1:${(fakeUpstream.address() as net.AddressInfo).port}`;
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
-
-let router: ChildProcess | null = null;
-let routerLog = "";
-
-function startRouter(): ChildProcess {
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      BUDDY_DATA_DIR: DATA_DIR,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
-      // 上游全关：状态由测试自己往数据库里写。
-      QODER_GLOBAL: "",
-      QODER_CN: "",
-      MINIMAX_CODE: "",
-      WORKBUDDY_CN: "",
-      TOKENRHYTHM: "",
-      QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
-      QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
-      QODER_GLOBAL_LEGACY_BASE: `${fakeBase}/qoder-global-legacy`,
-      QODER_CN_INFER_BASE: `${fakeBase}/qoder-cn`,
-      QODER_CN_OPENAPI_BASE: `${fakeBase}/openapi-cn`,
-      WORKBUDDY_CN_BASE: `${fakeBase}/workbuddy`,
-      WORKBUDDY_CHAT_BASE: `${fakeBase}/workbuddy`,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  router = child;
-  return child;
-}
-
-async function waitHealthy(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
+// 起网关交给共用的 helper：端口被抢就换号重试，退出时一定收尾。
+// 上游全关：状态由测试自己往数据库里写。
+const gw = await startGateway({
+  dataDir: DATA_DIR,
+  // 目录也是临时的，helper 在子进程死了之后删。
+  cleanupDataDir: true,
+  env: {
+    QODER_GLOBAL: "",
+    QODER_CN: "",
+    MINIMAX_CODE: "",
+    WORKBUDDY_CN: "",
+    TOKENRHYTHM: "",
+    QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
+    QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
+    QODER_GLOBAL_LEGACY_BASE: `${fakeBase}/qoder-global-legacy`,
+    QODER_CN_INFER_BASE: `${fakeBase}/qoder-cn`,
+    QODER_CN_OPENAPI_BASE: `${fakeBase}/openapi-cn`,
+    WORKBUDDY_CN_BASE: `${fakeBase}/workbuddy`,
+    WORKBUDDY_CHAT_BASE: `${fakeBase}/workbuddy`,
+  },
+});
+const base = gw.base;
 
 function cleanup(): void {
-  try {
-    router?.kill("SIGTERM");
-  } catch {
-    /* already gone */
-  }
   fakeUpstream.close();
 }
 process.on("exit", cleanup);
 
-startRouter();
-check("网关起来了", await waitHealthy());
+check("网关起来了", (await fetch(`${base}/health`)).ok);
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
@@ -536,6 +487,6 @@ if (problems.length) {
 if (fail) {
   console.log("");
   console.log("--- 网关的日志 ---");
-  console.log(routerLog.slice(-4000));
+  console.log(gw.log().slice(-4000));
 }
 process.exit(fail ? 1 : 0);

@@ -8,12 +8,14 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort, startGateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DATA_DIR = "/tmp/opencode/test-admin-regression";
+// 每一趟一个自己的目录：几个测试同时跑时不能共用一个 SQLite。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "admin-regression-"));
 const SERVICE = "/buddy.admin.v1.AdminService";
 
 let pass = 0;
@@ -29,24 +31,11 @@ function check(name: string, ok: boolean, detail = ""): void {
   }
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 const mockPort = await freePort();
-const routerPort = await freePort();
-const base = `http://127.0.0.1:${routerPort}`;
+const mockBase = `http://127.0.0.1:${mockPort}`;
 
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-
 // The sessions the requests need go into the test's own database. The mock
 // upstream does not look at the credential, but the router does: without a
 // session there is nothing to send.
@@ -101,53 +90,70 @@ mock.stderr.on("data", (c: Buffer) => {
   mockLog += c.toString();
 });
 
-// 路由器用 test/run-router.sh 起：上游的地址都指着 mock server。
-const router = spawn("bash", ["test/run-router.sh", String(routerPort), `http://127.0.0.1:${mockPort}`], {
-  cwd: ROOT,
-  env: { ...process.env, BUDDY_DATA_DIR: DATA_DIR },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let routerLog = "";
-router.stdout.on("data", (c: Buffer) => {
-  routerLog += c.toString();
-});
-router.stderr.on("data", (c: Buffer) => {
-  routerLog += c.toString();
+// 假上游（回放录下来的真实答复）：等它说自己起来了，路由器才知道往哪儿发。
+await new Promise<void>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`假上游没起来：\n${mockLog.slice(-500)}`)), 10_000);
+  mock.stdout.on("data", () => {
+    if (mockLog.includes("mock server on")) {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
 });
 
+// 账号与凭据：跟 test/run-router.sh 原来做的一样，写进这个测试自己的库。
+await new Promise<void>((resolve, reject) => {
+  const seeder = spawn(process.execPath, ["--experimental-strip-types", "test/fake-sessions.ts"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      BUDDY_DATA_DIR: DATA_DIR,
+      TEST_UPSTREAMS: "qoder,qoder-cn,workbuddy-cn,minimax",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let out = "";
+  seeder.stdout.on("data", (c: Buffer) => {
+    out += c.toString();
+  });
+  seeder.stderr.on("data", (c: Buffer) => {
+    out += c.toString();
+  });
+  seeder.on("exit", (code) => {
+    if (code === 0) resolve();
+    else reject(new Error(`写凭据失败：\n${out.slice(-500)}`));
+  });
+});
+
+// 路由器：上游的地址都指着 mock server。起网关交给共用的 helper：端口被抢
+// 就换号重试，退出时一定收尾。
+const gw = await startGateway({
+  dataDir: DATA_DIR,
+  // 目录也是临时的，helper 在子进程死了之后删。
+  cleanupDataDir: true,
+  env: {
+    QODER_GLOBAL_INFER_BASE: `${mockBase}/qoder-global`,
+    QODER_GLOBAL_OPENAPI_BASE: `${mockBase}/openapi-global`,
+    QODER_GLOBAL_LEGACY_BASE: `${mockBase}/qoder-global-legacy`,
+    QODER_CN_INFER_BASE: `${mockBase}/qoder-cn`,
+    QODER_CN_OPENAPI_BASE: `${mockBase}/openapi-cn`,
+    WORKBUDDY_CHAT_BASE: `${mockBase}/workbuddy`,
+    MINIMAX_BASE_URL: `${mockBase}/minimax/v1`,
+    MINIMAX_API_BASE: `${mockBase}/minimax`,
+    TOKENRHYTHM_INFER_BASE: `${mockBase}/tokenrhythm/v1`,
+    TOKENRHYTHM_API_BASE: `${mockBase}/tokenrhythm`,
+  },
+});
+const base = gw.base;
+
 const cleanup = () => {
-  for (const child of [router, mock]) {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      /* 已经走了 */
-    }
+  try {
+    mock.kill("SIGTERM");
+  } catch {
+    /* 已经走了 */
   }
 };
 process.on("exit", cleanup);
-
-async function waitForHealth(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        return true;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
-
-if (!(await waitForHealth())) {
-  console.log("  FAIL 网关没起来");
-  console.log(routerLog.slice(-1500));
-  console.log(mockLog.slice(-500));
-  process.exit(1);
-}
 
 const tokenFile = path.join(DATA_DIR, "admin-token");
 const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
@@ -479,6 +485,7 @@ await call("DeleteProvider", { id: "regression-minimax-plan" });
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
+gw.stop();
 cleanup();
 process.exit(fail ? 1 : 0);
 
