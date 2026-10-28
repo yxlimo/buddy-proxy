@@ -12,10 +12,11 @@
 // 断言的是「请求落到了哪个账号」与「库里那一行写了什么」：假上游收到的调用
 // 序列必须是 1,2 然后 2，而不是 1,2,1,2。
 //
-// 末尾还有三条算法上的断言（在本进程里直接跑）：
+// 末尾还有四条算法上的断言（在本进程里直接跑）：
 //   1. 短冷却不能盖掉长冷却；
 //   2. 额度见底的窗口说了算（周额度见底就等周窗口，不等 5 小时那个）；
-//   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个。
+//   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个；
+//   4. 连接与超时只冷却 1 分钟（不是 5 分钟），但上游自己说了就照它说的来。
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -628,7 +629,7 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
 }
 
 console.log("");
-console.log("算法：冷却的三条规矩");
+console.log("算法：冷却的四条规矩");
 {
   const { setCooldown, cooldownUntil } = await import("../lib/cooldown.ts");
   const { cooldownForFailure, planWindowEndsAt } = await import("../lib/router/account-cooldown.ts");
@@ -710,6 +711,54 @@ console.log("算法：冷却的三条规矩");
       serverDecision.source === "the upstream's answer" &&
       Math.abs(serverDecision.untilMs - (now + 30_000)) <= 1000,
     JSON.stringify(serverDecision),
+  );
+
+  // 4. 连接与超时不是账号的错：只冷却 1 分钟；上游自己说了就照它说的来。
+  const connectionError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  const connectionDecision = cooldownForFailure("acct-connection", connectionError, now);
+  check(
+    "连接类失败 → 固定 1 分钟（不是 5 分钟）",
+    connectionDecision !== null &&
+      connectionDecision.source === "fixed" &&
+      Math.abs(connectionDecision.untilMs - (now + 60_000)) <= 1000,
+    JSON.stringify(connectionDecision),
+  );
+
+  const timeoutError = Object.assign(new Error("timeout"), { name: "TimeoutError" });
+  const timeoutDecision = cooldownForFailure("acct-timeout", timeoutError, now);
+  check(
+    "超时类失败 → 固定 1 分钟（不是 5 分钟）",
+    timeoutDecision !== null &&
+      timeoutDecision.source === "fixed" &&
+      Math.abs(timeoutDecision.untilMs - (now + 60_000)) <= 1000,
+    JSON.stringify(timeoutDecision),
+  );
+
+  const plainServerError = withUpstreamStatus(new AuthError("上游挂了", "", 502), 500);
+  const plainServerDecision = cooldownForFailure("acct-server-500", plainServerError, now);
+  check(
+    "服务类失败（上游没给 retry-after）→ 仍是固定 5 分钟",
+    plainServerDecision !== null &&
+      plainServerDecision.source === "fixed" &&
+      Math.abs(plainServerDecision.untilMs - (now + 5 * 60_000)) <= 1000,
+    JSON.stringify(plainServerDecision),
+  );
+
+  const connectionWithRetryAfter = withCooldownUntil(
+    Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    now + 40_000,
+  );
+  const attachedConnectionDecision = cooldownForFailure(
+    "acct-connection-retry",
+    connectionWithRetryAfter,
+    now,
+  );
+  check(
+    "连接类失败但上游说了 40 秒 → 用上游的 40 秒（不是 1 分钟）",
+    attachedConnectionDecision !== null &&
+      attachedConnectionDecision.source === "the upstream's answer" &&
+      Math.abs(attachedConnectionDecision.untilMs - (now + 40_000)) <= 1000,
+    JSON.stringify(attachedConnectionDecision),
   );
 }
 

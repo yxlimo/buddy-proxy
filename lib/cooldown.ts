@@ -1,10 +1,13 @@
 // lib/cooldown.ts — 账号的冷却：失败之后一段时间不再路由到那个账号。
 //
-// 两种失败，两种冷却：
+// 三种失败，三种冷却：
 //
 //   限流 / 额度用完      冷却到「恢复时间 + 1 分钟」。恢复时间从哪儿来，由
 //                        lib/router/account-cooldown.ts 去找（错误上带的、
 //                        正文里写的、账号当前的套餐窗口）。
+//   连接与超时            固定 1 分钟（ACCOUNT_NETWORK_COOLDOWN_MS 可以改）。
+//                        连接断掉不是账号的错 —— 按 5 分钟算的话，一个只有
+//                        一个账号的平台会被自己的超时下线好几分钟。
 //   别的可降级失败        固定 5 分钟（ACCOUNT_COOLDOWN_MS 可以改）。
 //
 // 冷却落库：网关重启以后它还在 —— 一个刚被限流的账号不该因为重启又被试一次。
@@ -21,6 +24,9 @@ import { store } from "./store.ts";
 /** 不可用时的固定冷却时长（毫秒）。 */
 export const UNAVAILABLE_COOLDOWN_MS = 5 * 60_000;
 
+/** 连接断掉或超时时的固定冷却时长（毫秒）。 */
+export const NETWORK_COOLDOWN_MS = 60_000;
+
 /**
  * 冷却最多到什么时候（毫秒）：一周。
  *
@@ -32,6 +38,11 @@ export const MAX_COOLDOWN_MS = 7 * 24 * 60 * 60_000;
 /** 固定冷却时长，可以由设置改。 */
 export function unavailableCooldownMs(): number {
   return configNumber("ACCOUNT_COOLDOWN_MS", UNAVAILABLE_COOLDOWN_MS);
+}
+
+/** 连接与超时的固定冷却时长，可以由设置改。 */
+export function networkCooldownMs(): number {
+  return configNumber("ACCOUNT_NETWORK_COOLDOWN_MS", NETWORK_COOLDOWN_MS);
 }
 
 /** 一条冷却。 */

@@ -1,6 +1,6 @@
 // lib/router/account-cooldown.ts — 一次失败值多少冷却。
 //
-// 两类失败，两种冷却：
+// 三类失败，三种冷却：
 //
 //   限流 / 额度用完（rate-limit、quota）
 //       冷却到「恢复时间 + 1 分钟」。恢复时间取三个来源里**最晚**的：
@@ -12,14 +12,19 @@
 //       一次；正文里的重置时间与套餐窗口才说得出账号什么时候真的有额度。
 //       都没有就用固定值。
 //
-//   别的可降级失败（server、connection、timeout、credential、no-balance）
+//   连接与超时（connection、timeout）
+//       固定 1 分钟。连接断掉不是账号的错 —— 一个只有单个账号的平台会被
+//       自己的超时下线好几分钟。上游自己说了「过多久再来」（retry-after），
+//       就照它说的来。
+//
+//   别的可降级失败（server、credential、no-balance）
 //       固定 5 分钟；但上游自己说了「过多久再来」（retry-after），就照它说的
 //       来 —— 那时候一个短的等待是对的，套餐窗口跟服务挂了没关系。
 //
 // 只有可降级的失败才记冷却：请求本身的问题（400/404/413）不记 —— 一个坏请求
 // 不该把账号封掉，换一个账号也是一样的结果。
 
-import { MAX_COOLDOWN_MS, unavailableCooldownMs, isIgnoredPlanWindow } from "../cooldown.ts";
+import { MAX_COOLDOWN_MS, networkCooldownMs, unavailableCooldownMs, isIgnoredPlanWindow } from "../cooldown.ts";
 import { HEALTH_CACHE_ID } from "../health-cache.ts";
 import { peekCached } from "../store.ts";
 import { cooldownUntilOf } from "../upstream-status.ts";
@@ -51,7 +56,6 @@ export function cooldownForFailure(
 ): CooldownDecision | null {
   if (!isDegradableUpstreamError(error)) return null;
   const failure = classifyUpstreamError(error);
-  const fixed = unavailableCooldownMs();
   if (failure.kind === "rate-limit" || failure.kind === "quota") {
     const deadline = latestDeadlineFor(accountId, error, now);
     // 恢复时间已经过去了（上游说的就是现在）：那就用固定值试一下。
@@ -74,6 +78,12 @@ export function cooldownForFailure(
       };
     }
   }
+  // 没有上游给的恢复时间：用固定值。连接与超时是 1 分钟 —— 那不是账号的错，
+  // 按 5 分钟算的话一个只有单个账号的平台会被自己的超时下线好几分钟。
+  const fixed =
+    failure.kind === "connection" || failure.kind === "timeout"
+      ? networkCooldownMs()
+      : unavailableCooldownMs();
   return { untilMs: now + fixed, reason: failure.kind, source: "fixed" };
 }
 
