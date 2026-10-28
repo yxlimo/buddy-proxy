@@ -10,7 +10,8 @@
 //   3. 钱包变了之后，余额到期优先换到另一个账号；
 //   4. 只有一个账号的上游：策略不影响它；
 //   5. 降级的分类：服务不可用/429/402/401/403 降级，400/404/413 不降级，
-//      以及平台自己的业务码。
+//      以及平台自己的业务码；
+//   6. 七牛云的 403「模型不在这个 key 的分组里」：不换账号、不写冷却。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -416,6 +417,60 @@ console.log("平台自己的业务码");
   const wrong = withBusinessCode(new AuthError("x", "x", 404), "model_not_available");
   const failure = classifyUpstreamError(wrong);
   check("model_not_available → 不降级", failure.degradable === false, failure.kind);
+}
+
+console.log("");
+console.log("七牛云：模型不在这个 key 的分组里");
+
+{
+  const { cooldownForFailure } = await import("../lib/router/account-cooldown.ts");
+  const body = JSON.stringify({
+    error: {
+      code: "model_group_access_denied",
+      message: "model glm-4.5 is not available in your assigned model groups",
+    },
+  });
+  // 上游的样子：403，业务码说「这个模型不在你的分组里」。
+  const denied = withBusinessCode(
+    withUpstreamStatus(new AuthError("upstream HTTP 403", `七牛云上游返回 403：${body}`, 502), 403),
+    "model_group_access_denied",
+  );
+  const failure = classifyUpstreamError(denied);
+  check("403 + 分组拒绝 → 不降级", failure.degradable === false, failure.kind);
+  check("403 + 分组拒绝 → model", failure.kind === "model", failure.kind);
+  check(
+    "403 + 分组拒绝 → 不写冷却",
+    cooldownForFailure("acct-qiniu-denied", denied) === null,
+    "写了冷却",
+  );
+
+  // 信封里没解出码时，正文里写着也算。
+  const textOnly = withUpstreamStatus(
+    new AuthError("upstream HTTP 403", `七牛云上游返回 403：${body}`, 502),
+    403,
+  );
+  const textFailure = classifyUpstreamError(textOnly);
+  check("正文里写着分组拒绝 → 不降级", textFailure.degradable === false, textFailure.kind);
+  check("正文里写着分组拒绝 → model", textFailure.kind === "model", textFailure.kind);
+  check(
+    "正文里那个也不写冷却",
+    cooldownForFailure("acct-qiniu-text", textOnly) === null,
+    "写了冷却",
+  );
+
+  // 控制组：403 没有业务码 —— 那还是凭据被拒。不能把 403 一律放开。
+  const plain = withUpstreamStatus(
+    new AuthError("upstream HTTP 403", "七牛云上游返回 403：forbidden", 502),
+    403,
+  );
+  const plainFailure = classifyUpstreamError(plain);
+  check("403 没有业务码 → 降级", plainFailure.degradable === true, plainFailure.kind);
+  check("403 没有业务码 → credential", plainFailure.kind === "credential", plainFailure.kind);
+  check(
+    "403 没有业务码 → 照旧写冷却",
+    cooldownForFailure("acct-plain-403", plain) !== null,
+    "没写冷却",
+  );
 }
 
 console.log("");

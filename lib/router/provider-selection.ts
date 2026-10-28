@@ -205,7 +205,20 @@ const NAMED_CODES: Record<string, { degradable: boolean; kind: string }> = {
   model_not_available: { degradable: false, kind: "request" },
   invalid_model_error: { degradable: false, kind: "request" },
   not_found: { degradable: false, kind: "request" },
+  // 七牛云: 这个模型不在这把 key 的商品分组里。key 本身是好的 —— 换账号
+  // （除非它有别的分组）也是一样的结果，所以这是请求的问题，不是账号的。
+  model_group_access_denied: { degradable: false, kind: "model" },
 };
+
+/**
+ * The codes that mean the model is not in this key's group.
+ *
+ * 七牛云's 403 `model_group_access_denied`: the key is fine, but the model is
+ * not in the product group this key was sold with. The platform's own
+ * `/v1/models` is wider than what the key can use — that is the platform's
+ * business, not ours to fix.
+ */
+const MODEL_GROUP_CODES = new Set(["model_group_access_denied"]);
 
 /** What a failure says about the account that produced it. */
 export interface UpstreamFailure {
@@ -259,6 +272,9 @@ export function classifyUpstreamError(error: unknown): UpstreamFailure {
   const code = businessCodeOf(error);
   const byCode = code === null ? null : classifyBusinessCode(code);
   if (byCode) return { degradable: byCode.degradable, status, kind: byCode.kind };
+  // 「模型不在这个 key 的分组里」：信封里没解出这个码时，正文里写着也算。
+  // 状态码这时是 403 —— 按凭据被拒处理会把整个账号冷却掉，而账号没有坏。
+  if (isModelGroupDenied(error)) return { degradable: false, status, kind: "model" };
   if (status !== null) {
     if (status === 401 || status === 403) return { degradable: true, status, kind: "credential" };
     if (status === 402) return { degradable: true, status, kind: "no-balance" };
@@ -295,6 +311,34 @@ function classifyBusinessCode(code: number | string): { degradable: boolean; kin
     return null;
   }
   return NAMED_CODES[code.toLowerCase()] ?? null;
+}
+
+/**
+ * 这个失败是不是「模型不在这个 key 的分组里」。
+ *
+ * 码在信封里（业务码）是常态；正文里写着也算 —— 有些传输层不拆信封，只把
+ * 上游的原话带回来。
+ */
+function isModelGroupDenied(error: unknown): boolean {
+  const code = businessCodeOf(error);
+  if (typeof code === "string" && MODEL_GROUP_CODES.has(code.toLowerCase())) return true;
+  const text = errorTextOf(error).toLowerCase();
+  for (const known of MODEL_GROUP_CODES) {
+    if (text.includes(known)) return true;
+  }
+  return false;
+}
+
+/** 错误里能读到的原文：消息、提示，还有平台塞进来的那些字段。 */
+function errorTextOf(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error ?? "");
+  const err = error as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of ["message", "hint", "body", "text", "detail"]) {
+    const value = err[key];
+    if (typeof value === "string" && value) parts.push(value);
+  }
+  return parts.join("\n");
 }
 
 /** Qoder's queue: the request waits on this account, so the account stays. */

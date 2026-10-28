@@ -8,6 +8,7 @@
 //   1. 新装好的服务：内置上游全是关的（开关只有 provider.enabled 一份）；
 //   2. 凭据的 id 是现行格式：面板的「试一下/刷新」认得每一种形状；
 //   3. TokenRhythm 的会话是一张表：会话凭据不再是 missing；
+//   3.1 七牛云的两段凭据都列出来：账号行不再是「暂无凭据」；
 //   4. 用量保留天数是热设置：改完不报「待重启」；
 //   5. 用户自己加的 provider 出现在模型目录里；
 //   6. config-cli 拒绝服务没问过的设置。
@@ -252,6 +253,47 @@ check(
   "别的账号的凭据没动",
   credentialsOf(trOneId).some((c) => c.kind === "login"),
   JSON.stringify(credentialsOf(trOneId).map((c) => c.kind)),
+);
+
+/* ------------------------------------------------------------------ *
+ * 三之二、七牛的凭据挂在账号行上
+ * ------------------------------------------------------------------ */
+section("七牛云的凭据");
+
+// 七牛云的凭据是两段：推理 key 与门户 cookie（额度只认 cookie）。两段都要
+// 列出来 —— 面板上说「暂无凭据」，而上游层明明是已登录的。
+const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
+const qiniuRow = addAccount({ platform: "qiniu", alias: "测试七牛" });
+const qiniuId = String(qiniuRow.id ?? "qiniu");
+writeQiniuAccount(qiniuId, { apiKey: "sk-qiniu-test-key", portalCookie: "portal_cookie=abc" });
+
+const qiniuCredentials = credentialsOf(qiniuId);
+check(
+  "推理 key 列出来了",
+  qiniuCredentials.some((c) => c.kind === "api_key"),
+  qiniuCredentials.map((c) => c.kind).join(","),
+);
+check(
+  "门户 cookie 也列出来了",
+  qiniuCredentials.some((c) => c.kind === "cookie"),
+  qiniuCredentials.map((c) => c.kind).join(","),
+);
+const cookieCredential = qiniuCredentials.find((c) => c.kind === "cookie");
+check(
+  "cookie 是掩码，不是原值",
+  Boolean(cookieCredential) && cookieCredential!.masked !== "portal_cookie=abc",
+  String(cookieCredential?.masked),
+);
+const qiniuView = listAccounts().find((a) => a.id === qiniuId);
+check(
+  "账号不是「暂无凭据」",
+  qiniuView !== undefined && qiniuView.status !== CredentialState.MISSING,
+  String(qiniuView?.status),
+);
+check(
+  "凭据数不是 0",
+  (qiniuView?.credentialCount ?? 0) >= 1,
+  String(qiniuView?.credentialCount),
 );
 
 /* ------------------------------------------------------------------ *

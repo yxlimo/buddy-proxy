@@ -19,6 +19,7 @@ import { checkAccountHealth } from "../qoder/credits.ts";
 import { loadSession as loadWorkBuddySession } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { zcodeStatus } from "../zcode/auth.ts";
+import { qiniuAccountId, qiniuAccountOf } from "../qiniu/account.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
@@ -282,6 +283,25 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       }
       const sessionId = tokenRhythmSessionId(account.id);
       out.push(sessionRow(sessionId, account, "会话 cookie", loadTokenRhythmSession(account.id)));
+      return out;
+    }
+    case "qiniu": {
+      // 七牛的凭据是两段：推理 key 与门户 cookie（额度只认 cookie）。都没有就
+      // 什么都不列 —— 面板上不能出现「有凭据」却没有凭据的行。
+      const qiniu = qiniuAccountOf(account.id);
+      if (!qiniu) return out;
+      const secretId = qiniuAccountId(account.id);
+      const stored = secretOf(secretId);
+      if (qiniu.apiKey) {
+        out.push(plainRow(secretId, account, "api_key", "推理 API key", qiniu.apiKey, stored.updatedAt));
+      }
+      if (qiniu.portalCookie) {
+        // 门户 cookie 是同一份记录里的另一段：id 用派生的写法（#cookie），
+        // 免得造一个 parseCredentialId 认不出来的后缀。
+        out.push(
+          plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, stored.updatedAt),
+        );
+      }
       return out;
     }
     default:
