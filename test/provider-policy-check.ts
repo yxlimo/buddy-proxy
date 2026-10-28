@@ -71,8 +71,16 @@ console.log("");
 console.log("策略的读与写");
 
 check("写得进去", setPlatformPolicy("qoder", "single").ok === true);
+// 每个平台都收降级（只有 tokenrhythm 多一个余额到期优先）：读回来也得是 fallback。
 const fallbackOnQoder = setPlatformPolicy("qoder", "fallback");
-check("Qoder 只支持单一，降级不收", fallbackOnQoder.ok === false, JSON.stringify(fallbackOnQoder));
+check("Qoder 收降级", fallbackOnQoder.ok === true, JSON.stringify(fallbackOnQoder));
+check("Qoder 读回来是 fallback", platformPolicy("qoder") === "fallback", platformPolicy("qoder"));
+const qoderBackToSingle = setPlatformPolicy("qoder", "single");
+check(
+  "Qoder 能设回 single",
+  qoderBackToSingle.ok === true && platformPolicy("qoder") === "single",
+  JSON.stringify(qoderBackToSingle),
+);
 
 const written = setPlatformPolicy("tokenrhythm", "fallback");
 check("中转站的策略写得进去", written.ok === true, JSON.stringify(written));
@@ -126,8 +134,8 @@ check(
 );
 for (const kind of ["minimax", "qoder", "workbuddy", "sensenova", "intern-ai", "zcode"]) {
   check(
-    `${kind} 只有单一`,
-    policiesOfKind(kind).join(",") === "single",
+    `${kind} 收 single 与 fallback`,
+    policiesOfKind(kind).join(",") === "single,fallback",
     policiesOfKind(kind).join(","),
   );
 }
@@ -196,14 +204,18 @@ check(
 check("拒收的没写进库", platformPolicy("minimax-api") === "fallback", platformPolicy("minimax-api"));
 await setPolicy("minimax-api", ContractPolicy.SINGLE);
 
-const qoderFallback = await setPolicy("qoder", ContractPolicy.FALLBACK);
-check("Qoder 不收降级", qoderFallback.ok === false, JSON.stringify(qoderFallback));
-check(
-  "拒收的话说了只支持单一",
-  String(qoderFallback.message).includes("single"),
-  String(qoderFallback.message),
-);
-check("Qoder 的策略没被动", platformPolicy("qoder") === "single", platformPolicy("qoder"));
+// 降级是所有平台都有的选项：逐个平台设一遍，再读回来，再设回单一。
+for (const platform of ["qoder", "minimax", "workbuddy-cn", "sensenova", "intern-ai"]) {
+  const set = await setPolicy(platform, ContractPolicy.FALLBACK);
+  check(`${platform} 收降级`, set.ok === true, JSON.stringify(set));
+  check(`${platform} 读回来是 fallback`, platformPolicy(platform) === "fallback", platformPolicy(platform));
+  const backToSingle = await setPolicy(platform, ContractPolicy.SINGLE);
+  check(
+    `${platform} 能设回单一`,
+    backToSingle.ok === true && platformPolicy(platform) === "single",
+    JSON.stringify(backToSingle),
+  );
+}
 
 const unspecified = await setPolicy("tokenrhythm", ContractPolicy.UNSPECIFIED);
 check("UNSPECIFIED 不收", unspecified.ok === false, JSON.stringify(unspecified));
@@ -219,10 +231,13 @@ check("给错了的没写进库", platformPolicy("tokenrhythm") === "single", pl
 const noSuch = await setPolicy("no-such-platform", ContractPolicy.SINGLE);
 check("没有这个平台就不改", noSuch.ok === false, JSON.stringify(noSuch));
 
-const unsupportedText = unsupportedPolicyText("Qoder", "fallback", ["single"]);
+// 只有 tokenrhythm 有余额到期优先，拿它当「不支持」的样本。
+const unsupportedText = unsupportedPolicyText("tokenrhythm", "expiry_first", ["single", "fallback"]);
 check(
   "拒收的话是中文",
-  unsupportedText.includes("Qoder") && unsupportedText.includes("单一") && unsupportedText.includes("single"),
+  unsupportedText.includes("tokenrhythm") &&
+    unsupportedText.includes("余额到期优先") &&
+    unsupportedText.includes("single"),
   unsupportedText,
 );
 
@@ -352,20 +367,23 @@ check(
       return outcome(id);
     },
   };
-  const results2 = await runBenefits(["minimax-1", "qoder-2"], broken);
+  // 账号号是行给的：第一个 MiniMax Code 账号叫 minimax，没有 -1 后缀。
+  const minimaxAccount = addAccount({ platform: "minimax" });
+  const minimaxId = minimaxAccount.id!;
+  const results2 = await runBenefits([minimaxId, "qoder-2"], broken);
   check("出错的那个也出了结果", results2.length === 2, JSON.stringify(results2.length));
   check(
     "出错的那个说的是失败",
-    results2.find((r) => r.upstream === "minimax-1")?.ok === false,
-    JSON.stringify(results2.find((r) => r.upstream === "minimax-1")),
+    results2.find((r) => r.upstream === minimaxId)?.ok === false,
+    JSON.stringify(results2.find((r) => r.upstream === minimaxId)),
   );
   check(
     "错话里有原因",
-    String(results2.find((r) => r.upstream === "minimax-1")?.report.join("")).includes("会话坏了"),
-    JSON.stringify(results2.find((r) => r.upstream === "minimax-1")?.report),
+    String(results2.find((r) => r.upstream === minimaxId)?.report.join("")).includes("会话坏了"),
+    JSON.stringify(results2.find((r) => r.upstream === minimaxId)?.report),
   );
   check("别的账号照样签了", calls2.includes("qoder:qoder-2"), calls2.join(","));
-  check("出错的那个也轮到过", calls2.includes("minimax:minimax-1"), calls2.join(","));
+  check("出错的那个也轮到过", calls2.includes(`minimax:${minimaxId}`), calls2.join(","));
 }
 
 console.log("");

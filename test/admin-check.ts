@@ -266,24 +266,25 @@ const setExpiry = await call(
 );
 check("余额到期优先也改得掉", setExpiry.body?.ok === true, JSON.stringify(setExpiry.body));
 
-// 只有一个账号的：别的策略选了也没有用，所以不收。
+// 每个平台都收降级（只有 tokenrhythm 多一个余额到期优先）：qoder 也收。
 const qoderFallback = await call(
   "SetPlatformPolicy",
   { platform: "qoder", policy: "PROVIDER_POLICY_FALLBACK" },
   token,
 );
-check("Qoder 不收降级", qoderFallback.body?.ok !== true, JSON.stringify(qoderFallback.body));
-check(
-  "拒收的话说了这个平台支持哪几个",
-  String(qoderFallback.body?.message ?? "").includes("single"),
-  String(qoderFallback.body?.message),
-);
+check("Qoder 收降级", qoderFallback.body?.ok === true, JSON.stringify(qoderFallback.body));
 const qoderExpiry = await call(
   "SetPlatformPolicy",
   { platform: "qoder", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
   token,
 );
 check("Qoder 不收余额到期优先", qoderExpiry.body?.ok !== true, JSON.stringify(qoderExpiry.body));
+check(
+  "拒收的话说了这个平台支持哪几个",
+  ["single", "fallback"].every((v) => String(qoderExpiry.body?.message ?? "").includes(v)),
+  String(qoderExpiry.body?.message),
+);
+await call("SetPlatformPolicy", { platform: "qoder", policy: "PROVIDER_POLICY_SINGLE" }, token);
 
 // 给错了不收，而且说清楚只认哪三个。
 const badPolicy = await call("SetPlatformPolicy", { platform: "tokenrhythm", policy: 0 }, token);
@@ -319,7 +320,7 @@ const kinds = await call("ListProviderKinds", {}, token);
 const kindPolicies = (kind: string) => list(list(kinds.body?.kinds).find((k: any) => k.kind === kind)?.policies);
 check("中转站三个策略", kindPolicies("tokenrhythm").length === 3, JSON.stringify(kindPolicies("tokenrhythm")));
 check("开放平台两个策略", kindPolicies("minimax-api").length === 2, JSON.stringify(kindPolicies("minimax-api")));
-check("其余一个策略", kindPolicies("qoder").length === 1, JSON.stringify(kindPolicies("qoder")));
+check("其余两个策略", kindPolicies("qoder").length === 2, JSON.stringify(kindPolicies("qoder")));
 check(
   "中转站那三个是单一、降级、余额到期优先",
   kindPolicies("tokenrhythm").join(",") ===
