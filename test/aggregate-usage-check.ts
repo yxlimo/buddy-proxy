@@ -14,16 +14,12 @@
 //   2. 上游答 500 → 用量表里也只有一行（不能重复计数）；
 //   3. 上游答 200 → 用量表里仍然只有一行（成功那条没被弄坏）。
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL = "MiniMax-M3.1-Flash";
 /** 公布出去的模型名：客户端写的是它，用量表里的 agent_model 也是它。 */
@@ -91,102 +87,50 @@ const upstreamBase = `http://127.0.0.1:${(upstream.address() as any).port}`;
  * 网关
  * ------------------------------------------------------------------ */
 
-interface Gateway {
-  base: string;
+/** 网关 + 这个测试自己的那点东西（面板的令牌、那个账号）。 */
+interface Gateway extends HarnessGateway {
   token: string;
-  dataDir: string;
   account: string;
-  stop: () => void;
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-/** 起一个真的网关，上游只有 MiniMax Code，指向本机的假服务。 */
+/**
+ * 起一个真的网关，上游只有 MiniMax Code，指向本机的假服务。
+ *
+ * 起网关这件事交给共用的 helper：端口被抢就换号重试，退出时一定收尾。
+ */
 async function startGateway(): Promise<Gateway> {
-  const port = await freePort();
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "aggregate-usage-"));
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+  const gw = await startHarness({
+    // 数据目录由这个测试自己收（它还要读里面的库）。
+    keepDataDir: true,
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: dataDir,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
-      // 定时器关着：不换令牌、不签到、不扫余额 —— 自测不碰任何平台。
-      PERIODIC_ENABLED: "false",
       MINIMAX_BASE_URL: upstreamBase,
       MINIMAX_API_BASE: upstreamBase,
       MINIMAX_REGION: "cn",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  let log = "";
-  child.stdout?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 80; i++) {
-    if (child.exitCode !== null) break;
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        up = true;
-        break;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!up) {
-    child.kill("SIGTERM");
-    console.log(log.slice(-1500));
-    throw new Error("网关没起来");
-  }
-
-  const tokenFile = path.join(dataDir, "admin-token");
+  const tokenFile = path.join(gw.dataDir, "admin-token");
   const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
-  const gw: Gateway = {
-    base,
+  const local: Gateway = {
+    ...gw,
     token,
-    dataDir,
     account: "",
     stop: () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* 已经走了 */
-      }
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      gw.stop();
+      fs.rmSync(gw.dataDir, { recursive: true, force: true });
     },
   };
 
   // 一个 MiniMax Code 账号：凭据写进这个测试自己的库，与真的那台机器无关。
-  const seed = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  const seed = new DatabaseSync(path.join(gw.dataDir, "buddy.db"));
   seed.exec("PRAGMA busy_timeout = 5000");
   const insertSecret = seed.prepare(
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   );
-  const made = await call(gw, "AddAccount", { platform: "minimax", alias: "MiniMax" });
+  const made = await call(local, "AddAccount", { platform: "minimax", alias: "MiniMax" });
   const account = String(made.body?.id ?? "");
   if (!account) throw new Error(`加不了 MiniMax 的账号：${JSON.stringify(made.body)}`);
-  gw.account = account;
+  local.account = account;
   const now = Date.now();
   insertSecret.run(
     `session:provider:${account}`,
@@ -210,7 +154,7 @@ async function startGateway(): Promise<Gateway> {
   seed.close();
 
   // 公布一个模型：一个 target，指向 MiniMax Code。
-  const saved = await call(gw, "SavePublishedModel", {
+  const saved = await call(local, "SavePublishedModel", {
     model: {
       id: PUBLISHED,
       displayName: "用量的",
@@ -220,7 +164,7 @@ async function startGateway(): Promise<Gateway> {
     },
   });
   if (saved.body?.ok !== true) throw new Error(`发布模型失败：${JSON.stringify(saved.body)}`);
-  return gw;
+  return local;
 }
 
 /** 打一个面板的方法（Connect over HTTP）。 */
