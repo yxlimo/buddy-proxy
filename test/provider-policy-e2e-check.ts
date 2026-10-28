@@ -21,11 +21,11 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
@@ -213,17 +213,6 @@ interface Gateway {
   accounts?: string[];
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 /**
  * 起一个真的网关。
  *
@@ -231,15 +220,13 @@ function freePort(): Promise<number> {
  * 临时的，数据库里的东西（策略、会话、租户）都在里面，与真的那台机器无关。
  */
 async function startGateway(): Promise<Gateway> {
-  const port = await freePort();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "policy-e2e-"));
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+  // 起网关交给共用的 helper：端口被抢就换号重试，失败一定收尾。
+  const running = await startHarness({
+    dataDir,
+    // 目录是临时的：收尾归 helper（stop 时连目录一起删）。
+    cleanupDataDir: true,
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: dataDir,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
       // 路由日志：策略与租户都打出来，断言「为什么换了账号」有据可查。
       QODER_LOG_ROUTE: "true",
       // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
@@ -251,52 +238,15 @@ async function startGateway(): Promise<Gateway> {
       // 账号不再从环境变量来：醒来之后按面板的做法给每个账号建一行，凭据写进库。
       // （原来那 THREE 组 TOKEN_RHYTHM_<n>_* 已经退场。）
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  let log = "";
-  child.stdout?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    log += c.toString();
-  });
-
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 80; i++) {
-    if (child.exitCode !== null) break;
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        up = true;
-        break;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!up) {
-    child.kill("SIGTERM");
-    console.log(log.slice(-1500));
-    throw new Error("网关没起来");
-  }
 
   const tokenFile = path.join(dataDir, "admin-token");
   const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
   const gw: Gateway = {
-    base,
+    base: running.base,
     token,
-    log: () => log,
-    stop: () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* 已经走了 */
-      }
-      fs.rmSync(dataDir, { recursive: true, force: true });
-    },
+    log: () => running.log(),
+    stop: () => running.stop(),
   };
   // 中转站的账号：一个账号一个钱包。三个账号，第三个没钱（测试里也不该有真
   // 凭据）。凭据挂在账号行上，直接写这个测试自己的库 —— 一个真请求都不发。

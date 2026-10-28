@@ -13,15 +13,13 @@
 //   4. 上游的状态：没有推理 key 是 NO_CREDENTIAL，有 key 是 READY，
 //      积分用完了是 OUT_OF_CREDITS。
 
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway as startHarness } from "./harness.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = "/tmp/opencode/test-sensenova-intern-ai";
 const UNIT_DIR = "/tmp/opencode/test-sensenova-intern-ai-unit";
 const SERVICE = "/buddy.admin.v1.AdminService";
@@ -413,82 +411,45 @@ const fakeBase = `http://127.0.0.1:${(fake.address() as net.AddressInfo).port}`;
  * 三、网关
  * ------------------------------------------------------------------ */
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
-
-let router: ChildProcess | null = null;
-let routerLog = "";
-
-function startRouter(): ChildProcess {
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      BUDDY_DATA_DIR: DATA_DIR,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
-      // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
-      // 下面用面板的 SetUpstreamEnabled 把这两个新上游打开，其余默认就是关的。
-      // 推理端点与控制台都指向假上游：一个字都不出机器。
-      SENSENOVA_BASE: `${fakeBase}/sensenova/v1`,
-      SENSENOVA_PLATFORM_BASE: `${fakeBase}/sensenova`,
-      INTERN_AI_DISCOVERY_API_BASE: `${fakeBase}/intern-ai/v1`,
-      INTERN_AI_DISCOVERY_BASE: `${fakeBase}/intern-ai`,
-      TOKENRHYTHM_API_BASE: `${fakeBase}/tokenrhythm`,
-      MINIMAX_API_BASE: `${fakeBase}/minimax`,
-      // 故意不给推理 key：先看看没有凭据时上游是什么状态。
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  router = child;
-  return child;
-}
-
-async function waitHealthy(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
+// 起网关交给共用的 helper：端口被抢就换号重试，失败一定收尾。
+const gw = await startHarness({
+  dataDir: DATA_DIR,
+  // 目录归这个测试：helper 不许删（它只收自己建的临时目录）。
+  keepDataDir: true,
+  env: {
+    // 上游的开关不在环境里了：它在数据库的 provider.enabled 上。
+    // 下面用面板的 SetUpstreamEnabled 把这两个新上游打开，其余默认就是关的。
+    // 推理端点与控制台都指向假上游：一个字都不出机器。
+    SENSENOVA_BASE: `${fakeBase}/sensenova/v1`,
+    SENSENOVA_PLATFORM_BASE: `${fakeBase}/sensenova`,
+    INTERN_AI_DISCOVERY_API_BASE: `${fakeBase}/intern-ai/v1`,
+    INTERN_AI_DISCOVERY_BASE: `${fakeBase}/intern-ai`,
+    TOKENRHYTHM_API_BASE: `${fakeBase}/tokenrhythm`,
+    MINIMAX_API_BASE: `${fakeBase}/minimax`,
+    // 故意不给推理 key：先看看没有凭据时上游是什么状态。
+  },
+});
+const base = gw.base;
+/** 网关的日志（失败时打出来）。 */
+const log = () => gw.log();
 
 function cleanup(): void {
-  try {
-    router?.kill("SIGTERM");
-  } catch {
-    /* already gone */
-  }
+  gw.stop();
   fake.close();
 }
 process.on("exit", cleanup);
 
-startRouter();
-check("网关起来了", await waitHealthy());
+// 网关起来了：helper 等到 /health 答了才返回，这里再确认一次。
+let healthOk = false;
+try {
+  healthOk = (await fetch(`${base}/health`)).ok;
+} catch {
+  healthOk = false;
+}
+check("网关起来了", healthOk);
 
 /**
  * 等第一次健康快照刷完。
@@ -932,7 +893,7 @@ if (problems.length) {
 if (fail) {
   console.log("");
   console.log("--- 网关的日志 ---");
-  console.log(routerLog.slice(-4000));
+  console.log(log().slice(-4000));
 }
 cleanup();
 process.exit(fail ? 1 : 0);
