@@ -8,8 +8,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import path from "node:path";
+import { startGateway as startHarness } from "./harness.ts";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
@@ -170,30 +170,14 @@ const mockBase = `http://127.0.0.1:${mockPort}`;
  * 网关
  * ------------------------------------------------------------------ */
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
-
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
-const router = spawn(process.execPath, ["router-proxy.ts"], {
-  cwd: ROOT,
+// 起网关交给共用的 helper：端口被抢就换号重试，失败一定收尾。
+const gw = await startHarness({
+  dataDir: DATA_DIR,
+  keepDataDir: true,
   env: {
-    ...process.env,
-    BUDDY_DATA_DIR: DATA_DIR,
-    ROUTER_PORT: String(port),
-    BENEFITS_DISABLED: "1",
     // 上游全关：自测不碰任何平台，也不自动登录。
     MINIMAX_CODE: "",
     QODER_GLOBAL: "",
@@ -212,45 +196,13 @@ const router = spawn(process.execPath, ["router-proxy.ts"], {
     MINIMAX_POLL_INTERVAL_MS: "200",
     QODER_POLL_INTERVAL_MS: "200",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-let log = "";
-router.stdout.on("data", (c: Buffer) => {
-  log += c.toString();
-});
-router.stderr.on("data", (c: Buffer) => {
-  log += c.toString();
-});
+const base = gw.base;
+/** helper 收集的子进程输出。 */
+const log = () => gw.log();
 process.on("exit", () => {
-  try {
-    router.kill("SIGTERM");
-  } catch {
-    /* 已经走了 */
-  }
   mock.close();
 });
-
-async function waitForHealth(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) {
-        await res.text();
-        return true;
-      }
-    } catch {
-      /* 还没起来 */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
-
-if (!(await waitForHealth())) {
-  console.log("  FAIL 网关没起来");
-  console.log(log.slice(-800));
-  process.exit(1);
-}
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
@@ -429,9 +381,9 @@ check(
 console.log("");
 console.log("日志里没有材料");
 
-check("日志里没有 device code", !log.includes(FAKE_DEVICE_CODE));
-check("日志里没有 state", !log.includes(FAKE_STATE));
-check("日志里没有 code verifier", !log.includes(FAKE_VERIFIER));
+check("日志里没有 device code", !log().includes(FAKE_DEVICE_CODE));
+check("日志里没有 state", !log().includes(FAKE_STATE));
+check("日志里没有 code verifier", !log().includes(FAKE_VERIFIER));
 
 console.log("");
 console.log("状态机");
