@@ -837,6 +837,27 @@ check("另一个网关起来了", Boolean(restartRouter.base));
 restartRouter.stop();
 
 console.log("");
+console.log("凭据：空串占位");
+
+// 七牛的凭据是两段：推理 key 与门户 cookie，位置就是顺序。接口那边不能把空串
+// 过滤掉 —— 过滤掉之后「只填 cookie」（["", "c=1"]）就变成了「只填 API key」。
+// 放在最后写：门户 cookie 一旦写上，网关会拿它去问门户要额度，而这个测试
+// 不打网络。
+const qiniuAccount = await call("AddAccount", { platform: "qiniu", alias: "契约测试七牛" });
+const qiniuId = String(qiniuAccount.body?.id ?? "");
+check(
+  "加好了七牛云的账号",
+  qiniuAccount.body?.ok === true && qiniuId !== "",
+  JSON.stringify(qiniuAccount.body),
+);
+const qiniuKeys = await call("SetProviderKeys", { upstreamId: qiniuId, keys: ["", "c=1"] });
+check("只填 cookie 写成功了", qiniuKeys.body?.ok === true, JSON.stringify(qiniuKeys.body));
+check("只填 cookie 写进去一段", qiniuKeys.body?.count === 1, JSON.stringify(qiniuKeys.body));
+const qiniuMessage = String(qiniuKeys.body?.message ?? "");
+check("说的是门户 cookie", qiniuMessage.includes("cookie"), qiniuMessage);
+check("没说成 API key", !qiniuMessage.includes("API key"), qiniuMessage);
+
+console.log("");
 console.log(`pass=${pass} fail=${fail}`);
 router.stop();
 process.exit(fail ? 1 : 0);
