@@ -44,6 +44,8 @@ function check(name: string, ok: boolean, detail = ""): void {
 
 /** 发了第几次 device code 请求。 */
 let deviceCodeRequests = 0;
+/** 发了第几次 zcode poll 请求：第一次 pending，第二次 ready。 */
+let zcodePollRequests = 0;
 
 const mock = http.createServer(async (req, res) => {
   const chunks: Buffer[] = [];
@@ -93,6 +95,32 @@ const mock = http.createServer(async (req, res) => {
     );
     return;
   }
+  if (req.url?.startsWith("/api/v1/oauth/cli/init")) {
+    res.end(
+      JSON.stringify({
+        data: {
+          flow_id: "flow-1",
+          authorize_url: "https://example.invalid/zcode-login?flow=flow-1",
+          poll_token: "pt-1",
+          expires_at: Math.floor(Date.now() / 1000) + 600,
+        },
+      }),
+    );
+    return;
+  }
+  if (req.url?.startsWith("/api/v1/oauth/cli/poll/")) {
+    zcodePollRequests++;
+    if (zcodePollRequests === 1) {
+      res.end(JSON.stringify({ data: { status: "pending" } }));
+      return;
+    }
+    res.end(
+      JSON.stringify({
+        data: { status: "ready", token: "zcode-test-token", user: { user_id: "u-1" } },
+      }),
+    );
+    return;
+  }
   res.statusCode = 404;
   res.end("{}");
 });
@@ -138,6 +166,9 @@ const router = spawn(process.execPath, ["router-proxy.ts"], {
     // 假的上游。
     MINIMAX_OAUTH_ORIGIN: mockBase,
     WORKBUDDY_CN_BASE: mockBase,
+    ZCODE_BASE_URL: mockBase,
+    // 轮询快一点：自测不用等上游那三秒。
+    ZCODE_POLL_INTERVAL_MS: "200",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -202,7 +233,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
 // 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
-for (const platform of ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"]) {
+for (const platform of ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
   if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
@@ -265,6 +296,15 @@ check(
   "WorkBuddy 的链接是上游给的那条",
   String(workbuddy.body?.session?.authorizationUrl ?? "").includes(FAKE_STATE),
   JSON.stringify(workbuddy.body?.session?.authorizationUrl),
+);
+
+const zcode = await call("BeginLogin", { upstreamId: "zcode" });
+check("ZCode 开始了", zcode.body?.ok === true, JSON.stringify(zcode.body));
+check("ZCode 是浏览器流", zcode.body?.session?.method === "browser", JSON.stringify(zcode.body?.session));
+check(
+  "ZCode 的链接是上游给的那条",
+  String(zcode.body?.session?.authorizationUrl ?? "").includes("zcode-login"),
+  JSON.stringify(zcode.body?.session?.authorizationUrl),
 );
 
 const tokenrhythm = await call("BeginLogin", { upstreamId: "tokenrhythm" });
@@ -371,6 +411,15 @@ check(
   String(storedSecret?.data ?? "").includes("at-test"),
   String(storedSecret?.data).slice(0, 80),
 );
+
+// ZCode：浏览器 OAuth，轮询同意后凭据落库。
+const zcodeApproved = await waitFor(async () => {
+  const res = await call("GetLoginStatus", { loginId: zcode.body?.session?.loginId });
+  return res.body?.session?.status === "approved";
+});
+check("ZCode 轮询同意会变成 approved", zcodeApproved, "没有变成 approved");
+const zcodeSecret = db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:provider:zcode") as any;
+check("ZCode 的凭据落进了 secrets 表", Boolean(zcodeSecret?.data), JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
 
 // 取消。
 const cancelTarget = await call("BeginLogin", { upstreamId: "qoder" });

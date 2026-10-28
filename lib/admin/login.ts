@@ -28,13 +28,9 @@ import {
   type DeviceAuthorization as QoderDeviceAuthorization,
 } from "../qoder/auth.ts";
 import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts";
-import {
-  ZCODE_POLL_INTERVAL_MS,
-  ZCODE_POLL_TIMEOUT_MS,
-  beginLogin as beginZcodeLogin,
-  pollLogin as pollZcodeLogin,
-  type ZcodeLogin,
-} from "../zcode/auth.ts";
+// Side-effect import: this module registers zcode's login flow
+import "../zcode/auth.ts";
+import type { ZcodeLogin } from "../zcode/auth.ts";
 import { beginLoginFlow, driveLogin, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
 export type { LoginMethod };
 import { regionOf as workBuddyRegionOf } from "../workbuddy/auth.ts";
@@ -166,16 +162,28 @@ async function startQoder(providerId: string): Promise<Started> {
   };
 }
 
-/** ZCode：浏览器 OAuth，CLI 那一套（init 拿链接，poll 拿 JWT）。 */
-async function startZcode(): Promise<Started> {
-  const login = await beginZcodeLogin();
+/** ZCode：浏览器 OAuth，CLI 那一套（init 拿链接，poll 拿 JWT）。
+ *
+ * 登录链本身登记在 lib/zcode/auth.ts 的 registerLoginFlow 里，这里只要把
+ * 账号行的 id 交给它。 */
+async function startZcode(accountId: string, platform = "zcode"): Promise<Started> {
+  const ctx: LoginContext = {
+    accountId,
+    platform,
+    region: "",
+  };
+  const ticket = await beginLoginFlow("zcode", ctx);
+  // SAFETY: rows with poll.kind === "zcode" are written by startZcode alone
+  // and its login field is the ZcodeLogin that init returned
+  const login = ticket.state.login as unknown as Record<string, unknown>;
   return {
-    method: "browser",
-    authorizationUrl: login.authorizeUrl,
-    userCode: "",
-    expiresAt: login.expiresAtMs,
-    message: "请在浏览器中打开上方链接并完成登录，之后此处会自动显示为已登录。",
-    poll: { kind: "zcode", login: login as unknown as Record<string, unknown> },
+    method: ticket.method,
+    authorizationUrl: ticket.authorizationUrl,
+    userCode: ticket.userCode,
+    expiresAt: ticket.expiresAtMs,
+    message: ticket.message,
+    // 半凭据照旧摊进这一层再存：形状没变，重启前还在等的登录照旧能接上。
+    poll: { kind: "zcode", login },
   };
 }
 
@@ -262,7 +270,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       case "qoder":
         return startQoder(row.id);
       case "zcode":
-        return startZcode();
+        return startZcode(row.id, row.platform);
       case "workbuddy":
         return startWorkBuddy(row.id);
       case "tokenrhythm":
@@ -364,17 +372,24 @@ async function runPoll(session: StoredLogin): Promise<string> {
       return credentialId;
     }
     case "zcode": {
+      // SAFETY: rows with poll.kind === "zcode" are written by startZcode alone
+      // and its login field is the ZcodeLogin that init returned
       const login = poll.login as unknown as ZcodeLogin;
-      const deadline = Date.now() + ZCODE_POLL_TIMEOUT_MS;
-      while (Date.now() < deadline && Date.now() < session.expiresAt) {
-        const result = await pollZcodeLogin(login, providerId);
-        if (result.state === "approved") return `session:provider:${providerId}`;
-        if (result.state === "failed" || result.state === "expired") {
-          throw new AuthError("zcode login failed", result.message ?? "登录未成功。", 401);
-        }
-        await new Promise((r) => setTimeout(r, ZCODE_POLL_INTERVAL_MS));
-      }
-      throw new AuthError("zcode login timed out", "登录窗口过期了，请重新发起登录。", 401);
+      const ctx: LoginContext = {
+        accountId: providerId,
+        platform: session.upstreamId,
+        region: "",
+      };
+      const ticket: LoginTicket = {
+        method: "browser",
+        authorizationUrl: session.authorizationUrl,
+        userCode: session.userCode,
+        expiresAtMs: session.expiresAt,
+        message: session.message,
+        state: { login },
+      };
+      const { credentialId } = await driveLogin("zcode", ctx, ticket, session.expiresAt);
+      return credentialId;
     }
     default:
       throw new AuthError("unknown poll", "该登录会话没有可轮询的内容。", 400);

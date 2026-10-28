@@ -18,10 +18,16 @@ import crypto from "node:crypto";
 import { configNumber, configString } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { readSession, writeSession } from "../session.ts";
-import { deleteSecret, getSecret } from "../store.ts";
+import { deleteSecret } from "../store.ts";
 import { providerSecretId } from "../credential-ids.ts";
 import { deriveDeviceIdentity, deviceSalt } from "../device-identity.ts";
 import { dataDir } from "../paths.ts";
+import {
+  registerLoginFlow,
+  type LoginContext,
+  type LoginTicket,
+  type PollResult,
+} from "../login-flow.ts";
 
 /** ZCode 自己的站点。 */
 export const ZCODE_BASE = configString("ZCODE_BASE_URL", "https://zcode.z.ai").replace(/\/+$/, "");
@@ -271,3 +277,40 @@ export function zcodeStatus(providerId = "zcode"): Record<string, unknown> {
     loginAt: new Date(session.loginAtMs).toISOString(),
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * 登录链
+ * ------------------------------------------------------------------ */
+
+/**
+ * ZCode 的登录链（登记给 lib/login-flow.ts）。
+ *
+ * 轮询的节奏与窗口判定都交给框架：这一段只管「给一条链接」与「问一次」。
+ */
+registerLoginFlow<ZcodeSession>("zcode", {
+  method: "browser",
+  label: "zcode",
+  timeoutMs: ZCODE_POLL_TIMEOUT_MS,
+  pollIntervalMs: ZCODE_POLL_INTERVAL_MS,
+  begin: async (_ctx: LoginContext): Promise<LoginTicket> => {
+    const login = await beginLogin();
+    return {
+      method: "browser",
+      authorizationUrl: login.authorizeUrl,
+      userCode: "",
+      expiresAtMs: login.expiresAtMs,
+      message: "请在浏览器中打开上方链接并完成登录，之后此处会自动显示为已登录。",
+      state: { login },
+    };
+  },
+  poll: async (ctx: LoginContext, ticket: LoginTicket): Promise<PollResult<ZcodeSession>> => {
+    const r = await pollLogin(ticket.state.login as ZcodeLogin, ctx.accountId);
+    if (r.state === "approved") return { state: "approved", session: r.session as ZcodeSession };
+    if (r.state === "failed") return { state: "failed", message: r.message ?? "登录未成功。" };
+    if (r.state === "expired") return { state: "expired", message: r.message ?? "登录窗口过期了。" };
+    return { state: "pending" };
+  },
+  // 会话已经在 pollLogin 批准时存过了，这里不再存一次：存两次会把刚写好的
+  // 会话当成「更旧的那份」再写一遍。
+  commit: (ctx: LoginContext) => providerSecretId(ctx.accountId),
+});
