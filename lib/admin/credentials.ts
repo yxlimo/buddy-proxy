@@ -11,6 +11,7 @@ import {
   MAX_MINIMAX_API_TENANTS,
   miniMaxApiTenantSecretId,
 } from "../minimax/api.ts";
+import { writeQiniuAccount } from "../qiniu/account.ts";
 import { deleteSecret, setSecret } from "../store.ts";
 import { providerKindOf, providerSecretId } from "../providers.ts";
 
@@ -52,6 +53,22 @@ export function setProviderKeys(
     }
     setSecret(id, "key", { key });
     return { ok: true, message: "写了套餐 key", count: 1 };
+  }
+  if (kind?.kind === "qiniu" || upstreamId === "qiniu") {
+    // 七牛云的凭据有两段：推理用的 API key 与门户 cookie（额度只认 cookie）。
+    // 位置就是顺序：第一段是 key，第二段是 cookie。空的那段表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const portalCookie = String(keys[1] ?? "").trim();
+    const count = writeQiniuAccount(upstreamId, { apiKey, portalCookie });
+    const message =
+      count === 0
+        ? "清掉了七牛云的凭据"
+        : count === 2
+          ? "写了 API key 与门户 cookie"
+          : apiKey
+            ? "只写了 API key（查不了额度）"
+            : "只写了门户 cookie（不能推理）";
+    return { ok: true, message, count };
   }
   if (upstreamId !== "minimax-api") {
     return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };

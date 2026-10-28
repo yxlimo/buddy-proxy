@@ -13,7 +13,7 @@
 
 import { providerSecretId } from "../credential-ids.ts";
 import { tokenFingerprint } from "../credential.ts";
-import { getSecret } from "../store.ts";
+import { deleteSecret, getSecret, setSecret } from "../store.ts";
 
 /** 数据库里那份账号凭据的样子。 */
 export interface QiniuAccount {
@@ -53,6 +53,36 @@ export function qiniuPortalCookie(providerId: string): string {
 }
 
 /**
+ * 写这个账号的凭据。
+ *
+ * 两段都给全：空的那段表示清掉它（面板上重填一次就是替换的意思）。
+ * 两段都空就删掉这条凭据 —— 留着两段皆空的记录跟没有是一样的。
+ *
+ * 返回写进去的段数（0/1/2）：面板要按段报回写了什么。
+ */
+export function writeQiniuAccount(
+  providerId: string,
+  parts: { apiKey?: string; portalCookie?: string },
+): number {
+  const apiKey = String(parts.apiKey ?? "").trim();
+  const portalCookie = String(parts.portalCookie ?? "").trim();
+  if (!apiKey && !portalCookie) {
+    clearQiniuAccount(providerId);
+    return 0;
+  }
+  setSecret(qiniuAccountId(providerId), "account", {
+    apiKey,
+    ...(portalCookie ? { portalCookie } : {}),
+  });
+  return (apiKey ? 1 : 0) + (portalCookie ? 1 : 0);
+}
+
+/** 清掉这个账号的凭据。 */
+export function clearQiniuAccount(providerId: string): void {
+  deleteSecret(qiniuAccountId(providerId));
+}
+
+/**
  * 面板上看的凭据状态。
  *
  * 干活的是那把推理 key：没有它，一个请求也发不出去。门户 cookie 只影响
@@ -69,8 +99,10 @@ export function qiniuStatus(providerId: string): Record<string, unknown> {
     warning: false,
     detail: key
       ? cookie
-        ? "推理用的 API key；门户 cookie 也配了，能查额度"
-        : "推理用的 API key；没有门户 cookie，查不了额度"
-      : "账号上没有推理用的 API key",
+        ? "API key 与门户 cookie 都在"
+        : "有 API key，没有门户 cookie（查不了额度）"
+      : cookie
+        ? "只有门户 cookie，没有推理 key"
+        : "账号上没有推理用的 API key，也没有门户 cookie",
   };
 }
