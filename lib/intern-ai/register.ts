@@ -14,7 +14,11 @@ import type { ProviderRow } from "../providers.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { internAiStatus } from "./auth.ts";
 import { INTERN_AI_DISCOVERY_API_BASE } from "./config.ts";
-import type { InternAiBalance, InternAiCreditPack } from "./quota.ts";
+import type {
+  InternAiBalance,
+  InternAiCreditPack,
+  InternAiCreditWindow,
+} from "./quota.ts";
 import { internAiCatalog, internAiInferenceKey } from "./transport.ts";
 
 function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
@@ -37,6 +41,9 @@ function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaV
         : "已用尽",
   }));
   const total = alive.reduce((sum, pack) => sum + pack.totalCredits, 0);
+  // 墨点是余额，窗口是限额：两个概念，不相加。面板分开显示。
+  const rateLimit =
+    balance.rpmLimit > 0 ? `，RPM ${balance.rpmLimit} / TPM ${balance.tpmLimit}` : "";
   return [
     {
       upstreamId: provider.id,
@@ -46,10 +53,37 @@ function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaV
         used: balance.used,
         remaining: balance.availableCredits,
         lots,
-        note: `墨点：余额 ${balance.availableCredits}${alive.length ? `，${alive.length} 个批次` : ""}`,
+        note: `墨点：余额 ${balance.availableCredits}${alive.length ? `，${alive.length} 个批次` : ""}${rateLimit}`,
+      },
+      // 端砚真正的使用限额是这两个滚动窗口。报成套餐窗口的形状，面板不用为
+      // 这个平台另写一套（与 MiniMax 的套餐窗口同一个形状）。
+      tokenPlan: {
+        windows: [
+          {
+            label: "墨点",
+            // 5 小时窗口当「本轮」，7 天窗口当「本周」。
+            intervalPercent: windowPercent(balance.window5h),
+            weeklyPercent: windowPercent(balance.window7d),
+            intervalEndsAt: platformTimeMs(balance.window5h?.nextRecoverAt),
+            weeklyEndsAt: platformTimeMs(balance.window7d?.nextRecoverAt),
+          },
+        ],
       },
     },
   ];
+}
+
+/**
+ * 一个窗口还剩多少（百分比）。
+ *
+ * 没开这个窗口就是不限，算不出来也当满额 —— 面板显示 0% 会让人以为账号没额度。
+ */
+function windowPercent(window: InternAiCreditWindow | undefined): number {
+  if (!window || !window.enabled) return 100;
+  if (!(window.limitCredits > 0)) return 100;
+  const percent = (window.remainingCredits / window.limitCredits) * 100;
+  if (!Number.isFinite(percent)) return 100;
+  return Math.max(0, Math.min(100, percent));
 }
 
 /**
@@ -78,8 +112,13 @@ export const internAiKind = registerCompatiblePlatform({
   quotas: (provider, snapshot) => internAiQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
     const mine = (snapshot.internAi?.[provider.id] ?? {}) as any;
-    const balance = mine.balance as InternAiBalance | null;
+    const raw = mine.balance as any;
+    const balance = raw as InternAiBalance | null;
     if (!balance) return false;
+    // 平台自己说这个账号不能用（access_status 的正常值是 1）：不再往它发请求。
+    // 老数据里没有这个字段时当作正常，不误判。
+    const access = raw.accessStatus;
+    if (access !== undefined && access !== null && access !== 1) return true;
     if (balance.availableCredits <= 0) return true;
     // A window that is full is full: it cannot be spent this time round.
     for (const window of [balance.window5h, balance.window7d]) {
@@ -88,8 +127,24 @@ export const internAiKind = registerCompatiblePlatform({
     return false;
   },
   recoverAt: (provider, snapshot) => {
-    // 墨点批次的到期时间：最早到期的那批先走。
     const mine = (snapshot.internAi?.[provider.id] ?? {}) as any;
+    const balance = mine.balance as InternAiBalance | null;
+    if (balance) {
+      // 窗口见底时，恢复时间由窗口自己说：见底的那个窗口的 next_recover_at。
+      // 两个窗口都见底取较晚的 —— 少一个都不行（与 lib/kinds/minimax.ts 的
+      // planRecovery 同一套取舍）。算不出来就不知道。
+      let exhausted: number | null = null;
+      let sawExhausted = false;
+      for (const window of [balance.window5h, balance.window7d]) {
+        if (!window?.enabled || window.remainingCredits > 0) continue;
+        sawExhausted = true;
+        const at = platformTimeMs(window.nextRecoverAt);
+        if (!at) continue;
+        if (exhausted === null || at > exhausted) exhausted = at;
+      }
+      if (sawExhausted) return exhausted;
+    }
+    // 墨点批次的到期时间：最早到期的那批先走。
     const packs = (mine.packs ?? []) as InternAiCreditPack[];
     const alive = packs.filter((pack) => pack.status === "available" || pack.status === "unused");
     const now = Date.now();
