@@ -60,8 +60,13 @@ export async function ensureInternAiKey(session: InternAiSession, providerId = "
  * 模型目录
  * ------------------------------------------------------------------ */
 
-/** 缓存的模型目录。 */
-const catalog = new CatalogCache<InternAiCatalogModel>(CATALOG_TTL_MS);
+/**
+ * 缓存的模型目录。落库一份：重启后手上就有目录，这个平台不会从模型列表里
+ * 整组消失（目录空 = 平台不可见 = 路由不到）。
+ */
+const catalog = new CatalogCache<InternAiCatalogModel>(CATALOG_TTL_MS, {
+  cacheId: "intern-ai:catalog",
+});
 
 /** 现在这份目录。第一次问上游之前是空的。 */
 export function internAiCatalog(): InternAiCatalogModel[] {

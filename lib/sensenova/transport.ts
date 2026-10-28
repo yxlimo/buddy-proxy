@@ -47,8 +47,11 @@ export async function ensureSenseNovaKey(session: SenseNovaSession, providerId =
  * 模型目录
  * ------------------------------------------------------------------ */
 
-/** 缓存的模型清单。 */
-const catalog = new CatalogCache<SenseNovaModel>(CATALOG_TTL_MS);
+/**
+ * 缓存的模型清单。落库一份：重启后手上就有目录，这个平台不会从模型列表里
+ * 整组消失（目录空 = 平台不可见 = 路由不到）。
+ */
+const catalog = new CatalogCache<SenseNovaModel>(CATALOG_TTL_MS, { cacheId: "sensenova:catalog" });
 
 /** 现在这份清单。第一次问上游之前是空的。 */
 export function senseNovaCatalog(): SenseNovaModel[] {
