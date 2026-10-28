@@ -299,6 +299,9 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       case "minimax-api":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
         throw new AuthError("no login", "MiniMax 开放平台不扫码登录，用「API Key」按钮贴一把 key。", 400);
+      case "qiniu":
+        // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
+        throw new AuthError("no login", "七牛云不扫码登录，用「API Key」按钮贴一把 key。", 400);
       default:
         throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${upstreamId}`, 400);
     }

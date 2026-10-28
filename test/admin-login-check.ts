@@ -227,7 +227,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
 // 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
-for (const platform of ["minimax", "minimax-api", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
+for (const platform of ["minimax", "minimax-api", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
   if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
@@ -336,6 +336,20 @@ check(
   "开放平台不再说「没有登录的办法」",
   !String(minimaxApi.body?.message ?? "").includes("还没有登录的办法"),
   JSON.stringify(minimaxApi.body?.message),
+);
+
+// 七牛云也是 API-key 平台：点登录要说清楚用 API Key 按钮，别让人以为是坏了。
+const qiniu = await call("BeginLogin", { upstreamId: "qiniu" });
+check("七牛不开始登录", qiniu.body?.ok !== true, JSON.stringify(qiniu.body));
+check(
+  "七牛说该用 API Key",
+  String(qiniu.body?.message ?? "").includes("API Key"),
+  JSON.stringify(qiniu.body?.message),
+);
+check(
+  "七牛不再说「没有登录的办法」",
+  !String(qiniu.body?.message ?? "").includes("还没有登录的办法"),
+  JSON.stringify(qiniu.body?.message),
 );
 
 console.log("");
