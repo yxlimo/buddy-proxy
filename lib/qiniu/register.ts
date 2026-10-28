@@ -13,8 +13,9 @@ import {
 import type { ProviderRow } from "../providers.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { qiniuInferenceKey, qiniuStatus } from "./account.ts";
-import { qiniuCatalog, qiniuCatalogModels, refreshQiniuCatalog } from "./catalog.ts";
+import { qiniuCatalogModels } from "./catalog.ts";
 import { QINIU_INFER_BASE } from "./config.ts";
+import { QINIU_MODELS } from "./models.ts";
 import type { QiniuQuota } from "./quota.ts";
 
 /**
@@ -72,11 +73,8 @@ export const qiniuKind = registerCompatiblePlatform({
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => qiniuInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(qiniuStatus(provider.id), "api_key"),
-  models: (provider) => {
-    // 目录是平台自己的：旧了就再问一次。这一次不等它 —— 手上有的先用着。
-    void refreshQiniuCatalog(provider.id);
-    return qiniuCatalogModels(qiniuCatalog());
-  },
+  // 目录写死：平台报的 78 个比这把 key 的商品分组宽，报出去就会撞 403。
+  models: () => qiniuCatalogModels(QINIU_MODELS),
   quotas: (provider, snapshot) => qiniuQuotas(provider, snapshot),
   outOfCredits: (provider, snapshot) => {
     const quota = quotaOf(provider, snapshot);

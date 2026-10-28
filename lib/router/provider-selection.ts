@@ -220,6 +220,16 @@ const NAMED_CODES: Record<string, { degradable: boolean; kind: string }> = {
  */
 const MODEL_GROUP_CODES = new Set(["model_group_access_denied"]);
 
+/**
+ * The codes that mean the model itself is throttled.
+ *
+ * 七牛云's free models (`*-free`) have their own rate limit: the body says
+ * 「Too many requests for this free model」. That limit is on the model, not on
+ * the account — another account would be throttled the same way, and the
+ * account's paid models are still fine.
+ */
+const FREE_MODEL_RATE_LIMIT_CODES = new Set(["rate_limit_exceeded_error", "rate_limit_exceeded"]);
+
 /** What a failure says about the account that produced it. */
 export interface UpstreamFailure {
   /** Can the next account serve the request instead? */
@@ -270,6 +280,9 @@ export function classifyUpstreamError(error: unknown): UpstreamFailure {
   if (isBusy(error)) return { degradable: false, status, kind: "busy" };
   // The platform's own code says more than the status does.
   const code = businessCodeOf(error);
+  // 「这个免费模型被限流」：换账号没用（限的是模型），也不该把整个账号下线
+  // （别的模型还好好的）。所以它既不降级也不冷却 —— 与分组拒绝同一类。
+  if (isFreeModelRateLimit(error)) return { degradable: false, status, kind: "model" };
   const byCode = code === null ? null : classifyBusinessCode(code);
   if (byCode) return { degradable: byCode.degradable, status, kind: byCode.kind };
   // 「模型不在这个 key 的分组里」：信封里没解出这个码时，正文里写着也算。
@@ -324,6 +337,27 @@ function isModelGroupDenied(error: unknown): boolean {
   if (typeof code === "string" && MODEL_GROUP_CODES.has(code.toLowerCase())) return true;
   const text = errorTextOf(error).toLowerCase();
   for (const known of MODEL_GROUP_CODES) {
+    if (text.includes(known)) return true;
+  }
+  return false;
+}
+
+/**
+ * 这个失败是不是「这个免费模型被限流」。
+ *
+ * 限的是模型，不是账号：换账号一样被限（同一个免费模型），账号的别的模型
+ * 照常能用。所以它不是账号的错 —— 不换账号，也不写冷却。
+ *
+ * 两个条件都要：业务码说是限流，正文里写着 free model。只满足一个不算 ——
+ * 普通的 429 仍然是账号（或者说整个 key）被限流，照旧降级。
+ */
+function isFreeModelRateLimit(error: unknown): boolean {
+  const text = errorTextOf(error).toLowerCase();
+  if (!text.includes("free model")) return false;
+  const code = businessCodeOf(error);
+  if (typeof code === "string" && FREE_MODEL_RATE_LIMIT_CODES.has(code.toLowerCase())) return true;
+  // 信封里没解出码时，正文里写着码也算。
+  for (const known of FREE_MODEL_RATE_LIMIT_CODES) {
     if (text.includes(known)) return true;
   }
   return false;

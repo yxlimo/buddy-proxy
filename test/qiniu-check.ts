@@ -214,5 +214,39 @@ check(
   String(kind?.baseUrl(PROVIDER)),
 );
 
+/* ------------------------------------------------------------------ *
+ * 模型目录：写死的那一份
+ * ------------------------------------------------------------------ */
+
+section("目录");
+
+const models = kind?.models(PROVIDER) ?? [];
+check("目录是写死的 5 个", models.length === 5, String(models.length));
+check(
+  "就是这 5 个",
+  models.map((m) => m.id).join(",") ===
+    "nvidia/nemotron-3-ultra-550b-a55b0-free," +
+    "qiniu/conatus-free," +
+    "deepseek/deepseek-v4.1-flash-1017," +
+    "minimax/minimax-m3.1-flash," +
+    "qwen/qwen3.8-flash-next",
+  models.map((m) => m.id).join(","),
+);
+check(
+  "没有平台自己报的、key 用不了的那个",
+  !models.some((m) => m.id.includes("glm-4.5")),
+  models.map((m) => m.id).join(","),
+);
+check(
+  "每个都有名字",
+  models.every((m) => !!m.displayName),
+  models.map((m) => m.displayName).join(","),
+);
+check(
+  "平台没报的上下文档位不公布",
+  models.every((m) => m.contextWindow === undefined && m.maxOutputTokens === undefined),
+  JSON.stringify(models.map((m) => [m.contextWindow, m.maxOutputTokens])),
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

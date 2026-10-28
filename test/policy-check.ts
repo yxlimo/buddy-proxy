@@ -474,6 +474,58 @@ console.log("七牛云：模型不在这个 key 的分组里");
 }
 
 console.log("");
+console.log("七牛云：免费模型被限流");
+
+{
+  const { cooldownForFailure } = await import("../lib/router/account-cooldown.ts");
+  // 上游的样子：429，业务码说是限流，正文说是这个免费模型被限流。
+  const body = JSON.stringify({
+    error: {
+      code: "rate_limit_exceeded_error",
+      message: "Too many requests for this free model",
+    },
+  });
+  const limited = withBusinessCode(
+    withUpstreamStatus(new AuthError("upstream HTTP 429", `七牛云上游返回 429：${body}`, 502), 429),
+    "rate_limit_exceeded_error",
+  );
+  const failure = classifyUpstreamError(limited);
+  check("429 + 免费模型 → 不降级", failure.degradable === false, failure.kind);
+  check("429 + 免费模型 → model", failure.kind === "model", failure.kind);
+  check(
+    "429 + 免费模型 → 不写冷却",
+    cooldownForFailure("acct-qiniu-free", limited) === null,
+    "写了冷却",
+  );
+
+  // 控制组一：同一个业务码，但没说免费模型 —— 那还是普通的限流，照旧降级。
+  const plainBody = JSON.stringify({
+    error: {
+      code: "rate_limit_exceeded_error",
+      message: "Too many requests",
+    },
+  });
+  const plain = withBusinessCode(
+    withUpstreamStatus(new AuthError("upstream HTTP 429", `七牛云上游返回 429：${plainBody}`, 502), 429),
+    "rate_limit_exceeded_error",
+  );
+  const plainFailure = classifyUpstreamError(plain);
+  check("429 没提免费模型 → 降级", plainFailure.degradable === true, plainFailure.kind);
+  check("429 没提免费模型 → rate-limit", plainFailure.kind === "rate-limit", plainFailure.kind);
+  check(
+    "429 没提免费模型 → 照旧写冷却",
+    cooldownForFailure("acct-qiniu-plain-429", plain) !== null,
+    "没写冷却",
+  );
+
+  // 控制组二：普通 429，什么业务码都没有 —— 同样是限流。
+  const bare = withUpstreamStatus(new AuthError("upstream HTTP 429", "七牛云上游返回 429：too many requests", 502), 429);
+  const bareFailure = classifyUpstreamError(bare);
+  check("普通 429 → 降级", bareFailure.degradable === true, bareFailure.kind);
+  check("普通 429 → rate-limit", bareFailure.kind === "rate-limit", bareFailure.kind);
+}
+
+console.log("");
 console.log("不认识的策略");
 
 {
