@@ -60,6 +60,7 @@ export type { BalanceView, CreditView, CredentialView, HealthSnapshot, QuotaView
 import { CredentialState, ProviderPolicy as ContractPolicy, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { hasUsableCredential } from "./credentials.ts";
 import { loginActivity } from "./login.ts";
+import { coolingOf, coolingAccounts, platformCooling, type CoolingInfo, type PlatformCooling } from "./upstream-state.ts";
 import { policyEnum } from "./policy.ts";
 import { type CatalogGroup } from "../router/catalog.ts";
 
@@ -706,7 +707,7 @@ export function outOfCredits(id: string): boolean {
 }
 
 /** 一个账号自己的状态（不看别的账号）。 */
-function accountState(row: ProviderRow): UpstreamState {
+function accountState(row: ProviderRow, cooling?: Map<string, CoolingInfo>): UpstreamState {
   if (!row.enabled) return UpstreamState.DISABLED;
   const activity = loginActivity(row.id);
   if (activity.loggingIn) return UpstreamState.LOGGING_IN;
@@ -720,6 +721,8 @@ function accountState(row: ProviderRow): UpstreamState {
     return UpstreamState.NO_CREDENTIAL;
   }
   if (outOfCredits(row.id)) return UpstreamState.OUT_OF_CREDITS;
+  // 冷却只是暂时的绕开：额度用尽是更持久的原因，所以额度先说。
+  if (coolingOf(row.id, cooling).untilMs > 0) return UpstreamState.COOLING;
   return UpstreamState.READY;
 }
 
@@ -729,6 +732,8 @@ const STATE_ORDER: UpstreamState[] = [
   UpstreamState.CREDENTIAL_REJECTED,
   UpstreamState.CREDENTIAL_EXPIRED,
   UpstreamState.NO_CREDENTIAL,
+  // 冷却先于额度用尽：额度用尽要等窗口，冷却到点就好 —— 面板先说快恢复的那个。
+  UpstreamState.COOLING,
   UpstreamState.OUT_OF_CREDITS,
 ];
 
@@ -743,8 +748,9 @@ const STATE_ORDER: UpstreamState[] = [
  *                           让人以为「没登录」）
  *   4. 没有凭据            → NO_CREDENTIAL
  *   5. 凭据过期            → CREDENTIAL_EXPIRED
- *   6. 额度用尽            → OUT_OF_CREDITS
- *   7. 其余                → READY
+ *   6. 额度用尽            → OUT_OF_CREDITS（比冷却持久，先说它）
+ *   7. 在冷却              → COOLING（路由暂时绕开这个账号）
+ *   8. 其余                → READY
  *
  * 平台名下有几个账号时，有一个能接就算能接（READY）；都接不了就报最要紧的
  * 那一种：面板要的是「为什么接不了」，而不是一串状态。
@@ -753,10 +759,22 @@ export function upstreamState(id: UpstreamId): UpstreamState {
   const rows = accountsFor(id);
   if (!rows.length) return UpstreamState.NO_CREDENTIAL;
   if (!rows.some((row) => row.enabled)) return UpstreamState.DISABLED;
-  const states = rows.filter((row) => row.enabled).map(accountState);
+  const cooling = coolingAccounts();
+  const states = rows.filter((row) => row.enabled).map((row) => accountState(row, cooling));
   if (states.includes(UpstreamState.READY)) return UpstreamState.READY;
   for (const state of STATE_ORDER) {
     if (states.includes(state)) return state;
   }
   return states[0] ?? UpstreamState.NO_CREDENTIAL;
+}
+
+/**
+ * 这个上游的冷却信息：面板看的那几个数。
+ *
+ * 算的事在 lib/admin/upstream-state.ts，这里只把账号与快照喂给它。
+ */
+export function upstreamCooling(id: UpstreamId): PlatformCooling {
+  const rows = accountsFor(id);
+  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
+  return platformCooling({ rows, snapshot });
 }

@@ -34,7 +34,7 @@ run = "node --experimental-strip-types check-file-size.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:catalog:persist"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:catalog:persist", "test:upstream:cooldown"]
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
@@ -47,6 +47,10 @@ run = "node --experimental-strip-types test/policy-check.ts"
 [tasks."test:upstream:status"]
 description = "Check that the transports keep the upstream's own status (a fake upstream)"
 run = "node --experimental-strip-types test/upstream-status-check.ts"
+
+[tasks."test:upstream:cooldown"]
+description = "Check that the panel sees the cooldown (the state, the deadline, the reason)"
+run = "node --experimental-strip-types test/upstream-cooldown-check.ts"
 
 [tasks."test:minimax:api:policy"]
 description = "Check the open platform's policy (one key, the switch, the business code)"

@@ -32,6 +32,8 @@ enum UpstreamState {
   UPSTREAM_STATE_OUT_OF_CREDITS = 6;
   // 正在登录。
   UPSTREAM_STATE_LOGGING_IN = 7;
+  // 路由正在绕开这个账号，等到 cooldown_until_ms。
+  UPSTREAM_STATE_COOLING = 8;
 }
 
 // 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
@@ -78,6 +80,14 @@ message Upstream {
   repeated Account accounts = 16;
   // 这个平台下有没有开着的账号。有就能接请求。
   bool has_enabled_account = 17;
+  // 名下最早的冷却什么时候结束（Unix 毫秒）。0 = 都不在冷却。
+  int64 cooldown_until_ms = 18;
+  // 冷却的理由：平台给的说法（quota / rate-limit / connection……）。
+  string cooldown_reason = 19;
+  // 这个上游最早什么时候能再接（Unix 毫秒）。0 = 现在就能接，或者算不出来。
+  int64 recovers_at_ms = 20;
+  // 一句给面板直接用的话（比如「冷却到 12:23（rate-limit）」）。没有就空串。
+  string state_reason = 21;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -328,6 +338,10 @@ message Account {
   int64 created_at = 9;
   // 权重：大的先试。降级时按它排先后。
   int32 weight = 10;
+  // 这个账号的冷却什么时候结束（Unix 毫秒）。0 = 没在冷却。
+  int64 cooldown_until_ms = 11;
+  // 冷却的理由：平台给的说法（quota / rate-limit / connection……）。
+  string cooldown_reason = 12;
 }
 
 message ListAccountsRequest {}

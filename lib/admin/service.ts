@@ -86,9 +86,11 @@ import {
   upstreamPolicy,
   upstreamRegion,
   upstreamState,
+  upstreamCooling,
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
+import { coolingOf } from "./upstream-state.ts";
 import {
   deleteAccount,
   listAccounts,
@@ -223,6 +225,8 @@ function platformMessage(id: string) {
   const template = platformOf(id);
   const credential = upstreamCredential(id);
   const quota = upstreamQuota(id);
+  // 冷却：路由绕开这个账号到什么时候，面板要看得见。
+  const cooling = upstreamCooling(id);
   return create(UpstreamSchema, {
     id,
     // 平台的名字是模板里的那个（“Qoder（全球区）”）—— 账号的别名不能顶在这里：
@@ -257,6 +261,11 @@ function platformMessage(id: string) {
     quota: quota ? quotaMessage(quota) : undefined,
     baseUrl: upstreamBaseUrl(id),
     region: upstreamRegion(id),
+    // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
+    cooldownUntilMs: BigInt(cooling.cooldownUntilMs),
+    cooldownReason: cooling.cooldownReason,
+    recoversAtMs: BigInt(cooling.recoversAtMs),
+    stateReason: cooling.stateReason,
     accounts: accountsOfPlatform(id).flatMap((row) => {
       const account = accountRowMessage(row.id);
       return account ? [account] : [];
@@ -312,6 +321,8 @@ function accountRowMessage(accountId: string) {
   // 额度是**这个账号自己的**：平台行上那个是名下账号合起来的，账号行上要
   // 看得见自己那份（两个 MiniMax 账号各有各的套餐）。
   const quota = upstreamQuota(row.id);
+  // 冷却也是这个账号自己的：面板要能看出是哪一个账号被绕开了。
+  const cooling = coolingOf(row.id);
   return create(AccountSchema, {
     id: row.id,
     // 它属于哪个平台。路径里用平台 id，不用账号 id。
@@ -325,6 +336,8 @@ function accountRowMessage(accountId: string) {
     weight: row.weight,
     createdAt: BigInt(row.createdAt),
     quota: quota ? quotaMessage(quota) : undefined,
+    cooldownUntilMs: BigInt(cooling.untilMs),
+    cooldownReason: cooling.reason,
   });
 }
 
