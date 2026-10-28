@@ -195,6 +195,7 @@ export async function deliverOpenAIStream(
     }
   } catch (e) {
     // The headers are already out, so the failure goes back as an error event.
+    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
     writeSafe(ctx, errorEvent((e as Error)?.message));
     reportFailure(onFailure, e);
   }
@@ -242,6 +243,7 @@ export async function deliverAnthropicStream(
       if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
+    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
     writeSafe(ctx, errorEvent((e as Error)?.message));
     reportFailure(onFailure, e);
   }
@@ -284,6 +286,7 @@ export async function deliverOpenAIChunks(
       }
       writeSafe(ctx, SSE_DONE);
     } catch (e) {
+      console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
       writeSafe(ctx, errorEvent((e as Error)?.message));
       reportFailure(onFailure, e);
     }
@@ -295,6 +298,7 @@ export async function deliverOpenAIChunks(
       if (!writeSafe(ctx, chunk)) break;
     }
   } catch (e) {
+    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
     writeSafe(ctx, errorEvent((e as Error)?.message));
     reportFailure(onFailure, e);
   }
@@ -303,6 +307,41 @@ export async function deliverOpenAIChunks(
 
 function errorEvent(message: string): string {
   return sseEvent("error", { type: "error", error: { type: "api_error", message } });
+}
+
+/** One line about a failure, for the log. The stack is too noisy to keep. */
+function failureLine(e: unknown): string {
+  const message = (e as { message?: unknown })?.message;
+  return typeof message === "string" && message ? message : String(e);
+}
+
+/**
+ * Fix the message_start frame of an upstream Anthropic stream.
+ *
+ * The upstream may send a message_start whose `message` is missing or null.
+ * Clients read `message.usage` from that frame, so a null there crashes the
+ * client on the spot and the whole answer is lost — nothing else in the
+ * stream matters then. So a minimal legal message is filled in: the numbers
+ * in it are zeros, because the upstream never sent any.
+ */
+export function repairMessageStart(json: any, model: string): { json: any; repaired: boolean } {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return { json, repaired: false };
+  const message = json.message;
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    message.model = model;
+    return { json, repaired: false };
+  }
+  json.message = {
+    id: `msg_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
+    type: "message",
+    role: "assistant",
+    model,
+    content: [],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+  return { json, repaired: true };
 }
 
 /** Forward an OpenAI stream, frame by frame. */
@@ -321,6 +360,7 @@ async function pipeOpenAIChunks(
     }
     writeSafe(ctx, SSE_DONE);
   } catch (e) {
+    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
     writeSafe(ctx, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
     writeSafe(ctx, SSE_DONE);
     reportFailure(onFailure, e);
@@ -358,6 +398,7 @@ async function writeAnthropicFrames(
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
   let lastActivity = Date.now();
+  let warnedMissingMessage = false;
   const writePing = () => {
     if (ctx.res.writableEnded || ctx.res.destroyed) return;
     if (Date.now() - lastActivity < pingMs) return;
@@ -371,9 +412,13 @@ async function writeAnthropicFrames(
       let data = event.data;
       if (event.event === "message_start" || (!event.event && data.includes('"message_start"'))) {
         const json = parseLooseJson(data);
-        if (json?.message && typeof json.message === "object") {
-          json.message.model = model;
-          data = JSON.stringify(json);
+        if (json) {
+          const fixed = repairMessageStart(json, model);
+          if (fixed.repaired && !warnedMissingMessage) {
+            warnedMissingMessage = true;
+            console.warn("[DELIVER] 上游的 message_start 没有 message，已补一个最小对象");
+          }
+          data = JSON.stringify(fixed.json);
         }
       }
       const frame = event.event ? `event: ${event.event}\ndata: ${data}\n\n` : `data: ${data}\n\n`;
@@ -381,6 +426,7 @@ async function writeAnthropicFrames(
       lastActivity = Date.now();
     }
   } catch (e) {
+    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
     writeSafe(ctx, errorEvent((e as Error)?.message));
     reportFailure(onFailure, e);
   } finally {
@@ -426,6 +472,7 @@ export function sendError(ctx: Koa.Context, e: unknown, headers: Record<string, 
     }
     ctx.status = 503;
     if (Object.keys(extra).length) ctx.set(extra);
+    console.warn(`[DELIVER] 答复 503：${err?.message ?? "request failed"}`);
     ctx.body = {
       error: { type: "api_error", message: e.message },
       hint: e.detail,
@@ -439,6 +486,7 @@ export function sendError(ctx: Koa.Context, e: unknown, headers: Record<string, 
   }
   ctx.status = status;
   if (Object.keys(extra).length) ctx.set(extra);
+  console.warn(`[DELIVER] 答复 ${status}：${err?.message ?? "request failed"}`);
   ctx.body = {
     error: {
       // 503 means the credential is the problem; everything else is the request
