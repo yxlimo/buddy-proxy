@@ -157,8 +157,31 @@ function usageBucketMessage(bucket: { key: string; summary: UsageTotals }) {
   });
 }
 
+/**
+ * 0–100 的整数百分比。
+ *
+ * proto 里这两个百分比字段是 int32：上游给的是算出来的小数（端砚报
+ * 95.458552），不取整的话 JSON 里就带着小数，客户端解码时抛「expected
+ * number (int32)」，整个面板整页报错（2026-10-28 真出过）。
+ */
+function percentInt(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+/**
+ * 整毫秒。
+ *
+ * proto 的时间戳是 int64：BigInt(浮点) 会直接抛 RangeError。
+ */
+function wholeMs(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
 /** 一个额度摘要。 */
-function quotaMessage(quota: QuotaView) {
+export function quotaMessage(quota: QuotaView) {
   return create(UpstreamQuotaSchema, {
     upstreamId: quota.upstreamId,
     accountId: quota.accountId,
@@ -172,11 +195,12 @@ function quotaMessage(quota: QuotaView) {
               id: lot.id,
               sourceLabel: lot.sourceLabel,
               remainingCny: lot.remainingCny,
-              expiresAt: BigInt(lot.expiresAt),
+              // int64 的时间戳：上游给的是浮点毫秒，BigInt 会抛。
+              expiresAt: BigInt(wholeMs(lot.expiresAt)),
               status: lot.status,
             }),
           ),
-          nextExpiryAt: BigInt(quota.balance.nextExpiryAt),
+          nextExpiryAt: BigInt(wholeMs(quota.balance.nextExpiryAt)),
           expiringCny: quota.balance.expiringCny,
         })
       : undefined,
@@ -191,7 +215,7 @@ function quotaMessage(quota: QuotaView) {
               id: lot.id,
               sourceLabel: lot.sourceLabel,
               remaining: lot.remaining,
-              expiresAt: BigInt(lot.expiresAt),
+              expiresAt: BigInt(wholeMs(lot.expiresAt)),
               status: lot.status,
             }),
           ),
@@ -204,10 +228,12 @@ function quotaMessage(quota: QuotaView) {
           windows: quota.tokenPlan.windows.map((window) =>
             create(TokenPlanWindowSchema, {
               label: window.label,
-              intervalPercent: window.intervalPercent,
-              weeklyPercent: window.weeklyPercent,
-              intervalEndsAt: BigInt(window.intervalEndsAt),
-              weeklyEndsAt: BigInt(window.weeklyEndsAt),
+              // proto 的这两个字段是 int32：百分比是算出来的小数，不取整会让
+              // 整个面板解码失败（2026-10-28 真出过）。
+              intervalPercent: percentInt(window.intervalPercent),
+              weeklyPercent: percentInt(window.weeklyPercent),
+              intervalEndsAt: BigInt(wholeMs(window.intervalEndsAt)),
+              weeklyEndsAt: BigInt(wholeMs(window.weeklyEndsAt)),
             }),
           ),
         })

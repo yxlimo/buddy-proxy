@@ -14,6 +14,8 @@ import net from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fromJsonString, toJsonString } from "@bufbuild/protobuf";
+import { TokenPlanWindowSchema, UpstreamQuotaSchema } from "../lib/gen/buddy/admin/v1/admin_pb.ts";
 import { startGateway as startHarness, type Gateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -856,6 +858,90 @@ check("只填 cookie 写进去一段", qiniuKeys.body?.count === 1, JSON.stringi
 const qiniuMessage = String(qiniuKeys.body?.message ?? "");
 check("说的是门户 cookie", qiniuMessage.includes("cookie"), qiniuMessage);
 check("没说成 API key", !qiniuMessage.includes("API key"), qiniuMessage);
+
+console.log("");
+console.log("额度：小数在进 proto 之前取整");
+
+// 契约里 TokenPlanWindow 的两个百分比是 int32，而上游给的是算出来的小数
+// （端砚报 95.458552）。不取整的话 JSON 里就是小数，客户端解码时整页报错
+// （2026-10-28 真出过）。这里直接走服务里的那步转换。
+const quotaDir = "/tmp/opencode/test-admin-contract-quota";
+process.env.BUDDY_DATA_DIR = quotaDir;
+fs.rmSync(quotaDir, { recursive: true, force: true });
+fs.mkdirSync(quotaDir, { recursive: true, mode: 0o700 });
+const { quotaMessage } = await import("../lib/admin/service.ts");
+
+const quota = quotaMessage({
+  upstreamId: "intern-ai-test",
+  accountId: "intern-ai-test",
+  balance: {
+    availableCny: 12.345,
+    currency: "CNY",
+    lots: [{ id: "lot-1", sourceLabel: "赠金", remainingCny: 3.21, expiresAt: 1793188800123.7, status: "" }],
+    nextExpiryAt: 1793188800123.7,
+    expiringCny: 1.11,
+  },
+  credits: {
+    total: 100.5,
+    used: 4.25,
+    remaining: 96.25,
+    lots: [{ id: "credit-1", sourceLabel: "签到", remaining: 96.25, expiresAt: 1793188800123.7, status: "" }],
+    note: "",
+  },
+  tokenPlan: {
+    windows: [
+      {
+        label: "墨点",
+        intervalPercent: 97.5104,
+        weeklyPercent: 95.458552,
+        intervalEndsAt: 1793188800123.7,
+        weeklyEndsAt: 1793188800000.4,
+      },
+    ],
+  },
+});
+const window = quota.tokenPlan?.windows?.[0];
+check("额度里有窗口", Boolean(window));
+check("weeklyPercent 取整成 95", window?.weeklyPercent === 95, String(window?.weeklyPercent));
+check("intervalPercent 取整成 98", window?.intervalPercent === 98, String(window?.intervalPercent));
+check(
+  "intervalEndsAt 是整数毫秒",
+  Number.isInteger(Number(window?.intervalEndsAt)),
+  String(window?.intervalEndsAt),
+);
+check(
+  "weeklyEndsAt 是整数毫秒",
+  Number.isInteger(Number(window?.weeklyEndsAt)),
+  String(window?.weeklyEndsAt),
+);
+check(
+  "余额批次的时间戳是整数毫秒",
+  Number.isInteger(Number(quota.balance?.lots?.[0]?.expiresAt)),
+  String(quota.balance?.lots?.[0]?.expiresAt),
+);
+check(
+  "积分批次的时间戳是整数毫秒",
+  Number.isInteger(Number(quota.credits?.lots?.[0]?.expiresAt)),
+  String(quota.credits?.lots?.[0]?.expiresAt),
+);
+// 客户端解码 JSON：出事的正是这一步。int32 里带小数，fromJson 会报
+// “expected number (int32), got 95.458552”。
+try {
+  const json = toJsonString(TokenPlanWindowSchema, window!);
+  const parsed = JSON.parse(json) as { intervalPercent?: number; weeklyPercent?: number };
+  check("JSON 里百分比是整数", Number.isInteger(parsed.intervalPercent) && Number.isInteger(parsed.weeklyPercent), json);
+  fromJsonString(TokenPlanWindowSchema, json);
+  check("窗口能被 protobuf JSON 编码再解码", true);
+} catch (e) {
+  check("窗口能被 protobuf JSON 编码再解码", false, String(e));
+}
+try {
+  fromJsonString(UpstreamQuotaSchema, toJsonString(UpstreamQuotaSchema, quota));
+  check("整条额度能被 protobuf JSON 编码再解码", true);
+} catch (e) {
+  check("整条额度能被 protobuf JSON 编码再解码", false, String(e));
+}
+fs.rmSync(quotaDir, { recursive: true, force: true });
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
