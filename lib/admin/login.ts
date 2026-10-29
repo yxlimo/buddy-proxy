@@ -302,6 +302,9 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       case "qiniu":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
         throw new AuthError("no login", "七牛云不扫码登录，用「API Key」按钮贴一把 key。", 400);
+      case "xinghuo":
+        // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
+        throw new AuthError("no login", "讯飞星火不扫码登录，用「API Key」按钮贴一把 key。", 400);
       default:
         throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${upstreamId}`, 400);
     }

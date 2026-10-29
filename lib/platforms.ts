@@ -31,7 +31,7 @@ export interface Platform {
 }
 
 /**
- * 十个平台。
+ * 十一个平台。
  *
  * The region and the name live with the platform rather than with the account:
  * they are properties of the service, not of who is logged in.
@@ -47,6 +47,7 @@ export const PLATFORMS: Platform[] = [
   { id: "sensenova", kind: "sensenova", label: "SenseNova", region: "" },
   { id: "intern-ai", kind: "intern-ai", label: "书生·端砚", region: "" },
   { id: "qiniu", kind: "qiniu", label: "七牛云", region: "" },
+  { id: "xinghuo", kind: "xinghuo", label: "讯飞星火", region: "" },
 ];
 
 const BY_ID = new Map(PLATFORMS.map((p) => [p.id, p]));

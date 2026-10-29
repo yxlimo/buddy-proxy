@@ -15,6 +15,7 @@
 import "../sensenova/register.ts";
 import "../intern-ai/register.ts";
 import "../qiniu/register.ts";
+import "../xinghuo/register.ts";
 import "./minimax.ts";
 import "./qoder.ts";
 import "./workbuddy.ts";

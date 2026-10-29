@@ -139,14 +139,14 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "十个上游都在",
-  list(status.body?.upstreams).length === 10,
+  "十一个上游都在",
+  list(status.body?.upstreams).length === 11,
   String(status.body?.upstreams?.length),
 );
 check(
   "上游的名字与 id 都对",
   list(status.body?.upstreams).every((u: any) => typeof u.id === "string" && typeof u.label === "string") &&
-    ["minimax", "minimax-api", "zcode", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai", "qiniu"].every((id) =>
+    ["minimax", "minimax-api", "zcode", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai", "qiniu", "xinghuo"].every((id) =>
       list(status.body?.upstreams).some((u: any) => u.id === id),
     ),
   JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
@@ -164,7 +164,7 @@ console.log("");
 console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
-check("上游列表有十个", list(upstreams.body?.upstreams).length === 10, String(list(upstreams.body?.upstreams).length));
+check("上游列表有十一个", list(upstreams.body?.upstreams).length === 11, String(list(upstreams.body?.upstreams).length));
 
 // 启动不再插行：新库里一个账号都没有。后面要用的账号按面板的做法加出来 ——
 // 平台是模板，账号才是 provider 表里的行。

@@ -20,6 +20,7 @@ import { loadSession as loadWorkBuddySession } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { zcodeStatus } from "../zcode/auth.ts";
 import { qiniuAccountId, qiniuAccountOf } from "../qiniu/account.ts";
+import { xinghuoAccountId, xinghuoAccountOf } from "../xinghuo/account.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
@@ -302,6 +303,16 @@ export function credentialsOf(accountId: string): CredentialRow[] {
           plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, stored.updatedAt),
         );
       }
+      return out;
+    }
+    case "xinghuo": {
+      // 讯飞星火只有一把推理 key。没有就什么都不列 —— 面板上不能出现「有凭据」
+      // 却没有凭据的行。
+      const xinghuo = xinghuoAccountOf(account.id);
+      if (!xinghuo) return out;
+      const secretId = xinghuoAccountId(account.id);
+      const stored = secretOf(secretId);
+      out.push(plainRow(secretId, account, "api_key", "推理 API key", xinghuo.apiKey, stored.updatedAt));
       return out;
     }
     default:

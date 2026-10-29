@@ -12,6 +12,7 @@ import {
   miniMaxApiTenantSecretId,
 } from "../minimax/api.ts";
 import { writeQiniuAccount } from "../qiniu/account.ts";
+import { writeXinghuoKey } from "../xinghuo/account.ts";
 import { deleteSecret, setSecret } from "../store.ts";
 import { providerKindOf, providerSecretId } from "../providers.ts";
 
@@ -69,6 +70,16 @@ export function setProviderKeys(
             ? "只写了 API key（查不了额度）"
             : "只写了门户 cookie（不能推理）";
     return { ok: true, message, count };
+  }
+  if (kind?.kind === "xinghuo" || upstreamId === "xinghuo") {
+    // 讯飞星火只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const count = writeXinghuoKey(upstreamId, apiKey);
+    return {
+      ok: true,
+      message: count ? "写了讯飞星火的 API key" : "清掉了讯飞星火的 API key",
+      count,
+    };
   }
   if (upstreamId !== "minimax-api") {
     return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
