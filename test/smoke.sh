@@ -13,12 +13,10 @@ cd "$ROOT"
 
 # The test starts from an empty database: whatever an earlier run left behind
 # (a snapshot in the old shape, a session that is gone) would answer with
-# numbers that are not there any more.
-rm -rf "${BUDDY_DATA_DIR:-/tmp/opencode/test-buddy}"
-
-MOCK_PORT="${MOCK_PORT:-6699}"
-ROUTER_PORT="${ROUTER_PORT:-6698}"
+# numbers that are not there any more. The gateway now makes its own temporary
+# one (test/serve.ts), so there is nothing here to clean up.
 FIXTURES="$ROOT/test/fixtures"
+mkdir -p /tmp/opencode
 
 if [ ! -d "$FIXTURES" ] || [ -z "$(ls -A "$FIXTURES" 2>/dev/null)" ]; then
   echo "no fixtures yet — run test/capture.sh first"
@@ -34,29 +32,39 @@ else
   export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax"
 fi
 
-node --experimental-strip-types test/mock-server.ts "$MOCK_PORT" > /tmp/opencode/mock-server.log 2>&1 &
-MOCK_PID=$!
-bash test/run-router.sh "$ROUTER_PORT" "http://127.0.0.1:$MOCK_PORT" > /tmp/opencode/smoke-router.log 2>&1 &
+# 网关与假上游都交给 test/serve.ts 起：端口由共享 helper 挑（撞了就换号重来），
+# 起来之后它把基址写进 ready 文件；收尾时它自己把网关与假上游都收掉。
+READY="$(mktemp -d)/ready.json"
+node --experimental-strip-types test/serve.ts --mock --ready-file "$READY" \
+  --env "TEST_UPSTREAMS=$TEST_UPSTREAMS" \
+  --log-file /tmp/opencode/smoke-router.log > /tmp/opencode/smoke-serve.log 2>&1 &
 ROUTER_PID=$!
 
 cleanup() {
-  kill $ROUTER_PID $MOCK_PID 2>/dev/null
-  wait $ROUTER_PID $MOCK_PID 2>/dev/null
+  kill $ROUTER_PID 2>/dev/null
+  wait $ROUTER_PID 2>/dev/null
 }
 trap cleanup EXIT
 
-# The router has to be the one this script started, on a free port.
-for _ in $(seq 1 60); do
-  if ! kill -0 $ROUTER_PID 2>/dev/null; then
-    echo "the router did not start:"
-    tail -5 /tmp/opencode/smoke-router.log
-    exit 1
+# 挑端口那一手有半秒的空窗，所以用 ready 文件当准 —— 不是抡 curl 猜。
+BASE=""
+for _ in $(seq 1 120); do
+  if [ -f "$READY" ]; then
+    BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base"])' "$READY" 2>/dev/null)"
+    [ -n "$BASE" ] && break
   fi
-  curl -s --noproxy '*' -m 2 "http://127.0.0.1:$ROUTER_PORT/health" > /dev/null && break
+  if ! kill -0 $ROUTER_PID 2>/dev/null; then
+    break
+  fi
   sleep 0.5
 done
+if [ -z "$BASE" ]; then
+  echo "the router did not start:"
+  tail -20 /tmp/opencode/smoke-serve.log
+  exit 1
+fi
 
-bash test/e2e.sh "http://127.0.0.1:$ROUTER_PORT"
+bash test/e2e.sh "$BASE"
 status=$?
 
 # The settings layer is checked on its own: the order the three sources are

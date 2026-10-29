@@ -12,8 +12,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PROXY_PORT="${PROXY_PORT:-6699}"
-ROUTER_PORT="${ROUTER_PORT:-6698}"
 FIXTURES="$ROOT/test/fixtures"
+mkdir -p /tmp/opencode
 
 # The relay station needs an account and a key; without them it stays off.
 if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
@@ -29,7 +29,11 @@ node --experimental-strip-types test/capture-legacy.ts || true
 
 node --experimental-strip-types test/record-proxy.ts "$PROXY_PORT" > /tmp/opencode/record-proxy.log 2>&1 &
 PROXY_PID=$!
-bash test/run-router.sh "$ROUTER_PORT" "http://127.0.0.1:$PROXY_PORT" > /tmp/opencode/capture-router.log 2>&1 &
+
+# 网关交给 test/serve.ts：端口由共享 helper 挑，上游指向录制代理。
+READY="$(mktemp -d)/ready.json"
+node --experimental-strip-types test/serve.ts --upstream "http://127.0.0.1:$PROXY_PORT" \
+  --ready-file "$READY" > /tmp/opencode/capture-serve.log 2>&1 &
 ROUTER_PID=$!
 
 cleanup() {
@@ -38,18 +42,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The router has to be the one this script started, on a free port.
-for _ in $(seq 1 60); do
-  if ! kill -0 $ROUTER_PID 2>/dev/null; then
-    echo "the router did not start:"
-    tail -5 /tmp/opencode/capture-router.log
-    exit 1
-  fi
-  curl -s --noproxy '*' -m 2 "http://127.0.0.1:$ROUTER_PORT/health" > /dev/null && break
+for _ in $(seq 1 120); do
+  [ -f "$READY" ] && break
+  kill -0 $ROUTER_PID 2>/dev/null || break
   sleep 0.5
 done
+BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base"])' "$READY" 2>/dev/null)"
+if [ -z "$BASE" ]; then
+  echo "the router did not start:"
+  tail -20 /tmp/opencode/capture-serve.log
+  exit 1
+fi
 
-E2E_SKIP="qoder-cn" bash test/e2e.sh "http://127.0.0.1:$ROUTER_PORT"
+E2E_SKIP="qoder-cn" bash test/e2e.sh "$BASE"
 status=$?
 
 # The China region answers slowly, so the recorder may still be waiting for it.

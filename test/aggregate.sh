@@ -16,9 +16,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-MOCK_PORT="${MOCK_PORT:-6709}"
-ROUTER_PORT="${ROUTER_PORT:-6708}"
 export BUDDY_DATA_DIR="${BUDDY_DATA_DIR:-/tmp/opencode/test-aggregate}"
+mkdir -p /tmp/opencode
 PASS=0
 FAIL=0
 
@@ -43,26 +42,32 @@ mkdir -p "$BUDDY_DATA_DIR"
 # logged in.)
 node --experimental-strip-types test/aggregate-setup.ts seed
 
-node --experimental-strip-types test/mock-server.ts "$MOCK_PORT" > /tmp/opencode/aggregate-mock.log 2>&1 &
-MOCK_PID=$!
-bash test/run-router.sh "$ROUTER_PORT" "http://127.0.0.1:$MOCK_PORT" > /tmp/opencode/aggregate-router.log 2>&1 &
+# 网关与假上游交给 test/serve.ts（端口由共享 helper 挑，撞了换号重来）。
+READY="$(mktemp -d)/ready.json"
+node --experimental-strip-types test/serve.ts --mock --data-dir "$BUDDY_DATA_DIR" \
+  --ready-file "$READY" > /tmp/opencode/aggregate-serve.log 2>&1 &
 ROUTER_PID=$!
 
 cleanup() {
-  kill $ROUTER_PID $MOCK_PID 2>/dev/null
-  wait $ROUTER_PID $MOCK_PID 2>/dev/null
+  kill $ROUTER_PID 2>/dev/null
+  wait $ROUTER_PID 2>/dev/null
 }
 trap cleanup EXIT
 
-for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:$ROUTER_PORT/health" > /dev/null 2>&1; then break; fi
-  sleep 0.25
+for _ in $(seq 1 120); do
+  [ -f "$READY" ] && break
+  kill -0 $ROUTER_PID 2>/dev/null || break
+  sleep 0.5
 done
 
-BASE="http://127.0.0.1:$ROUTER_PORT"
+BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base"])' "$READY" 2>/dev/null)"
+TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$READY" 2>/dev/null)"
+if [ -z "$BASE" ]; then
+  echo "the router did not start:"
+  tail -20 /tmp/opencode/aggregate-serve.log
+  exit 1
+fi
 ADMIN="$BASE/buddy.admin.v1.AdminService"
-# The panel's token: the gateway generated it into the data directory.
-TOKEN="$(cat "$BUDDY_DATA_DIR/admin-token" 2>/dev/null)"
 
 # One Connect call: the method, the body, and the answer.
 admin() {

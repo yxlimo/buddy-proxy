@@ -17,11 +17,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-6792}"
 FAKE_PORT="${FAKE_PORT:-6793}"
 DATA_DIR="${DATA_DIR:-/tmp/opencode/e2e-browser-login}"
 SESSION="${BROWSER_SESSION:-e2e-login-check}"
-BASE="http://127.0.0.1:$PORT"
+# 网关的端口由 test/serve.ts 挑（共享 helper），起来之后才知道基址。
+BASE=""
 
 PASS=0
 FAIL=0
@@ -101,15 +101,19 @@ FAKE_PID=$!
 sleep 1.5
 
 FAKE="http://127.0.0.1:$FAKE_PORT"
-BUDDY_DATA_DIR="$DATA_DIR" ROUTER_PORT="$PORT" BENEFITS_DISABLED=1 \
-  QODER_GLOBAL= QODER_CN= MINIMAX_CODE= WORKBUDDY_CN= TOKENRHYTHM= \
-  MINIMAX_OAUTH_ORIGIN="$FAKE" \
-  WORKBUDDY_CN_BASE="$FAKE/workbuddy" \
-  QODER_GLOBAL_OPENAPI_BASE="$FAKE/qoder-openapi" \
-  SENSENOVA_PLATFORM_BASE="$FAKE/sensenova" SENSENOVA_IAM_BASE="$FAKE/sensenova" \
-  INTERN_AI_SSO_BASE="$FAKE/intern-ai" INTERN_AI_SSO_API_BASE="$FAKE/intern-ai" \
-  TOKENRHYTHM_API_BASE="$FAKE/tokenrhythm" \
-  node router-proxy.ts > "$DATA_DIR/router.log" 2>&1 &
+
+# 网关交给 test/serve.ts：端口由共享 helper 挑，假上游的地址用 --env 逐个传。
+READY="$(mktemp -d)/ready.json"
+node --experimental-strip-types test/serve.ts --data-dir "$DATA_DIR" --ready-file "$READY" \
+  --env "MINIMAX_OAUTH_ORIGIN=$FAKE" \
+  --env "WORKBUDDY_CN_BASE=$FAKE/workbuddy" \
+  --env "QODER_GLOBAL_OPENAPI_BASE=$FAKE/qoder-openapi" \
+  --env "SENSENOVA_PLATFORM_BASE=$FAKE/sensenova" \
+  --env "SENSENOVA_IAM_BASE=$FAKE/sensenova" \
+  --env "INTERN_AI_SSO_BASE=$FAKE/intern-ai" \
+  --env "INTERN_AI_SSO_API_BASE=$FAKE/intern-ai" \
+  --env "TOKENRHYTHM_API_BASE=$FAKE/tokenrhythm" \
+  > "$DATA_DIR/router.log" 2>&1 &
 ROUTER_PID=$!
 
 cleanup() {
@@ -118,15 +122,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for _ in $(seq 1 60); do
-  curl -fsS "$BASE/health" > /dev/null 2>&1 && break
-  sleep 0.25
+for _ in $(seq 1 120); do
+  [ -f "$READY" ] && break
+  kill -0 $ROUTER_PID 2>/dev/null || break
+  sleep 0.5
 done
 
-TOKEN="$(cat "$DATA_DIR/admin-token" 2>/dev/null)"
+BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base"])' "$READY" 2>/dev/null)"
+TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$READY" 2>/dev/null)"
 if [ -z "$TOKEN" ]; then
   echo "网关没起来："
-  tail -5 "$DATA_DIR/router.log"
+  tail -20 "$DATA_DIR/router.log"
   exit 1
 fi
 
