@@ -3,13 +3,22 @@
 //   import { startGateway } from "./harness.ts";
 //
 // 它只做两件事，不做业务：
-//   1. 起一个真的 router-proxy.ts，/health 答了才算起来；
+//   1. 起一个真的 router-proxy.ts，探到它答话才算起来；
 //   2. 保证收尾：端口被抢就换号重试，进程退出时一定把子进程杀掉。
 //
 // 为什么有它：以前每个测试自己写一套 freePort() + spawn()。freePort() 是
 // 「listen(0) 拿一个号再关掉」，内核把同一个号发给两个并行测试时就撞车
 // （listen EADDRINUSE），而失败时那个子进程没人收 —— 留一个跑好几分钟的
 // 网关在后台。这里把两件事收口到一处：撞了换号再来，退出时一定收干净。
+//
+// 「起来了」的判据（这里踩过坑）：
+//   freePort() 拿到号就放开，等子进程真的去绑，中间有半秒的空窗 —— 别的
+//   测试可能抢走这个号。这时候 /health 答话的是**别人**的网关，我们的
+//   子进程随后带着 EADDRINUSE 退掉。原来只等 200ms 看它退没退，而它要
+//   500ms 才退得掉，于是 helper 以为起来了，测试用着一个随时会消失的网关，
+//   最后报的是 ECONNREFUSED —— 看着像网络问题，其实是启动竞态。
+//   所以现在要两样都对：端口上有 HTTP 答复（不是连不上），而且答话的那个
+//   网关认我们的面板令牌（是「我们」而不是「别人」）。
 //
 // 离线：这个 helper 只起本机的网关，不发任何真实上游请求。
 
@@ -24,13 +33,27 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** 最多试几个端口。 */
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 8;
 /** 网关要起来就等多久（毫秒）。 */
 const READY_TIMEOUT_MS = 20_000;
+/** 换端口之前等多久（毫秒）：让并行的测试错开，别一起抢同一段端口号。 */
+const RETRY_DELAY_MIN_MS = 100;
+const RETRY_DELAY_MAX_MS = 300;
+/** 探测的间隔与单次超时（毫秒）。 */
+const POLL_MS = 150;
+const PROBE_TIMEOUT_MS = 3_000;
 /** SIGTERM 之后多久还活着就上 SIGKILL。 */
 const KILL_AFTER_MS = 500;
 /** 失败时附在错误后面的输出长度。 */
-const LOG_TAIL = 1500;
+const LOG_TAIL = 2000;
+/**
+ * 归属探针用的路径：一个不存在的方法。
+ *
+ * 面板的 API 要令牌（数据目录里的 admin-token，每个网关一份）。探一个不存在
+ * 的方法：令牌被认了才走得到路由里，答 404（unimplemented）；令牌不对就是
+ * 401。别的网关有它自己的令牌 —— 所以这个 404 就是「这个端口上是我们」。
+ */
+const CONNECT_PROBE_PATH = "/buddy.admin.v1.AdminService/__harness_probe__";
 
 export interface GatewayOptions {
   /** 不给就 mkdtemp 一个临时目录。 */
@@ -159,21 +182,155 @@ export async function freePort(): Promise<number> {
   });
 }
 
-/** 等 /health 答。子进程先死了就不等了。 */
-async function waitForHealth(child: ChildProcess, base: string, healthPath: string): Promise<boolean> {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (exited(child)) return false;
+/* ------------------------------------------------------------------ *
+ * 探测：这个端口上有没有网关，那个网关是不是我们的
+ * ------------------------------------------------------------------ */
+
+/** 面板令牌：数据目录里的 admin-token。网关绑好端口之后才写它。 */
+function readAdminToken(dataDir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(dataDir, "admin-token"), "utf8").trim();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 连接类失败：连不上（不是 HTTP 答复）。 */
+function isConnectionError(e: unknown): boolean {
+  const err = e as any;
+  const code = String(err?.cause?.code ?? err?.code ?? "");
+  if (["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOTFOUND", "EHOSTUNREACH", "ETIMEDOUT"].includes(code)) {
+    return true;
+  }
+  return /fetch failed|ECONNREFUSED|socket hang up/i.test(String(err?.message ?? ""));
+}
+
+/** 把一个异常说成人话：连接类失败要能一眼看出是 ECONNREFUSED。 */
+function describeError(e: unknown): string {
+  const err = e as any;
+  const code = String(err?.cause?.code ?? err?.code ?? "");
+  const message = String(err?.message ?? err);
+  return code ? `${code}（${message}）` : message;
+}
+
+interface Probe {
+  /** 端口上有 HTTP 答复（状态码不管）：不是连不上。 */
+  http: boolean;
+  /** 这个端口上的是我们的网关。 */
+  ours: boolean;
+  /** 连接类失败。 */
+  refused: boolean;
+  /** 答的状态码。 */
+  status: number | null;
+  /** 一句话说清刚才看见了什么。 */
+  detail: string;
+}
+
+/**
+ * 探一次端口。
+ *
+ * 两问：「有没有 HTTP 答复」和「答话的是不是我们」。
+ * 只问第一问不够 —— 端口被抢的时候，答话的是**别的**网关，它答得挺好。
+ */
+async function probe(base: string, token: string | null): Promise<Probe> {
+  let http = false;
+  let ours = false;
+  let refused = false;
+  let status: number | null = null;
+  let detail = "";
+
+  // 一、真实端点：答什么状态码都行，要的是「有 HTTP 答复」，不是连不上。
+  try {
+    const res = await fetch(`${base}/v1/models`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    await res.text();
+    http = true;
+    status = res.status;
+  } catch (e) {
+    refused = isConnectionError(e);
+    detail = describeError(e);
+  }
+
+  // 二、归属：面板令牌。这个端口上的网关认我们的令牌，才是我们的。
+  if (token) {
     try {
-      const res = await fetch(`${base}${healthPath}`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${base}${CONNECT_PROBE_PATH}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: "{}",
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      const body = await res.text();
+      // 令牌被认了才会走到 Connect 的路由：方法不存在，答 404（unimplemented）。
+      ours = res.status === 404 && body.includes("unimplemented");
+      if (!ours && res.status === 401) {
+        detail = `端口上答话的是别的网关（面板令牌被拒：401）`;
+      } else if (!ours) {
+        detail = `端口上答话的不是我们的网关（状态码 ${res.status}）`;
+      }
+    } catch (e) {
+      refused = refused || isConnectionError(e);
+      detail = detail || describeError(e);
+    }
+  } else if (!detail) {
+    detail = "还没有面板令牌（网关还没绑好端口）";
+  }
+
+  return { http, ours, refused, status, detail };
+}
+
+/** 一次启动的结果。 */
+interface ReadyResult {
+  ready: boolean;
+  /** 失败的原因分类。 */
+  reason: "ready" | "child-exited" | "timeout";
+  /** 一句话说清。 */
+  detail: string;
+}
+
+/**
+ * 等网关真的起来。
+ *
+ * 判据是「探到它」：端口上有 HTTP 答复，而且答话的那个网关认我们的令牌。
+ * 子进程先死了就不等了。
+ */
+async function waitForReady(
+  child: ChildProcess,
+  base: string,
+  dataDir: string,
+  healthPath: string,
+): Promise<ReadyResult> {
+  const deadline = Date.now() + READY_TIMEOUT_MS;
+  let last = "";
+  let sawHttp = false;
+  while (Date.now() < deadline) {
+    if (exited(child)) {
+      return { ready: false, reason: "child-exited", detail: last || "子进程自己退了" };
+    }
+    // 健康检查：它答了说明 HTTP 那条路是通的（但可能答的是别人的网关）。
+    try {
+      const res = await fetch(`${base}${healthPath}`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
       await res.text();
-      if (res.ok) return true;
+      sawHttp = true;
     } catch {
       /* 还没起来 */
     }
-    await sleep(200);
+    const p = await probe(base, readAdminToken(dataDir));
+    last = p.detail;
+    if (p.ours && p.http) {
+      // 它可能刚拿到端口又退了：再确认一次它还活着。
+      if (await died(child, 0)) {
+        return { ready: false, reason: "child-exited", detail: "子进程刚起来就退了" };
+      }
+      return { ready: true, reason: "ready", detail: "" };
+    }
+    await sleep(POLL_MS);
   }
-  return false;
+  return {
+    ready: false,
+    reason: "timeout",
+    detail: last || (sawHttp ? "健康检查答了，但探不到我们的网关" : "探测超时"),
+  };
 }
 
 /**
@@ -182,10 +339,13 @@ async function waitForHealth(child: ChildProcess, base: string, healthPath: stri
  * /health 在 bootstrap 之前就能答，而建表是懒的：测试紧接着往库里直接插
  * `secrets`，就会撞上「no such table: secrets」（并行跑时真的会发生 ——
  * 2026-10-28 全套红过两次）。所以启动完成之后再等这张表。
+ *
+ * 子进程退了就不等了：等下去也是白等。
  */
-async function waitForSchema(dataDir: string): Promise<void> {
+async function waitForSchema(dataDir: string, child: ChildProcess): Promise<void> {
   const file = path.join(dataDir, "buddy.db");
   for (let i = 0; i < 200; i++) {
+    if (exited(child)) throw new Error("网关在建表的时候退了");
     try {
       const db = new DatabaseSync(file);
       const row = db
@@ -282,8 +442,49 @@ function stopGateway(state: GatewayState): void {
   escalate.unref?.();
 }
 
+/* ------------------------------------------------------------------ *
+ * 失败分类：端口被抢（换号再来）还是代码崩了（立刻报）
+ * ------------------------------------------------------------------ */
+
+type FailureKind = "port-taken" | "crash" | "died" | "not-listening" | "hung";
+
+interface Failure {
+  kind: FailureKind;
+  detail: string;
+  /** 值不值得换个端口再来一次。 */
+  retryable: boolean;
+}
+
+/** 输出的栈帧：node 崩了的时候会打这种行。 */
+function hasStackTrace(output: string): boolean {
+  return /\n\s+at\s+\S+.*:\d+:\d+/.test(output);
+}
+
 /**
- * 起一个真的网关，等它 /health 答了才返回。
+ * 这次为什么没起来。
+ *
+ * 端口被抢（EADDRINUSE）值得换号再来；代码崩了（栈）换号也没用，立刻报 ——
+ * 别把真错误藏在八次重试后面。
+ */
+function classify(output: string, result: ReadyResult): Failure {
+  if (output.includes("EADDRINUSE")) {
+    return { kind: "port-taken", detail: "端口被别的进程占了（EADDRINUSE）", retryable: true };
+  }
+  if (hasStackTrace(output)) {
+    return { kind: "crash", detail: "子进程崩了（见下面的输出）", retryable: false };
+  }
+  if (result.reason === "child-exited") {
+    return { kind: "died", detail: result.detail || "子进程自己退了", retryable: false };
+  }
+  // 起来了但一声不吭：它卡住了，不是什么端口的事，换号也没用。
+  if (!output.trim()) {
+    return { kind: "hung", detail: "子进程一直没有输出，也没有开始答话", retryable: false };
+  }
+  return { kind: "not-listening", detail: result.detail || "启动期连不上", retryable: true };
+}
+
+/**
+ * 起一个真的网关，等它答话才返回。
  *
  * 端口被抢了（并行测试撞车）就换一个号再来，最多 MAX_ATTEMPTS 次；
  * 别的错（配置不对、代码崩了）不重试 —— 重试也没用，直接带着子进程的输出报错。
@@ -295,6 +496,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   // 调用方自己给的目录也可以由 helper 收：它同样是临时的。
   const removable = owned || options.cleanupDataDir === true;
   let lastOutput = "";
+  const tried: string[] = [];
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const port = await freePort();
@@ -323,13 +525,25 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     });
 
     const base = `http://127.0.0.1:${port}`;
-    let ready = await waitForHealth(child, base, healthPath);
-    // 端口可能已经被别的网关抢了：那时候答 /health 的是它，不是我们。
-    // 我们的子进程会自己退出，等它一下再算数。
-    if (ready && (await died(child, 200))) ready = false;
+    const result = await waitForReady(child, base, dataDir, healthPath);
 
-    if (ready) {
-      await waitForSchema(dataDir);
+    if (result.ready) {
+      try {
+        await waitForSchema(dataDir, child);
+      } catch (e) {
+        lastOutput = output.text;
+        await terminate(child);
+        removeTempDir(dataDir, removable);
+        throw new Error(`网关没起来（第 ${attempt}/${MAX_ATTEMPTS} 次，端口 ${port}）：${String(e)}\n${output.text.slice(-LOG_TAIL)}`);
+      }
+      // 表建好了，再确认一次网关还活着：早退的子进程不能当成 ready。
+      if (await died(child, 0)) {
+        lastOutput = output.text;
+        await terminate(child);
+        tried.push(`第 ${attempt} 次：端口 ${port} —— 子进程在建表之后退了`);
+        await sleep(retryDelay());
+        continue;
+      }
       const state: GatewayState = {
         child,
         dataDir,
@@ -350,19 +564,30 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     }
 
     lastOutput = output.text;
+    const failure = classify(output.text, result);
     // 这一次没起来：先把子进程收干净，不留僵尸。
     await terminate(child);
-    // 只有「端口被抢」才换号重试。
-    if (!output.text.includes("EADDRINUSE")) {
+    if (!failure.retryable) {
       removeTempDir(dataDir, removable);
-      throw new Error(`网关没起来（端口 ${port}）：\n${output.text.slice(-LOG_TAIL)}`);
+      throw new Error(
+        `网关没起来（第 ${attempt}/${MAX_ATTEMPTS} 次，端口 ${port}）：${failure.detail}\n${output.text.slice(-LOG_TAIL)}`,
+      );
     }
+    tried.push(`第 ${attempt} 次：端口 ${port} —— ${failure.detail}`);
+    // 换个号再来之前先等一下：让并行的测试错开，别一起抢同一段端口号。
+    await sleep(retryDelay());
   }
 
   removeTempDir(dataDir, removable);
   throw new Error(
-    `网关没起来（试了 ${MAX_ATTEMPTS} 个端口，端口一直被抢）：\n${lastOutput.slice(-LOG_TAIL)}`,
+    `网关没起来（试了 ${MAX_ATTEMPTS} 个端口）：\n${tried.join("\n")}\n` +
+      `--- 子进程输出（尾 ${LOG_TAIL} 字符）---\n${lastOutput.slice(-LOG_TAIL)}`,
   );
+}
+
+/** 换号之前等多久：100–300ms 之间随机，错开并行的测试。 */
+function retryDelay(): number {
+  return RETRY_DELAY_MIN_MS + Math.floor(Math.random() * (RETRY_DELAY_MAX_MS - RETRY_DELAY_MIN_MS + 1));
 }
 
 /** 删掉 helper 自己建的临时目录。 */
