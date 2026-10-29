@@ -33,14 +33,16 @@ import "../tokenrhythm/accounts.ts";
 // Side-effect import: this module registers sensenova's login flow
 import "../sensenova/auth.ts";
 import type { SenseNovaLogin } from "../sensenova/auth.ts";
+// Side-effect import: this module registers intern-ai's login flow
+import "../intern-ai/login-flow.ts";
+import type { InternAiLogin } from "../intern-ai/login-flow.ts";
 import {
   importToken as importInternAiToken,
   internAiSite,
   loadSession as loadInternAiSession,
-  login as loginInternAi,
 } from "../intern-ai/auth.ts";
 import { ensureInternAiKey } from "../intern-ai/transport.ts";
-import { exchangeCode as exchangeInternAiCode } from "../intern-ai/auth.ts";import { INTERN_AI_SSO_BASE } from "../intern-ai/config.ts";
+import { exchangeCode as exchangeInternAiCode } from "../intern-ai/auth.ts";
 
 /** 一次登录的状态。 */
 export type LoginStatus = "pending" | "approved" | "failed" | "expired" | "cancelled";
@@ -242,18 +244,14 @@ function startPassword(): Started {
 }
 
 /** intern-ai：只能半自动 —— 人在浏览器里登录，把 token 贴回来。 */
-function startInternAi(): Started {
-  const url = `${INTERN_AI_SSO_BASE}/login`;
+async function startInternAi(ctx: LoginContext): Promise<Started> {
+  const ticket = await beginLoginFlow("intern-ai", ctx);
   return {
-    method: "token",
-    authorizationUrl: url,
-    userCode: "",
-    // 人在浏览器里登录、打开开发者工具、复制 token，都要时间：半小时够。
-    expiresAt: Date.now() + 30 * 60 * 1000,
-    message:
-      `在浏览器里打开上面的链接登录，然后从开发者工具的 Cookie 里复制 uaa-token，贴回面板。` +
-      `两个子站共用这个 token，不用分别登。` +
-      `这一步要人自己点，服务器替不了。`,
+    method: ticket.method,
+    authorizationUrl: ticket.authorizationUrl,
+    userCode: ticket.userCode,
+    expiresAt: ticket.expiresAtMs,
+    message: ticket.message,
     poll: null,
   };
 }
@@ -295,7 +293,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       case "sensenova":
         return startPassword();
       case "intern-ai":
-        return startInternAi();
+        return startInternAi({ accountId: row.id, platform: row.kind, region: row.region });
       case "minimax-api":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
         throw new AuthError("no login", "MiniMax 开放平台不扫码登录，用「API Key」按钮贴一把 key。", 400);
@@ -648,30 +646,25 @@ export async function loginWithPassword(input: {
         };
       }
       case "intern-ai": {
-        const captcha =
-          input.captchaVerifyParam && input.captchaSceneId && input.captchaPrefix
-            ? {
-                captchaVerifyParam: input.captchaVerifyParam,
-                sceneId: input.captchaSceneId,
-                prefix: input.captchaPrefix,
-              }
-            : undefined;
-        // 契约里这个请求没有「登哪个子站」这一项，所以两个子站都登。
-        const session = await loginInternAi(
+        // 授权阶段在 lib/intern-ai/login-flow.ts 里登记：两个子站都登，顺手把
+        // 推理用的 key 建出来。这里只把账号行与表单交过去。
+        const { credentialId, result } = await submitLoginResult<InternAiLogin>(
+          "intern-ai",
+          { accountId: row.id, platform: row.kind, region: row.region },
           {
-            user: input.username,
+            username: input.username,
             password: input.password,
-            captcha,
+            extra: {
+              captchaVerifyParam: input.captchaVerifyParam,
+              sceneId: input.captchaSceneId,
+              prefix: input.captchaPrefix,
+            },
           },
-          row.id,
         );
-        // 推理端点认的是 Discovery 子站那把 key：账号上没有就建一把。
-        const keyReady = await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session, row.id));
-        const credentialId = `session:provider:${row.id}`;
         closePendingLogins(row.id, { ok: true, credentialId });
         return {
           ok: true,
-          message: keyReady
+          message: result.keyReady
             ? "intern-ai 登录完成，推理用的 key 已就绪。"
             : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
           credentialId,

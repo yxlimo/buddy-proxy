@@ -39,8 +39,7 @@ import {
   unavailableCooldownMs,
   isIgnoredPlanWindow,
 } from "../cooldown.ts";
-import { HEALTH_CACHE_ID } from "../health-cache.ts";
-import { peekCached } from "../store.ts";
+import { peekHealthSnapshot } from "../health-cache.ts";
 import { cooldownUntilOf } from "../upstream-status.ts";
 import { classifyUpstreamError, isDegradableUpstreamError } from "./provider-selection.ts";
 
@@ -248,7 +247,7 @@ function normalizeZone(zone: string): string {
  * 什么时候换跟恢复时间没关系，只是没有更好的说法。
  */
 export function planWindowEndsAt(accountId: string, now = Date.now()): number | null {
-  const snapshot = peekCached<any>(HEALTH_CACHE_ID);
+  const snapshot = peekHealthSnapshot<any>();
   const mine = snapshot?.data?.minimax?.[accountId];
   const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
   // 见底的窗口：它们结束了账号才有额度。
@@ -282,7 +281,7 @@ export function planWindowEndsAt(accountId: string, now = Date.now()): number | 
  * —— 那只是一个窗口边界，账号现在就能干活。
  */
 function exhaustedPlanWindowEndsAt(accountId: string, now = Date.now()): number | null {
-  const snapshot = peekCached<any>(HEALTH_CACHE_ID);
+  const snapshot = peekHealthSnapshot<any>();
   const mine = snapshot?.data?.minimax?.[accountId];
   const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
   let exhausted: number | null = null;

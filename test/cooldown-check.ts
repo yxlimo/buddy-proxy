@@ -593,8 +593,7 @@ console.log("算法：冷却的四条规矩");
 {
   const { setCooldown, cooldownUntil } = await import("../lib/cooldown.ts");
   const { cooldownForFailure, planWindowEndsAt } = await import("../lib/router/account-cooldown.ts");
-  const { setCached } = await import("../lib/store.ts");
-  const { HEALTH_CACHE_ID } = await import("../lib/health-cache.ts");
+  const { putHealthSnapshot } = await import("../lib/health-cache.ts");
   const { withUpstreamStatus, withCooldownUntil } = await import("../lib/upstream-status.ts");
   const { AuthError } = await import("../lib/credential.ts");
 
@@ -618,7 +617,7 @@ console.log("算法：冷却的四条规矩");
   const now = Date.now();
   const intervalEnd = now + 5 * 3600_000;
   const weeklyEnd = now + 7 * 24 * 3600_000;
-  setCached(HEALTH_CACHE_ID, {
+  putHealthSnapshot({
     minimax: {
       "acct-weekly": {
         tokenPlan: {

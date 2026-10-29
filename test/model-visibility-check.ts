@@ -79,8 +79,7 @@ function fakeCtx(body: unknown = {}, params: Record<string, string> = {}): FakeC
 
 await import("../lib/kinds/index.ts");
 const { addAccount } = await import("../lib/providers.ts");
-const { setCached } = await import("../lib/store.ts");
-const { HEALTH_CACHE_ID } = await import("../lib/health-cache.ts");
+const { putHealthSnapshot } = await import("../lib/health-cache.ts");
 const { serveModels } = await import("../lib/router/catalog-routes.ts");
 const { handle } = await import("../lib/router/handle.ts");
 const { routeInGroup } = await import("../lib/router/routes.ts");
@@ -125,7 +124,7 @@ check("有额度时路由拿到了目标", healthy.model === `minimax/${MODEL}`,
  * 1) 账号没额度：目录不变
  * ------------------------------------------------------------------ */
 
-setCached(HEALTH_CACHE_ID, exhaustedSnapshot());
+putHealthSnapshot(exhaustedSnapshot());
 
 section("额度用尽：模型还在目录里");
 

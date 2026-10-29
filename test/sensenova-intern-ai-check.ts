@@ -256,6 +256,43 @@ const INTERN_BALANCE_WINDOW = parseBalance({
   },
 });
 
+/**
+ * 假上游现在答的那一份。
+ *
+ * 额度快照只活在网关进程里（不落库），所以测试不能像以前那样往库里塞一份
+ * 快照让网关读 —— 得让假上游答出新数字，再让网关现问一次。
+ */
+let sensePoolsRaw: unknown = SENSE_POOLS_RAW;
+let internBalanceRaw: unknown = INTERN_BALANCE_RAW;
+
+/** 让网关现在就问一趟上游：额度页上「刷新额度」走的就是这条路。 */
+async function refreshQuota(): Promise<void> {
+  await admin("GetBalance", { force: true });
+}
+
+/** 积分为 0 的那一份（平台给的样子）。 */
+const SENSE_POOLS_EMPTY_RAW = {
+  ...SENSE_POOLS_RAW,
+  pools: SENSE_POOLS_RAW.pools.map((pool) => ({
+    ...pool,
+    window_5h: { ...pool.window_5h, remaining: "0" },
+    window_7d: { ...pool.window_7d, remaining: "0" },
+    grant_balance: "0",
+  })),
+};
+
+/** 墨点没了（平台给的样子）。 */
+const INTERN_BALANCE_EMPTY_RAW = { ...INTERN_BALANCE_RAW, available_credits: "0" };
+
+/** 5 小时窗口用满（平台给的样子）。 */
+const INTERN_BALANCE_WINDOW_RAW = {
+  ...INTERN_BALANCE_RAW,
+  usage_windows: {
+    "5h": { ...INTERN_BALANCE_RAW.usage_windows["5h"], remaining_credits: "0" },
+    "7d": INTERN_BALANCE_RAW.usage_windows["7d"],
+  },
+};
+
 /** 书生·端砚的墨点批次（平台给的样子）。 */
 const INTERN_PACKS_RAW = {
   packages: [
@@ -350,7 +387,7 @@ const fake = http.createServer(async (req, res) => {
   }
   // SenseNova 的控制台：积分池。
   if (route === "/sensenova/lite/console/v1/tokenplan/pool-usage") {
-    json(SENSE_POOLS_RAW);
+    json(sensePoolsRaw);
     return;
   }
 
@@ -382,7 +419,7 @@ const fake = http.createServer(async (req, res) => {
   }
   // 书生·端砚的控制台：墨点与在售的模型。
   if (route === "/intern-ai/api/tokenplan/v1/credits/balance") {
-    json({ code: 0, msg: "ok", data: INTERN_BALANCE_RAW });
+    json({ code: 0, msg: "ok", data: internBalanceRaw });
     return;
   }
   if (route === "/intern-ai/api/tokenplan/v1/credits/packages") {
@@ -752,21 +789,7 @@ await admin("SetAccountEnabled", { accountId: "sensenova", enabled: true });
 
 section("额度");
 
-/** /health 的快照：额度用尽靠它。 */
-function healthSnapshot(): unknown {
-  return {
-    qoder: {},
-    minimax: { minimax: { balance: null, tokenPlan: null } },
-    minimaxApi: {},
-    zcode: {},
-    workbuddy: { "workbuddy-cn": { credits: null } },
-    tokenrhythm: { tokenrhythm: { tenants: [] } },
-    sensenova: { sensenova: { pools: SENSE_POOLS } },
-    internAi: { "intern-ai": { balance: INTERN_BALANCE, packs: INTERN_PACKS } },
-  };
-}
-
-writeCached("health:upstreams:v2", healthSnapshot());
+await refreshQuota();
 
 const withQuota = await admin("ListUpstreams");
 const senseUpstream = (withQuota.upstreams ?? []).find((u: any) => u.id === "sensenova");
@@ -854,29 +877,25 @@ check("问平台得来的没有余额", senseBalance?.balance === undefined, JSO
 
 section("额度用尽");
 
-// 池子里的积分都空了。
-writeCached("health:upstreams:v2", {
-  ...(healthSnapshot() as any),
-  sensenova: { sensenova: { pools: SENSE_POOLS_EMPTY } },
-});
+// 池子里的积分都空了：假上游改答那一份，再让网关现问一次。
+sensePoolsRaw = SENSE_POOLS_EMPTY_RAW;
+await refreshQuota();
 check("SenseNova 的积分用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("sensenova")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("sensenova"));
 
 // 墨点没了。
-writeCached("health:upstreams:v2", {
-  ...(healthSnapshot() as any),
-  internAi: { "intern-ai": { balance: INTERN_BALANCE_EMPTY, packs: INTERN_PACKS } },
-});
+internBalanceRaw = INTERN_BALANCE_EMPTY_RAW;
+await refreshQuota();
 check("书生·端砚的墨点用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("intern-ai"));
 
 // 窗口用满了也是用尽了。
-writeCached("health:upstreams:v2", {
-  ...(healthSnapshot() as any),
-  internAi: { "intern-ai": { balance: INTERN_BALANCE_WINDOW, packs: INTERN_PACKS } },
-});
+internBalanceRaw = INTERN_BALANCE_WINDOW_RAW;
+await refreshQuota();
 check("窗口用尽了也是 OUT_OF_CREDITS", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("intern-ai"));
 
 // 额度回来了就又是 READY。
-writeCached("health:upstreams:v2", healthSnapshot());
+sensePoolsRaw = SENSE_POOLS_RAW;
+internBalanceRaw = INTERN_BALANCE_RAW;
+await refreshQuota();
 check("额度回来了 → UPSTREAM_STATE_READY", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_READY", await upstreamStateOf("intern-ai"));
 
 /* ------------------------------------------------------------------ *

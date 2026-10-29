@@ -86,7 +86,24 @@ check(
  * 网关
  * ------------------------------------------------------------------ */
 
-const fakeUpstream = http.createServer((_req, res) => {
+/**
+ * Qoder 额度问询的答案。
+ *
+ * 额度快照只活在网关进程内存里（不落库），所以测试不能像以前那样往库里塞
+ * 一份快照 —— 得让假上游答出新数字，再让网关现问一次（GetBalance force）。
+ */
+let qoderQuotaRaw: unknown = {
+  userQuota: { total: 100, used: 10, remaining: 90 },
+  addOnQuota: { total: 0, used: 0, remaining: 0 },
+  isQuotaExceeded: false,
+};
+
+const fakeUpstream = http.createServer((req, res) => {
+  if (String(req.url ?? "").endsWith("/api/v2/quota/usage")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(qoderQuotaRaw));
+    return;
+  }
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
 });
@@ -246,20 +263,13 @@ function qoderSession(expiresInMs: number) {
   };
 }
 
-/** /health 的快照：额度用尽靠它。 */
-function healthSnapshot(qoderCredits: unknown) {
-  return {
-    qoder: {
-      qoder: { account: null, credits: qoderCredits },
-    },
-    minimax: { minimax: { balance: null, tokenPlan: null } },
-    minimaxApi: {},
-    zcode: {},
-    workbuddy: { "workbuddy-cn": { credits: null } },
-    tokenrhythm: { tokenrhythm: { tenants: [] } },
-    sensenova: {},
-    internAi: {},
-  };
+/**
+ * 让网关现在就问一趟上游的额度。
+ *
+ * 额度页上的「刷新额度」走的就是这条路：面板拿现数，不拿内存里的旧数。
+ */
+async function refreshQuota(): Promise<void> {
+  await admin("GetBalance", { force: true });
 }
 
 async function upstreamStateOf(id: string): Promise<string> {
@@ -337,17 +347,21 @@ check("正在登录 → UPSTREAM_STATE_LOGGING_IN", (await upstreamStateOf("qode
 deleteCached("login:state-test-pending");
 deleteCached("login:state-test-failed");
 writeSecret("session:provider:qoder", "session", qoderSession(3600_000));
-writeCached(
-  "health:upstreams:v2",
-  healthSnapshot({ region: "global", plan: { total: 100, used: 100, remaining: 0 }, addOn: { total: 0, used: 0, remaining: 0 }, quotaExceeded: true, resetsAt: null }),
-);
+qoderQuotaRaw = {
+  userQuota: { total: 100, used: 100, remaining: 0 },
+  addOnQuota: { total: 0, used: 0, remaining: 0 },
+  isQuotaExceeded: true,
+};
+await refreshQuota();
 check("额度用尽 → UPSTREAM_STATE_OUT_OF_CREDITS", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_OUT_OF_CREDITS", await upstreamStateOf("qoder"));
 
 // 6b. 套餐用完但加购还有 —— 平台说 quotaExceeded: false，那就不算用尽。
-writeCached(
-  "health:upstreams:v2",
-  healthSnapshot({ region: "global", plan: { total: 300, used: 300, remaining: 0 }, addOn: { total: 100, used: 0, remaining: 100 }, quotaExceeded: false, resetsAt: null }),
-);
+qoderQuotaRaw = {
+  userQuota: { total: 300, used: 300, remaining: 0 },
+  addOnQuota: { total: 100, used: 0, remaining: 100 },
+  isQuotaExceeded: false,
+};
+await refreshQuota();
 check(
   "套餐用完、加购还有 → 仍然 READY",
   (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_READY",
@@ -355,10 +369,12 @@ check(
 );
 
 // 7. 一切正常。
-writeCached(
-  "health:upstreams:v2",
-  healthSnapshot({ region: "global", plan: { total: 100, used: 10, remaining: 90 }, addOn: { total: 0, used: 0, remaining: 0 }, quotaExceeded: false, resetsAt: null }),
-);
+qoderQuotaRaw = {
+  userQuota: { total: 100, used: 10, remaining: 90 },
+  addOnQuota: { total: 0, used: 0, remaining: 0 },
+  isQuotaExceeded: false,
+};
+await refreshQuota();
 check("一切正常 → UPSTREAM_STATE_READY", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_READY", await upstreamStateOf("qoder"));
 
 // 凭据状态本身也是枚举。

@@ -43,6 +43,7 @@ async function listenOn(server: http.Server, host = "127.0.0.1"): Promise<number
  * 控制台的地址是在模块加载时读进常量的，所以这个地址必须在导入
  * lib/sensenova/keys.ts 之前设好 —— 下面的 import 都是动态的，正好。
  */
+/** 控制台收到的最后一份「建 key」的请求体。 */
 let lastCreateBody: any = null;
 const console_ = http.createServer((req, res) => {
   const chunks: Buffer[] = [];

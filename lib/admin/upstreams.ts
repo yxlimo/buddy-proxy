@@ -33,8 +33,7 @@ import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
 import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
 import { qiniuQuotaOf } from "../qiniu/quota.ts";
-import { peekCached, setCached } from "../store.ts";
-import { HEALTH_CACHE_ID } from "../health-cache.ts";
+import { clearHealthSnapshot, peekHealthSnapshot, putHealthSnapshot } from "../health-cache.ts";
 import {
   accountsOfPlatform,
   listProviders,
@@ -390,56 +389,68 @@ export async function refreshHealthSnapshot(): Promise<void> {
   };
 
   for (const row of listProviders()) {
-    switch (row.kind) {
-      case "qoder": {
-        let account: unknown;
-        try {
-          account = await checkAccountHealth(row.id);
-        } catch (e) {
-          account = { region: row.region, usable: false, reason: (e as Error)?.message };
-        }
-        snapshot.qoder[row.id] = { account, credits: await fetchQoderCredits(row.id) };
-        break;
-      }
-      case "minimax": {
-        // 明细与判定值同源：一次扫描只发一次 credit/details
-        const ledger = await miniMaxCreditLedger(row.id);
-        snapshot.minimax[row.id] = {
-          balance: await miniMaxBalance(row.id),
-          tokenPlan: await miniMaxCodeTokenPlan(row.id),
-          credits: ledger.lots,
-          points: { amount: ledger.points, at: Date.now() },
-          creditFallbackEnabled: await miniMaxCreditFallback(row.id),
-        };
-        break;
-      }
-      case "minimax-api":
-        snapshot.minimaxApi[row.id] = { tenants: await miniMaxApiTenantPlans(row.id) };
-        break;
-      case "zcode":
-        snapshot.zcode[row.id] = { quota: await zcodeQuota(300_000, row.id) };
-        break;
-      case "workbuddy":
-        snapshot.workbuddy[row.id] = { credits: await fetchWorkBuddyCredits(row.id) };
-        break;
-      case "tokenrhythm":
-        // 一个账号一行一个钱包：快照也按账号存。
-        snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
-        break;
-      case "sensenova":
-        snapshot.sensenova[row.id] = { pools: await senseNovaPools(row.id) };
-        break;
-      case "intern-ai":
-        snapshot.internAi[row.id] = await internAiCredits(row.id);
-        break;
-      case "qiniu":
-        // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
-        snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
-        break;
+    // 一家问不到不能把别的都拖下水：这家这一轮就不报（面板上它没有额度），
+    // 其余照旧。整轮都问不到才是真没有，那时快照里全是空桶。
+    try {
+      await refreshOne(snapshot, row);
+    } catch (e) {
+      console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
     }
   }
-  setCached(HEALTH_CACHE_ID, snapshot);
+
+  putHealthSnapshot(snapshot);
   healthRefreshedAt = Date.now();
+}
+
+/** 问一家上游，把它那段填进快照。 */
+async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
+  switch (row.kind) {
+    case "qoder": {
+      let account: unknown;
+      try {
+        account = await checkAccountHealth(row.id);
+      } catch (e) {
+        account = { region: row.region, usable: false, reason: (e as Error)?.message };
+      }
+      snapshot.qoder[row.id] = { account, credits: await fetchQoderCredits(row.id) };
+      return;
+    }
+    case "minimax": {
+      // 明细与判定值同源：一次扫描只发一次 credit/details
+      const ledger = await miniMaxCreditLedger(row.id);
+      snapshot.minimax[row.id] = {
+        balance: await miniMaxBalance(row.id),
+        tokenPlan: await miniMaxCodeTokenPlan(row.id),
+        credits: ledger.lots,
+        points: { amount: ledger.points, at: Date.now() },
+        creditFallbackEnabled: await miniMaxCreditFallback(row.id),
+      };
+      return;
+    }
+    case "minimax-api":
+      snapshot.minimaxApi[row.id] = { tenants: await miniMaxApiTenantPlans(row.id) };
+      return;
+    case "zcode":
+      snapshot.zcode[row.id] = { quota: await zcodeQuota(300_000, row.id) };
+      return;
+    case "workbuddy":
+      snapshot.workbuddy[row.id] = { credits: await fetchWorkBuddyCredits(row.id) };
+      return;
+    case "tokenrhythm":
+      // 一个账号一行一个钱包：快照也按账号存。
+      snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
+      return;
+    case "sensenova":
+      snapshot.sensenova[row.id] = { pools: await senseNovaPools(row.id) };
+      return;
+    case "intern-ai":
+      snapshot.internAi[row.id] = await internAiCredits(row.id);
+      return;
+    case "qiniu":
+      // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
+      snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
+      return;
+  }
 }
 
 /**
@@ -447,14 +458,20 @@ export async function refreshHealthSnapshot(): Promise<void> {
  *
  * 快照旧了就起一个刷新（不等它），端点立刻拿旧答案走 —— 健康检查不该被
  * 上游的慢拖住。
+ *
+ * 刷新整体失败就把快照丢掉：额度是上游的现数，拿不到就不说，不拿上一份
+ * 顶上（那会让面板显示看着像最新的旧数字）。
  */
 export function healthSnapshot(): { data: HealthSnapshot | null; at: number; stale: boolean } {
-  const cached = peekCached<HealthSnapshot>(HEALTH_CACHE_ID);
+  const cached = peekHealthSnapshot<HealthSnapshot>();
   const at = cached?.at ?? 0;
   const stale = !cached || Date.now() - at > HEALTH_CACHE_MS;
   if (stale && !healthRefresh) {
     healthRefresh = refreshHealthSnapshot()
-      .catch((e) => console.warn(`[HEALTH] 刷新失败：${(e as Error)?.message}`))
+      .catch((e) => {
+        clearHealthSnapshot();
+        console.warn(`[HEALTH] 刷新失败：${(e as Error)?.message}`);
+      })
       .finally(() => {
         healthRefresh = null;
       });
@@ -470,17 +487,19 @@ export function healthRefreshing(): boolean {
 /**
  * 让快照是最新的，面板要现数的时候用。
  *
- * 刚刷过就不再来一次，免得面板一打开就把上游问一轮。
+ * 刚刷过就不再来一次，免得面板一打开就把上游问一轮；`force` 是面板上
+ * 「刷新额度」那一按钮：它就是要现在问一次上游，所以不受这个限制。
  */
-export async function freshHealthSnapshot(): Promise<HealthSnapshot> {
-  if (Date.now() - healthRefreshedAt > FRESH_MIN_MS) {
+export async function freshHealthSnapshot(force = false): Promise<HealthSnapshot> {
+  if (force || Date.now() - healthRefreshedAt > FRESH_MIN_MS) {
     try {
       await refreshHealthSnapshot();
     } catch (e) {
+      clearHealthSnapshot();
       console.warn(`[HEALTH] 刷新失败：${(e as Error)?.message}`);
     }
   }
-  return peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? ({} as HealthSnapshot);
+  return peekHealthSnapshot<HealthSnapshot>()?.data ?? ({} as HealthSnapshot);
 }
 
 /* ------------------------------------------------------------------ *
@@ -559,12 +578,12 @@ function safeCredential(row: ProviderRow): CredentialView | null {
  *
  * `fresh` 的时候先问一遍平台：面板要看现数时才用，不然就用缓存里的。
  */
-export async function upstreamQuotas(id: string, fresh = false): Promise<QuotaView[]> {
+export async function upstreamQuotas(id: string, fresh = false, force = false): Promise<QuotaView[]> {
   const rows = accountsFor(id);
   if (!rows.length) return [];
   const snapshot = fresh
-    ? await freshHealthSnapshot()
-    : peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
+    ? await freshHealthSnapshot(force)
+    : peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
   if (!snapshot) return [];
   const out: QuotaView[] = [];
   for (const row of rows) {
@@ -620,19 +639,16 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
  * 就不该再有关于它的话。
  */
 export function forgetAccountSnapshot(accountId: string): void {
-  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data;
+  const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data;
   if (!snapshot) return;
-  let changed = false;
   // 快照的每个桶都是「账号 id → 那一份」。摊成一张表就能按账号 id 找。
+  // 删的是桶里那张表本身，快照对象没换 —— 不需要再写回去。
   const buckets: Record<string, unknown> = { ...snapshot };
   for (const bucket of Object.values(buckets)) {
     if (!bucket || typeof bucket !== "object") continue;
     const table = bucket as Record<string, unknown>;
-    if (!(accountId in table)) continue;
     delete table[accountId];
-    changed = true;
   }
-  if (changed) setCached(HEALTH_CACHE_ID, snapshot);
 }
 
 /** 一个上游的额度，合并成一条。上游列表用它。 */
@@ -660,7 +676,7 @@ export function snapshotEntry(
 
 /** 从快照里取一个 Provider 的额度，不问上游。 */
 function upstreamQuotasCached(id: string): QuotaView[] {
-  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
+  const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
   if (!snapshot) return [];
   const out: QuotaView[] = [];
   for (const row of accountsFor(id)) {
@@ -702,7 +718,7 @@ export { tokenPlanView } from "../kinds/index.ts";
  */
 export function outOfCredits(id: string): boolean {
   const rows = accountsFor(id).filter((row) => row.enabled);
-  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
+  const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
   if (!snapshot || !rows.length) return false;
   // 一个平台名下有几个账号：只要有一个还有钱，这个平台就还没用完。
   return rows.every((row) => {
@@ -780,6 +796,6 @@ export function upstreamState(id: UpstreamId): UpstreamState {
  */
 export function upstreamCooling(id: UpstreamId): PlatformCooling {
   const rows = accountsFor(id);
-  const snapshot = peekCached<HealthSnapshot>(HEALTH_CACHE_ID)?.data ?? null;
+  const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
   return platformCooling({ rows, snapshot });
 }

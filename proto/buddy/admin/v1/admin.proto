@@ -515,6 +515,10 @@ message ListProviderKindsResponse {
 
 message GetBalanceRequest {
   string upstream_id = 1;
+  // 现在就问一趟上游，不等「刚问过」的那个空当。
+  //
+  // 面板上的「刷新额度」按这一下；平时打开面板不传。
+  bool force = 2;
 }
 
 message GetBalanceResponse {

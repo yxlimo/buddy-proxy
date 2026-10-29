@@ -13,6 +13,8 @@ import {
 import type { ProviderRow } from "../providers.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { internAiStatus } from "./auth.ts";
+// 登录链登记：引用即登记（见 lib/login-flow.ts）。
+import "./login-flow.ts";
 import { INTERN_AI_DISCOVERY_API_BASE } from "./config.ts";
 import type {
   InternAiBalance,

@@ -671,7 +671,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     const ids = wanted ? [wanted] : listProviders().map((p) => p.id);
     const quotas = [];
     for (const id of ids) {
-      for (const quota of await upstreamQuotas(id, true)) quotas.push(quotaMessage(quota));
+      for (const quota of await upstreamQuotas(id, true, Boolean(request.force)))
+        quotas.push(quotaMessage(quota));
     }
     return create(GetBalanceResponseSchema, { quotas });
   },

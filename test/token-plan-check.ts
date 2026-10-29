@@ -73,8 +73,7 @@ const plan = {
 await import("../lib/kinds/index.ts");
 const { tokenPlanView } = await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
-const { setCached } = await import("../lib/store.ts");
-const { HEALTH_CACHE_ID } = await import("../lib/health-cache.ts");
+const { putHealthSnapshot } = await import("../lib/health-cache.ts");
 const { planWindowEndsAt } = await import("../lib/router/account-cooldown.ts");
 
 section("视图里只剩文本窗口");
@@ -129,7 +128,7 @@ check("只有视频窗口就不算没钱", onlyVideo === false, String(onlyVideo
 
 section("冷却不取视频窗口的结束时间");
 
-setCached(HEALTH_CACHE_ID, snapshot);
+putHealthSnapshot(snapshot);
 const now = Date.parse("2026-10-27T08:00:00.000Z");
 const endsAt = planWindowEndsAt("minimax", now);
 check(
@@ -141,7 +140,7 @@ check(
 const withoutGeneral = {
   minimax: { minimax: { balance: 0, tokenPlan: { windows: [plan.windows[1]] }, credits: [] } },
 } as any;
-setCached(HEALTH_CACHE_ID, withoutGeneral);
+putHealthSnapshot(withoutGeneral);
 check("只剩视频窗口就没有恢复时间", planWindowEndsAt("minimax", now) === null, String(planWindowEndsAt("minimax", now)));
 
 fs.rmSync(tmp, { recursive: true, force: true });

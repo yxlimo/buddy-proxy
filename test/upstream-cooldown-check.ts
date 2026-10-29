@@ -38,10 +38,10 @@ function check(name: string, ok: boolean, detail = ""): void {
   }
 }
 
-const { setSecret, setCached } = await import("../lib/store.ts");
+const { setSecret } = await import("../lib/store.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { setCooldown, clearCooldown } = await import("../lib/cooldown.ts");
-const { HEALTH_CACHE_ID } = await import("../lib/health-cache.ts");
+const { putHealthSnapshot } = await import("../lib/health-cache.ts");
 const { adminService } = await import("../lib/admin/service.ts");
 const { UpstreamState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts");
 
@@ -139,14 +139,14 @@ console.log("额度用尽 + 冷却：额度优先");
 
 {
   // 快照说额度用尽了（Qoder 的平台自己的标记）。
-  setCached(HEALTH_CACHE_ID, { qoder: { [firstId]: { credits: { quotaExceeded: true } } } });
+  putHealthSnapshot({ qoder: { [firstId]: { credits: { quotaExceeded: true } } } });
   const upstream = await upstreamOf("qoder");
   check("状态是额度用尽", upstream.state === UpstreamState.OUT_OF_CREDITS, String(upstream.state));
   check("冷却时刻仍然填着", upstream.cooldownUntilMs === BigInt(now + 5 * 60_000), String(upstream.cooldownUntilMs));
   check("冷却理由仍然填着", upstream.cooldownReason === "rate-limit", upstream.cooldownReason);
   check("一句话里说额度用尽", upstream.stateReason.includes("额度用尽"), upstream.stateReason);
   // 快照清掉，后面的判据回到「额度充足」。
-  setCached(HEALTH_CACHE_ID, {});
+  putHealthSnapshot({});
 }
 
 console.log("");
@@ -201,7 +201,7 @@ console.log("额度用尽：平台自己说得出什么时候回来");
 {
   clearCooldown(firstId);
   const resetsAtMs = now + 45 * 60_000;
-  setCached(HEALTH_CACHE_ID, {
+  putHealthSnapshot({
     qoder: { [firstId]: { credits: { quotaExceeded: true, resetsAt: new Date(resetsAtMs).toISOString() } } },
   });
   const upstream = await upstreamOf("qoder");
@@ -229,7 +229,7 @@ console.log("额度用尽：平台说不出来的时候就说不知道");
     loginAtMs: now,
     refreshedAtMs: now,
   });
-  setCached(HEALTH_CACHE_ID, { workbuddy: { [wbId]: { credits: { daily: 0 } } } });
+  putHealthSnapshot({ workbuddy: { [wbId]: { credits: { daily: 0 } } } });
   const upstream = await upstreamOf("workbuddy-cn");
   check("状态是额度用尽", upstream.state === UpstreamState.OUT_OF_CREDITS, String(upstream.state));
   check("算不出恢复时间", upstream.recoversAtMs === 0n, String(upstream.recoversAtMs));
@@ -243,7 +243,7 @@ console.log("冷却与额度同时存在：恢复时间取早的那个");
   const until = now + 10 * 60_000;
   const resetsAtMs = now + 45 * 60_000;
   setCooldown(firstId, until, "quota");
-  setCached(HEALTH_CACHE_ID, {
+  putHealthSnapshot({
     qoder: { [firstId]: { credits: { quotaExceeded: true, resetsAt: new Date(resetsAtMs).toISOString() } } },
   });
   const upstream = await upstreamOf("qoder");
@@ -252,13 +252,13 @@ console.log("冷却与额度同时存在：恢复时间取早的那个");
   const later = now + 60 * 60_000;
   const soon = now + 5 * 60_000;
   setCooldown(firstId, later, "quota");
-  setCached(HEALTH_CACHE_ID, {
+  putHealthSnapshot({
     qoder: { [firstId]: { credits: { quotaExceeded: true, resetsAt: new Date(soon).toISOString() } } },
   });
   const again = await upstreamOf("qoder");
   check("额度更早：恢复时间是额度回来的时刻", again.recoversAtMs === BigInt(soon), String(again.recoversAtMs));
   clearCooldown(firstId);
-  setCached(HEALTH_CACHE_ID, {});
+  putHealthSnapshot({});
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
