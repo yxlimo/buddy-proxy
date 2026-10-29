@@ -11,7 +11,7 @@ import {
   type ProviderRow,
   type QuotaView,
 } from "./shared.ts";
-import { workbuddyStatus } from "../workbuddy/auth.ts";
+import { regionFrom, workbuddyStatus } from "../workbuddy/auth.ts";
 import { refreshSession as refreshWorkBuddySession } from "../workbuddy/auth.ts";
 import { runWorkBuddyBenefits } from "../workbuddy/benefits.ts";
 import { workbuddyModelList } from "../workbuddy/models.ts";
@@ -51,7 +51,9 @@ registerKind({
   label: "WorkBuddy",
   login: "browser",
   policies: ["single", "fallback"],
-  baseUrl: () => WORKBUDDY_ENDPOINTS.cn.base,
+  // The row carries the region, so a row that is not logged in yet still
+  // answers with the right host.
+  baseUrl: (provider) => WORKBUDDY_ENDPOINTS[regionFrom(provider.region)].base,
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
   models: () => workbuddyCatalogModels(workbuddyModelList()),
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),

@@ -31,7 +31,7 @@ export interface Platform {
 }
 
 /**
- * 十一个平台。
+ * 十二个平台。
  *
  * The region and the name live with the platform rather than with the account:
  * they are properties of the service, not of who is logged in.
@@ -43,6 +43,7 @@ export const PLATFORMS: Platform[] = [
   { id: "qoder", kind: "qoder", label: "Qoder（全球区）", region: "global" },
   { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },
   { id: "workbuddy-cn", kind: "workbuddy", label: "WorkBuddy（中国区）", region: "cn" },
+  { id: "workbuddy-global", kind: "workbuddy", label: "WorkBuddy（国际区）", region: "global" },
   { id: "tokenrhythm", kind: "tokenrhythm", label: "TokenRhythm", region: "" },
   { id: "sensenova", kind: "sensenova", label: "SenseNova", region: "" },
   { id: "intern-ai", kind: "intern-ai", label: "书生·端砚", region: "" },

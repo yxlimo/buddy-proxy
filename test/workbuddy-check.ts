@@ -238,5 +238,29 @@ check(
 check("two ids are not the same", uuidv7Hex() !== hex);
 
 console.log("");
+console.log("the regions");
+{
+  const { ENDPOINTS } = await import("../lib/workbuddy/auth.ts");
+  const { platformOf } = await import("../lib/platforms.ts");
+  const { kindOf } = await import("../lib/provider-kinds.ts");
+
+  check("the China endpoints did not move", ENDPOINTS.cn.base === "https://www.workbuddy.cn" && ENDPOINTS.cn.origin === "https://www.codebuddy.cn");
+  check(
+    "the international endpoints are the ones the client uses",
+    ENDPOINTS.global.base === "https://www.workbuddy.ai" && ENDPOINTS.global.origin === "https://www.codebuddy.ai",
+    JSON.stringify(ENDPOINTS.global),
+  );
+  check("the international platform is a row of its own", platformOf("workbuddy-global")?.region === "global", JSON.stringify(platformOf("workbuddy-global")));
+  check("the China platform is still China", platformOf("workbuddy-cn")?.region === "cn", JSON.stringify(platformOf("workbuddy-cn")));
+
+  // The base URL follows the account row, not a constant.
+  const kind = kindOf("workbuddy");
+  const asGlobal = kind?.baseUrl({ id: "workbuddy-global", region: "global" } as any);
+  const asCn = kind?.baseUrl({ id: "workbuddy-cn", region: "cn" } as any);
+  check("the base URL follows the row: international", asGlobal === "https://www.workbuddy.ai", String(asGlobal));
+  check("the base URL follows the row: China", asCn === "https://www.workbuddy.cn", String(asCn));
+}
+
+console.log("");
 console.log(`pass=${pass} fail=${fail}`);
 if (fail) process.exit(1);

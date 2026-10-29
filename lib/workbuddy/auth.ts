@@ -1,4 +1,4 @@
-// lib/workbuddy/auth.ts — the proxy's own WorkBuddy session (China region).
+// lib/workbuddy/auth.ts — the proxy's own WorkBuddy session.
 //
 // WorkBuddy signs in through a browser. The client asks the server for a
 // state, sends the user to a login page, and then polls for the token; the
@@ -9,10 +9,11 @@
 // refreshing is unambiguous. The refresh token rotates on every refresh, so
 // the file must survive restarts.
 //
-// Only the China region is implemented. The endpoints are configurable because
-// the region moved host once already: the desktop client talks to
-// www.workbuddy.cn, the older gateway was copilot.tencent.com, and the
-// account's own domain decides which one answers for it.
+// Two regions: China (www.workbuddy.cn) and the international one
+// (www.workbuddy.ai). The endpoints are configurable because the region moved
+// host once already: the desktop client talks to www.workbuddy.cn, the older
+// gateway was copilot.tencent.com, and the account's own domain decides which
+// one answers for it.
 
 import { configString, configNumber } from "../config.ts";
 import { cliFetch } from "../http.ts";
@@ -27,7 +28,7 @@ import { getSecret } from "../store.ts";
 import { provider, providerSecretId } from "../providers.ts";
 import { beginLoginFlow, driveLogin, registerLoginFlow, type LoginContext } from "../login-flow.ts";
 
-export type WorkBuddyRegion = "cn";
+export type WorkBuddyRegion = "cn" | "global";
 
 export interface WorkBuddyEndpoints {
   /** Where the user approves in a browser, and where the token comes from. */
@@ -40,6 +41,10 @@ export const ENDPOINTS: Record<WorkBuddyRegion, WorkBuddyEndpoints> = {
   cn: {
     base: configString("WORKBUDDY_CN_BASE", "https://www.workbuddy.cn").replace(/\/+$/, ""),
     origin: configString("WORKBUDDY_CN_ORIGIN", "https://www.codebuddy.cn").replace(/\/+$/, ""),
+  },
+  global: {
+    base: configString("WORKBUDDY_GLOBAL_BASE", "https://www.workbuddy.ai").replace(/\/+$/, ""),
+    origin: configString("WORKBUDDY_GLOBAL_ORIGIN", "https://www.codebuddy.ai").replace(/\/+$/, ""),
   },
 };
 
@@ -116,16 +121,26 @@ function legacySessionId(region: WorkBuddyRegion): string {
 }
 
 /**
+ * Which region a row's `region` field says.
+ *
+ * A row that says nothing is China, the region that was there first. Kept
+ * separate from `regionOf` so a caller that already holds the row (the kind's
+ * `baseUrl`) does not have to look it up again — and so a row that is not in
+ * the table yet still answers with its own region.
+ */
+export function regionFrom(region: string | undefined): WorkBuddyRegion {
+  return region === "global" ? "global" : "cn";
+}
+
+/**
  * Which region a provider talks to.
  *
- * The region picks the endpoints; the provider id picks the credential. Only
- * the China region is implemented, so the row has nothing to choose from yet —
- * but the region is read from the row, so a second one only has to be added
- * here.
+ * The region picks the endpoints; the provider id picks the credential. The
+ * region comes from the account row, so one account is one region; a row that
+ * says nothing is China, the region that was there first.
  */
 export function regionOf(providerId = "workbuddy-cn"): WorkBuddyRegion {
-  const region = provider(providerId)?.region;
-  return region === "cn" ? region : "cn";
+  return regionFrom(provider(providerId)?.region);
 }
 
 function loginHint(providerId = "workbuddy-cn"): string {

@@ -5,14 +5,15 @@
 // same identity headers.
 
 import { configString } from "../config.ts";
-import { accountHeaders, loadSession, type WorkBuddySession } from "./auth.ts";
+import { accountHeaders, loadSession, regionOf, type WorkBuddySession } from "./auth.ts";
 
 /** The host the account's own API is on. */
 export function workBuddyApiBase(providerId = "workbuddy-cn"): string {
   const override = configString("WORKBUDDY_CHAT_BASE", "").replace(/\/+$/, "");
   if (override) return override;
   const session = loadSession(providerId);
-  const host = session?.domain || "www.workbuddy.cn";
+  // The account's own domain decides; without one, the region's host does.
+  const host = session?.domain || (regionOf(providerId) === "global" ? "www.workbuddy.ai" : "www.workbuddy.cn");
   return `https://${host}`;
 }
 
