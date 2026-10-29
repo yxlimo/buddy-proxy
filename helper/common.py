@@ -15,11 +15,22 @@ import re
 import subprocess
 import urllib.parse
 
-# 网关地址候选：挨个试，第一个通的算准。
-# 127.0.0.1 是本机自己起的网关；NAS 上那份是 192.168.50.4。
-# 命令行 --gateway 与环境变量 BUDDY_GATEWAY 都能覆盖。
-DEFAULT_GATEWAYS = ["http://127.0.0.1:6450", "http://192.168.50.4:6450"]
+# 网关地址的来源有三级：命令行 --gateway > 环境变量 BUDDY_GATEWAY >
+# 配置文件 ~/.config/buddy-helper/config.json。
+# 不内置默认地址 —— 猜错（127.0.0.1 还是 NAS 上那份）就是对着错的网关查
+# 额度，报出来的恢复时间没意义。
 ENV_GATEWAY = "BUDDY_GATEWAY"
+CONFIG_DIR = pathlib.Path.home() / ".config" / "buddy-helper"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+
+# 网关地址没给、或者网关连不上时的退出码。
+EXIT_NO_GATEWAY = 5
+
+# 找不到网关地址时给的那句提示（两个脚本共用）。
+NO_GATEWAY_HINT = (
+    "没有配置网关地址。用 --gateway 指定，或写 ~/.config/buddy-helper/config.json："
+    '{"gateway": "http://192.168.50.4:6450"}'
+)
 
 # pi 的会话都放在这儿，按工作目录分目录。
 PI_SESSIONS_ROOT = pathlib.Path.home() / ".pi" / "agent" / "sessions"
@@ -32,14 +43,59 @@ UUID_RE = re.compile(
 # ------------------------------------------------------------------ 网关
 
 
-def gateway_candidates(explicit: str | None = None) -> list:
-    """要试的网关地址：命令行 > 环境变量 > 默认候选。"""
-    if explicit:
-        return [explicit.rstrip("/")]
-    env = os.environ.get(ENV_GATEWAY) or os.environ.get("ROUTER_URL")
+def read_gateway_config(config_path=None) -> str:
+    """配置文件里写的网关地址。没有文件、文件坏了、没有 gateway 键都当没有。"""
+    path = pathlib.Path(config_path) if config_path else CONFIG_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    value = data.get("gateway")
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def resolve_gateway(explicit: str | None = None, config_path=None) -> tuple:
+    """要用的网关地址。返回 (地址, 错误信息)。
+
+    优先级：命令行 --gateway > 环境变量 BUDDY_GATEWAY > 配置文件。
+    三个都没有就报错（错误信息里带着怎么给的提示）。
+    """
+    if explicit and explicit.strip():
+        return explicit.strip().rstrip("/"), ""
+    env = (os.environ.get(ENV_GATEWAY) or "").strip()
     if env:
-        return [env.rstrip("/")]
-    return [g.rstrip("/") for g in DEFAULT_GATEWAYS]
+        return env.rstrip("/"), ""
+    config = read_gateway_config(config_path)
+    if config:
+        return config.rstrip("/"), ""
+    return "", NO_GATEWAY_HINT
+
+
+def set_gateway(url: str, config_path=None) -> pathlib.Path:
+    """把网关地址写进配置文件。返回写到哪个文件。
+
+    配置文件里已有的别的键留着 —— 只改 gateway 那一项。
+    """
+    path = pathlib.Path(config_path) if config_path else CONFIG_PATH
+    address = (url or "").strip().rstrip("/")
+    if not address:
+        raise SystemExit("网关地址不能为空。")
+    data = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                data = existing
+        except ValueError:
+            data = {}
+    data["gateway"] = address
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def http_get_json(url: str, timeout: int = 15):
@@ -69,17 +125,6 @@ def http_get_json(url: str, timeout: int = 15):
         return json.loads(body), ""
     except ValueError as exc:
         return None, f"{url} 返回的不是 JSON：{exc}"
-
-
-def fetch_from_gateways(gateways: list, path: str, timeout: int = 15):
-    """挨个候选网关试。返回 (数据, 用到的网关, 错误信息)。"""
-    last = ""
-    for base in gateways:
-        data, err = http_get_json(base + path, timeout=timeout)
-        if data is not None:
-            return data, base, ""
-        last = err
-    return None, "", last
 
 
 # ------------------------------------------------------------------ 会话

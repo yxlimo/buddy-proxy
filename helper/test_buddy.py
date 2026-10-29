@@ -6,6 +6,8 @@
 
     python3 -m unittest discover -s helper -p 'test_*.py'
 """
+import argparse
+import datetime
 import json
 import os
 import pathlib
@@ -164,6 +166,142 @@ class NextRecoveryTest(unittest.TestCase):
             health_payload([account("minimax", percent=0, token_plan=False)])
         )
         self.assertIsNone(buddy_todo.next_recovery(accounts, self.NOW, 60_000))
+
+
+class ResolveAtTest(unittest.TestCase):
+    """`at` 只有一个来源选择问题：自动算与手动给。
+
+    自动算出来的时刻和 `--at` 给的时刻走的是同一段等待代码。
+    """
+
+    NOW = datetime.datetime(2026, 10, 29, 9, 0, 0)
+
+    def args(self, now=False, at=None, grace=60) -> argparse.Namespace:
+        return argparse.Namespace(now=now, at=at, grace=grace)
+
+    def test_without_at_usable_quota_means_now(self):
+        payload = health_payload(
+            [account("minimax", percent=89, ends_at="2026-10-29T11:34:24.360Z")]
+        )
+        calls = []
+
+        def reader():
+            calls.append(1)
+            return buddy_todo.parse_health(payload), ""
+
+        resolved = buddy_todo.resolve_at(self.args(), reader=reader, now=self.NOW)
+        self.assertEqual(resolved["error"], "")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(resolved["plan"]["usable"])
+        self.assertAlmostEqual(resolved["at"], self.NOW.timestamp(), delta=1)
+
+    def test_without_at_unusable_quota_means_recovery_plus_grace(self):
+        recovers = "2026-10-29T11:00:00.000Z"
+        payload = health_payload(
+            [account("minimax", percent=0, ends_at=recovers)]
+        )
+
+        def reader():
+            return buddy_todo.parse_health(payload), ""
+
+        resolved = buddy_todo.resolve_at(self.args(grace=60), reader=reader, now=self.NOW)
+        self.assertEqual(resolved["error"], "")
+        self.assertFalse(resolved["plan"]["usable"])
+        self.assertAlmostEqual(
+            resolved["at"],
+            common.to_ms(recovers) / 1000 + 60,
+            delta=1,
+        )
+
+    def test_manual_at_is_used_as_is_and_no_quota_is_read(self):
+        def reader():
+            raise AssertionError("给了 --at 就不该查额度")
+
+        resolved = buddy_todo.resolve_at(self.args(at="14:30"), reader=reader, now=self.NOW)
+        self.assertEqual(resolved["error"], "")
+        self.assertIsNone(resolved["plan"])
+        self.assertEqual(
+            resolved["at"],
+            self.NOW.replace(hour=14, minute=30, second=0, microsecond=0).timestamp(),
+        )
+
+    def test_now_means_now(self):
+        def reader():
+            raise AssertionError("--now 就不该查额度")
+
+        resolved = buddy_todo.resolve_at(self.args(now=True), reader=reader, now=self.NOW)
+        self.assertEqual(resolved["error"], "")
+        self.assertIsNone(resolved["plan"])
+        self.assertAlmostEqual(resolved["at"], self.NOW.timestamp(), delta=1)
+
+    def test_unreadable_quota_is_an_error(self):
+        def reader():
+            return [], "连不上"
+
+        resolved = buddy_todo.resolve_at(self.args(), reader=reader, now=self.NOW)
+        self.assertNotEqual(resolved["error"], "")
+        self.assertEqual(resolved["code"], buddy_todo.EXIT_NO_GATEWAY)
+
+
+class GatewayConfigTest(unittest.TestCase):
+    """网关地址的优先级：--gateway > BUDDY_GATEWAY > 配置文件 > 报错。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config = pathlib.Path(self.tmp.name) / "config.json"
+        self.saved_env = os.environ.pop(common.ENV_GATEWAY, None)
+
+    def tearDown(self):
+        if self.saved_env is not None:
+            os.environ[common.ENV_GATEWAY] = self.saved_env
+        else:
+            os.environ.pop(common.ENV_GATEWAY, None)
+        self.tmp.cleanup()
+
+    def write_config(self, gateway: str) -> None:
+        self.config.write_text(json.dumps({"gateway": gateway}), encoding="utf-8")
+
+    def test_command_line_wins(self):
+        self.write_config("http://config:6450")
+        os.environ[common.ENV_GATEWAY] = "http://env:6450"
+        gateway, err = common.resolve_gateway("http://cli:6450", self.config)
+        self.assertEqual(err, "")
+        self.assertEqual(gateway, "http://cli:6450")
+
+    def test_env_wins_over_config(self):
+        self.write_config("http://config:6450")
+        os.environ[common.ENV_GATEWAY] = "http://env:6450"
+        gateway, err = common.resolve_gateway(None, self.config)
+        self.assertEqual(err, "")
+        self.assertEqual(gateway, "http://env:6450")
+
+    def test_config_is_the_last_source(self):
+        self.write_config("http://config:6450")
+        gateway, err = common.resolve_gateway(None, self.config)
+        self.assertEqual(err, "")
+        self.assertEqual(gateway, "http://config:6450")
+
+    def test_nothing_configured_is_an_error_with_exit_code_five(self):
+        gateway, err = common.resolve_gateway(None, self.config)
+        self.assertEqual(gateway, "")
+        self.assertIn("没有配置网关地址", err)
+        self.assertEqual(common.EXIT_NO_GATEWAY, 5)
+
+    def test_set_gateway_writes_the_file_and_it_reads_back(self):
+        path = common.set_gateway("http://192.168.50.4:6450", self.config)
+        self.assertEqual(path, self.config)
+        self.assertTrue(self.config.is_file())
+        self.assertEqual(common.read_gateway_config(self.config), "http://192.168.50.4:6450")
+        gateway, err = common.resolve_gateway(None, self.config)
+        self.assertEqual(err, "")
+        self.assertEqual(gateway, "http://192.168.50.4:6450")
+
+    def test_set_gateway_keeps_the_other_keys(self):
+        self.config.write_text(json.dumps({"other": 1}), encoding="utf-8")
+        common.set_gateway("http://192.168.50.4:6450", self.config)
+        data = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(data["other"], 1)
+        self.assertEqual(data["gateway"], "http://192.168.50.4:6450")
 
 
 class PiSessionsTest(unittest.TestCase):

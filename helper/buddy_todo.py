@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-"""盯着 MiniMax 的额度，额度回来（或到点）之后给当前目录的会话发一条消息。
+"""盯着 MiniMax 的额度，额度回来之后给当前目录的会话发一条消息。
 
     python3 helper/buddy_todo.py              # 等额度回来再发
     python3 helper/buddy_todo.py --now        # 立刻发
-    python3 helper/buddy_todo.py --at 14:30   # 到点发（本地时间）
     python3 helper/buddy_todo.py --dry-run    # 只打印，不发
 
 待办写在当前目录的 `.buddy-todo.md` 里，内容就是要发的话。发成功了那个文件
 改名成 `.buddy-todo.sent-<时间戳>.md` 存档；失败了原样留着。
 
+什么时候发不用人给时间：额度接口报了几点恢复，脚本自己算。自动算出来的那个
+时刻和 `--at 14:30` 手动给的时刻是同一个 `at` —— 只是来源不同。
+
 会话要自己选（防止发错地方）：脚本把当前目录的会话列出来编号，回车确认才发，
 `--session <编号或 id>` 可以跳过这步（给自动化用）。
+
+网关地址的来源：`--gateway` > 环境变量 `BUDDY_GATEWAY` > 配置文件
+`~/.config/buddy-helper/config.json`；三个都没有就报错退出（退出码 5）。
 """
+from __future__ import annotations
+
 import argparse
 import datetime
 import pathlib
 import sys
 import time
+import typing
 import uuid
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -30,6 +38,7 @@ DEFAULT_POLL = 30       # 秒
 EXIT_NO_TODO = 2
 EXIT_NO_PLAN = 3
 EXIT_SEND_FAILED = 4
+EXIT_NO_GATEWAY = common.EXIT_NO_GATEWAY
 
 # 会话列表里最后那一项：新开一个 pi 会话。
 NEW_SESSION = {"client": "pi", "id": "", "title": "新开一个 pi 会话", "new": True}
@@ -348,21 +357,101 @@ def parse_at(value: str, now=None) -> float:
     return target.timestamp()
 
 
+def resolve_at(
+    args,
+    reader: typing.Callable[[], tuple] | None = None,
+    now=None,
+) -> dict:
+    """算出「该发的那一刻」。
+
+    自动算与手动给只是同一个 `at` 的两种来源：
+      --now  → 现在
+      --at   → 用户给的时间（不查额度）
+      都不给 → 从额度接口算：额度够用就是现在，不够用是恢复时刻 + grace
+
+    返回 {"at": 时刻（秒）或 None, "error": "", "code": 0, "plan": 计划或 None}。
+    reader 是读额度的那个函数（单测注入假的）：返回 (账号列表, 错误信息)。
+    """
+    now = now or datetime.datetime.now()
+    if args.now:
+        return {"at": now.timestamp(), "error": "", "code": 0, "plan": None}
+    if args.at:
+        return {"at": parse_at(args.at, now), "error": "", "code": 0, "plan": None}
+    if reader is None:
+        return {
+            "at": None,
+            "error": "没法读网关的额度，不知道什么时候能发。",
+            "code": EXIT_NO_GATEWAY,
+            "plan": None,
+        }
+    accounts, err = reader()
+    if err:
+        return {
+            "at": None,
+            "error": f"网关的 /health 读不出来，不知道额度什么时候回来：{err}",
+            "code": EXIT_NO_GATEWAY,
+            "plan": None,
+        }
+    plan = next_recovery(accounts, int(now.timestamp() * 1000), args.grace * 1000)
+    if plan is None:
+        return {
+            "at": None,
+            "error": "算不出额度什么时候回来：没有账号的窗口额度、冷却时间或额度可读。",
+            "code": EXIT_NO_PLAN,
+            "plan": None,
+        }
+    return {"at": plan["at"] / 1000.0, "error": "", "code": 0, "plan": plan}
+
+
+def wait_until(at: float, poll_s: int, reader=None, grace_ms: int = 0) -> None:
+    """等到 `at` 那一刻。
+
+    `at` 是同一个变量：自动算出来的时刻，和用户手动给的时刻，走的是同一段
+    等待。自动算的时候每轮重读一次额度 —— 额度提前回来就提前发；到点还没回来
+    就按新的恢复时刻接着等。
+    """
+    while True:
+        now = time.time()
+        if reader is not None:
+            accounts, err = reader()
+            if not err:
+                plan = next_recovery(accounts, int(now * 1000), grace_ms)
+                if plan is not None:
+                    if plan["usable"]:
+                        log(f"额度可用（{plan['reason']}）")
+                        return
+                    at = plan["at"] / 1000.0
+        if now >= at:
+            return
+        time.sleep(max(1, min(poll_s, int(at - now))))
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="盯额度，额度回来之后给当前目录的会话发一条消息")
     parser.add_argument("--file", default=None, help="待办文件（默认当前目录的 .buddy-todo.md）")
     parser.add_argument("--cwd", default=None, help="工作目录：待办文件、会话列表、客户端的 cwd（默认当前目录）")
     parser.add_argument("--now", action="store_true", help="立刻发，不等额度")
-    parser.add_argument("--at", default=None, help="到点发（本地时间，例 14:30 或 14:30:00）")
+    parser.add_argument("--at", default=None, help="到点发（本地时间 HH:MM，也接受 HH:MM:SS）")
     parser.add_argument("--client", choices=["pi", "opencode"], default=None, help="用哪个客户端（默认两个都列，挑哪个算哪个）")
     parser.add_argument("--session", default=None, help="会话编号或 id（给了就不问）")
-    parser.add_argument("--gateway", default=None, help="网关地址（默认 http://127.0.0.1:6450，连不上就试 NAS 上那份）")
+    parser.add_argument("--gateway", default=None, help="网关地址（优先于 BUDDY_GATEWAY 和配置文件）")
+    parser.add_argument("--set-gateway", default=None, metavar="URL", help="把网关地址写进配置文件")
     parser.add_argument("--grace", type=int, default=DEFAULT_GRACE, help=f"额度回来之后多等几秒（默认 {DEFAULT_GRACE}）")
     parser.add_argument("--poll", type=int, default=DEFAULT_POLL, help=f"每隔多久重读一次额度（默认 {DEFAULT_POLL} 秒）")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help=f"客户端最多跑多久（默认 {DEFAULT_TIMEOUT} 秒）")
-    parser.add_argument("--force", action="store_true", help="到点了额度还是不可用，也照发")
     parser.add_argument("--dry-run", action="store_true", help="只打印要发的命令，不发")
     args = parser.parse_args(argv)
+
+    if args.set_gateway:
+        path = common.set_gateway(args.set_gateway)
+        log(f"网关地址写到 {path}")
+        return 0
+
+    # 网关地址：命令行 > 环境变量 > 配置文件；三个都没有就报错。
+    gateway, gateway_err = common.resolve_gateway(args.gateway)
+    if not gateway:
+        log(gateway_err)
+        return EXIT_NO_GATEWAY
 
     cwd = pathlib.Path(args.cwd).resolve() if args.cwd else pathlib.Path.cwd()
     todo_path = pathlib.Path(args.file) if args.file else cwd / ".buddy-todo.md"
@@ -376,33 +465,23 @@ def main(argv: list) -> int:
         log(f"待办文件 {todo_path.name} 是空的，没什么要发的。")
         return EXIT_NO_TODO
 
-    # 真正的网关要连得上才算数：挨个候选试，第一个答得上 /health 的算准。
-    gateway = ""
-    accounts = []
-    if not args.now:
-        for candidate in common.gateway_candidates(args.gateway):
-            accounts, err = read_accounts(candidate)
-            if not err:
-                gateway = candidate
-                break
-            log(f"{candidate} 的额度拿不到：{err}")
-        if not gateway:
-            if not args.dry_run:
-                log("网关的 /health 读不出来，不知道额度什么时候回来。")
-                return EXIT_NO_PLAN
-            gateway = common.gateway_candidates(args.gateway)[0]
+    # 自动算的时候要读额度；手动给了时刻就不查。
+    reader: typing.Callable[[], tuple] | None = None
+    if not args.now and not args.at:
+        def read_quota():
+            return read_accounts(gateway)
 
-    plan = None
-    if not args.now:
-        plan = next_recovery(accounts, int(time.time() * 1000), args.grace * 1000)
-        if plan is None:
-            if args.dry_run:
-                log("算不出额度什么时候回来（没有窗口、冷却或额度可读）。")
-            else:
-                log("算不出额度什么时候回来：没有账号的窗口额度、冷却时间或额度可读。")
-                return EXIT_NO_PLAN
-        else:
-            log(plan["reason"])
+        reader = read_quota
+
+    resolved = resolve_at(args, reader=reader)
+    if resolved["error"]:
+        log(resolved["error"])
+        if not args.dry_run:
+            return resolved["code"]
+        resolved["at"] = time.time()
+    at = resolved["at"]
+    if resolved["plan"]:
+        log(resolved["plan"]["reason"])
 
     sessions = list_sessions(str(cwd), args.client or "both")
     if args.session:
@@ -419,52 +498,14 @@ def main(argv: list) -> int:
     if args.now:
         log("立刻发。")
     elif args.at:
-        target = parse_at(args.at)
-        wait = max(0.0, target - time.time())
-        log(f"等到 {datetime.datetime.fromtimestamp(target).strftime('%Y-%m-%d %H:%M:%S')} 再发（约 {int(wait)} 秒）。")
-        time.sleep(wait)
-        # 到点了重读一次额度：不可用就接着等（除非 --force）。
-        accounts, err = read_accounts(gateway)
-        if err:
-            log(f"额度重读失败：{err}")
-        else:
-            plan = next_recovery(accounts, int(time.time() * 1000), args.grace * 1000)
-            if plan is None:
-                log("算不出额度什么时候回来。")
-                return EXIT_NO_PLAN
-            if not plan["usable"]:
-                if args.force:
-                    log("--force：额度还不可用，照发。")
-                else:
-                    log(f"{plan['reason']}；继续等。")
-                    wait_until(gateway, args.grace * 1000, args.poll)
+        log(f"到 {at} 那一刻发。")
     else:
-        if plan is not None and not plan["usable"]:
-            wait_until(gateway, args.grace * 1000, args.poll)
+        log(f"等额度回来（{at} 那一刻发）。")
+
+    wait_until(at, args.poll, reader=reader, grace_ms=args.grace * 1000)
 
     code, _reason = deliver(todo_path, client, session, prompt, timeout=args.timeout)
     return code
-
-
-def wait_until(gateway: str, grace_ms: int, poll_s: int) -> None:
-    """等到额度回来（每 poll_s 秒重读一次）。"""
-    while True:
-        now = int(time.time() * 1000)
-        accounts, err = read_accounts(gateway)
-        if err:
-            log(f"额度重读失败：{err}")
-            time.sleep(poll_s)
-            continue
-        current = next_recovery(accounts, now, grace_ms)
-        if current is None:
-            log("算不出额度什么时候回来。")
-            raise SystemExit(EXIT_NO_PLAN)
-        if current["usable"]:
-            log(f"额度可用（{current['reason']}）")
-            return
-        wait = max(1, min(poll_s, int((current["at"] - now) / 1000)))
-        log(f"{current['reason']}；{wait} 秒后再看")
-        time.sleep(wait)
 
 
 if __name__ == "__main__":

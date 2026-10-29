@@ -9,7 +9,8 @@
     python3 helper/buddy_sync.py --check         # 只比对，不写；不一致退出码 1
 
 命令行：
-  --gateway URL    网关地址，默认 http://127.0.0.1:6450（连不上就试 NAS 上那份）
+  --gateway URL    网关地址（优先于 BUDDY_GATEWAY 和配置文件）
+  --set-gateway URL  把网关地址写进 ~/.config/buddy-helper/config.json
   --api-key KEY    客户端 api key，默认 public（网关跑 public 模式时不校验 key）
   --providers      同时同步各上游分组的 provider（默认不同步）
   --dry-run        只打印要改什么，不写文件
@@ -649,7 +650,8 @@ def main(argv: list) -> int:
     global GATEWAY, API_KEY
 
     parser = argparse.ArgumentParser(description="把网关公布的模型同步到客户端的 provider 配置")
-    parser.add_argument("--gateway", default=None, help="网关地址（默认 http://127.0.0.1:6450，连不上就试 NAS 上那份）")
+    parser.add_argument("--gateway", default=None, help="网关地址（优先于 BUDDY_GATEWAY 和配置文件）")
+    parser.add_argument("--set-gateway", default=None, metavar="URL", help="把网关地址写进 ~/.config/buddy-helper/config.json")
     parser.add_argument("--api-key", default=os.environ.get("ROUTER_API_KEY", DEFAULT_API_KEY), help="客户端 api key（默认 public）")
     parser.add_argument("--providers", action="store_true", help="同时同步各上游分组的 provider")
     parser.add_argument("--dry-run", action="store_true", help="只打印要改什么，不写文件")
@@ -657,22 +659,27 @@ def main(argv: list) -> int:
     parser.add_argument("--keep-legacy", action="store_true", help="保留 qoder / minimax-code / minimax / token-rhythm 这些老名字")
     args = parser.parse_args(argv)
 
+    if args.set_gateway:
+        path = common.set_gateway(args.set_gateway)
+        print(f"网关地址写到 {path}")
+        return 0
+
     API_KEY = args.api_key
 
-    candidates = common.gateway_candidates(args.gateway)
-    sources = []
-    failures = []
-    for gateway in candidates:
-        sources, failures = collect_sources(gateway, args.providers)
-        if sources:
-            GATEWAY = gateway
-            break
+    # 网关地址：命令行 > 环境变量 > 配置文件；三个都没有就报错。
+    gateway, gateway_err = common.resolve_gateway(args.gateway)
+    if not gateway:
+        print(gateway_err, file=sys.stderr)
+        return common.EXIT_NO_GATEWAY
+
+    sources, failures = collect_sources(gateway, args.providers)
     for what, err in failures:
         print(f"!! {what}：{err}", file=sys.stderr)
 
     if not sources:
         print("一个模型清单都没拉到，什么都不改。", file=sys.stderr)
         return 1
+    GATEWAY = gateway
 
     if args.check:
         return run_check(GATEWAY, sources[0][3])
