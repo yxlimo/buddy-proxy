@@ -12,7 +12,6 @@ import { deleteProviderCredentials, deleteProviderRow, listProviders, provider }
 import { getSecret, listSecrets } from "../store.ts";
 import { clearDeadSession, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
-import { miniMaxTokenPlanKey, fetchMiniMaxTokenPlan } from "../minimax/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { loadSession as loadQoderSession } from "../qoder/auth.ts";
 import { checkAccountHealth } from "../qoder/credits.ts";
@@ -63,7 +62,7 @@ export interface CredentialRow {
   accountId: string;
   /** 账号属于哪个平台。凭据挂在账号上，平台是它所在的那一层。 */
   platform: string;
-  /** session / api_key / login / plan_key */
+  /** session / api_key / login。 */
   kind: string;
   label: string;
   /** 掩码后的值：只留前几位。 */
@@ -173,7 +172,7 @@ function secretOf(id: string): { data: any; updatedAt: number } {
 /**
  * 一个账号的凭据。
  *
- * 账号下面有几条：一个登录会话、一把推理 key，也许还有一个 plan key。列表里
+ * 账号下面有几条：一个登录会话、一把推理 key，也许还有一个登录账号。列表里
  * 只给已经配好的那些 —— 没配的东西不算凭据。
  *
  * 账号的 id 就是 provider 表那一行的 id，所以这里不看别的东西：先按 id 取行，
@@ -185,15 +184,10 @@ export function credentialsOf(accountId: string): CredentialRow[] {
   if (!account) return out;
   switch (account.kind) {
     case "minimax": {
+      // MiniMax Code 只有会话：额度也跟着会话走，没有第二把 key。
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
       out.push(sessionRow(sessionId, account, "登录会话", session.data, session.updatedAt));
-      const key = miniMaxTokenPlanKey(account.id);
-      if (key) {
-        const keyId = `key:provider:${account.id}:plan`;
-        const keyRow = secretOf(keyId);
-        out.push(plainRow(keyId, account, "plan_key", "Plan key", key, keyRow.updatedAt));
-      }
       return out;
     }
     case "minimax-api": {
@@ -440,7 +434,7 @@ export function deleteAccount(accountId: string): { ok: boolean; message: string
  */
 interface CredentialTarget {
   account: ProviderRow;
-  /** session / plan_key / api_key / login。 */
+  /** session / api_key / login。 */
   form: string;
   /** 第几把 key（开放平台一把 key 一个配额）。 */
   tenant: number | null;
@@ -486,14 +480,6 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
   const p = target.account;
   switch (p.kind) {
     case "minimax": {
-      if (target.form === "plan_key") {
-        const key = miniMaxTokenPlanKey(p.id);
-        if (!key) return { ok: false, message: "未配置 plan key" };
-        const plan = await fetchMiniMaxTokenPlan(key);
-        return plan
-          ? { ok: true, message: `plan 额度读到了（${plan.windows.length} 个窗口）` }
-          : { ok: false, message: "无法读取 plan 额度，key 可能不正确" };
-      }
       const cred = await readCredential(p.id);
       return {
         ok: true,

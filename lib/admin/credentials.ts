@@ -14,7 +14,7 @@ import {
 import { writeQiniuAccount } from "../qiniu/account.ts";
 import { writeXinghuoKey } from "../xinghuo/account.ts";
 import { deleteSecret, setSecret } from "../store.ts";
-import { providerKindOf, providerSecretId } from "../providers.ts";
+import { providerKindOf } from "../providers.ts";
 
 /**
  * 上游报的状态 → 契约里的枚举。
@@ -33,8 +33,9 @@ import { providerKindOf, providerSecretId } from "../providers.ts";
  *
  * MiniMax 开放平台：一把 key 一个配额，key 列表就是一个账号下的几把 key。
  *
- * MiniMax Code 网关：只有一把 —— 那是它的 coding plan 的 key（sk-cp-…），
- * 用来查套餐额度。推理走的是会话，不是这把 key。
+ * 七牛云：推理用的 API key 与门户 cookie 两段。讯飞星火：一把推理用的 key。
+ *
+ * MiniMax Code 网关不收 key：它用登录的会话，套餐额度也跟着会话走。
  *
  * key 写在账号自己名下：面板写什么就是什么，环境变量不参与（它会在每次读的
  * 时候把自己写回数据库，删掉的账号转眼又有一把 key）。
@@ -44,16 +45,13 @@ export function setProviderKeys(
   keys: string[],
 ): { ok: boolean; message: string; count: number } {
   const kind = providerKindOf(upstreamId);
-  if (kind?.kind === "minimax") {
-    // Code 网关的套餐 key：只有一把。
-    const key = (keys[0] ?? "").trim();
-    const id = providerSecretId(upstreamId, "plan");
-    if (!key) {
-      deleteSecret(id);
-      return { ok: true, message: "清掉了套餐 key", count: 0 };
-    }
-    setSecret(id, "key", { key });
-    return { ok: true, message: "写了套餐 key", count: 1 };
+  if (kind?.kind === "minimax" || upstreamId === "minimax") {
+    // Code 网关只用会话：额度也走会话，没有要贴的 key。
+    return {
+      ok: false,
+      message: "MiniMax Code 用登录的会话，不用 key（套餐额度也跟着会话走）。",
+      count: 0,
+    };
   }
   if (kind?.kind === "qiniu" || upstreamId === "qiniu") {
     // 七牛云的凭据有两段：推理用的 API key 与门户 cookie（额度只认 cookie）。
@@ -154,8 +152,8 @@ export function hasUsableCredential(state: CredentialState): boolean {
  *
  * 凭据的 id 就是它在数据库里的地址（见 lib/providers.ts 的 providerSecretId）：
  * 会话是 session:provider:<账号>，钥匙是 key:provider:<账号>:<后缀>。后缀各家
- * 不同（套餐额度是 plan，开放平台一把 key 一个配额是 key-1，账号密码是
- * account），所以认出它是哪一种要靠后缀。
+ * 不同（开放平台一把 key 一个配额是 key-1，账号密码是 account），所以认出它是
+ * 哪一种要靠后缀。
  *
  * 账号就是 provider 表那一行的 id —— 账号模型里一行一个登录，所以凭据的 id
  * 里没有比账号更细的东西。
@@ -163,7 +161,7 @@ export function hasUsableCredential(state: CredentialState): boolean {
 export interface CredentialRef {
   /** 它属于哪个账号：provider 表里那一行的 id。 */
   accountId: string;
-  /** session / plan_key / api_key / login。 */
+  /** session / api_key / login。 */
   form: string;
   /** 第几把 key：只有一把 key 一个配额的平台（MiniMax 开放平台）才有。 */
   tenant: number | null;
@@ -193,7 +191,6 @@ export function parseCredentialId(id: string): CredentialRef | null {
     const accountId = parts[2];
     const suffix = parts[3];
     if (!accountId) return null;
-    if (suffix === "plan") return { accountId, form: "plan_key", tenant: null, derived };
     if (suffix === "account") return { accountId, form: "login", tenant: null, derived };
     const key = /^key-(\d+)$/.exec(suffix);
     if (key) return { accountId, form: "api_key", tenant: Number(key[1]), derived };

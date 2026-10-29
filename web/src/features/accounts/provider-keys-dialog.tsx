@@ -31,7 +31,7 @@ export function ProviderKeysDialog({
   existing,
   onSubmit,
   pending,
-  /** 这把 key 是干什么的：开放平台是租户的 key，Code 网关是套餐的 key。 */
+  /** 这把 key 是干什么的：开放平台是租户的 key。 */
   kind,
 }: {
   open: boolean
@@ -78,11 +78,9 @@ export function ProviderKeysDialog({
             <KeyRound className='size-4' />
             {isQiniu
               ? '七牛云凭据'
-              : kind === 'minimax'
-                ? '套餐 key'
-                : isXinghuo
-                  ? '讯飞星火 API Key'
-                  : 'API Key'}
+              : isXinghuo
+                ? '讯飞星火 API Key'
+                : 'API Key'}
           </DialogTitle>
           <DialogDescription>
             {isQiniu ? (
@@ -94,9 +92,7 @@ export function ProviderKeysDialog({
               <>在讯飞星火控制台创建 API Key，整串粘贴。一把就够，填多把也只认第一把</>
             ) : (
               <>
-                {kind === 'minimax'
-                  ? '一把 coding plan 的 key（sk-cp-…），用来查这个账号的套餐额度。推理走的是登录会话，不用这把 key。'
-                  : '一行一把 key，按顺序排：第一把是第一个租户。填了 key 的租户会轮着接手请求，接不了的（套餐用完、被拒、被限流）就换下一把。'}
+                一行一把 key，按顺序排：第一把是第一个租户。填了 key 的租户会轮着接手请求，接不了的（套餐用完、被拒、被限流）就换下一把。
                 {existing.length > 0
                   ? ` 现在有 ${existing.length} 把，保存后会被这里填的替换。`
                   : ''}
@@ -146,9 +142,7 @@ export function ProviderKeysDialog({
           </div>
         ) : (
           <div className='grid gap-2'>
-            <Label htmlFor='provider-keys'>
-              {kind === 'minimax' ? '套餐 key（一把）' : 'key（每行一把）'}
-            </Label>
+            <Label htmlFor='provider-keys'>key（每行一把）</Label>
             <Textarea
               id='provider-keys'
               rows={5}

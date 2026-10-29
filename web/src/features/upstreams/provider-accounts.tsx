@@ -109,11 +109,9 @@ export function ProviderAccounts({
   // 给不给「填 key」的入口：看这一类怎么登录，由后端说（loginOf）。不按平台名
   // 一个个写死 —— 写死就漏，新平台上线的第一次必漏。
   //
-  // 两个历史特例要留着，因为后端的 login 字段说的不是这件事：
-  // - minimax：Code 网关的套餐 key（sk-cp-…），用来查套餐额度，跟登录方式无关；
+  // 一个历史特例要留着，因为后端的 login 字段说的不是这件事：
   // - minimax-api：开放平台一把 key 一个租户，一个账号下多把 key，也跟登录方式无关。
-  const canSetKeys =
-    loginOf?.(kind) === 'api_key' || kind === 'minimax-api' || kind === 'minimax'
+  const canSetKeys = loginOf?.(kind) === 'api_key' || kind === 'minimax-api'
 
   // 正在动的是哪条凭据：看 mutation 的 variables，不用自己存一份状态。
   const testingId = testCredential.isPending
@@ -258,11 +256,7 @@ export function ProviderAccounts({
                       onClick={() => onManageKeys(account)}
                     >
                       <KeyRound />
-                      {kind === 'minimax'
-                        ? '套餐 key'
-                        : kind === 'qiniu'
-                          ? '凭据'
-                          : 'API Key'}
+                      {kind === 'qiniu' ? '凭据' : 'API Key'}
                     </Button>
                   ) : null}
                   {/* 登录一直在：登录会覆盖这个账号的旧会话，不需要先注销。 */}

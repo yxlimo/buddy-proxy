@@ -17,7 +17,7 @@ import { getSecret } from "../store.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
 import { providerSecretId } from "../providers.ts";
-import { fetchMiniMaxTokenPlan, minimaxApiHost, type MiniMaxRegion } from "./credits.ts";
+import { minimaxApiHost, type MiniMaxRegion, type MiniMaxTokenPlan } from "./credits.ts";
 
 /** 最多读几个租户。 */
 const MAX_TENANTS = 10;
@@ -342,8 +342,47 @@ export async function miniMaxApiTenantPlans(
 ): Promise<{ index: number; plan: unknown }[]> {
   const out: { index: number; plan: unknown }[] = [];
   for (const tenant of miniMaxApiTenants(providerId)) {
-    const plan = await fetchMiniMaxTokenPlan(tenant.key, region);
+    const plan = await fetchMiniMaxApiTokenPlan(tenant.key, region);
     out.push({ index: tenant.index, plan });
   }
   return out;
+}
+
+/**
+ * 一把 key 的套餐额度（开放平台的接口）。
+ *
+ * 开放平台认 key，不认会话：一把 key 就是一份套餐，所以额度也是按 key 问的。
+ * 这个接口报的是「还剩多少」，与 Code 会话那个（报「用了多少」）方向相反。
+ */
+async function fetchMiniMaxApiTokenPlan(
+  apiKey: string,
+  region: MiniMaxRegion = "cn",
+): Promise<MiniMaxTokenPlan | null> {
+  try {
+    const r = await fetch(`${minimaxApiHost(region)}/v1/token_plan/remains`, {
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!r.ok) return null;
+    const body: any = await r.json().catch(() => null);
+    if (!body || body?.base_resp?.status_code !== 0) return null;
+    const rows = Array.isArray(body.model_remains) ? body.model_remains : [];
+    return {
+      windows: rows.map((row: any) => ({
+        model: String(row?.model_name ?? ""),
+        intervalPercent: Number(row?.current_interval_remaining_percent) || 0,
+        weeklyPercent: Number(row?.current_weekly_remaining_percent) || 0,
+        intervalEndsAt:
+          typeof row?.end_time === "number" ? new Date(row.end_time).toISOString() : null,
+        weeklyEndsAt:
+          typeof row?.weekly_end_time === "number"
+            ? new Date(row.weekly_end_time).toISOString()
+            : null,
+        intervalRemainsMs: Number(row?.remains_time) || 0,
+        weeklyRemainsMs: Number(row?.weekly_remains_time) || 0,
+      })),
+    };
+  } catch {
+    return null;
+  }
 }

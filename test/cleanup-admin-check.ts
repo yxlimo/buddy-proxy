@@ -77,7 +77,6 @@ const { parseCredentialId } = await import("../lib/admin/credentials.ts");
 
 const shapes: [string, string, number | null][] = [
   ["session:provider:qoder", "session", null],
-  ["key:provider:minimax:plan", "plan_key", null],
   ["key:provider:minimax-api:key-1", "api_key", 1],
   ["key:provider:sensenova:account", "login", null],
   ["key:provider:intern-ai:account", "login", null],
@@ -91,6 +90,11 @@ for (const [id, form, tenant] of shapes) {
     JSON.stringify(ref),
   );
 }
+check(
+  "旧的 plan 后缀不认了（MiniMax Code 的额度只走会话）",
+  parseCredentialId("key:provider:minimax:plan") === null,
+  JSON.stringify(parseCredentialId("key:provider:minimax:plan")),
+);
 check(
   "从账号里派生出来的推理 key 也认得",
   parseCredentialId("key:provider:sensenova:account#api_key")?.derived === "api_key",
@@ -114,6 +118,7 @@ const { getSecret, setSecret: writeSecret } = await import("../lib/store.ts");
 
 // 同前缀的另一个上游：它们的前缀一样，只有冒号后面不一样。
 writeSecret("session:provider:minimax", "session", { accessToken: "a" });
+// 旧库里留下的套餐 key：账号注销时也要跟着删干净。
 writeSecret("key:provider:minimax:plan", "account", { key: "b" });
 writeSecret("session:provider:minimax-code-m-plan", "session", { accessToken: "c" });
 writeSecret("session:provider:minimax-api", "session", { accessToken: "d" });

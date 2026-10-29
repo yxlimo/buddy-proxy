@@ -473,7 +473,6 @@ console.log("凭据的 id：现行格式");
 // 一个字也不出机器。
 const knownIds = [
   "session:provider:no-such-upstream",
-  "key:provider:no-such-upstream:plan",
   "key:provider:no-such-upstream:key-1",
   "key:provider:no-such-upstream:account",
 ];
@@ -508,6 +507,36 @@ check(
   "旧格式不认了",
   String(legacyId.body?.message ?? "").includes("不认识的凭据"),
   String(legacyId.body?.message),
+);
+// 旧的 plan 后缀也不认了：MiniMax Code 的额度只走会话。
+const legacyPlanId = await call("TestCredential", { credentialId: "key:provider:no-such-upstream:plan" }, token);
+check(
+  "旧的 plan 后缀不认了",
+  String(legacyPlanId.body?.message ?? "").includes("不认识的凭据"),
+  String(legacyPlanId.body?.message),
+);
+
+console.log("");
+console.log("MiniMax Code：只用会话");
+
+// 面板不再问这个 key。
+const codeKeys = await call("SetProviderKeys", { upstreamId: "minimax", keys: ["sk-cp-nope"] }, token);
+check("MiniMax Code 不收 key", codeKeys.body?.ok === false, JSON.stringify(codeKeys.body));
+check(
+  "说的是它用会话",
+  String(codeKeys.body?.message ?? "").includes("会话"),
+  String(codeKeys.body?.message),
+);
+
+// 它的凭据只有会话那一条。
+const codeAccount = await call("AddAccount", { platform: "minimax", alias: "Code 主账号" }, token);
+const codeAccountId = String(codeAccount.body?.id ?? "");
+const codeCreds = await call("ListCredentials", { accountId: codeAccountId }, token);
+check(
+  "MiniMax Code 的凭据只有会话",
+  list(codeCreds.body?.credentials).every((c: any) => c.kind === "session") &&
+    list(codeCreds.body?.credentials).length === 1,
+  JSON.stringify(list(codeCreds.body?.credentials).map((c: any) => [c.id, c.kind])),
 );
 
 console.log("");

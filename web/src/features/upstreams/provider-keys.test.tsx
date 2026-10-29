@@ -508,6 +508,34 @@ describe('按 kind 的 login 给入口', () => {
     ).toBeInTheDocument()
   })
 
+  it('MiniMax Code：额度只认会话，不再给「套餐 key」按钮', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: kindsClient(
+        [upstream('minimax', 'minimax', 'MiniMax Code', [accountOf('minimax', 'minimax', '主账号')])],
+        [{ kind: 'minimax', login: 'device' }]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 minimax 的账号与凭据' })
+    )
+
+    const row = (await screen.findByText('主账号')).closest('tr')
+    expect(
+      within(row as HTMLElement).queryByRole('button', { name: '套餐 key' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(row as HTMLElement).queryByRole('button', { name: 'API Key' })
+    ).not.toBeInTheDocument()
+    // 控制组：登录按钮还在。
+    expect(
+      within(row as HTMLElement).getByRole('button', { name: '登录' })
+    ).toBeInTheDocument()
+  })
+
   it('讯飞星火：一把 key 就够，提交时只传一把', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []

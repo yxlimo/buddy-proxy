@@ -12,7 +12,7 @@ import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
 import { miniMaxApiTenantPlans } from "../minimax/api.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
-import { fetchMiniMaxBalance, miniMaxTokenPlan, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
+import { fetchMiniMaxBalance, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
 import {
   fetchMiniMaxCreditFallback,
   fetchMiniMaxCreditsAndPoints,
@@ -301,20 +301,19 @@ export async function miniMaxCreditLedger(
 /**
  * MiniMax Code 账号上的套餐额度。
  *
- * 先用会话读：会话是账号自己登录用的，每个账号都有，桌面客户端就是这么读的
- * （`/backend/account/token_plan/remains_percent`）。读不到再退回 plan key 那条
- * （开放平台的 `/v1/token_plan/remains`，要 sk-cp- 那种 key）。
+ * 只用会话读：会话是账号自己登录用的，每个账号都有，桌面客户端就是这么读的
+ * （`/backend/account/token_plan/remains_percent`）。读不到就是读不到——没有
+ * 第二条路，套餐 key 那套已经删了。
  */
 export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unknown> {
   const region = MINIMAX_REGION === "en" ? "global" : "cn";
   try {
     const cred = await readCredential(providerId);
     const withSession = await fetchMiniMaxTokenPlanWithSession(cred.accessToken, region);
-    if (withSession?.windows.length) return withSession;
+    return withSession?.windows.length ? withSession : null;
   } catch {
-    // 没有会话或读不到，往下走。
+    return null;
   }
-  return miniMaxTokenPlan(300_000, providerId);
 }
 
 /** 「Token Plan 达限后使用积分」这个开关，读不到是 null（不知道）。 */

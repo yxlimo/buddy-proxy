@@ -109,6 +109,10 @@ let creditQuery = new URLSearchParams();
 /** 这一轮里 credit/details 被问了几次。一轮扫描只该问一次。 */
 let creditHits = 0;
 let fallbackHeaders: Record<string, string> = {};
+/** 会话读套餐额度的那个接口被问了几次。 */
+let sessionPlanHits = 0;
+/** 旧的 key 路径（开放平台那个接口）被问了几次：不该问了。 */
+let keyPlanHits = 0;
 
 const fake = http.createServer((req, res) => {
   const url = req.url ?? "";
@@ -155,6 +159,37 @@ const fake = http.createServer((req, res) => {
       used_credits: 0,
       remaining_credits: 0,
       token_plan_credit_fallback_enabled: true,
+      base_resp: { status_code: 0 },
+    });
+  }
+
+  if (url.startsWith("/backend/account/token_plan/remains_percent")) {
+    sessionPlanHits += 1;
+    return send(200, {
+      model_remains: [
+        {
+          model_name: "general",
+          start_time: now,
+          end_time: now + 5 * 3600_000,
+          remains_time: 5 * 3600_000,
+          current_interval_used_percent: "0%",
+          current_interval_total_percent: "100%",
+          weekly_start_time: now,
+          weekly_end_time: now + 7 * DAY,
+          weekly_remains_time: 7 * DAY,
+          current_weekly_used_percent: "10%",
+          current_weekly_total_percent: "100%",
+        },
+      ],
+      base_resp: { status_code: 0, status_msg: "success" },
+    });
+  }
+
+  // 旧的 key 路径：MiniMax Code 不该再走它。
+  if (url.startsWith("/v1/token_plan/remains")) {
+    keyPlanHits += 1;
+    return send(200, {
+      model_remains: [],
       base_resp: { status_code: 0 },
     });
   }
@@ -368,6 +403,48 @@ check(
   "只有视频窗口就没有判定依据",
   outOfCredits(snapshotWith({ windows: [videoFull.windows[1]] }, 0, false)) === false,
   String(outOfCredits(snapshotWith({ windows: [videoFull.windows[1]] }, 0, false))),
+);
+
+/* ------------------------------------------------------------------ *
+ * 五、套餐额度：只走会话
+ * ------------------------------------------------------------------ */
+
+section("套餐额度只走会话");
+
+const { miniMaxCodeTokenPlan } = await import("../lib/admin/upstreams.ts");
+const { setSecret: writeDbSecret } = await import("../lib/store.ts");
+
+// 没有会话：读不到，也不打上游。
+sessionPlanHits = 0;
+keyPlanHits = 0;
+const noSession = await miniMaxCodeTokenPlan("minimax");
+check("没有会话就是 null", noSession === null, JSON.stringify(noSession));
+check(
+  "没有会话就不打上游（连旧的那条路也不走）",
+  sessionPlanHits === 0 && keyPlanHits === 0,
+  `${sessionPlanHits} ${keyPlanHits}`,
+);
+
+// 有会话：读的是会话那个接口。
+writeDbSecret("session:provider:minimax", "session", {
+  accessToken: "session-token",
+  refreshToken: "refresh-token",
+  expiresAtMs: Date.now() + 3600_000,
+  generation: 1,
+  loginAtMs: Date.now(),
+});
+sessionPlanHits = 0;
+keyPlanHits = 0;
+const withSession = await miniMaxCodeTokenPlan("minimax");
+check(
+  "有会话就读到了套餐额度",
+  (withSession as any)?.windows?.length === 1,
+  JSON.stringify(withSession),
+);
+check(
+  "读的是会话那个接口，没走旧的 key 路径",
+  sessionPlanHits === 1 && keyPlanHits === 0,
+  `${sessionPlanHits} ${keyPlanHits}`,
 );
 
 /* ------------------------------------------------------------------ *

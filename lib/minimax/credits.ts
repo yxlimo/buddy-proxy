@@ -1,19 +1,19 @@
 // lib/minimax/credits.ts — what the MiniMax accounts have left.
 //
-// Two different things are asked about here, and they need different
-// credentials:
+// Both things here are read with the account's own session:
 //
-//   the account balance   GET /account/query_balance      the OAuth session works
-//   the token plan quota  GET /v1/token_plan/remains      needs the API key
+//   the account balance   GET /account/query_balance
+//   the token plan quota  GET /backend/account/token_plan/remains_percent
 //
 // The token plan is the subscription: its usage runs in a five-hour window and
 // a weekly one, and what is left of each is a percentage. The balance is the
 // money on the platform account — the cash, the vouchers and the credits, with
 // the credits being the ones that were given rather than paid for.
+//
+// The open platform (lib/minimax/api.ts) reads each tenant's plan with that
+// tenant's own key — that is a different upstream with its own keys.
 
 import { configString } from "../config.ts";
-import { getSecret, setSecret } from "../store.ts";
-import { providerSecretId } from "../providers.ts";
 
 /** The platform hosts. The key decides which one answers. */
 export const MINIMAX_API_HOSTS = {
@@ -118,15 +118,12 @@ function percent(raw: unknown): number {
 /**
  * The token plan's usage, read with the account's own session.
  *
- * The open platform's `/v1/token_plan/remains` needs an API key (sk-cp-…), so
- * an account that only has a session has no plan to show. The Code client
- * reads the same plan from `/backend/account/token_plan/remains_percent` with
- * the session, and that works for every account — the session is what the
- * account logs in with.
+ * The Code client reads the plan from `/backend/account/token_plan/remains_percent`
+ * with the session, and that works for every account — the session is what the
+ * account logs in with. There is no second way to read it.
  *
- * The two endpoints report the same window differently: the key one says how
- * much is *left*, this one says how much is *used* out of the total. Both end
- * up as "how much is left" here.
+ * The platform reports the window as "how much is *used*" out of the total, so
+ * what is left is the difference between the two.
  */
 export async function fetchMiniMaxTokenPlanWithSession(
   accessToken: string,
@@ -156,88 +153,3 @@ export async function fetchMiniMaxTokenPlanWithSession(
     return null;
   }
 }
-
-/**
- * The token plan's usage.
- *
- * The plan's key is the API key (`sk-cp-…`), not the OAuth session: the
- * session is for the Code gateway, the key is for the plan.
- */
-export async function fetchMiniMaxTokenPlan(
-  apiKey: string,
-  region: MiniMaxRegion = "cn",
-): Promise<MiniMaxTokenPlan | null> {
-  try {
-    const r = await fetch(`${minimaxApiHost(region)}/v1/token_plan/remains`, {
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!r.ok) return null;
-    const body: any = await r.json().catch(() => null);
-    if (!body || body?.base_resp?.status_code !== 0) return null;
-    const rows = Array.isArray(body.model_remains) ? body.model_remains : [];
-    return {
-      windows: rows.map((row: any) => ({
-        model: String(row?.model_name ?? ""),
-        intervalPercent: num(row?.current_interval_remaining_percent),
-        weeklyPercent: num(row?.current_weekly_remaining_percent),
-        intervalEndsAt: iso(row?.end_time),
-        weeklyEndsAt: iso(row?.weekly_end_time),
-        intervalRemainsMs: num(row?.remains_time),
-        weeklyRemainsMs: num(row?.weekly_remains_time),
-      })),
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The token plan's key, when one is configured.
- *
- * It is a credential, so the environment wins: a key that was rotated in .env
- * has to take effect. The database holds a copy, so the service still works
- * when the .env file is not there, and the panel can read what is configured.
- */
-/**
- * 账号的 plan key。
- *
- * 只有一处：账号自己的那一格。环境变量不是凭据来源——它会在每次读的时候把
- * 自己写回数据库，于是删掉的账号转眼又有了 key，而且面板上设的那把会被它
- * 顶掉。
- */
-export function miniMaxTokenPlanKey(providerId = "minimax"): string | null {
-  const id = providerSecretId(providerId, "plan");
-  const stored = getSecret<unknown>(id);
-  if (typeof stored === "string" && stored) return stored;
-  if (stored && typeof stored === "object" && "key" in stored) return String((stored as any).key ?? "");
-  return null;
-}
-
-/* ------------------------------------------------------------------ *
- * The cached view
- * ------------------------------------------------------------------ */
-
-// The plan of each provider is cached separately: they are different accounts.
-
-/**
- * The token plan's usage, from a recent answer.
- *
- * The health endpoint asks for it on every check, and the platform is not
- * asked more often than it needs to be.
- */
-export async function miniMaxTokenPlan(
-  maxAgeMs = 300_000,
-  providerId = "minimax",
-): Promise<MiniMaxTokenPlan | null> {
-  const key = miniMaxTokenPlanKey(providerId);
-  if (!key) return null;
-  const cached = planCaches.get(providerId);
-  if (cached && Date.now() - cached.at < maxAgeMs) return cached.plan;
-  const plan = await fetchMiniMaxTokenPlan(key);
-  planCaches.set(providerId, { at: Date.now(), plan });
-  return plan;
-}
-
-/** The plan of each provider, cached separately: they are different accounts. */
-const planCaches = new Map<string, { at: number; plan: MiniMaxTokenPlan | null }>();
