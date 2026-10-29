@@ -14,17 +14,17 @@
 // 这个文件原来叫 config-restart-check —— 那时改配置要重启才生效。现在改完
 // 就生效，所以它检查的是热加载；重启那部分也还在里面：改的值要经得起重启。
 
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { startGateway, type Gateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DATA_DIR = "/tmp/opencode/test-config-restart";
-const KEYS_FILE = path.join(DATA_DIR, "api-keys.json");
 const SERVICE = "/buddy.admin.v1.AdminService";
 const CLIENT_KEY = "oc-test-key-1234567890";
 
@@ -52,7 +52,7 @@ function section(title: string): void {
  * 假的上游（只是为了让网关别往外面发请求）
  * ------------------------------------------------------------------ */
 
-const fakeUpstream = http.createServer((req, res) => {
+const fakeUpstream = http.createServer((_req, res) => {
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
 });
@@ -63,19 +63,9 @@ const fakeBase = `http://127.0.0.1:${(fakeUpstream.address() as net.AddressInfo)
  * 网关
  * ------------------------------------------------------------------ */
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+// 每次跑都用自己的临时目录：端口和数据目录都由 helper 挑，撞了重来。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "config-restart-"));
+const KEYS_FILE = path.join(DATA_DIR, "api-keys.json");
 fs.writeFileSync(KEYS_FILE, JSON.stringify({ test: CLIENT_KEY }, null, 2));
 
 // Qoder 的会话种进测试自己的数据库：等一下要把 Qoder 打开，没有会话的话
@@ -86,69 +76,67 @@ execFileSync(process.execPath, ["--experimental-strip-types", "test/aggregate-se
   stdio: "ignore",
 });
 
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
+/** 网关进程的环境变量：前门的钥匙、上游全指向本机的假上游。 */
+const gatewayEnv: Record<string, string> = {
+  KEYS_FILE,
+  BENEFITS_DISABLED: "1",
+  // 上游全关：这一轮只关心配置。开关在数据库里（provider.enabled），
+  // 下面用面板的 SetUpstreamEnabled 改它。
+  // 万一有请求打出去，也只打到本机。
+  QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
+  QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
+  QODER_GLOBAL_LEGACY_BASE: `${fakeBase}/qoder-global-legacy`,
+  QODER_CN_INFER_BASE: `${fakeBase}/qoder-cn`,
+  QODER_CN_OPENAPI_BASE: `${fakeBase}/openapi-cn`,
+  WORKBUDDY_CN_BASE: `${fakeBase}/workbuddy`,
+  WORKBUDDY_CHAT_BASE: `${fakeBase}/workbuddy`,
+};
 
-let router: ChildProcess | null = null;
-let routerLog = "";
-
-function startRouter(): ChildProcess {
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      BUDDY_DATA_DIR: DATA_DIR,
-      KEYS_FILE,
-      ROUTER_PORT: String(port),
-      BENEFITS_DISABLED: "1",
-      // 上游全关：这一轮只关心配置。开关在数据库里（provider.enabled），
-      // 下面用面板的 SetUpstreamEnabled 改它。
-      // 万一有请求打出去，也只打到本机。
-      QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
-      QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
-      QODER_GLOBAL_LEGACY_BASE: `${fakeBase}/qoder-global-legacy`,
-      QODER_CN_INFER_BASE: `${fakeBase}/qoder-cn`,
-      QODER_CN_OPENAPI_BASE: `${fakeBase}/openapi-cn`,
-      WORKBUDDY_CN_BASE: `${fakeBase}/workbuddy`,
-      WORKBUDDY_CHAT_BASE: `${fakeBase}/workbuddy`,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  router = child;
-  return child;
+/**
+ * 起一个网关（数据目录还是那一个）。
+ *
+ * keepDataDir：中途要重启，重启之间数据库必须活着，所以前面几次起网关都
+ * 让 helper 留着目录；最后一次不留，它负责把目录收走。
+ */
+async function startOurGateway(keepDataDir = true): Promise<Gateway> {
+  return startGateway({ dataDir: DATA_DIR, cleanupDataDir: true, keepDataDir, env: gatewayEnv });
 }
 
-async function waitHealthy(): Promise<boolean> {
-  for (let i = 0; i < 80; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 250));
+/** 这个地址上还有 HTTP 答复吗：进程还活着。 */
+async function answering(at: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${at}/health`, { signal: AbortSignal.timeout(1500) });
+    await res.text();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 网关起来了吗：/health 答 200。 */
+async function gatewayUp(at: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${at}/health`, { signal: AbortSignal.timeout(3000) });
+    await res.text();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 进程走了没有：连不上就是走了。 */
+async function processGone(at: string, timeoutMs = 8000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await answering(at))) return true;
+    await new Promise((r) => setTimeout(r, 100));
   }
   return false;
 }
 
-function cleanup(): void {
-  try {
-    router?.kill("SIGTERM");
-  } catch {
-    /* already gone */
-  }
-  fakeUpstream.close();
-}
-process.on("exit", cleanup);
-
-startRouter();
-check("网关起来了", await waitHealthy());
+let gw = await startOurGateway();
+let base = gw.base;
+check("网关起来了", await gatewayUp(base));
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
@@ -352,17 +340,14 @@ const restart = await admin("RestartSystem");
 check("RestartSystem 答应了", restart.accepted === true, JSON.stringify(restart));
 
 // 进程会在 500 毫秒后退出（容器会把它拉起来；这里自己拉）。
-const exited = await new Promise<boolean>((resolve) => {
-  const timer = setTimeout(() => resolve(false), 8000);
-  router?.once("exit", () => {
-    clearTimeout(timer);
-    resolve(true);
-  });
-});
+const exited = await processGone(base);
 check("进程真的退出了", exited);
 
-startRouter();
-check("网关又起来了", await waitHealthy());
+gw.stop();
+// 重启：同一个数据目录，端口换一个（helper 挑）。
+gw = await startOurGateway();
+base = gw.base;
+check("网关又起来了", await gatewayUp(base));
 
 const afterRestart = await health();
 check(
@@ -431,10 +416,12 @@ check(
 );
 
 // 重启之后还是那个值。
-router?.kill("SIGTERM");
-await new Promise((r) => setTimeout(r, 500));
-startRouter();
-check("网关又起来了", await waitHealthy());
+gw.stop();
+await processGone(base);
+// 最后一个网关：目录交给 helper 收（前面几个留着，重启之间数据库要活着）。
+gw = await startOurGateway(false);
+base = gw.base;
+check("网关又起来了", await gatewayUp(base));
 const originsAfter = (await admin("ListConfig")).items?.find((i: any) => i.key === "ADMIN_CORS_ORIGINS");
 check(
   "重启之后还是那个值",
@@ -519,5 +506,11 @@ console.log(`pass=${pass} fail=${fail}`);
 if (problems.length) {
   console.log("");
   for (const problem of problems) console.log(`  - ${problem}`);
+}
+if (fail) {
+  // 失败时把网关的输出带上：它比断言更能说明发生了什么。
+  console.log("");
+  console.log("--- 网关输出 ---");
+  console.log(gw.log().slice(-4000));
 }
 process.exit(fail ? 1 : 0);
