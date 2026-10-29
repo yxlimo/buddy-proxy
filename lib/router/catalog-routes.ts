@@ -11,7 +11,7 @@
 // platform's own models under their real names.
 
 import type Koa from "koa";
-import { platformOf } from "../platforms.ts";
+import { PLATFORMS, platformOf } from "../platforms.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { accountsOfPlatform, listProviders } from "../providers.ts";
 import { aggregateModels } from "../aggregate.ts";
@@ -35,7 +35,12 @@ import { refreshInternAiCatalog } from "../intern-ai/transport.ts";
 // database starts with, before the upstream answers for the first time.
 /** The upstream catalogue, refreshed when the one in the database is old. */
 export async function refreshWorkBuddyCatalog(force = false): Promise<void> {
-  const accounts = enabledAccounts("workbuddy-cn");
+  // The catalogue is the kind's, not a platform's: any logged-in account of any
+  // WorkBuddy region can fetch it, and the first one that is on answers. Asking
+  // only the China platform would leave a database with nothing but an
+  // international account stuck on the bundled table for ever.
+  const accounts = PLATFORMS.filter((template) => template.kind === "workbuddy")
+    .flatMap((template) => enabledAccounts(template.id));
   if (!accounts.length) return;
   try {
     // The catalogue is the platform's, but the request that fetches it needs an
