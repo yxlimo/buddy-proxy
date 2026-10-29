@@ -6,7 +6,9 @@ import {
   AccountSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListProviderKindsResponseSchema,
   ListUpstreamsResponseSchema,
+  ProviderKindSchema,
   ProviderPolicy,
   SetProviderKeysResponseSchema,
   UpstreamSchema,
@@ -37,6 +39,37 @@ function account(): Account {
     id: 'minimax-api',
     platform: 'minimax-api',
     alias: '租户一',
+    enabled: true,
+    status: 'missing',
+    credentialCount: 0,
+  })
+}
+
+/** 一个平台，带着它名下的账号。 */
+function upstream(
+  id: string,
+  kind: string,
+  label: string,
+  accounts: Account[]
+) {
+  return create(UpstreamSchema, {
+    id,
+    kind,
+    label,
+    state: UpstreamState.NO_CREDENTIAL,
+    policy: ProviderPolicy.SINGLE,
+    policies: [ProviderPolicy.SINGLE],
+    accountCount: accounts.length,
+    accounts,
+  })
+}
+
+/** 一个账号。 */
+function accountOf(id: string, platform: string, alias: string): Account {
+  return create(AccountSchema, {
+    id,
+    platform,
+    alias,
     enabled: true,
     status: 'missing',
     credentialCount: 0,
@@ -266,6 +299,11 @@ describe('七牛云的凭据', () => {
             }),
           ],
         }),
+      // 后端说七牛云是 api_key 登录：面板据此给「凭据」按钮。
+      ListProviderKinds: () =>
+        create(ListProviderKindsResponseSchema, {
+          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
+        }),
       ListAccounts: () =>
         create(ListAccountsResponseSchema, { accounts: [qiniuAccount()] }),
       ListCredentials: () =>
@@ -364,6 +402,161 @@ describe('七牛云的凭据', () => {
 
     await waitFor(() => {
       expect(sent).toEqual([['', '']])
+    })
+  })
+})
+
+/**
+ * 给不给「填 key」的入口，由后端说的 kind ⇒ login 决定。
+ *
+ * 以前是按平台名一个个写死，写死就漏：新平台上线的第一次必漏（minimax-api、
+ * qiniu、xinghuo 各漏过一次）。
+ */
+describe('按 kind 的 login 给入口', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  /** 一个平台 + 后端说的每一类怎么登录。 */
+  function kindsClient(
+    list: ReturnType<typeof upstream>[],
+    kinds: { kind: string; login: string }[],
+    sent?: string[][]
+  ) {
+    return mockAdminClient({
+      ListUpstreams: () => create(ListUpstreamsResponseSchema, { upstreams: list }),
+      ListProviderKinds: () =>
+        create(ListProviderKindsResponseSchema, {
+          kinds: kinds.map((row) => create(ProviderKindSchema, row)),
+        }),
+      ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
+      ListCredentials: () => create(ListCredentialsResponseSchema, { credentials: [] }),
+      SetProviderKeys: (input) => {
+        sent?.push(input.keys ?? [])
+        return create(SetProviderKeysResponseSchema, { ok: true })
+      },
+    })
+  }
+
+  it('后端说这一类用 api_key 登录：账号行给「API Key」按钮', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: kindsClient(
+        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
+        [{ kind: 'xinghuo', login: 'api_key' }]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 xinghuo 的账号与凭据' })
+    )
+
+    const row = (await screen.findByText('星火一')).closest('tr')
+    expect(
+      within(row as HTMLElement).getByRole('button', { name: 'API Key' })
+    ).toBeInTheDocument()
+  })
+
+  it('后端说这一类不是 api_key 登录：不给「API Key」按钮', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: kindsClient(
+        [upstream('qoder', 'qoder', 'Qoder', [accountOf('qoder-1', 'qoder', '邱德')])],
+        [{ kind: 'qoder', login: 'device' }]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 qoder 的账号与凭据' })
+    )
+
+    const row = (await screen.findByText('邱德')).closest('tr')
+    expect(
+      within(row as HTMLElement).queryByRole('button', { name: 'API Key' })
+    ).not.toBeInTheDocument()
+    // 控制组：登录按钮还在，只是不给填 key 的入口。
+    expect(
+      within(row as HTMLElement).getByRole('button', { name: '登录' })
+    ).toBeInTheDocument()
+  })
+
+  it('后端没说过这一类怎么登录：历史特例仍然给按钮', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: kindsClient(
+        [upstream('minimax-api', 'minimax-api', 'MiniMax 开放平台', [account()])],
+        // 后端的列表里没有 minimax-api：login 未知。
+        []
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 minimax-api 的账号与凭据' })
+    )
+
+    const row = (await screen.findByText('租户一')).closest('tr')
+    expect(
+      within(row as HTMLElement).getByRole('button', { name: 'API Key' })
+    ).toBeInTheDocument()
+  })
+
+  it('讯飞星火：一把 key 就够，提交时只传一把', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: kindsClient(
+        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
+        [{ kind: 'xinghuo', login: 'api_key' }],
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 xinghuo 的账号与凭据' })
+    )
+    await user.click(await screen.findByRole('button', { name: 'API Key' }))
+
+    expect(await screen.findByText('讯飞星火 API Key')).toBeInTheDocument()
+    await user.type(await screen.findByLabelText('API Key'), 'sk-xinghuo-one')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-xinghuo-one']])
+    })
+  })
+
+  it('讯飞星火：留空提交表示清掉那把 key', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: kindsClient(
+        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
+        [{ kind: 'xinghuo', login: 'api_key' }],
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: '展开 xinghuo 的账号与凭据' })
+    )
+    await user.click(await screen.findByRole('button', { name: 'API Key' }))
+
+    await user.click(await screen.findByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['']])
     })
   })
 })

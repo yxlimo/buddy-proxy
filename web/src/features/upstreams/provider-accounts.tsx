@@ -56,6 +56,7 @@ function needsRelogin(credential: Credential): boolean {
 export function ProviderAccounts({
   platform,
   kind,
+  loginOf,
   accounts,
   loggingIn,
   busyAccountId,
@@ -71,6 +72,8 @@ export function ProviderAccounts({
   platform: string
   /** 这个平台是哪一类：不同种类的 key 不一样。 */
   kind: string
+  /** 这一类怎么登录（api_key / device / browser / password / code），由后端给。 */
+  loginOf?: (kind: string) => string | undefined
   /** 这个平台名下的账号，按创建先后排（也就是权重次序）。 */
   accounts: Account[]
   /** 正在发起登录。 */
@@ -102,6 +105,15 @@ export function ProviderAccounts({
 
   const credentials = useCredentials(activeId)
   const testCredential = useTestCredential()
+
+  // 给不给「填 key」的入口：看这一类怎么登录，由后端说（loginOf）。不按平台名
+  // 一个个写死 —— 写死就漏，新平台上线的第一次必漏。
+  //
+  // 两个历史特例要留着，因为后端的 login 字段说的不是这件事：
+  // - minimax：Code 网关的套餐 key（sk-cp-…），用来查套餐额度，跟登录方式无关；
+  // - minimax-api：开放平台一把 key 一个租户，一个账号下多把 key，也跟登录方式无关。
+  const canSetKeys =
+    loginOf?.(kind) === 'api_key' || kind === 'minimax-api' || kind === 'minimax'
 
   // 正在动的是哪条凭据：看 mutation 的 variables，不用自己存一份状态。
   const testingId = testCredential.isPending
@@ -239,9 +251,7 @@ export function ProviderAccounts({
                     iconOnly
                     onSave={(alias) => onRename(account, alias)}
                   />
-                  {kind === 'minimax-api' ||
-                  kind === 'minimax' ||
-                  kind === 'qiniu' ? (
+                  {canSetKeys ? (
                     <Button
                       variant='outline'
                       size='sm'

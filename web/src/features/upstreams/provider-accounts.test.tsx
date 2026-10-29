@@ -11,6 +11,7 @@ import {
   GetLoginStatusResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListProviderKindsResponseSchema,
   ListUpstreamsResponseSchema,
   LoginSessionSchema,
   LogoutAccountResponseSchema,
@@ -94,6 +95,7 @@ function clientWith(
     ListUpstreams: () =>
       create(ListUpstreamsResponseSchema, { upstreams: [platform(accounts)] }),
     ListAccounts: () => create(ListAccountsResponseSchema, { accounts }),
+    ListProviderKinds: () => create(ListProviderKindsResponseSchema, { kinds: [] }),
     ListCredentials: (input) =>
       create(ListCredentialsResponseSchema, {
         credentials: [

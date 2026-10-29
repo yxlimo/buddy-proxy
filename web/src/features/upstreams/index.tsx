@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ChevronRight, Plus } from 'lucide-react'
@@ -33,6 +33,7 @@ import {
   upstreamKeys,
   useAddAccount,
   useDeleteAccount,
+  useProviderKinds,
   useSetAccountEnabled,
   useUpstreams,
   useUpdateProvider,
@@ -67,6 +68,9 @@ const REGION_LABELS: Record<string, string> = {
  */
 export function UpstreamsPage() {
   const upstreams = useUpstreams()
+  // 每一类平台怎么登录：由后端说。面板照它决定给不给「填 key」的入口，不按平
+  // 台名写死（写死就漏，新平台上线的第一次必漏）。
+  const kinds = useProviderKinds()
   const setEnabled = useSetAccountEnabled()
   const addAccount = useAddAccount()
   const updateProvider = useUpdateProvider()
@@ -92,6 +96,15 @@ export function UpstreamsPage() {
   const busyAccountId = setEnabled.isPending
     ? (setEnabled.variables?.accountId ?? null)
     : null
+  // kind ⇒ login。取不到就是取不到：那一类的入口由组件里的历史特例兜着。
+  const loginByKind = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const kind of kinds.data?.kinds ?? []) {
+      map.set(kind.kind, kind.login)
+    }
+    return map
+  }, [kinds.data])
+
   // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它变，
   // 免得先弹回旧值再跳到新值。
   const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
@@ -255,6 +268,7 @@ export function UpstreamsPage() {
                               <ProviderAccounts
                                 platform={upstream.id}
                                 kind={upstream.kind}
+                                loginOf={(kind) => loginByKind.get(kind)}
                                 accounts={upstream.accounts}
                                 loggingIn={login.pending}
                                 busyAccountId={busyAccountId}

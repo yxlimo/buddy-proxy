@@ -21,6 +21,9 @@ import { Textarea } from '@/components/ui/textarea'
  *
  * 七牛云是两段：推理用的 API Key，加上只用来查额度的门户 cookie。两段各有
  * 位置，空串表示清掉那一段，所以不能把空串丢掉。
+ *
+ * 讯飞星火只有一把推理用的 API Key：一把就够，填多把也只算第一把。空串表示清
+ * 掉那把。
  */
 export function ProviderKeysDialog({
   open,
@@ -43,8 +46,11 @@ export function ProviderKeysDialog({
   // 七牛的两段凭据。位置要留着：空串是「清掉这一段」，不是「不填」。
   const [apiKey, setApiKey] = useState('')
   const [cookie, setCookie] = useState('')
+  // 讯飞星火的一把 key。
+  const [xinghuoKey, setXinghuoKey] = useState('')
 
   const isQiniu = kind === 'qiniu'
+  const isXinghuo = kind === 'xinghuo'
 
   const keys = text
     .split('\n')
@@ -55,6 +61,7 @@ export function ProviderKeysDialog({
     setText('')
     setApiKey('')
     setCookie('')
+    setXinghuoKey('')
   }
 
   return (
@@ -73,7 +80,9 @@ export function ProviderKeysDialog({
               ? '七牛云凭据'
               : kind === 'minimax'
                 ? '套餐 key'
-                : 'API Key'}
+                : isXinghuo
+                  ? '讯飞星火 API Key'
+                  : 'API Key'}
           </DialogTitle>
           <DialogDescription>
             {isQiniu ? (
@@ -81,6 +90,8 @@ export function ProviderKeysDialog({
                 推理 API Key 用来发模型请求；门户 Cookie 只用于查询资源包额度，可留空。在
                 portal.qiniu.com 登录后从浏览器复制 Cookie，整串粘贴。留空表示清掉那一段。
               </>
+            ) : isXinghuo ? (
+              <>在讯飞星火控制台创建 API Key，整串粘贴。一把就够，填多把也只认第一把</>
             ) : (
               <>
                 {kind === 'minimax'
@@ -120,6 +131,19 @@ export function ProviderKeysDialog({
               />
             </div>
           </div>
+        ) : isXinghuo ? (
+          <div className='grid gap-2'>
+            <Label htmlFor='xinghuo-api-key'>API Key</Label>
+            <Input
+              id='xinghuo-api-key'
+              type='password'
+              placeholder='在讯飞星火控制台复制的 API Key'
+              value={xinghuoKey}
+              onChange={(event) => setXinghuoKey(event.target.value)}
+              className='font-mono text-xs'
+              autoComplete='off'
+            />
+          </div>
         ) : (
           <div className='grid gap-2'>
             <Label htmlFor='provider-keys'>
@@ -147,9 +171,13 @@ export function ProviderKeysDialog({
             取消
           </Button>
           <Button
-            disabled={pending || (!isQiniu && keys.length === 0)}
+            disabled={pending || (!isQiniu && !isXinghuo && keys.length === 0)}
             onClick={() =>
-              isQiniu ? onSubmit([apiKey, cookie]) : onSubmit(keys)
+              isQiniu
+                ? onSubmit([apiKey, cookie])
+                : isXinghuo
+                  ? onSubmit([xinghuoKey.trim()])
+                  : onSubmit(keys)
             }
           >
             保存
