@@ -1,8 +1,11 @@
 // lib/cooldown.ts — 账号的冷却：失败之后一段时间不再路由到那个账号。
 //
-// 三种失败，三种冷却：
+// 四种失败，四种冷却：
 //
-//   限流 / 额度用完      冷却到「恢复时间 + 1 分钟」。恢复时间从哪儿来，由
+//   限流（RPM/TPM）      固定 1 分钟（ACCOUNT_RATE_COOLDOWN_MS 可以改）。
+//                        限流的窗口是分钟级的 —— 超了一分钟，等一分钟就够；
+//                        按 5 分钟算会把同平台别的模型一起挡掉。
+//   额度用完             冷却到「恢复时间 + 1 分钟」。恢复时间从哪儿来，由
 //                        lib/router/account-cooldown.ts 去找（错误上带的、
 //                        正文里写的、账号当前的套餐窗口）。
 //   连接与超时            固定 1 分钟（ACCOUNT_NETWORK_COOLDOWN_MS 可以改）。
@@ -28,6 +31,14 @@ export const UNAVAILABLE_COOLDOWN_MS = 5 * 60_000;
 export const NETWORK_COOLDOWN_MS = 60_000;
 
 /**
+ * 限流（RPM/TPM）的固定冷却时长（毫秒）。
+ *
+ * 限流的窗口是分钟级的：超了一分钟，等一分钟就够。按 5 分钟算的话，一个只
+ * 漏了一分钟的账号会被下线五分钟，同平台别的模型跟着一起被挡。
+ */
+export const RATE_COOLDOWN_MS = 60_000;
+
+/**
  * 冷却最多到什么时候（毫秒）：一周。
  *
  * 再久就是「永久封禁」了，那不是冷却。窗口最长的一周（套餐的周窗口）也在
@@ -43,6 +54,11 @@ export function unavailableCooldownMs(): number {
 /** 连接与超时的固定冷却时长，可以由设置改。 */
 export function networkCooldownMs(): number {
   return configNumber("ACCOUNT_NETWORK_COOLDOWN_MS", NETWORK_COOLDOWN_MS);
+}
+
+/** 限流的固定冷却时长，可以由设置改。 */
+export function rateCooldownMs(): number {
+  return configNumber("ACCOUNT_RATE_COOLDOWN_MS", RATE_COOLDOWN_MS);
 }
 
 /** 一条冷却。 */

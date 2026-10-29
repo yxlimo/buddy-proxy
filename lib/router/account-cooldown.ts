@@ -1,8 +1,14 @@
 // lib/router/account-cooldown.ts — 一次失败值多少冷却。
 //
-// 三类失败，三种冷却：
+// 四类失败，四种冷却：
 //
-//   限流 / 额度用完（rate-limit、quota）
+//   限流（rate-limit：超了 RPM/TPM）
+//       固定 1 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来。
+//       限流的窗口是分钟级的：超了一分钟，等一分钟就够 —— 按 5 分钟算会把
+//       同平台别的模型一起挡掉（2026-10-30：qiniu 报 rate_limit_tpm_exceeded，
+//       账号被下线五分钟，同平台别的模型也一起没了）。
+//
+//   额度用完（quota）
 //       冷却到「恢复时间 + 1 分钟」。恢复时间取三个来源里**最晚**的：
 //         1. 错误对象上带的（传输层读到 retry-after，就挂上去）
 //         2. 错误正文里写的时间（MiniMax 的 1310：「您的限额将在
@@ -10,7 +16,9 @@
 //         3. 账号当前的套餐窗口什么时候结束（健康快照里的 tokenPlan.windows）
 //       为什么取最晚的：上游的 retry-after 常常只有几十秒，早回来只是再失败
 //       一次；正文里的重置时间与套餐窗口才说得出账号什么时候真的有额度。
-//       都没有就用固定值。
+//       都没有就用固定值（5 分钟）。
+//       额度是一次性的（等窗口），限流是分钟级的（等一分钟）—— 两者的等待
+//       不是一回事，所以分开算。
 //
 //   连接与超时（connection、timeout）
 //       固定 1 分钟。连接断掉不是账号的错 —— 一个只有单个账号的平台会被
@@ -24,7 +32,13 @@
 // 只有可降级的失败才记冷却：请求本身的问题（400/404/413）不记 —— 一个坏请求
 // 不该把账号封掉，换一个账号也是一样的结果。
 
-import { MAX_COOLDOWN_MS, networkCooldownMs, unavailableCooldownMs, isIgnoredPlanWindow } from "../cooldown.ts";
+import {
+  MAX_COOLDOWN_MS,
+  networkCooldownMs,
+  rateCooldownMs,
+  unavailableCooldownMs,
+  isIgnoredPlanWindow,
+} from "../cooldown.ts";
 import { HEALTH_CACHE_ID } from "../health-cache.ts";
 import { peekCached } from "../store.ts";
 import { cooldownUntilOf } from "../upstream-status.ts";
@@ -32,6 +46,14 @@ import { classifyUpstreamError, isDegradableUpstreamError } from "./provider-sel
 
 /** 恢复时间之后再多留一分钟：上游说的那一刻是开始恢复，不是那一刻就好。 */
 export const COOLDOWN_GRACE_MS = 60_000;
+
+/**
+ * 上游自己说的恢复时间之后多留一秒。
+ *
+ * 只给限流用：上游说的「过几十秒再来」是分钟级的窗口，多留一分钟就把「限流
+ * 只下线一分钟」这个修复抵消了。一秒够避开边界（正好卡在那一刻又被限一次）。
+ */
+const RATE_RETRY_GRACE_MS = 1_000;
 
 /** 一次失败值多少冷却。 */
 export interface CooldownDecision {
@@ -63,7 +85,25 @@ export function cooldownForFailure(
   // 第二个目标也会被跳过（2026-10-28 实测：一个模型回 500，整个平台 503、
   // 第二个目标没被试）。换下一个目标、下一个账号就够了，不写冷却。
   if (failure.kind === "server") return null;
-  if (failure.kind === "rate-limit" || failure.kind === "quota") {
+  if (failure.kind === "rate-limit") {
+    // 限流是分钟级的：超了一分钟，等一分钟就够。按 5 分钟算的话，一个只漏了
+    // 一分钟的账号会被下线五分钟，同平台别的模型跟着一起被挡。
+    const deadline = rateLimitDeadlineFor(accountId, error, now);
+    if (deadline) {
+      // 上游自己说的恢复时间（retry-after）只多留一秒；正文里的重置时间与
+      // 套餐窗口说的是额度，照旧多留一分钟。
+      const grace = deadline.source === "the upstream's answer" ? RATE_RETRY_GRACE_MS : COOLDOWN_GRACE_MS;
+      return {
+        untilMs: Math.min(deadline.at + grace, now + MAX_COOLDOWN_MS),
+        reason: failure.kind,
+        source: deadline.source,
+      };
+    }
+    // 上游什么也没说得出：固定一分钟。
+    return { untilMs: now + rateCooldownMs(), reason: failure.kind, source: "fixed" };
+  }
+  if (failure.kind === "quota") {
+    // 额度是真的用完了：要等窗口，不是等一分钟。
     const deadline = latestDeadlineFor(accountId, error, now);
     // 恢复时间已经过去了（上游说的就是现在）：那就用固定值试一下。
     if (deadline && deadline.at + COOLDOWN_GRACE_MS > now) {
@@ -87,11 +127,43 @@ export function cooldownForFailure(
   }
   // 没有上游给的恢复时间：用固定值。连接与超时是 1 分钟 —— 那不是账号的错，
   // 按 5 分钟算的话一个只有单个账号的平台会被自己的超时下线好几分钟。
+  // 额度用完也是固定值：额度是真的用完了，等窗口（5 分钟）。
   const fixed =
     failure.kind === "connection" || failure.kind === "timeout"
       ? networkCooldownMs()
       : unavailableCooldownMs();
   return { untilMs: now + fixed, reason: failure.kind, source: "fixed" };
+}
+
+/**
+ * 恢复时间从哪儿来 —— 限流类的失败取**最先说得出时间的那个来源**。
+ *
+ * 三个来源，按这个次序：
+ *
+ *   1. 正文里写的重置时间（MiniMax 的 1310：「您的限额将在 2026-10-30
+ *      07:55:44 重置」）。这是上游明确说的「什么时候恢复」，比 retry-after
+ *      那个几十秒的提示准。
+ *   2. 上游自己说的（retry-after）。限流的窗口是分钟级的，这几十秒才是对
+ *      的 —— 额度要等的是几小时（套餐窗口），跟限流不是一回事。
+ *   3. 见底的套餐窗口。它说的是额度，排在最后。
+ *
+ * 已经过去的时间不算：上游说的截止时间早就过了，那就用固定的一分钟试一下。
+ */
+function rateLimitDeadlineFor(
+  accountId: string,
+  error: unknown,
+  now: number,
+): { at: number; source: string } | null {
+  // 正文里写的时间。
+  const body = parseDeadlineFromText(errorTextOf(error));
+  if (body !== null && body > now) return { at: body, source: "the body" };
+  // 错误对象上带的（传输层读到的 retry-after）。
+  const attached = cooldownUntilOf(error);
+  if (attached !== null && attached > now) return { at: attached, source: "the upstream's answer" };
+  // 见底的套餐窗口：额度用完了的那个窗口什么时候换。
+  const window = exhaustedPlanWindowEndsAt(accountId, now);
+  if (window !== null && window > now) return { at: window, source: "the plan window" };
+  return null;
 }
 
 /**

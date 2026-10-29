@@ -211,7 +211,8 @@ async function handleAggregate(
   const ordered = byWeight(candidates);
 
   // 试过的失败，按尝试的先后记着：给客户端看哪一个由它们决定，不由最后一个决定。
-  const failures: unknown[] = [];
+  // 记的是「哪个目标」与「它的错」：客户端要知道每个目标各自为什么失败。
+  const failures: { id: string; error: unknown }[] = [];
 
   try {
     await select({
@@ -225,7 +226,7 @@ async function handleAggregate(
         const stopped = error instanceof SelectionStop;
         const reason = stopped ? error.reason : error;
         // 答复已经开始的那个错不参与挑选：那时已经没有选择了。
-        if (!stopped) failures.push(reason);
+        if (!stopped) failures.push({ id: candidate.id, error: reason });
         const at = ordered.findIndex((c) => c.id === candidate.id);
         const next = ordered[at + 1];
         console.log(
@@ -242,9 +243,25 @@ async function handleAggregate(
         // 那个是「这个上游没有这个模型」—— 客户端拿到后者就会去改模型名，而
         // 真正该做的是等额度恢复。所以挑最有说明力的那个。
         const best = pickMostInformativeFailure(failures);
-        if (best) return best;
-        if (lastError instanceof Error) return lastError;
-        return new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502);
+        if (!best) {
+          if (lastError instanceof Error) return lastError;
+          return new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502);
+        }
+        // 多个目标都失败：把每一个的原因都说出来。只给一个笼统的错（「所有
+        // 账号都在额度用尽或者冷却中」），客户端不知道该等哪一个 —— 限流等
+        // 一分钟，额度用尽等窗口。
+        if (failures.length > 1) {
+          const summary = summarizeFailures(failures);
+          // 复制一个新的：那个错可能被别人持有（上游的冷却就是这么记的）。
+          if (best instanceof AuthError) {
+            const hint = [best.hint, summary]
+              .filter((part) => part && part.trim())
+              .join("\n");
+            return new AuthError(best.message, hint, best.status, best.type);
+          }
+          return new AuthError(String(best.message), summary, clientStatusOf(best) ?? 502);
+        }
+        return best;
       },
     });
   } catch (e) {
@@ -303,17 +320,29 @@ function recordUnroutedUsage(
  *
  * 同一档里取第一个：先试的那个 target 更接近用户真正问的那个模型。
  */
-function pickMostInformativeFailure(failures: unknown[]): Error | undefined {
+function pickMostInformativeFailure(failures: { id: string; error: unknown }[]): Error | undefined {
   let best: Error | undefined;
   let bestRank = Number.POSITIVE_INFINITY;
   for (const failure of failures) {
-    if (!(failure instanceof Error)) continue;
-    const rank = failureRank(failure);
+    const error = failure.error;
+    if (!(error instanceof Error)) continue;
+    const rank = failureRank(error);
     if (rank >= bestRank) continue;
-    best = failure;
+    best = error;
     bestRank = rank;
   }
   return best;
+}
+
+/**
+ * 几个目标都失败：每个目标一句话原因，合成一段说明。
+ *
+ * 客户端只看到一个笼统的错时，它不知道下一步该做什么 —— 限流等一分钟，额度
+ * 用尽等窗口，上游挂了换一个。把每个目标各自的原因说出来，才说得上。
+ */
+function summarizeFailures(failures: { id: string; error: unknown }[]): string {
+  const lines = failures.map((one) => `  ${one.id}：${describeTargetFailure(one.error)}`);
+  return `这个模型有 ${failures.length} 个上游，都失败了：\n${lines.join("\n")}`;
 }
 
 /** 这个失败有多说明力：数字越小越说明力强。 */

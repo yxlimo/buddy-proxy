@@ -736,6 +736,60 @@ console.log("算法：冷却的四条规矩");
   );
 }
 
+console.log("");
+console.log("算法：限流是分钟级的 —— 冷却一分钟，不是一下五分钟");
+{
+  const { cooldownForFailure } = await import("../lib/router/account-cooldown.ts");
+  const { withUpstreamStatus, withCooldownUntil, withBusinessCode } = await import("../lib/upstream-status.ts");
+  const { AuthError } = await import("../lib/credential.ts");
+  const now = Date.now();
+
+  // 限流：429 + rate_limit_tpm_exceeded，正文里没有时间。
+  const rateError = withBusinessCode(
+    withUpstreamStatus(new AuthError("每分钟 token 数超了", "", 429), 429),
+    "rate_limit_tpm_exceeded",
+  );
+  const rateDecision = cooldownForFailure("acct-rate", rateError, now);
+  check(
+    "限流 → 固定 1 分钟（不是 5 分钟）",
+    rateDecision !== null &&
+      rateDecision.source === "fixed" &&
+      Math.abs(rateDecision.untilMs - (now + 60_000)) <= 1_000,
+    JSON.stringify(rateDecision),
+  );
+
+  // 限流 + 上游说了 retry-after 20 秒：照它说的来（约 21 秒），不是 1 分钟。
+  const rateWithRetry = withCooldownUntil(
+    withBusinessCode(
+      withUpstreamStatus(new AuthError("每分钟 token 数超了", "", 429), 429),
+      "rate_limit_tpm_exceeded",
+    ),
+    now + 20_000,
+  );
+  const retryDecision = cooldownForFailure("acct-rate-retry", rateWithRetry, now);
+  check(
+    "限流但上游说了 20 秒 → 用上游的 20 秒（约 21 秒），不是 60 秒",
+    retryDecision !== null &&
+      retryDecision.source === "the upstream's answer" &&
+      Math.abs(retryDecision.untilMs - (now + 21_000)) <= 1_000,
+    JSON.stringify(retryDecision),
+  );
+
+  // 对照组：额度用完还是 5 分钟 —— 别被限流那条带着改了。
+  const quotaError = withBusinessCode(
+    withUpstreamStatus(new AuthError("额度用完了", "", 429), 429),
+    "quota_exceeded",
+  );
+  const quotaDecision = cooldownForFailure("acct-quota-fixed", quotaError, now);
+  check(
+    "额度用完 → 还是 5 分钟（对照组）",
+    quotaDecision !== null &&
+      quotaDecision.source === "fixed" &&
+      Math.abs(quotaDecision.untilMs - (now + 5 * 60_000)) <= 1_000,
+    JSON.stringify(quotaDecision),
+  );
+}
+
 upstream.close();
 fs.rmSync(UNIT_DIR, { recursive: true, force: true });
 

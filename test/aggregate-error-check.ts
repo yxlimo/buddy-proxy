@@ -9,6 +9,9 @@
 // 客户端拿到后者就会去改模型名，而真正该做的是等额度恢复。
 //
 //   503（额度/冷却/凭据） > 其它 5xx > 4xx，同一档里取第一个。
+//
+// 还有一件：几个目标都失败的时候，提示里要把每个目标各自的原因说出来 ——
+// 只给一个笼统的错，客户端不知道该等哪一个。
 
 import fs from "node:fs";
 import http from "node:http";
@@ -21,6 +24,8 @@ const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL_A = "MiniMax-M3.1-Flash";
 /** 假上游对它答 404。 */
 const MODEL_B = "MiniMax-M3";
+/** 假上游对它答 502（上游挂了）。 */
+const MODEL_BROKEN = "deepseek-v4-pro";
 
 let pass = 0;
 let fail = 0;
@@ -39,6 +44,12 @@ function check(name: string, ok: boolean, detail = ""): void {
  * 假上游
  * ------------------------------------------------------------------ */
 
+/** 每个模型怎么答（MiniMax 那个上游）：测试自己改，场景之间换。 */
+let minimaxPlans: Record<string, { status: number; body: unknown }> = {};
+
+/** Qoder 那个上游是不是挂了（502）：场景自己改。 */
+let qoderBroken = false;
+
 const upstream = http.createServer((req, res) => {
   const chunks: Buffer[] = [];
   req.on("data", (c: Buffer) => chunks.push(c));
@@ -56,12 +67,23 @@ const upstream = http.createServer((req, res) => {
       res.end(JSON.stringify(payload));
     };
     if (url.includes("/model/v1/chat/completions")) {
+      // 这个场景：上游自己挂了（502）。
+      if (qoderBroken) {
+        json(502, { error: { message: "upstream exploded", type: "api_error" } });
+        return;
+      }
       // Qoder：模型在排队。上游的 429 是「等一会儿」，网关报 503。
       json(429, { error: { message: "the model is queued", type: "rate_limit_error" } });
       return;
     }
     if (url.includes("/messages")) {
       const model = String(body.model ?? "");
+      // 场景自己定的答法：比如「这个模型额度用完了」。
+      const planned = minimaxPlans[model];
+      if (planned) {
+        json(planned.status, planned.body);
+        return;
+      }
       if (model === MODEL_B) {
         json(404, { type: "error", error: { type: "invalid_request_error", message: "model-B-missing" } });
         return;
@@ -271,6 +293,90 @@ console.log("场景二：两个都是 4xx —— 客户端拿到第一个的错"
     check(
       "不是最后一个 target 的错",
       !answered.text.includes("model-B-missing"),
+      answered.text.slice(0, 300),
+    );
+  } finally {
+    gw.stop();
+  }
+}
+
+console.log("");
+console.log("场景三：两个目标都失败 —— 提示里把每个目标的原因都说出来");
+
+{
+  const gw = await startGateway();
+  try {
+    const saved = await call(gw, "SavePublishedModel", {
+      model: {
+        id: "pub-two-reasons",
+        displayName: "两个原因",
+        enabled: true,
+        strategy: "fallback",
+        targets: [
+          // 先试的这个额度用完（429）。
+          { groupName: "minimax", upstreamModel: MODEL_B, weight: 2, enabled: true },
+          // 后试的这个上游挂了（502）。
+          { groupName: "qoder", upstreamModel: MODEL_BROKEN, weight: 1, enabled: true },
+        ],
+      },
+    });
+    check("发布模型成功了", saved.body?.ok === true, JSON.stringify(saved.body));
+    // 这个模型答 429：额度用完（业务码 2053）。
+    minimaxPlans = {
+      [MODEL_B]: {
+        status: 429,
+        body: { type: "error", error: { type: "api_error", message: "积分不够了 (2053)" } },
+      },
+    };
+    // Qoder 那个上游答 502：它挂了。
+    qoderBroken = true;
+
+    const answered = await ask(gw, "pub-two-reasons");
+    check("客户端拿到的是错误", answered.status >= 400, `${answered.status} ${answered.text.slice(0, 200)}`);
+    check(
+      "提示里说了两个上游都失败了",
+      answered.text.includes("都失败了"),
+      answered.text.slice(0, 400),
+    );
+    check(
+      "提示里说了第一个目标：额度用尽",
+      answered.text.includes(`minimax/${MODEL_B}`) && answered.text.includes("quota"),
+      answered.text.slice(0, 600),
+    );
+    check(
+      "提示里说了第二个目标：上游 502",
+      answered.text.includes(`qoder/${MODEL_BROKEN}`) && answered.text.includes("502"),
+      answered.text.slice(0, 600),
+    );
+  } finally {
+    gw.stop();
+  }
+}
+
+console.log("");
+console.log("场景四：只有一个目标失败 —— 提示里不挂汇总");
+
+{
+  minimaxPlans = {};
+  qoderBroken = false;
+  const gw = await startGateway();
+  try {
+    const saved = await call(gw, "SavePublishedModel", {
+      model: {
+        id: "pub-one",
+        displayName: "一个目标",
+        enabled: true,
+        strategy: "fallback",
+        targets: [{ groupName: "minimax", upstreamModel: MODEL_A, weight: 1, enabled: true }],
+      },
+    });
+    check("发布模型成功了", saved.body?.ok === true, JSON.stringify(saved.body));
+
+    const answered = await ask(gw, "pub-one");
+    check("客户端拿到的是 400", answered.status === 400, `${answered.status} ${answered.text.slice(0, 200)}`);
+    check(
+      "提示里没有「都失败了」那种汇总",
+      !answered.text.includes("都失败了"),
       answered.text.slice(0, 300),
     );
   } finally {
