@@ -64,7 +64,13 @@ export async function fetchQoderCredits(providerId = "qoder"): Promise<QoderCred
         ...(session.machineType ? { "Cosy-Machine-Type": session.machineType } : {}),
       },
     });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      // 正文只在这一处拿得到：额度读不出来时面板上只会写「没有额度」，
+      // 没人知道上游到底答了什么。
+      const text = await r.text().catch(() => "");
+      console.warn(`[UPSTREAM] Qoder 额度查询 ${r.status}：${text.slice(0, 300)}`);
+      return null;
+    }
     const body = await r.json().catch(() => undefined);
     const pot = (p: any) => ({
       total: Number(p?.total ?? 0),
@@ -100,8 +106,16 @@ export async function checkAccountHealth(providerId = "qoder"): Promise<QoderAcc
     },
   });
   if (!r.ok) {
-    const body = await r.json().catch(() => undefined);
+    const text = await r.text().catch(() => "");
+    let body: any = undefined;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      /* not JSON */
+    }
     const code = body?.errorCode ?? body?.code ?? `HTTP ${r.status}`;
+    // 只留一个代码在面板上，上游到底说了什么只有这里知道。
+    console.warn(`[UPSTREAM] Qoder 账号状态 ${r.status}：${text.slice(0, 300)}`);
     return {
       region,
       authorized: false,

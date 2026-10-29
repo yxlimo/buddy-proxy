@@ -155,6 +155,11 @@ export async function qoderChatCompletion(
   if (r.status === 401) {
     // The client sees the gateway's status; the upstream's own status says
     // that the credential was refused, not that the request was wrong.
+    //
+    // 上游说为什么拒（令牌过期？IP 不在名单？）只有正文里有，而这里原来
+    // 一点不留：容器一重建，拒的理由就查不到了。
+    const text = await r.text().catch(() => "");
+    console.warn(`[UPSTREAM] Qoder 上游 ${r.status}：${text.slice(0, 500)}`);
     const error = new AuthError(
       `upstream rejected the credential (HTTP 401)`,
       `Qoder 拒绝了当前凭据。删掉 session 文件后重启服务即可重新登录。`,
@@ -168,6 +173,15 @@ export async function qoderChatCompletion(
     // it is busy. Both are worth retrying.
     const text = await r.text().catch(() => "");
     const detail = parseLimitError(text);
+    // 排队是上游自己说的「等多久再来」，但它只留在 hint 里：日志与用量表只记
+    // message，容器一重建就查不到了。这一行是唯一留得住的地方。
+    //
+    // 403 是排队，429 是后端都忙（见上面的注释），两者说不一样的话，
+    // 排查的人会被带偏。
+    const why = detail?.queued === true || r.status === 403 ? "排队" : "繁忙";
+    console.warn(
+      `[UPSTREAM] Qoder ${why}，${detail?.retryAfterSec ?? 10} 秒后重试：${text.slice(0, 300)}`,
+    );
     const error = new LimitError(
       `qoder model is queued (HTTP ${r.status})`,
       detail?.message ?? `Qoder 上游繁忙（HTTP ${r.status}）：${text.slice(0, 200)}`,
@@ -180,6 +194,10 @@ export async function qoderChatCompletion(
     // The client sees the gateway's status; the upstream's own status says
     // whether another account would do better (a 400 is the request's fault,
     // and every account would fail the same way).
+    //
+    // 正文只放在 hint 里，而日志与用量表都只记 message。上游为什么拒，
+    // 只能靠这一行（容器一重建，hint 就没了）。
+    console.warn(`[UPSTREAM] Qoder 上游 ${r.status}：${text.slice(0, 500)}`);
     const error = new AuthError(
       `upstream HTTP ${r.status}`,
       `Qoder 上游返回 ${r.status}：${text.slice(0, 300)}`,

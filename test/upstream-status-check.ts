@@ -113,6 +113,27 @@ async function caught(run: () => Promise<unknown>): Promise<any> {
   }
 }
 
+/**
+ * 跑一段代码，把它打出来的警告收下来。
+ *
+ * 上游为什么拒只留在日志里（hint 容器一重建就没了），所以日志本身要能查。
+ */
+async function warningsDuring(run: () => Promise<unknown>): Promise<string[]> {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  try {
+    await run();
+  } catch {
+    /* 错误由调用方自己抓 */
+  } finally {
+    console.warn = original;
+  }
+  return warnings;
+}
+
 console.log("");
 console.log("Qoder：上游的 400");
 
@@ -153,6 +174,59 @@ console.log("Qoder：上游的 429（排队）");
   const failure = classifyUpstreamError(error);
   check("排队不降级", failure.degradable === false, failure.kind);
   check("日志里说的是 busy", failure.kind === "busy", failure.kind);
+}
+
+console.log("");
+console.log("Qoder：上游的 500 与排队的正文要进日志");
+
+{
+  status = 500;
+  body = JSON.stringify({ error: "internal server error" });
+  const warnings = await warningsDuring(() =>
+    qoderChatCompletion(
+      { model: "test", messages: [{ role: "user", content: "hi" }] },
+      { stream: false, providerId: "qoder", region: "global" },
+    ),
+  );
+  check(
+    "500 打了 [UPSTREAM]",
+    warnings.some((w) => w.includes("[UPSTREAM]")),
+    JSON.stringify(warnings),
+  );
+  check(
+    "500 的正文留在了日志里",
+    warnings.some((w) => w.includes("internal server error")),
+    JSON.stringify(warnings),
+  );
+  check(
+    "500 的状态留在了日志里",
+    warnings.some((w) => w.includes("500")),
+    JSON.stringify(warnings),
+  );
+}
+
+{
+  status = 429;
+  body = JSON.stringify({
+    code: "10605",
+    message: JSON.stringify({ isQueued: true, retryAfterSeconds: 30, message: "排队中" }),
+  });
+  const warnings = await warningsDuring(() =>
+    qoderChatCompletion(
+      { model: "test", messages: [{ role: "user", content: "hi" }] },
+      { stream: false, providerId: "qoder", region: "global" },
+    ),
+  );
+  check(
+    "排队打了 [UPSTREAM]",
+    warnings.some((w) => w.includes("[UPSTREAM]")),
+    JSON.stringify(warnings),
+  );
+  check(
+    "排队说了等多久",
+    warnings.some((w) => w.includes("30 秒后重试")),
+    JSON.stringify(warnings),
+  );
 }
 
 console.log("");

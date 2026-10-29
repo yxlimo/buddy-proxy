@@ -383,6 +383,9 @@ export async function legacyChatCompletion(
   const r = await fetch(url, { method: "POST", headers, body: encoded, signal: opts.signal });
   if (!r.ok) {
     const text = await r.text().catch(() => "");
+    // 正文只放在 hint 里，而日志与用量表都只记 message。上游为什么拒，
+    // 只能靠这一行（容器一重建，hint 就没了）。
+    console.warn(`[UPSTREAM] Qoder 老协议上游 ${r.status}：${text.slice(0, 500)}`);
     throw new AuthError(`legacy upstream HTTP ${r.status}`, `Qoder 老协议返回 ${r.status}：${text.slice(0, 300)}`, 502);
   }
   return r;
