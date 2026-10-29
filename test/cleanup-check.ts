@@ -26,16 +26,15 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-check-"));
 process.env.BUDDY_DATA_DIR = tmp;
 
-/** 一个假端口。 */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as any).port;
-      server.close(() => resolve(port));
-    });
-  });
+/**
+ * 把服务绑到一个空端口上，返回真正的号。
+ *
+ * 不要「先 listen(0) 拿个号再关掉、然后拿那个号去绑」——这中间有半秒的空窗，
+ * 别的测试（或者别的进程）会抢走它。直接绑在 0 上，内核给的号就是它占着的号。
+ */
+async function listenOn(server: http.Server, host = "127.0.0.1"): Promise<number> {
+  await new Promise<void>((resolve) => server.listen(0, host, resolve));
+  return (server.address() as any).port;
 }
 
 /**
@@ -44,7 +43,6 @@ function freePort(): Promise<number> {
  * 控制台的地址是在模块加载时读进常量的，所以这个地址必须在导入
  * lib/sensenova/keys.ts 之前设好 —— 下面的 import 都是动态的，正好。
  */
-const CONSOLE_PORT = await freePort();
 let lastCreateBody: any = null;
 const console_ = http.createServer((req, res) => {
   const chunks: Buffer[] = [];
@@ -72,8 +70,8 @@ const console_ = http.createServer((req, res) => {
     );
   });
 });
-await new Promise<void>((resolve) => console_.listen(CONSOLE_PORT, "127.0.0.1", resolve));
-process.env.SENSENOVA_PLATFORM_BASE = `http://127.0.0.1:${CONSOLE_PORT}`;
+const consolePort = await listenOn(console_);
+process.env.SENSENOVA_PLATFORM_BASE = `http://127.0.0.1:${consolePort}`;
 
 let pass = 0;
 let fail = 0;
@@ -182,8 +180,6 @@ section("路由层写进用量表的是模拟端的名字");
 
 const ROUTER_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-router-"));
 
-const UPSTREAM_PORT = await freePort();
-
 /**
  * 假的中国区上游。
  *
@@ -222,7 +218,7 @@ const upstream = http.createServer((req, res) => {
     res.end();
   });
 });
-await new Promise<void>((resolve) => upstream.listen(UPSTREAM_PORT, "127.0.0.1", resolve));
+const UPSTREAM_PORT = await listenOn(upstream);
 
 // 假会话：qoder-cn 的那一行。
 const seeded = spawnSync(
@@ -408,12 +404,11 @@ check("提示里说的是平台的名字", String(caught?.hint).includes("SenseN
 
 // 401 特判：这一轮把它从两个 transport 搬到了 openai-platform.ts，
 // 搬完得有人看着。
-const REJECT_PORT = await freePort();
-const rejecting = http.createServer((req, res) => {
+const rejecting = http.createServer((_req, res) => {
   res.writeHead(401, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: { message: "invalid api key" } }));
 });
-await new Promise<void>((resolve) => rejecting.listen(REJECT_PORT, "127.0.0.1", resolve));
+const REJECT_PORT = await listenOn(rejecting);
 
 let rejected: any = null;
 try {

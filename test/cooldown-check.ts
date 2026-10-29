@@ -18,17 +18,13 @@
 //   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个；
 //   4. 连接与超时只冷却 1 分钟（不是 5 分钟），但上游自己说了就照它说的来。
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { startGateway as startHarness } from "./harness.ts";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL = "MiniMax-M3.1-Flash";
 
@@ -112,14 +108,6 @@ function refused(): Plan {
   };
 }
 
-/** 上游 5xx：不是账号的错，不冷却 —— 只让这次请求换下一个目标/账号。 */
-function broken(): Plan {
-  return {
-    status: 500,
-    body: { type: "error", error: { type: "api_error", message: "假上游挂了" } },
-  };
-}
-
 /** 一个流式答复的几帧（Anthropic 方言）。 */
 function sseFrames(): string {
   return (
@@ -198,17 +186,6 @@ interface Gateway {
   stop: () => void;
   accounts: string[];
   dataDir: string;
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
 }
 
 /**

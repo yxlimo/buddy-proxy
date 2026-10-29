@@ -203,6 +203,13 @@ function providerRows(): { id: string; enabled: number }[] {
 
 section("改之前");
 
+// 开关挂在账号上（provider 表一行一个账号），一个平台「开着」= 它名下至少
+// 一个账号开着。这一节要的是「全关着」，所以先把两个测试账号关掉 —— 这是布置，
+// 不是检查项。
+for (const id of ["qoder", "workbuddy-cn"]) {
+  await admin("SetAccountEnabled", { accountId: id, enabled: false });
+}
+
 const before = await admin("GetSystemStatus");
 check("pendingRestart 是假", before.pendingRestart === false, JSON.stringify(before.pendingRestart));
 check("Qoder 全球区现在是关着的", before.upstreams?.find((u: any) => u.id === "qoder")?.enabled === false);
@@ -243,10 +250,10 @@ check(
  * 二、改一个上游开关：不用重启
  * ------------------------------------------------------------------ */
 
-section("改一个上游开关");
+section("改一个账号的开关");
 
-const switched = await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
-check("面板能把上游打开", switched.ok === true, JSON.stringify(switched));
+const switched = await admin("SetAccountEnabled", { accountId: "qoder", enabled: true });
+check("面板能把账号打开", switched.ok === true, JSON.stringify(switched));
 check("改完没有待重启的东西", switched.pendingRestart === false, JSON.stringify(switched));
 
 // The switch lives in the provider table now, not in the config table.
@@ -310,19 +317,19 @@ const listedModels = await admin("ListPublishedModels");
 const hot = (listedModels.models ?? []).find((m: any) => m.id === "hot");
 check("面板说它已经公布了", hot?.published === true, JSON.stringify(hot));
 
-// 把上游关掉：模型还在库里，但没人能接了。
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
+// 把账号关掉：模型还在库里，但没人能接了。
+await admin("SetAccountEnabled", { accountId: "qoder", enabled: false });
 const rootAfterOff = await publishedOnRoot();
-check("上游一关，根路由就不公布了", !rootAfterOff.includes("hot"), JSON.stringify(rootAfterOff));
+check("账号一关，根路由就不公布了", !rootAfterOff.includes("hot"), JSON.stringify(rootAfterOff));
 const listedAfterOff = await admin("ListPublishedModels");
 const hotAfterOff = (listedAfterOff.models ?? []).find((m: any) => m.id === "hot");
 check("面板说它没有公布了", hotAfterOff?.published === false, JSON.stringify(hotAfterOff));
 check("模型还在库里", hotAfterOff?.id === "hot", JSON.stringify(hotAfterOff));
 
 // 再打开：立刻又公布了。
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: true });
+await admin("SetAccountEnabled", { accountId: "qoder", enabled: true });
 const rootAfterOn = await publishedOnRoot();
-check("上游再开，根路由又公布了", rootAfterOn.includes("hot"), JSON.stringify(rootAfterOn));
+check("账号再开，根路由又公布了", rootAfterOn.includes("hot"), JSON.stringify(rootAfterOn));
 const listedAfterOn = await admin("ListPublishedModels");
 check(
   "面板也说它又公布了",
@@ -492,10 +499,10 @@ check("带钥匙就过（只是模型不存在，不是 401）", withKey.status 
 
 // 收尾：把前门关回去，把 Qoder 也关回去。
 await admin("SetConfig", { key: "REQUIRE_API_KEY", value: "false" });
-await admin("SetUpstreamEnabled", { upstreamId: "qoder", enabled: false });
+await admin("SetAccountEnabled", { accountId: "qoder", enabled: false });
 const finalHealth = await health();
 check("收尾之后前门又开着", finalHealth.auth === "public", JSON.stringify(finalHealth.auth));
-check("收尾之后上游又关着", upstreamOn(finalHealth, "qoder") === false, JSON.stringify(finalHealth.providers));
+check("收尾之后账号又关着", upstreamOn(finalHealth, "qoder") === false, JSON.stringify(finalHealth.providers));
 
 /* ------------------------------------------------------------------ *
  * 结果
