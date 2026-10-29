@@ -8,6 +8,7 @@ import {
   newestPiSession,
   parseHealth,
   parseOpencodeSessions,
+  sendFailureMessages,
   sessionIdOf,
   type AccountQuota,
 } from "../tools/wait-nudge.ts";
@@ -311,6 +312,70 @@ check("newestPiSession 目录形态和浮文件形态混在一起时仍优先目
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+check("newestPiSession 跳过没有 transcript 的子目录（subagent-artifacts）", () => {
+  const root = mkdtempSync(join(tmpdir(), "wait-nudge-"));
+  try {
+    const dir = join(root, "--tmp-x--");
+    mkdirSync(dir, { recursive: true });
+    const session = join(dir, "2026-01-01T00-00-00-000Z_abc.jsonl");
+    writeFileSync(session, "{}\n");
+    // The subagents' output: newer than the session, but no transcript.
+    const artifacts = join(dir, "subagent-artifacts");
+    mkdirSync(artifacts, { recursive: true });
+    utimesSync(session, T / 1000, T / 1000);
+    utimesSync(artifacts, (T + 120 * MINUTE) / 1000, (T + 120 * MINUTE) / 1000);
+
+    const found = newestPiSession(root, "/tmp/x");
+    assert.ok(found);
+    assert.equal(found.id, "abc");
+    assert.equal(found.file, session);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+check("newestPiSession 跳过没有 transcript 的会话目录", () => {
+  const root = mkdtempSync(join(tmpdir(), "wait-nudge-"));
+  try {
+    const dir = join(root, "--tmp-y--");
+    mkdirSync(join(dir, "2026-01-01T00-00-00-000Z_01a17814-ad50-775e-8c08-6ff8df765b64"), {
+      recursive: true,
+    });
+
+    assert.equal(newestPiSession(root, "/tmp/y"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+check("sessionIdOf 没有 uuid 又没有下划线的名字不是会话", () => {
+  assert.equal(sessionIdOf("subagent-artifacts"), null);
+  assert.equal(sessionIdOf("2026-01-01T00-00-00-000Z_abc"), "abc");
+  assert.equal(
+    sessionIdOf("01a17814-ad50-775e-8c08-6ff8df765b64"),
+    "01a17814-ad50-775e-8c08-6ff8df765b64",
+  );
+});
+
+check("sendFailureMessages 把 stderr 也说出来", () => {
+  const messages = sendFailureMessages("pi", 1, "No session found matching 'x'\n");
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0], "发送失败：pi 退出码 1");
+  assert.equal(messages[1], "pi 说：No session found matching 'x'");
+});
+
+check("sendFailureMessages 的 stderr 只留前 500 字", () => {
+  const messages = sendFailureMessages("pi", 1, "x".repeat(900));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1], `pi 说：${"x".repeat(500)}`);
+});
+
+check("sendFailureMessages 没有 stderr 就只说退出码", () => {
+  const messages = sendFailureMessages("pi", 2, "  \n");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0], "发送失败：pi 退出码 2");
 });
 
 check("parseOpencodeSessions 取第一条", () => {
