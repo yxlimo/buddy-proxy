@@ -9,9 +9,16 @@ import { AuthError } from "../../credential.ts";
 import type { WorkBuddyModel } from "../../workbuddy/models.ts";
 import { TokenRhythmNoBalanceError } from "../../tokenrhythm/transport.ts";
 import { byOrder, classifyUpstreamError, describeUpstreamError, isDegradableUpstreamError, isNoBalanceFailure, selectProvider } from "../provider-selection.ts";
-import { businessCodeOf, upstreamStatusOf, withBusinessCode, withUpstreamStatus } from "../../upstream-status.ts";
+import {
+  businessCodeOf,
+  cooldownUntilOf,
+  upstreamStatusOf,
+  withBusinessCode,
+  withCooldownUntil,
+  withUpstreamStatus,
+} from "../../upstream-status.ts";
 import { clearCooldown, cooldownUntil, isCoolingDown, setCooldown } from "../../cooldown.ts";
-import { cooldownForFailure, cooldownStamp } from "../account-cooldown.ts";
+import { cooldownForFailure, cooldownStamp, errorTextOf } from "../account-cooldown.ts";
 import { accountsOfPlatform, type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { platformWithoutAccount } from "../routes.ts";
@@ -72,8 +79,19 @@ export interface UpstreamContext {
  * code stay on the error: they say whether another account would do better
  * (a 402 means this account is out of credit, a 400 means the request is
  * wrong and every account would fail the same way).
+ *
+ * `retryAfterMs` is what the upstream said about its own window ("come back
+ * in two seconds"). It is put on the error so the routing layer can wait
+ * instead of failing the client — see rateLimitWaitMs. It is *not* the
+ * cooldown decision: how long the account is put aside is a separate
+ * question (lib/router/account-cooldown.ts).
  */
-export function upstreamStatusError(status: number, text: string, what: string): AuthError {
+export function upstreamStatusError(
+  status: number,
+  text: string,
+  what: string,
+  retryAfterMs?: number,
+): AuthError {
   // 正文只进 hint，日志与用量表只记 message。上游为什么拒，只能靠这一行。
   console.warn(`[UPSTREAM] ${what}上游 ${status}：${text.slice(0, 500)}`);
   const error = new AuthError(
@@ -84,7 +102,125 @@ export function upstreamStatusError(status: number, text: string, what: string):
   withUpstreamStatus(error, status);
   const code = businessCodeOfBody(text);
   if (code !== null) withBusinessCode(error, code);
+  // 上游说的「过多久再来」：挂到错误上，等得起的时候网关自己等。
+  if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)) {
+    withCooldownUntil(error, Date.now() + Math.max(0, Math.round(retryAfterMs)));
+  }
   return error;
+}
+
+/* ------------------------------------------------------------------ *
+ * 等得起就自己等
+ * ------------------------------------------------------------------ */
+
+/**
+ * 正文里出现这些之一，就是「每分钟 token 超限」（TPM）。
+ *
+ * 只有这一类才等：RPM（请求太密）等一下没意义 —— 那是请求本身的节奏不对，
+ * 换账号才是对的。
+ */
+const TPM_MARKERS = ["tpm", "tokens per minute", "rate_limit_tpm_exceeded"];
+
+/**
+ * 上游没说要等多久时，等多久（毫秒）。
+ *
+ * 一分钟窗口的一半：保守。早回来了只是再失败一次。
+ */
+const DEFAULT_RATE_WAIT_MS = 30_000;
+
+/**
+ * 一次最多等多久（毫秒）。
+ *
+ * 超过一分钟就不等了：客户端等不了那么久，那种情况照旧报错 + 降级。
+ */
+const MAX_RATE_WAIT_MS = 60_000;
+
+/**
+ * 一个请求里总共最多等多久（毫秒）。
+ *
+ * 「等得起」说的是一分钟以内，不是「随便多久」。
+ */
+const RATE_WAIT_BUDGET_MS = 60_000;
+
+/** 一个等过了的错误：冷却不写它（见 underPolicy 的 onAttempt）。 */
+export interface RateWaited {
+  rateWaited?: boolean;
+}
+
+/** 记一笔：这个失败等过了。 */
+export function withRateWaited<T extends object>(error: T): T {
+  (error as T & RateWaited).rateWaited = true;
+  return error;
+}
+
+/** 这个失败等过了吗。 */
+export function rateWaitedOf(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as RateWaited).rateWaited === true;
+}
+
+/**
+ * 这个失败是「每分钟 token 超限」吗。
+ *
+ * 只有 TPM 类才算：RPM 等一下没意义，换账号才是对的。
+ */
+function isTokenRateLimit(error: unknown): boolean {
+  const text = errorTextOf(error).toLowerCase();
+  return TPM_MARKERS.some((marker) => text.includes(marker));
+}
+
+/**
+ * 等多久（毫秒）。null = 等不起，照旧报错。
+ *
+ * 等多久：上游自己说的（retry-after，挂在错误上）；没说的话按一分钟窗口的
+ * 一半。上游说了「过两分钟再来」就是等不起 —— 客户端等不了那么久。
+ */
+export function rateLimitWaitMs(error: unknown): number | null {
+  if (!isTokenRateLimit(error)) return null;
+  const until = cooldownUntilOf(error);
+  const wait = until === null ? DEFAULT_RATE_WAIT_MS : until - Date.now();
+  if (wait <= 0 || wait > MAX_RATE_WAIT_MS) return null;
+  return wait;
+}
+
+/** 等一会儿（毫秒）。 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 跑一次调用；遇到「等得起」的限流就等，然后重试**同一个**账号。
+ *
+ * 等的是上游说的那个窗口（一分钟以内）。客户端这时候只是在等答复，不该看到
+ * 429/503 —— 所以等发生在拿到答复之前，连接一直开着，不会写出半截答复。
+ *
+ * 等过了的错误带一个标记：冷却不写它（见 underPolicy 的 onAttempt）。那个
+ * 账号正在等自己的窗口恢复，写了冷却反而把它挡在门外。
+ */
+async function runWithRateWait<T>(
+  account: ProviderRow,
+  what: string,
+  run: (account: ProviderRow) => Promise<T>,
+): Promise<T> {
+  const deadline = Date.now() + RATE_WAIT_BUDGET_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await run(account);
+    } catch (e) {
+      const wait = rateLimitWaitMs(e);
+      // 等不起的（不是 TPM，或者上游说了「过两分钟再来」）：照旧报错。
+      if (wait === null) throw e;
+      if (e && typeof e === "object") withRateWaited(e as Record<string, unknown>);
+      // 等过两次还是不行：照旧报错（但不写冷却）。
+      if (attempt >= 2) throw e;
+      // 这个请求的等待预算用完了：照旧报错。
+      if (Date.now() + wait > deadline) throw e;
+      console.log(
+        `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying`,
+      );
+      await sleep(wait);
+    }
+  }
 }
 
 /**
@@ -383,7 +519,13 @@ export async function underPolicy<T>(
   }
 
   const candidates = byOrder(
-    usable.map((account) => ({ id: account.id, weight: account.weight, run: () => run(account) })),
+    // 每个候选跑之前先过一遍「等得起就等」：限流的窗口是一分钟级的，等得起
+    // 就自己等，重试的还是同一个账号（客户端不该看到这个错）。
+    usable.map((account) => ({
+      id: account.id,
+      weight: account.weight,
+      run: () => runWithRateWait(account, what, run),
+    })),
   );
   return selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,
@@ -404,7 +546,11 @@ export async function underPolicy<T>(
         return;
       }
       // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
-      const decision = cooldownForFailure(candidate.id, error);
+      //
+      // 等过了的限流不记：那个账号正在等自己的窗口恢复，记了冷却反而把它
+      // （和别的请求）挡在门外 —— 它等好了就能接。
+      const waited = rateWaitedOf(error);
+      const decision = waited ? null : cooldownForFailure(candidate.id, error);
       if (decision) {
         try {
           setCooldown(candidate.id, decision.untilMs, decision.reason);
@@ -419,7 +565,11 @@ export async function underPolicy<T>(
       console.log(
         `[ROUTE] ${what} account=${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
           (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching") +
-          (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : ""),
+          (waited
+            ? ", waited for the rate limit, not cooling down"
+            : decision
+              ? `, cooling down until ${cooldownStamp(decision.untilMs)}`
+              : ""),
       );
     },
     // The caller sees the error the upstream produced, not a new one.

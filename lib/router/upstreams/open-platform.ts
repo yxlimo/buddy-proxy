@@ -10,6 +10,7 @@ import { senseNovaChat } from "../../sensenova/transport.ts";
 import { internAiChat } from "../../intern-ai/transport.ts";
 import { deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
+import { retryAfterMs } from "../../upstream-status.ts";
 import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
 
 /**
@@ -52,16 +53,21 @@ export async function toOpenAiPlatform(
   const response = await underPolicy(
     route.platform,
     opts.log,
-    (account) => opts.chat(openaiBody, ctx.clientHeaders, account.id),
+    async (account) => {
+      const res = await opts.chat(openaiBody, ctx.clientHeaders, account.id);
+      if (res.ok) return res;
+      // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
+      // 记（onAttempt），这里只负责把错误造出来。
+      //
+      // 错误在这里造（而不是等 underPolicy 回来再造）：策略才知道这个失败等不
+      // 等得起 —— TPM 类限流等得起就自己等，重试同一个账号（见
+      // lib/router/upstreams/policy.ts 的 runWithRateWait）。上游说的
+      // retry-after 也在这里读出来挂到错误上。
+      const text = await res.text().catch(() => "");
+      throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
+    },
     settle,
   );
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    const error = upstreamStatusError(response.status, text, opts.what);
-    // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。
-    settle.failure(error);
-    throw error;
-  }
 
   if (!stream) {
     const json = await response.json();

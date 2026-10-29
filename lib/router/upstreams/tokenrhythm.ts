@@ -26,6 +26,7 @@ import { byOrder, describeUpstreamError, isDegradableUpstreamError, isNoBalanceF
 import { provider } from "../../providers.ts";
 import { platformOf, platformPolicy } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
+import { retryAfterMs } from "../../upstream-status.ts";
 import { type UpstreamContext, upstreamStatusError, accountFailure } from "./policy.ts";
 
 /**
@@ -113,7 +114,8 @@ export async function toTokenRhythm(
       }
       if (!response.ok) {
         const text = await response.text().catch(() => "");
-        throw upstreamStatusError(response.status, text, "TokenRhythm ");
+        // retry-after 是上游说的「过多久再来」：挂到错误上，冷却照它算。
+        throw upstreamStatusError(response.status, text, "TokenRhythm ", retryAfterMs(response) ?? undefined);
       }
       return { response, accountId };
     },

@@ -7,6 +7,7 @@ import { zcodeChat } from "../../zcode/transport.ts";
 import { zcodeMaxOutput } from "../../zcode/models.ts";
 import { deliverAnthropicStream, deliverJson, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
+import { retryAfterMs } from "../../upstream-status.ts";
 import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
 
 /**
@@ -51,7 +52,8 @@ export async function toZcode(
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    const error = upstreamStatusError(response.status, text, "ZCode ");
+    // retry-after 是上游说的「过多久再来」：挂到错误上，冷却与等待都照它算。
+    const error = upstreamStatusError(response.status, text, "ZCode ", retryAfterMs(response) ?? undefined);
     // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。
     settle.failure(error);
     throw error;
