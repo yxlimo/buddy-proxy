@@ -15,16 +15,16 @@
 // 假上游的「模型名」是 Qoder 上游协议里的 key：gmodel 是 GLM-5.3，dmodel 是
 // DeepSeek-V4-Pro，kmodel 是 Kimi-K2.8-Preview，mmodel 是 MiniMax-M3.1-Flash。
 
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { startFakeQoder } from "./fake-qoder-upstream.ts";
+import { startGateway, type Gateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DATA_DIR = "/tmp/opencode/test-route-e2e";
 const SERVICE = "/buddy.admin.v1.AdminService";
 let pass = 0;
 let fail = 0;
@@ -58,42 +58,37 @@ const upstreamBase = fake.base;
  * 网关
  * ------------------------------------------------------------------ */
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-
 // Qoder 的会话种进测试自己的数据库：假上游不看凭据，但网关没有会话就不发
 // 请求 —— 而且会走设备流去真的登录。
+//
+// 数据目录：helper 建一个临时的，或者这里自己建（重启要接着用同一个）。
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "buddy-route-e2e-"));
+
 execFileSync(process.execPath, ["--experimental-strip-types", "test/aggregate-setup.ts", "seed"], {
   cwd: ROOT,
-  env: { ...process.env, BUDDY_DATA_DIR: DATA_DIR },
+  env: { ...process.env, BUDDY_DATA_DIR: dataDir },
   stdio: "ignore",
 });
 
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
+/**
+ * 起过的网关：端口每次都换，所以 base 要跟着换。
+ */
+const gateways: Gateway[] = [];
 
-let router: ChildProcess | null = null;
-let routerLog = "";
+/** 网关的地址与面板令牌：重启之后要跟着新网关换。 */
+let base = "";
+let token = "";
 
-/** 起一个网关（或者再起一个）。 */
-function startRouter(): ChildProcess {
-  const child = spawn(process.execPath, ["router-proxy.ts"], {
-    cwd: ROOT,
+/**
+ * 起一个网关（或者再起一个）。
+ *
+ * 数据目录一直是同一个：重启之后，账号的开关、发布的模型都还在库里。
+ * 目录由最后一个网关收（cleanupDataDir），前面几个留着。
+ */
+async function startRouter(opts: { cleanupDataDir?: boolean } = {}): Promise<Gateway> {
+  const gw = await startGateway({
+    dataDir,
     env: {
-      ...process.env,
-      BUDDY_DATA_DIR: DATA_DIR,
-      ROUTER_PORT: String(port),
       BENEFITS_DISABLED: "1",
       // 开关不在环境里了：它在数据库的 provider.enabled 上（一行一个账号），
       // 重启也还在。开头用面板的 SetAccountEnabled 把这个账号打开。
@@ -102,67 +97,39 @@ function startRouter(): ChildProcess {
       QODER_GLOBAL_OPENAPI_BASE: `${upstreamBase}/openapi-global`,
       QODER_GLOBAL_LEGACY_BASE: `${upstreamBase}/qoder-global-legacy`,
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    keepDataDir: opts.cleanupDataDir !== true,
+    cleanupDataDir: opts.cleanupDataDir === true,
   });
-  child.stdout?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  child.stderr?.on("data", (c: Buffer) => {
-    routerLog += c.toString();
-  });
-  router = child;
-  return child;
-}
-
-async function waitHealthy(): Promise<void> {
-  // A minute, not twenty seconds: the machine may be busy with other tests,
-  // and a router that is slow to come up is not a failure.
-  for (let i = 0; i < 120; i++) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  // Say so: otherwise the next fetch fails with a connection error and the
-  // real reason is a hundred lines up.
-  throw new Error(`the router did not come up:\n${routerLog.slice(-2000)}`);
+  gateways.push(gw);
+  base = gw.base;
+  token = readToken(gw);
+  return gw;
 }
 
 /**
- * Stop the router and wait for it to let go of the port.
+ * 停掉网关，等它真的退出。
  *
- * The next router binds the same port, so starting it before the old one is
- * really gone means the new one dies on "address in use" — and then the test
- * fails on a connection error that says nothing about the cause.
+ * 下一个网关要用同一个数据目录：旧进程还开着 SQLite 库的时候，新的那个
+ * 写库会撞上锁。所以要等它真的走了再起下一个。
  */
-async function stopRouter(): Promise<void> {
-  const child = router;
-  router = null;
-  if (!child) return;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  child.kill("SIGTERM");
-  const hard = setTimeout(() => child.kill("SIGKILL"), 5000);
-  await exited;
-  clearTimeout(hard);
-}
-
-function cleanup(): void {
-  try {
-    router?.kill("SIGTERM");
-  } catch {
-    /* already gone */
+async function stopRouter(gw: Gateway): Promise<void> {
+  gw.stop();
+  for (let i = 0; i < 100; i++) {
+    try {
+      await fetch(`${gw.base}/health`, { signal: AbortSignal.timeout(500) });
+    } catch {
+      return; // 连不上了：它走了
+    }
+    await new Promise((r) => setTimeout(r, 100));
   }
-  fake.close();
 }
-process.on("exit", cleanup);
 
-startRouter();
-await waitHealthy();
+/** 面板令牌：网关绑好端口之后才写它。 */
+function readToken(gw: Gateway): string {
+  return fs.readFileSync(path.join(gw.dataDir, "admin-token"), "utf8").trim();
+}
 
-const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
+await startRouter();
 
 /** 一次 Connect 调用。 */
 async function admin(method: string, body: unknown = {}): Promise<any> {
@@ -218,7 +185,7 @@ function inferCalls(): { model: string; stream: boolean }[] {
 
 /** 读数据库里的表。 */
 function query(sql: string): any[] {
-  const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"), { readOnly: true });
+  const db = new DatabaseSync(path.join(dataDir, "buddy.db"), { readOnly: true });
   try {
     return db.prepare(sql).all() as any[];
   } finally {
@@ -637,9 +604,8 @@ section("上游真的关掉之后（重启过）");
 
 // 把上游开关改成关（写进数据库），再重启：这次上游是真的关着的。
 await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: false });
-await stopRouter();
-startRouter();
-await waitHealthy();
+await stopRouter(gateways[gateways.length - 1]);
+await startRouter();
 const offHealth = await fetch(`${base}/health`).then((r) => r.json());
 // 开关只有一份：provider 表里的 enabled，/health 的 providers 段报的就是它。
 const offQoder = (offHealth.providers ?? []).find((p: any) => p.id === "qoder");
@@ -662,9 +628,9 @@ check("客户端问一个公布出来的模型，答不上来", offChat.status =
 
 // 回到上游开着的状态，后面的收尾还要用。
 await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: true });
-await stopRouter();
-startRouter();
-await waitHealthy();
+await stopRouter(gateways[gateways.length - 1]);
+// 最后一个网关负责把数据目录收掉。
+await startRouter({ cleanupDataDir: true });
 
 /* ------------------------------------------------------------------ *
  * 收尾
@@ -677,6 +643,7 @@ if (problems.length) {
   console.log("查出来的问题：");
   for (const p of problems) console.log(`  - ${p}`);
 }
+const routerLog = gateways.map((g) => g.log()).join("\n");
 if (routerLog.includes("[AUTH]")) {
   console.log("");
   console.log("（网关的登录日志，只看一眼有没有真的去登录）");
@@ -688,5 +655,6 @@ if (routerLog.includes("[AUTH]")) {
       .join("\n"),
   );
 }
-cleanup();
+for (const gw of gateways) gw.stop();
+fake.close();
 process.exit(fail === 0 ? 0 : 1);
