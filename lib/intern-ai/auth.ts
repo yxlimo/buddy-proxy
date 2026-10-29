@@ -45,7 +45,7 @@ import {
   internAiCredentials,
   internAiDiscoveryKey,
 } from "./config.ts";
-import { readSession, withSessionLock, writeSession } from "../session.ts";
+import { readSession, writeSession } from "../session.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { providerSecretId } from "../providers.ts";
@@ -543,11 +543,6 @@ export function tokenExpiryMs(token: string): number {
 }
 
 /** 会话还在不在。 */
-export function sessionValid(session: InternAiSession | null): session is InternAiSession {
-  if (!session?.sites?.length) return false;
-  return session.sites.every((s) => !!s.token);
-}
-
 /** 数据库里的会话。 */
 export function loadSession(providerId = "intern-ai"): InternAiSession | null {
   const valid = (raw: any) => !!raw?.sites?.length && raw.sites.every((s: any) => !!s?.token);
@@ -567,22 +562,6 @@ export function clearSession(providerId = "intern-ai"): void {
   } catch {
     /* 没什么可清的了 */
   }
-}
-
-/**
- * 能用的会话。
- *
- * 库里没有就登录一次。全程拿着锁：两个进程同时登录会互相搅乱。
- */
-export async function sessionFor(
-  opts: InternAiLoginOptions = {},
-  providerId = "intern-ai",
-): Promise<InternAiSession> {
-  return withSessionLock(sessionId(providerId), async () => {
-    const stored = loadSession(providerId);
-    if (sessionValid(stored)) return stored;
-    return login(opts, providerId);
-  });
 }
 
 /** 面板上的「快到期」提示线（毫秒）。 */

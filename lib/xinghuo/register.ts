@@ -8,6 +8,7 @@
 // quotas / outOfCredits / recoverAt。
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { declareNoLoginFlow } from "../login-flow.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { xinghuoInferenceKey, xinghuoStatus } from "./account.ts";
 import { XINGHUO_INFER_BASE } from "./config.ts";
@@ -25,3 +26,6 @@ export const xinghuoKind = registerCompatiblePlatform({
   // 目录写死：星火没有可查的模型目录接口。
   models: () => xinghuoCatalogModels(XINGHUO_MODELS),
 });
+
+// 只有一把 API Key：没有会话，也没有额度接口要登。
+declareNoLoginFlow("xinghuo", "星火用 API Key，没有会话登录");

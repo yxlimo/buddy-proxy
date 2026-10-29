@@ -5,6 +5,7 @@
 // one upstream, so a key is a tenant and the tenants can be tried in turn.
 
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
+import { declareNoLoginFlow } from "../login-flow.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { minimaxCatalogModels, miniMaxApiCatalogModels } from "../catalog-models.ts";
 import {
@@ -233,3 +234,6 @@ registerKind({
     return planRecovery(windows);
   },
 });
+
+// 开放平台发的是请求，没有会话：面板上点「登录」只有一个「贴 API Key」的说明。
+declareNoLoginFlow("minimax-api", "开放平台用 API Key，没有会话登录");

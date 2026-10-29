@@ -11,6 +11,7 @@ import {
   type QuotaView,
 } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
+import { declareNoLoginFlow } from "../login-flow.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { qiniuInferenceKey, qiniuStatus } from "./account.ts";
 import { qiniuCatalogModels } from "./catalog.ts";
@@ -84,3 +85,6 @@ export const qiniuKind = registerCompatiblePlatform({
     return quota.respacks.every((pack) => pack.remaining <= 0);
   },
 });
+
+// 推理用 API Key、额度用门户 cookie，两样都不是会话。
+declareNoLoginFlow("qiniu", "七牛用 API Key + 门户 cookie，没有会话登录");

@@ -565,6 +565,16 @@ check("不用回填的上游会拒绝", wrongImport.body?.ok !== true, JSON.stri
 const noCode = await call("ExchangeLoginCode", { upstreamId: "intern-ai", code: "" });
 check("空授权码不换", noCode.body?.ok !== true, JSON.stringify(noCode.body));
 
+// 每个平台都得有登录链或显式声明「没有」：新接一个平台忘了登记，这条会红。
+{
+  const { allKinds } = await import("../lib/provider-kinds.ts");
+  const { loginFlowOf, noLoginFlowReason } = await import("../lib/login-flow.ts");
+  const naked = allKinds()
+    .map((k) => k.kind)
+    .filter((kind) => !loginFlowOf(kind) && !noLoginFlowReason(kind));
+  check("每个平台都有登录链或显式声明", naked.length === 0, naked.join("、"));
+}
+
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
 try {

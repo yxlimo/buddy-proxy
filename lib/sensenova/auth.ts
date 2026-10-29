@@ -29,7 +29,7 @@ import {
   senseNovaApiKey,
   senseNovaCredentials,
 } from "./config.ts";
-import { readSession, withSessionLock, writeSession } from "../session.ts";
+import { readSession, writeSession } from "../session.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { providerSecretId } from "../providers.ts";
@@ -81,7 +81,6 @@ export function storedAccount(providerId = "sensenova"): StoredAccount | null {
 }
 
 /** 多久算快到期（毫秒）。到了就用刷新换新的。 */
-const REFRESH_SKEW_MS = 60_000;
 
 /** 面板上的「快到期」提示线（毫秒）。 */
 const WARN_MS = 5 * 60 * 1000;
@@ -396,11 +395,6 @@ export async function refreshSession(session: SenseNovaSession, providerId = "se
 }
 
 /** 会话还在不在。 */
-export function sessionValid(session: SenseNovaSession | null): session is SenseNovaSession {
-  if (!session?.accessToken || !session.refreshToken) return false;
-  return session.expiresAtMs > Date.now();
-}
-
 /** 数据库里的会话。 */
 export function loadSession(providerId = "sensenova"): SenseNovaSession | null {
   const valid = (raw: any) => !!raw?.accessToken && !!raw?.refreshToken;
@@ -419,30 +413,6 @@ export function clearSession(providerId = "sensenova"): void {
   } catch {
     /* 没什么可清的了 */
   }
-}
-
-/**
- * 能用的会话：先看数据库里的，快到期就刷新，刷新不了就重新登录。
- *
- * 全程拿着锁：refresh_token 是轮换的，两个进程同时刷新，
- * 后一个拿到的是作废的票。
- */
-export async function sessionFor(providerId = "sensenova"): Promise<SenseNovaSession> {
-  return withSessionLock(sessionId(providerId), async () => {
-    const stored = loadSession(providerId);
-    if (stored && stored.expiresAtMs - REFRESH_SKEW_MS > Date.now()) {
-      return stored;
-    }
-    if (stored) {
-      try {
-        return await refreshSession(stored, providerId);
-      } catch (e) {
-        // 刷新失败多半是会话没了，重新登录。
-        if (!(e instanceof SenseNovaError) || e.kind !== "auth") throw e;
-      }
-    }
-    return login(undefined, undefined, providerId);
-  });
 }
 
 /**

@@ -30,6 +30,7 @@ import { pruneUsage } from "./lib/usage.ts";
 import { app } from "./lib/router/app.ts";
 import { modelsOfPlatform } from "./lib/router/catalog-routes.ts";
 import { startUpstreams } from "./lib/router/bootstrap.ts";
+import { assertLoginFlows } from "./lib/login-flow.ts";
 
 const PORT = configNumber("ROUTER_PORT", 6450);
 const HOST = configString("ROUTER_HOST", "0.0.0.0");
@@ -58,6 +59,12 @@ if (clearAt >= 0) {
 // 路由读的是内存里那一份，所以这一步要在第一个请求之前做完。库里没有的
 // 时候，留着写死的那份引导值，等第一次抓取换掉它。
 initWorkBuddyCatalog();
+
+// 这里才是「所有模块都加载完了」的那一刻。新接一个平台只写了 registerKind、
+// 忘了登记登录链（或声明「没有」），这里当场报出来，而不是等人在面板上点
+// 「登录」才收到一句 400。放在 kinds/index.ts 里不行：那个文件被 import
+// 的时机比各模块登记 flow 早。
+assertLoginFlows();
 
 const server = app.listen(PORT, HOST, () => {
   const base = `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`;

@@ -20,6 +20,7 @@
 //     现在替它们记会让一次登录留下两条记录）
 
 import { AuthError } from "./credential.ts";
+import { allKinds } from "./provider-kinds.ts";
 
 /** 面板按它决定画什么。 */
 export type LoginMethod = "device" | "browser" | "password" | "code" | "token" | "key";
@@ -116,6 +117,38 @@ export function loginFlowOf(kind: string): LoginFlow<any> | null {
 /** 登记过的平台，给启动时的穷尽校验用。 */
 export function loginKinds(): string[] {
   return [...flows.keys()].sort();
+}
+
+/**
+ * 显式声明「这个平台没有登录链」。
+ *
+ * 不登记 flow、也不声明，启动时会被 assertLoginFlows() 拦下来 —— 沉默地
+ * 漏掉一个平台，面板上只会回一句「没有这个方法」，排查时看不出是漏了。
+ */
+const noFlows = new Map<string, string>();
+
+/** 这个平台为什么没有登录链；有 flow 或从没声明过都是 null。 */
+export function noLoginFlowReason(kind: string): string | null {
+  return noFlows.get(kind) ?? null;
+}
+
+export function declareNoLoginFlow(kind: string, reason: string): void {
+  noFlows.set(kind, reason);
+}
+
+/**
+ * 每个已注册的 kind 都必须有 flow 或显式的「没有 flow」声明。
+ *
+ * 新接一个平台忘了登记，这里在启动时就报出来，而不是等用户点「登录」才
+ * 收到一句 400。
+ */
+export function assertLoginFlows(): void {
+  const missing = allKinds()
+    .map((k) => k.kind)
+    .filter((kind) => !flows.has(kind) && !noFlows.has(kind));
+  if (missing.length) {
+    throw new Error(`这些平台既没有登录链也没有声明：${missing.join("、")}`);
+  }
 }
 
 function sleep(ms: number): Promise<void> {

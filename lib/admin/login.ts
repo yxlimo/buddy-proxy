@@ -22,6 +22,7 @@ import type { DeviceAuthorization as MinimaxDeviceAuthorization } from "../minim
 import "../qoder/auth.ts";
 import type { DeviceAuthorization as QoderDeviceAuthorization } from "../qoder/auth.ts";
 import { accountsOfPlatform, provider, type ProviderRow } from "../providers.ts";
+import { providerSecretId } from "../credential-ids.ts";
 // Side-effect import: this module registers zcode's login flow
 import "../zcode/auth.ts";
 import type { ZcodeLogin } from "../zcode/auth.ts";
@@ -744,8 +745,8 @@ export async function exchangeLoginCode(input: {
   return {
     ok: true,
     message: "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: "session:provider:intern-ai",
-    accountId: "intern-ai",
+    credentialId: providerSecretId(input.accountId),
+    accountId: input.accountId,
   };
 }
 
@@ -771,7 +772,7 @@ export async function importLoginToken(input: {
   return {
     ok: true,
     message: "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: "session:provider:intern-ai",
-    accountId: "intern-ai",
+    credentialId: providerSecretId(input.accountId),
+    accountId: input.accountId,
   };
 }
