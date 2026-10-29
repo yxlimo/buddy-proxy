@@ -62,7 +62,7 @@ for (let i = 0; i < STD_ALPHABET.length; i++) TO_CUSTOM.set(STD_ALPHABET[i]!, CU
 TO_CUSTOM.set("=", "$");
 
 /** Standard base64, rearranged in thirds, then mapped onto Qoder's alphabet. */
-export function qoderBase64Encode(bytes: Buffer): string {
+function qoderBase64Encode(bytes: Buffer): string {
   const standard = bytes.toString("base64");
   const split = Math.floor(standard.length / 3);
   const rearranged = standard.slice(-split) + standard.slice(split, -split) + standard.slice(0, split);
@@ -75,7 +75,7 @@ export function qoderBase64Encode(bytes: Buffer): string {
  * Session and signature
  * ------------------------------------------------------------------ */
 
-export interface LegacyIdentity {
+interface LegacyIdentity {
   name: string;
   aid: string;
   uid: string;
@@ -87,7 +87,7 @@ export interface LegacyIdentity {
   refresh_token: string;
 }
 
-export interface LegacySession {
+interface LegacySession {
   tempKey: Buffer;
   cosyKey: string;
   info: string;
@@ -98,7 +98,7 @@ export interface LegacySession {
 }
 
 /** The identity the CLI itself stores in `~/.qoder/.auth/user`. */
-export async function buildSession(providerId = "qoder"): Promise<LegacySession> {
+async function buildSession(providerId = "qoder"): Promise<LegacySession> {
   const region = regionOf(providerId);
   const cred = await ensureCredential(providerId);
   const stored = loadSession(providerId);
@@ -154,12 +154,12 @@ function buildPayloadB64(info: string): string {
   return Buffer.from(JSON.stringify(sorted), "utf8").toString("base64");
 }
 
-export function signRequest(payloadB64: string, cosyKey: string, date: string, body: string, path: string): string {
+function signRequest(payloadB64: string, cosyKey: string, date: string, body: string, path: string): string {
   return crypto.createHash("md5").update(`${payloadB64}\n${cosyKey}\n${date}\n${body}\n${path}`).digest("hex");
 }
 
 /** The headers a legacy request needs. */
-export function legacyHeaders(session: LegacySession, fullUrl: string, body: string): Record<string, string> {
+function legacyHeaders(session: LegacySession, fullUrl: string, body: string): Record<string, string> {
   const path = new URL(fullUrl).pathname;
   const pathForSignature = path.startsWith("/algo") ? path.slice("/algo".length) : path;
   const payloadB64 = buildPayloadB64(session.info);
@@ -190,7 +190,7 @@ export function legacyHeaders(session: LegacySession, fullUrl: string, body: str
  * Request body
  * ------------------------------------------------------------------ */
 
-export interface LegacyRequestBody {
+interface LegacyRequestBody {
   /** OpenAI-shaped messages. */
   messages: Json[];
   tools?: Json[];
@@ -219,7 +219,7 @@ const BLANK_RESPONSE_META = {
 };
 
 /** Qoder's own request shape for the legacy protocol. */
-export function buildLegacyBody(req: LegacyRequestBody): Json {
+function buildLegacyBody(req: LegacyRequestBody): Json {
   const text = String(req.messages?.[req.messages.length - 1]?.content ?? "");
   const system = req.messages?.find((m) => m.role === "system");
   const userMessages = req.messages.filter((m) => m.role !== "system");
@@ -354,7 +354,7 @@ export function buildLegacyBody(req: LegacyRequestBody): Json {
  * Request
  * ------------------------------------------------------------------ */
 
-export interface LegacyRequestOptions {
+interface LegacyRequestOptions {
   /** Which provider (which account) to talk to. */
   providerId?: string;
   region?: QoderRegion;
