@@ -8,6 +8,7 @@ import {
   newestPiSession,
   parseHealth,
   parseOpencodeSessions,
+  sessionIdOf,
   type AccountQuota,
 } from "../tools/wait-nudge.ts";
 
@@ -252,6 +253,61 @@ check("newestPiSession 只有 .jsonl 的会话也认", () => {
     assert.ok(found);
     assert.equal(found.id, "01a17813-e930-7241-b8d2-4c5272079c84");
     assert.equal(found.file, join(dir, `${name}.jsonl`));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+check("sessionIdOf 对 UUID 名字仍取 UUID", () => {
+  assert.equal(
+    sessionIdOf("2026-10-26T11-59-43-440Z_01a17814-1111-2222-3333-444455556666"),
+    "01a17814-1111-2222-3333-444455556666",
+  );
+  assert.equal(sessionIdOf("01a17814-ad50-775e-8c08-6ff8df765b64"), "01a17814-ad50-775e-8c08-6ff8df765b64");
+});
+
+check("sessionIdOf 对非 UUID 的会话名取最后一个下划线之后那段", () => {
+  assert.equal(sessionIdOf("2026-10-29T03-58-17-343Z_nudge-test-1"), "nudge-test-1");
+  assert.equal(sessionIdOf("2026-10-29T03-58-17-343Z_nudge-test-1.jsonl".slice(0, -".jsonl".length)), "nudge-test-1");
+});
+
+check("newestPiSession 认得非 UUID 名字的会话", () => {
+  const root = mkdtempSync(join(tmpdir(), "wait-nudge-"));
+  try {
+    const dir = join(root, "--tmp-x--");
+    const name = "2026-10-29T03-58-17-343Z_nudge-test-1";
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${name}.jsonl`), "{}\n");
+
+    const found = newestPiSession(root, "/tmp/x");
+    assert.ok(found);
+    assert.equal(found.id, "nudge-test-1");
+    assert.equal(found.file, join(dir, `${name}.jsonl`));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+check("newestPiSession 目录形态和浮文件形态混在一起时仍优先目录形态", () => {
+  const root = mkdtempSync(join(tmpdir(), "wait-nudge-"));
+  try {
+    const dir = join(root, "--tmp-mixed--");
+    const older = "2026-10-29T03-58-17-343Z_folder-old";
+    const newer = "2026-10-29T04-58-17-343Z_folder-new";
+    const floating = "2026-10-29T05-58-17-343Z_floating-file";
+    mkdirSync(join(dir, older), { recursive: true });
+    mkdirSync(join(dir, newer), { recursive: true });
+    writeFileSync(join(dir, older, "session.jsonl"), "{}\n");
+    writeFileSync(join(dir, newer, "session.jsonl"), "{}\n");
+    writeFileSync(join(dir, `${floating}.jsonl`), "{}\n");
+    utimesSync(join(dir, older), T / 1000, T / 1000);
+    utimesSync(join(dir, newer), (T + 60 * MINUTE) / 1000, (T + 60 * MINUTE) / 1000);
+    utimesSync(join(dir, `${floating}.jsonl`), (T + 120 * MINUTE) / 1000, (T + 120 * MINUTE) / 1000);
+
+    const found = newestPiSession(root, "/tmp/mixed");
+    assert.ok(found);
+    assert.equal(found.id, "folder-new");
+    assert.equal(found.file, join(dir, newer, "session.jsonl"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
