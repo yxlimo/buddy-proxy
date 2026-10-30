@@ -223,6 +223,21 @@ export const WORKBUDDY_CN_MODELS: WorkBuddyModel[] = [
     onlyReasoning: true,
     efforts: [],
   },
+  // 上游的 /v3/config 里没有这个名字（cn 的注册表和 agents 列表都没有），但
+  // 后端对 `kimi-k3.1-pro` 正常出话，桌面端的选择器里也把它列成 0.97×。目录
+  // 是滞后的一份视图，所以这里按实测补上。
+  {
+    id: "kimi-k3.1-pro",
+    display_name: "Kimi-K3.1-Pro",
+    credits: 0.97,
+    context: 1000000,
+    maxOutput: 32000,
+    vision: true,
+    tools: true,
+    reasoning: true,
+    onlyReasoning: true,
+    efforts: [],
+  },
   {
     id: "kimi-k2.8-preview",
     display_name: "Kimi-K2.8-Preview",
