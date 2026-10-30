@@ -45,45 +45,50 @@ export function DailyCheckinPanel() {
         </div>
       </CardHeader>
       <CardContent className='grid gap-3'>
-        {benefits.map((benefit) => (
-          <div
-            key={benefit.upstreamId}
-            className='grid gap-1 rounded-lg border p-3'
-          >
-            <div className='flex items-center justify-between gap-3'>
-              <span className='text-sm font-medium'>{benefit.upstreamId}</span>
-              <div className='flex items-center gap-2'>
-                {benefit.credits > 0 ? (
-                  <Badge>+{benefit.credits} 点</Badge>
-                ) : null}
-                {/* ok 说的是「上次签到成不成功」。从来没签过时后端也给
-                    ok=false，那不是失败，只是没有记录：没有记录就不标失败。 */}
-                {!benefit.ok && benefit.checkedAt > 0n ? (
-                  <span className='text-xs text-muted-foreground'>未成功</span>
-                ) : null}
+        {/* 签到项平铺：容器自动换行，每项按内容自适应，窄屏折到下一行 */}
+        <div className='flex flex-wrap gap-2'>
+          {benefits.map((benefit) => (
+            <div
+              key={benefit.upstreamId}
+              className='grid w-fit min-w-0 max-w-full gap-1 rounded-lg border p-3'
+            >
+              <div className='flex items-center justify-between gap-3'>
+                <span className='text-sm font-medium'>{benefit.upstreamId}</span>
+                <div className='flex items-center gap-2'>
+                  {benefit.credits > 0 ? (
+                    <Badge>+{benefit.credits} 点</Badge>
+                  ) : null}
+                  {/* ok 说的是「上次签到成不成功」。从来没签过时后端也给
+                      ok=false，那不是失败，只是没有记录：没有记录就不标失败。 */}
+                  {!benefit.ok && benefit.checkedAt > 0n ? (
+                    <span className='text-xs text-muted-foreground'>未成功</span>
+                  ) : null}
+                </div>
               </div>
+              {benefit.checkedAt > 0n ? (
+                <span className='text-xs text-muted-foreground'>
+                  上次签到 {formatLocalMoment(benefit.checkedAt)}
+                </span>
+              ) : (
+                <span className='text-xs text-muted-foreground'>还没签过</span>
+              )}
+              {benefit.summary ? (
+                <span className='text-sm text-muted-foreground'>
+                  {benefit.summary}
+                </span>
+              ) : null}
+              {benefit.lines.length > 0 ? (
+                <ul className='grid gap-0.5 text-xs text-muted-foreground'>
+                  {benefit.lines.map((line, index) => (
+                    <li key={`${index}-${line}`} className='break-words'>
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
-            {benefit.checkedAt > 0n ? (
-              <span className='text-xs text-muted-foreground'>
-                上次签到 {formatLocalMoment(benefit.checkedAt)}
-              </span>
-            ) : (
-              <span className='text-xs text-muted-foreground'>还没签过</span>
-            )}
-            {benefit.summary ? (
-              <span className='text-sm text-muted-foreground'>
-                {benefit.summary}
-              </span>
-            ) : null}
-            {benefit.lines.length > 0 ? (
-              <ul className='grid gap-0.5 text-xs text-muted-foreground'>
-                {benefit.lines.map((line, index) => (
-                  <li key={`${index}-${line}`}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ))}
+          ))}
+        </div>
 
         {run.data ? (
           <div className='grid gap-1 rounded-lg border p-3'>

@@ -29,11 +29,6 @@ export const sidebarData: SidebarData = {
           icon: Boxes,
         },
         {
-          title: '配置',
-          url: '/config',
-          icon: Settings2,
-        },
-        {
           title: '额度',
           url: '/balance',
           icon: Wallet,
@@ -47,6 +42,11 @@ export const sidebarData: SidebarData = {
           title: '主路由模型',
           url: '/models',
           icon: Layers,
+        },
+        {
+          title: '配置',
+          url: '/config',
+          icon: Settings2,
         },
       ],
     },

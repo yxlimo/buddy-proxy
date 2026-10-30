@@ -85,7 +85,7 @@ describe('DailyCheckinPanel', () => {
     toastError.mockClear()
   })
 
-  it('不同平台的账号各占一行', async () => {
+  it('不同平台的账号平铺在同一个可换行的容器里', async () => {
     const { client } = setup({
       benefits: [
         benefit({ upstreamId: 'minimax' }),
@@ -100,6 +100,13 @@ describe('DailyCheckinPanel', () => {
     expect(screen.getByText('每日签到')).toBeTruthy()
     // checkedAt = 0 的账号显示「还没签过」
     expect(screen.getAllByText('还没签过')).toHaveLength(2)
+
+    // 布局：两个账号在同一个 flex-wrap 容器里，宽度不够时自动折行
+    const minimax = screen.getByText('minimax')
+    const qoder = screen.getByText('qoder-cn')
+    const container = minimax.closest('.flex-wrap')
+    expect(container).toBeTruthy()
+    expect(qoder.closest('.flex-wrap')).toBe(container)
   })
 
   it('签到加了 12 积分时显示 +12 点', async () => {
