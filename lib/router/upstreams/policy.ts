@@ -70,6 +70,14 @@ export interface UpstreamContext {
    * each piece is counted on its own.
    */
   lastUsage?: { promptTokens: number; completionTokens: number; reasoningTokens: number };
+  /**
+   * 这次请求实际发给上游的输出上限。
+   *
+   * 模拟客户端的上游不用客户端传的值：Qoder 固定发它自己客户端的 32000
+   * （见 lib/qoder/models.ts 的 QODER_CLIENT_MAX_TOKENS）。要判断「思考是不是
+   * 把预算吃满了」，得看真正发出去的那个数，不是客户端想要的那个。
+   */
+  upstreamMaxTokens?: number;
 }
 
 /**

@@ -34,6 +34,8 @@ export async function toWorkBuddy(
   // answer there, so the number matters.
   if (typeof openaiBody.max_tokens !== "number") {
     openaiBody.max_tokens = ctx.workbuddyMaxOutput(model);
+    // 记下真正发出去的上限：日志要拿它和 reasoning 一起看。
+    ctx.upstreamMaxTokens = openaiBody.max_tokens;
   }
   if (ctx.logRoute) {
     console.log(`[ROUTE] workbuddy model=${route.model} stream=${stream}`);

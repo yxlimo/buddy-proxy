@@ -48,6 +48,11 @@ export async function toMinimax(
   anthropicBody.model = upstreamModel(route);
   anthropicBody.stream = stream;
 
+  // 生效上限：客户端给了就用它的，没给才是目录默认值。日志拿它算用掉多少。
+  if (typeof (anthropicBody as any).max_tokens === "number") {
+    ctx.upstreamMaxTokens = (anthropicBody as any).max_tokens;
+  }
+
   let r: Response;
   // 流式答复是在这里返回之后才消费的：冷却由调用方在流结束时结算，
   // 「响应头到了」不算成功。
@@ -151,6 +156,11 @@ export async function toMiniMaxApi(
   const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
   openaiBody.model = model;
   openaiBody.stream = stream;
+
+  // 生效上限：客户端给了就用它的，没给才是目录默认值。日志拿它算用掉多少。
+  if (typeof (openaiBody as any).max_tokens === "number") {
+    ctx.upstreamMaxTokens = (openaiBody as any).max_tokens;
+  }
 
   // 一个账号可以有不止一把 key，所以候选是「账号 × key」：账号之间按策略
   // 换，账号自己名下的 key 也按同一个策略换。

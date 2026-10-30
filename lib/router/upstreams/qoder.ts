@@ -74,6 +74,8 @@ export async function toQoder(
   // caller asked for; the gateway ignores it and cuts the answer at the
   // model's real limit.
   openaiBody.max_tokens = QODER_CLIENT_MAX_TOKENS;
+  // 记下真正发出去的上限：日志要拿它和 reasoning 一起看。
+  ctx.upstreamMaxTokens = QODER_CLIENT_MAX_TOKENS;
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
   const settle = settlement();
   const upstream = await underPolicy(
@@ -132,6 +134,8 @@ export async function toQoderLegacy(
   platform = "qoder",
 ): Promise<void> {
   const settle = settlement();
+  // 旧协议发的是同一个固定上限（下面 parameters 里的 max_tokens）。
+  ctx.upstreamMaxTokens = QODER_CLIENT_MAX_TOKENS;
   const chunks = await underPolicy(
     platform,
     "qoder",

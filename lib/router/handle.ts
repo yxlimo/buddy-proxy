@@ -508,6 +508,65 @@ async function callUpstream(
   }
 }
 /**
+ * 上游把输出全放在了思考里。
+ *
+ * `completion_tokens` 含思考，`reasoning_tokens` 是其中思考的部分：两者相减
+ * 才是正文。相减接近 0 说明这条答复只有思考、没有正文 —— 状态仍是 200，我们
+ * 记成功，客户端拿到的却是空内容（magic-context 的 empty_completion 就是它）。
+ *
+ * 两个都是 0 表示上游没给 usage，不是空答复。
+ *
+ * 两条分支：正文几乎没有（<=5），以及思考吃掉大量预算、正文只剩一点
+ * （思考 >= 2000 且正文 <= 100）。单看「正文很小」分不开正常短答复和空答复。
+ */
+export function isAllThinking(usage?: {
+  completionTokens?: number;
+  reasoningTokens?: number;
+}): boolean {
+  const completion = usage?.completionTokens ?? 0;
+  // 上游没给 usage：不是空答复，不判。
+  if (completion <= 0) return false;
+  const reasoning = usage?.reasoningTokens ?? 0;
+  const visible = completion - reasoning;
+  // 一、正文几乎没有。
+  if (visible <= 5) return true;
+  // 二、思考吃了大量预算，正文只剩一点。短答复（思考也少）走不到这里，
+  // 所以不会把正常的短回答算进来。
+  return reasoning >= 2000 && visible <= 100;
+}
+
+/**
+ * 这次请求真正生效的输出上限。
+ *
+ * 模拟客户端的上游不用客户端传的值（见 UpstreamContext.upstreamMaxTokens）：
+ * Qoder 固定发它自己客户端的 32000，客户端要多少都没用。所以先看真正发
+ * 出去的那个数，客户端请求体里的那个只是备选。
+ */
+export function effectiveMaxTokens(
+  uctx: Pick<UpstreamContext, "upstreamMaxTokens">,
+  body: Json,
+): number | "未指定" {
+  return (
+    uctx.upstreamMaxTokens ??
+    (typeof body.max_tokens === "number"
+      ? body.max_tokens
+      : typeof body.max_completion_tokens === "number"
+        ? body.max_completion_tokens
+        : "未指定")
+  );
+}
+
+/**
+ * 上限用掉了多少：思考把预算吃满时这里就是 100%。
+ *
+ * 上限不是数字就不知道：写 `?`，不猜。
+ */
+export function budgetUsed(completion: number, budget: number | "未指定"): string {
+  if (typeof budget !== "number" || budget <= 0) return "?";
+  return `${Math.round((completion / budget) * 100)}%`;
+}
+
+/**
  * 记下这一条请求。
  *
  * 每条走过的请求都记：哪个上游、哪个模型、客户端要的是什么、谁发来的、
@@ -528,6 +587,20 @@ function recordRequestUsage(
   const upstreamModel = route.model.includes("/")
     ? route.model.slice(route.model.indexOf("/") + 1)
     : route.model;
+  // 输出全在思考里：200 + 空正文。日志里要能看到是哪个上游、给了多少预算。
+  if (isAllThinking(uctx.lastUsage)) {
+    const completion = uctx.lastUsage?.completionTokens ?? 0;
+    const reasoning = uctx.lastUsage?.reasoningTokens ?? 0;
+    // 生效上限优先：模拟客户端的上游不用客户端传的值。
+    const budget = effectiveMaxTokens(uctx, body);
+    // 用掉了多少：思考把预算吃满时这里就是 100%。上限不是数字就不知道。
+    const used = budgetUsed(completion, budget);
+    console.warn(
+      `[UPSTREAM] ${route.platform}/${upstreamModel} 答 200 但没有正文` +
+        `（completion=${completion} reasoning=${reasoning} 正文=${completion - reasoning}` +
+        ` 上游上限=${budget} 用掉=${used} client=${client}）`,
+    );
+  }
   recordUsage({
     upstreamId: route.platform,
     upstreamModel,

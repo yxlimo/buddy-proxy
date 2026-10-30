@@ -33,6 +33,11 @@ export async function toZcode(
   anthropicBody.model = model.toLowerCase();
   anthropicBody.stream = stream;
 
+  // 生效上限：客户端给了就用它的，没给才是目录默认值。日志拿它算用掉多少。
+  if (typeof (anthropicBody as any).max_tokens === "number") {
+    ctx.upstreamMaxTokens = (anthropicBody as any).max_tokens;
+  }
+
   // The upstream's session id: the client's session id, mapped to the shape the
   // upstream expects. The same client session always maps to the same id.
   const sessionId = upstreamSessionId(route.platform, ctx.clientSessionId ?? "");
