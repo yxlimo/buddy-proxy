@@ -4,3 +4,13 @@
 # esbuild 需要跑它的安装脚本把二进制准备好，否则 vite 起不来。
 allowBuilds:
   esbuild: true
+
+# 与根目录同名文件一致：全局虚拟仓库，原因是 worktree 里装依赖近乎瞬时。
+#
+# 这里不需要 addMissingPeerTypes：jest-dom 7.x 自己声明了 peerDependencies.vitest，
+# pnpm 会把 vitest 链到 store 里 jest-dom 旁边，它的 types/vitest.d.ts 才能
+# `import 'vitest'` 成功、`declare module 'vitest'` 的增广才生效。jest-dom 6.x
+# 没有这个 peer，全局 store 下 vitest 解析不到，增广失效 —— 表现为一堆
+# 「Property 'toBeInTheDocument' does not exist」，而 skipLibCheck 会把这个真因
+# （TS2307）吞掉，只剩误导性的 TS2339。
+virtualStoreType: global

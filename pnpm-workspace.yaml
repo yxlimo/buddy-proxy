@@ -1,0 +1,18 @@
+# 这份文件只放 pnpm 的配置，没有 packages 字段：根目录不是一个 workspace，
+# 只是借这个文件给 pnpm 传设置（web/pnpm-workspace.yaml 也是同样用法）。
+#
+# virtualStoreType: global —— node_modules 里只放指向全局 content-addressable
+# store 的符号链接。给子代理开 git worktree 时，每个 worktree 各跑一次
+# `pnpm install` 几乎是瞬时的，不必复制定整份 node_modules。
+#
+# addMissingPeerTypes: true —— 全局 store 下 TypeScript 会跟随符号链接进 store
+# 的真实路径，而那条路径向上找不到工程目录的 node_modules/@types。koa 3.x 自己
+# 不发布类型，类型全靠 @types/koa，于是 `import ... from 'koa'` 解析到只有 JS 的
+# dist/koa.mjs，DefaultContext / Middleware 全退化成 any（ctx 隐式 any，3 处
+# TS7006）。这个开关让 pnpm 把缺失的 peer 类型也链进那个目录，类型恢复真实。
+#
+# 注意：这两个开关（settings.addMissingPeerTypes 与 packageExtensionsChecksum）
+# 会写进 pnpm-lock.yaml。Dockerfile 必须连这个文件一起 COPY，否则容器里
+# `pnpm install --frozen-lockfile` 会报 ERR_PNPM_LOCKFILE_CONFIG_MISMATCH。
+virtualStoreType: global
+addMissingPeerTypes: true

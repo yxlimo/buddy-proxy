@@ -30,7 +30,10 @@ FROM node:24-alpine
 WORKDIR /app
 
 # Dependencies first so this layer is cached.
-COPY package.json pnpm-lock.yaml ./
+# pnpm-workspace.yaml 一起 COPY：它写着 virtualStoreType 与 addMissingPeerTypes，
+# 后者会写进 lockfile 的 settings。少了它，install 仍然能跑（pnpm 12 容忍这个
+# 差异），但装出来的布局与 lockfile 记的不一致，也不利于以后升级 pnpm。
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod
 
 # Only what the router actually loads: the entry point and lib/. There is no login
