@@ -856,7 +856,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           : outcome.signedIn
             ? "今日已签到"
             : outcome.statusUnavailable
-              ? "平台未提供签到状态"
+              ? "平台不支持"
               : "今日暂无新活动";
       return create(BenefitStatusSchema, {
         upstreamId: upstream,

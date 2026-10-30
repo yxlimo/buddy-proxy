@@ -914,9 +914,9 @@ console.log("权益：签到那一行写什么");
     signedInNoCredits,
   );
   check(
-    "平台未提供签到状态",
-    (await summaryOf({ upstream: upstreamId, ok: true, credits: 0, statusUnavailable: true, report: [], at })) ===
-      "平台未提供签到状态",
+  "平台不支持",
+  (await summaryOf({ upstream: upstreamId, ok: true, credits: 0, statusUnavailable: true, report: [], at })) ===
+  "平台不支持",
   );
   check(
     "别的就是「今日暂无新活动」",
