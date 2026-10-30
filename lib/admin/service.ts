@@ -75,6 +75,7 @@ import { adminTokenSet } from "./token.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
   forgetAccountSnapshot,
+  freshHealthSnapshot,
   healthSnapshot,
   setAccountEnabled,
   upstreamQuota,
@@ -668,11 +669,20 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async getBalance(request) {
     const wanted = String(request.upstreamId ?? "");
-    const ids = wanted ? [wanted] : listProviders().map((p) => p.id);
     const quotas = [];
-    for (const id of ids) {
-      for (const quota of await upstreamQuotas(id, true, Boolean(request.force)))
+    if (wanted) {
+      // 问一个平台：只刷这个平台名下的账号，不碰别人。
+      for (const quota of await upstreamQuotas(wanted, true, Boolean(request.force))) {
         quotas.push(quotaMessage(quota));
+      }
+    } else {
+      // 没指定平台：整轮刷新一次（一次就够），然后从快照里读。
+      await freshHealthSnapshot(Boolean(request.force));
+      for (const row of listProviders()) {
+        for (const quota of await upstreamQuotas(row.id)) {
+          quotas.push(quotaMessage(quota));
+        }
+      }
     }
     return create(GetBalanceResponseSchema, { quotas });
   },

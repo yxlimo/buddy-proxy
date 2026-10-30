@@ -261,6 +261,12 @@ const FRESH_MIN_MS = 5_000;
 let healthRefresh: Promise<void> | null = null;
 let healthRefreshedAt = 0;
 
+/** 正在飞着的平台刷新：平台 id → 那一轮。 */
+const platformRefreshes = new Map<string, Promise<HealthSnapshot>>();
+
+/** 每个平台上次刷完的时刻。 */
+const platformRefreshedAt = new Map<string, number>();
+
 /** MiniMax 的区域。 */
 const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
 
@@ -371,12 +377,12 @@ async function internAiCredits(providerId = "intern-ai"): Promise<{ balance: unk
 }
 
 /**
- * 问一遍上游，把答案记下来。
+ * 空快照：每个桶都是空的。
  *
- * 每家按上游分开记：两个同类的上游各有各的数字。
+ * 全量刷新从空快照开始填；单独刷一个平台时，它当「这个平台这一轮的结果」。
  */
-export async function refreshHealthSnapshot(): Promise<void> {
-  const snapshot: HealthSnapshot = {
+function emptySnapshot(): HealthSnapshot {
+  return {
     qoder: {},
     minimax: {},
     zcode: {},
@@ -386,15 +392,98 @@ export async function refreshHealthSnapshot(): Promise<void> {
     internAi: {},
     qiniu: {},
   };
+}
 
-  for (const row of listProviders()) {
-    // 一家问不到不能把别的都拖下水：这家这一轮就不报（面板上它没有额度），
-    // 其余照旧。整轮都问不到才是真没有，那时快照里全是空桶。
-    try {
-      await refreshOne(snapshot, row);
-    } catch (e) {
-      console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
-    }
+/**
+ * 桶的名字。
+ *
+ * 快照按 kind 分桶：每个 kind 一张「账号 id → 那一份」的表。kind 与桶名
+ * 只有 intern-ai 这一处对不上（桶叫 internAi）。
+ */
+function bucketOf(kind: string): string {
+  return kind === "intern-ai" ? "internAi" : kind;
+}
+
+/** 快照里的一张表。桶不存在就是没有这一家。 */
+function bucketTable(snapshot: HealthSnapshot, bucket: string): Record<string, unknown> | undefined {
+  // SAFETY: 快照的每个桶都是「账号 id → 那一份」的表；桶名对不上时取到 undefined。
+  const tables = snapshot as unknown as Record<string, Record<string, unknown>>;
+  return tables[bucket];
+}
+
+/**
+ * 抄一份快照。
+ *
+ * 桶是新的表，桶里的东西还是原来那些 —— 合并一个平台的数字时不改别人。
+ */
+function copySnapshot(snapshot: HealthSnapshot): HealthSnapshot {
+  return {
+    qoder: { ...snapshot.qoder },
+    minimax: { ...snapshot.minimax },
+    zcode: { ...snapshot.zcode },
+    workbuddy: { ...snapshot.workbuddy },
+    tokenrhythm: { ...snapshot.tokenrhythm },
+    sensenova: { ...snapshot.sensenova },
+    internAi: { ...snapshot.internAi },
+    qiniu: { ...snapshot.qiniu },
+  };
+}
+
+/** 账号行按平台分组。 */
+function groupByPlatform(rows: ProviderRow[]): Map<string, ProviderRow[]> {
+  const groups = new Map<string, ProviderRow[]>();
+  for (const row of rows) {
+    const group = groups.get(row.platform);
+    if (group) group.push(row);
+    else groups.set(row.platform, [row]);
+  }
+  return groups;
+}
+
+/**
+ * 把一个平台这一轮的结果写进快照。
+ *
+ * 只写这个平台名下那些账号行的位置：别的平台的桶原样留着 —— 面板上一个
+ * 平台刷一次，不该把别家的数字清掉。
+ *
+ * 这一轮没问到的账号不留数（面板上它没有额度），而不是拿上一轮的旧数充数。
+ */
+function applyPartial(snapshot: HealthSnapshot, partial: HealthSnapshot, rows: ProviderRow[]): void {
+  for (const row of rows) {
+    const bucket = bucketOf(row.kind);
+    const target = bucketTable(snapshot, bucket);
+    if (!target) continue;
+    const value = bucketTable(partial, bucket)?.[row.id];
+    if (value === undefined) delete target[row.id];
+    else target[row.id] = value;
+  }
+}
+
+/**
+ * 问一遍上游，把答案记下来。
+ *
+ * 每家按上游分开记：两个同类的上游各有各的数字。
+ *
+ * 平台之间并发、平台内的账号之间也并发：面板上是每个平台并发问的，
+ * 串行地问等于把上游问 N 遍。
+ */
+export async function refreshHealthSnapshot(): Promise<void> {
+  const groups = groupByPlatform(listProviders());
+  const partials = new Map<string, HealthSnapshot>();
+  await Promise.allSettled(
+    [...groups.entries()].map(async ([platform, rows]) => {
+      try {
+        partials.set(platform, await refreshPlatform(platform, rows));
+      } catch (e) {
+        console.warn(`[HEALTH] ${platform} 的额度没问到：${(e as Error)?.message}`);
+      }
+    }),
+  );
+  const snapshot: HealthSnapshot = emptySnapshot();
+  for (const [platform, rows] of groups) {
+    const partial = partials.get(platform);
+    if (!partial) continue;
+    applyPartial(snapshot, partial, rows);
   }
 
   putHealthSnapshot(snapshot);
@@ -454,6 +543,65 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
 }
 
 /**
+ * 问一个平台名下的账号，得到只属于它的结果。
+ *
+ * 并发地问：平台上有几个账号就同时问几个 —— 一家一家等太慢，面板上一个
+ * 平台刷新一次要等好几十秒。
+ *
+ * 一家问不到只跳过它：这家这一轮就不报（面板上它没有额度），其余照旧。
+ */
+async function refreshPlatformRows(rows: ProviderRow[]): Promise<HealthSnapshot> {
+  const partial = emptySnapshot();
+  await Promise.allSettled(
+    rows.map(async (row) => {
+      try {
+        await refreshOne(partial, row);
+      } catch (e) {
+        console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
+      }
+    }),
+  );
+  return partial;
+}
+
+/**
+ * 问一个平台，正在飞的时候后来的调用等同一轮。
+ *
+ * 面板上十几个并发请求打过来，同一个平台只该问一遍上游：后来的等前头
+ * 那一轮的结果，不各发一遍。不同的平台互不影响。
+ */
+function refreshPlatform(platform: string, rows: ProviderRow[]): Promise<HealthSnapshot> {
+  const inflight = platformRefreshes.get(platform);
+  if (inflight) return inflight;
+  const round: Promise<HealthSnapshot> = refreshPlatformRows(rows).finally(() => {
+    platformRefreshedAt.set(platform, Date.now());
+    if (platformRefreshes.get(platform) === round) platformRefreshes.delete(platform);
+  });
+  platformRefreshes.set(platform, round);
+  return round;
+}
+
+/**
+ * 全量刷新。正在飞的时候后来的调用等同一轮，不各发一遍。
+ *
+ * 后台刷新与面板上的「现数」走同一条路：面板正好要全量的时候，后台那一轮
+ * 就一起等，不用问上游两遍。
+ */
+function startHealthRefresh(): Promise<void> {
+  if (!healthRefresh) {
+    healthRefresh = refreshHealthSnapshot()
+      .catch((e) => {
+        clearHealthSnapshot();
+        console.warn(`[HEALTH] 刷新失败：${(e as Error)?.message}`);
+      })
+      .finally(() => {
+        healthRefresh = null;
+      });
+  }
+  return healthRefresh;
+}
+
+/**
  * 快照，以及一次后台刷新。
  *
  * 快照旧了就起一个刷新（不等它），端点立刻拿旧答案走 —— 健康检查不该被
@@ -465,16 +613,12 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
 export function healthSnapshot(): { data: HealthSnapshot | null; at: number; stale: boolean } {
   const cached = peekHealthSnapshot<HealthSnapshot>();
   const at = cached?.at ?? 0;
+  // 数据有多旧：按写入时刻算。
   const stale = !cached || Date.now() - at > HEALTH_CACHE_MS;
-  if (stale && !healthRefresh) {
-    healthRefresh = refreshHealthSnapshot()
-      .catch((e) => {
-        clearHealthSnapshot();
-        console.warn(`[HEALTH] 刷新失败：${(e as Error)?.message}`);
-      })
-      .finally(() => {
-        healthRefresh = null;
-      });
+  // 整轮刷新另有它的节奏：面板上一个平台一个平台地刷，不该把整轮一直往后
+  // 推 —— 那一轮要是不来，别人（没被问到的平台、停用的账号）就一直旧着。
+  if (Date.now() - healthRefreshedAt > HEALTH_CACHE_MS) {
+    void startHealthRefresh();
   }
   return { data: cached?.data ?? null, at, stale };
 }
@@ -492,11 +636,42 @@ export function healthRefreshing(): boolean {
  */
 export async function freshHealthSnapshot(force = false): Promise<HealthSnapshot> {
   if (force || Date.now() - healthRefreshedAt > FRESH_MIN_MS) {
-    try {
-      await refreshHealthSnapshot();
-    } catch (e) {
-      clearHealthSnapshot();
-      console.warn(`[HEALTH] 刷新失败：${(e as Error)?.message}`);
+    await startHealthRefresh();
+  }
+  return peekHealthSnapshot<HealthSnapshot>()?.data ?? ({} as HealthSnapshot);
+}
+
+/**
+ * 一个 id 属于哪个平台：平台 id 就是自己，账号 id 看它挂在哪个平台名下。
+ */
+function platformKeyOf(id: string): string {
+  if (isPlatform(id)) return id;
+  return provider(id)?.platform ?? id;
+}
+
+/**
+ * 让**一个平台**的额度是最新的。
+ *
+ * 只刷这个平台名下的账号，别家的桶原样留着：面板上每个平台并发问一次，
+ * 每个平台只该碰自己那几个账号。
+ *
+ * 已经在飞的那一轮要等它，不各发一遍；不同的平台互不影响。
+ */
+async function freshPlatformSnapshot(id: string, force = false): Promise<HealthSnapshot> {
+  const platform = platformKeyOf(id);
+  const rows = accountsOfPlatform(platform);
+  if (rows.length) {
+    const last = platformRefreshedAt.get(platform) ?? 0;
+    if (force || Date.now() - last > FRESH_MIN_MS) {
+      try {
+        const partial = await refreshPlatform(platform, rows);
+        // 合并进现有快照：别的平台的桶不动。
+        const merged = copySnapshot(peekHealthSnapshot<HealthSnapshot>()?.data ?? emptySnapshot());
+        applyPartial(merged, partial, rows);
+        putHealthSnapshot(merged);
+      } catch (e) {
+        console.warn(`[HEALTH] ${platform} 的额度没问到：${(e as Error)?.message}`);
+      }
     }
   }
   return peekHealthSnapshot<HealthSnapshot>()?.data ?? ({} as HealthSnapshot);
@@ -582,7 +757,7 @@ export async function upstreamQuotas(id: string, fresh = false, force = false): 
   const rows = accountsFor(id);
   if (!rows.length) return [];
   const snapshot = fresh
-    ? await freshHealthSnapshot(force)
+    ? await freshPlatformSnapshot(id, force)
     : peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
   if (!snapshot) return [];
   const out: QuotaView[] = [];
