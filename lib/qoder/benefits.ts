@@ -155,7 +155,7 @@ async function claimCampaign(
   row: any,
   region: QoderRegion,
   upstream: string,
-): Promise<{ credits: number; lines: string[] }> {
+): Promise<{ credits: number; lines: string[]; signedIn: boolean }> {
   const lines: string[] = [];
   const key = String(row.campaignKey ?? row.campaignId);
   const claim = await qoderCall(
@@ -170,19 +170,22 @@ async function claimCampaign(
     const kind = granted?.kind ?? row.benefit?.kind ?? "";
     if (claim.body?.replayed === true) {
       lines.push(`活动「${key}」已经领过了`);
-      return { credits: 0, lines };
+      // The platform says it was already taken: today's check-in did land, the
+      // credits just did not come from this request. Only the daily
+      // check-in counts -- a replayed promo is not a check-in.
+      return { credits: 0, lines, signedIn: row.actionType === "CLAIM_BENEFIT" };
     }
     if (amount > 0) {
       lines.push(`领活动「${key}」+${amount} ${kind}`);
       console.log(`[BENEFITS] ${upstream}: claimed ${key} +${amount} ${kind}`);
-      return { credits: amount, lines };
+      return { credits: amount, lines, signedIn: true };
     }
     // Some campaigns grant nothing (a promo you only have to open). Claiming
     // them is still correct -- the platform says it can be claimed -- but
     // there is no credit to report.
     lines.push(`领活动「${key}」（没有积分）`);
     console.log(`[BENEFITS] ${upstream}: claimed ${key} (no credits)`);
-    return { credits: 0, lines };
+    return { credits: 0, lines, signedIn: false };
   }
   // The platform says why when it refuses. 503 RISK_DEPENDENCY_UNAVAILABLE
   // means it could not find the device behind the machine token, which is a
@@ -194,7 +197,7 @@ async function claimCampaign(
     `HTTP ${claim.status}`;
   lines.push(`领活动「${key}」失败：${why}`);
   console.log(`[BENEFITS] ${upstream}: claim ${key} failed (HTTP ${claim.status}): ${why}`);
-  return { credits: 0, lines };
+  return { credits: 0, lines, signedIn: false };
 }
 
 /**
@@ -209,16 +212,28 @@ async function claimAll(
   region: QoderRegion,
   upstream: string,
   hasDailyCampaign: boolean,
-): Promise<{ credits: number; lines: string[] }> {
+): Promise<{ credits: number; lines: string[]; signedIn: boolean }> {
   const lines: string[] = [];
   let credits = 0;
+  let signedIn = false;
   for (const row of rows) {
     if (row.actionType !== "CLAIM_BENEFIT" && row.actionType !== "VIEW_DETAILS") continue;
     const key = String(row.campaignKey ?? row.campaignId);
     const startAt = typeof row.startAt === "number" ? row.startAt : 0;
     const windowKey = `${upstream}:${key}`;
     const lastAttempted = claimedWindows.get(windowKey) ?? 0;
+    // This window was already tried: the platform said it was taken, or the
+    // attempt failed and we do not try again in the same window.
+    const triedThisWindow = claimedWindows.has(windowKey) && startAt <= lastAttempted;
     if (!shouldAttemptClaim(row, now, lastAttempted)) {
+      // The platform does not reset claimStatus, but we remember which window
+      // we tried. A daily check-in whose window we already tried and which
+      // says CLAIMED: today is signed in, even though this run got no
+      // credits. Without this the panel shows "nothing new" for a day that
+      // was signed in.
+      if (row.actionType === "CLAIM_BENEFIT" && row.claimStatus === "CLAIMED" && triedThisWindow) {
+        signedIn = true;
+      }
       // Current behaviour: a campaign that is already claimed says so, and
       // anything else is skipped quietly. Where the platform has no daily
       // campaign at all, that line would stand in for a check-in that does
@@ -233,9 +248,10 @@ async function claimAll(
     // attempt must not turn into a retry loop against the platform.
     claimedWindows.set(windowKey, startAt);
     credits += outcome.credits;
+    if (outcome.signedIn) signedIn = true;
     lines.push(...outcome.lines);
   }
-  return { credits, lines };
+  return { credits, lines, signedIn };
 }
 
 export async function runQoderBenefits(providerId = "qoder-cn"): Promise<BenefitOutcome> {
@@ -249,6 +265,12 @@ export async function runQoderBenefits(providerId = "qoder-cn"): Promise<Benefit
     return { upstream, ok: false, credits: 0, report: ["未找到 Qoder 登录态"], at: new Date().toISOString() };
   }
   let credits = 0;
+  let signedIn = false;
+  // The daily check-in lives on a different host in the global region, and
+  // that host does not answer for us. The campaigns list is all we get, and
+  // it does not carry the check-in's state -- so we cannot say whether today
+  // is signed in. That is not the same as "there is no daily check-in".
+  let statusUnavailable = false;
   try {
     const campaigns = await qoderCall(session, "/sash/api/v1/me/campaigns", "GET", region);
     if (campaigns.status !== 200) {
@@ -265,14 +287,18 @@ export async function runQoderBenefits(providerId = "qoder-cn"): Promise<Benefit
           ? ` — ${rows.map((r: any) => `${r.campaignKey}:${r.claimStatus}`).join(", ")}`
           : ""),
     );
-    // "No daily check-in activity" is a different thing from "already
-    // claimed": the platform sometimes has no CLAIM_BENEFIT campaign at all
-    // (the global region only carries VIEW_DETAILS ones), and saying
+    // "No daily check-in in the list" is a different thing from "already
+    // claimed": the platform sometimes has no CLAIM_BENEFIT campaign in this
+    // list (the global region only carries VIEW_DETAILS ones), and saying
     // "claimed" there would claim a win that never happened. This line comes
     // first so it is not hidden behind the per-campaign lines.
     const hasDailyCampaign = rows.some((r: any) => r.actionType === "CLAIM_BENEFIT");
+    // No CLAIM_BENEFIT in the list means the check-in's state is not in front
+    // of us: the global region's check-in lives on the web host, which only
+    // takes a browser cookie. Say "could not confirm", not "no check-in".
+    statusUnavailable = !hasDailyCampaign;
     if (!hasDailyCampaign) {
-      report.push("平台没有每日签到活动（列表里没有 CLAIM_BENEFIT 活动）");
+      report.push("列表里没有每日签到活动（签到状态不在这个接口里，没法确认今天签没签）");
     }
     if (!rows.length) {
       report.push("无可领取的活动");
@@ -284,9 +310,21 @@ export async function runQoderBenefits(providerId = "qoder-cn"): Promise<Benefit
     const outcome = await claimAll(session, rows, now, region, upstream, hasDailyCampaign);
     credits += outcome.credits;
     report.push(...outcome.lines);
+    // The platform's answer decides, not the credit count: a replay means
+    // today's check-in already landed. Credits on their own also mean it.
+    signedIn = outcome.signedIn || credits > 0;
     if (!creditCampaigns) report.push("无可领取积分的活动");
   } catch (e) {
     report.push(`异常：${(e as Error).message}`);
   }
-  return { upstream, ok: true, credits, report, at: new Date().toISOString() };
+  return {
+    upstream,
+    ok: true,
+    credits,
+    signedIn,
+    // The platform's check-in state is not in front of us (see above).
+    statusUnavailable,
+    report,
+    at: new Date().toISOString(),
+  };
 }

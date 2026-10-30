@@ -842,11 +842,22 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           ok: false,
         });
       }
+      // The summary is what the panel shows on the line: what happened, in
+      // one line. Five answers, in this order: it did not work; it worked and
+      // brought credits; it worked (the credits came earlier today); the
+      // platform does not tell us the check-in's state; anything else.
+      //
+      // "Already claimed" is not one of them: that is an internal wording
+      // and it belongs in the details (lines), not in the summary.
       const summary = !outcome.ok
         ? "签到未成功"
-        : outcome.credits > 0
+        : outcome.signedIn && outcome.credits > 0
           ? `今日已签到 +${outcome.credits}`
-          : "今日暂无新活动";
+          : outcome.signedIn
+            ? "今日已签到"
+            : outcome.statusUnavailable
+              ? "平台未提供签到状态"
+              : "今日暂无新活动";
       return create(BenefitStatusSchema, {
         upstreamId: upstream,
         summary,

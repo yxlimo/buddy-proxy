@@ -23,6 +23,14 @@ const DATA_DIR = "/tmp/opencode/test-admin-contract";
 const SERVICE = "/buddy.admin.v1.AdminService";
 const PROTO = path.join(ROOT, "proto/buddy/admin/v1/admin.proto");
 
+// This process runs the panel's own logic too (the check-in summary), so it
+// needs a data dir of its own. The gateway below runs in another process with
+// DATA_DIR -- the two must not share one database.
+const LOCAL_DATA_DIR = "/tmp/opencode/test-admin-contract-local";
+process.env.BUDDY_DATA_DIR = LOCAL_DATA_DIR;
+fs.rmSync(LOCAL_DATA_DIR, { recursive: true, force: true });
+fs.mkdirSync(LOCAL_DATA_DIR, { recursive: true, mode: 0o700 });
+
 let pass = 0;
 let fail = 0;
 
@@ -860,17 +868,72 @@ check("说的是门户 cookie", qiniuMessage.includes("cookie"), qiniuMessage);
 check("没说成 API key", !qiniuMessage.includes("API key"), qiniuMessage);
 
 console.log("");
+console.log("权益：签到那一行写什么");
+
+// The summary is the panel's own wording, and it depends on what the check-in
+// said -- not on the credits alone. It runs here: the gateway has no check-in
+// result to show (its accounts are not signed in).
+{
+  const { adminService } = await import("../lib/admin/service.ts");
+  const { benefits } = await import("../lib/admin/benefits.ts");
+  const { addAccount } = await import("../lib/providers.ts");
+  const account = addAccount({ platform: "qoder-cn" });
+  const upstreamId = String(account.id ?? "");
+  check("加好了中国区的账号", account.ok === true && upstreamId !== "", JSON.stringify(account));
+
+  /** 给一次签到的结果，看面板上那一行写出来的是什么。 */
+  const summaryOf = async (outcome: Record<string, unknown>): Promise<string> => {
+    benefits.lastRun.lastOutcome = [outcome as any];
+    const res = await adminService.getBenefitStatus!({} as any, {} as any);
+    const row = res.benefits.find((b: any) => b.upstreamId === upstreamId);
+    return String(row?.summary ?? "");
+  };
+  const at = new Date().toISOString();
+
+  check(
+    "没成功就是「签到未成功」",
+    (await summaryOf({ upstream: upstreamId, ok: false, credits: 0, report: [], at })) === "签到未成功",
+  );
+  check(
+    "签到了也拿到了积分",
+    (await summaryOf({ upstream: upstreamId, ok: true, credits: 100, signedIn: true, report: [], at })) ===
+      "今日已签到 +100",
+  );
+  const signedInNoCredits = await summaryOf({
+    upstream: upstreamId,
+    ok: true,
+    credits: 0,
+    signedIn: true,
+    report: [],
+    at,
+  });
+  check("签到了但这次没有积分", signedInNoCredits === "今日已签到", signedInNoCredits);
+  check(
+    "签到了但没有积分不能写成「今日暂无新活动」",
+    signedInNoCredits !== "今日暂无新活动",
+    signedInNoCredits,
+  );
+  check(
+    "平台未提供签到状态",
+    (await summaryOf({ upstream: upstreamId, ok: true, credits: 0, statusUnavailable: true, report: [], at })) ===
+      "平台未提供签到状态",
+  );
+  check(
+    "别的就是「今日暂无新活动」",
+    (await summaryOf({ upstream: upstreamId, ok: true, credits: 0, report: [], at })) === "今日暂无新活动",
+  );
+}
+
+console.log("");
 console.log("额度：小数在进 proto 之前取整");
+
+// The service module is already loaded (the check-in summary above needs it),
+// and it got its data dir from the top of this file.
+const { quotaMessage } = await import("../lib/admin/service.ts");
 
 // 契约里 TokenPlanWindow 的两个百分比是 int32，而上游给的是算出来的小数
 // （端砚报 95.458552）。不取整的话 JSON 里就是小数，客户端解码时整页报错
 // （2026-10-28 真出过）。这里直接走服务里的那步转换。
-const quotaDir = "/tmp/opencode/test-admin-contract-quota";
-process.env.BUDDY_DATA_DIR = quotaDir;
-fs.rmSync(quotaDir, { recursive: true, force: true });
-fs.mkdirSync(quotaDir, { recursive: true, mode: 0o700 });
-const { quotaMessage } = await import("../lib/admin/service.ts");
-
 const quota = quotaMessage({
   upstreamId: "intern-ai-test",
   accountId: "intern-ai-test",
@@ -941,9 +1004,9 @@ try {
 } catch (e) {
   check("整条额度能被 protobuf JSON 编码再解码", false, String(e));
 }
-fs.rmSync(quotaDir, { recursive: true, force: true });
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
+fs.rmSync(LOCAL_DATA_DIR, { recursive: true, force: true });
 router.stop();
 process.exit(fail ? 1 : 0);
