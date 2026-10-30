@@ -59,7 +59,7 @@ The same image, run by compose:
 ```yaml
 services:
   buddy-proxy:
-    image: yxlimo/buddy-proxy:0.2.1
+    image: shaylulimo/buddy-proxy:0.2.1
     container_name: buddy-proxy
     restart: unless-stopped
     ports:
