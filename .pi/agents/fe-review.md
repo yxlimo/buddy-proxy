@@ -5,6 +5,7 @@ inheritSkills: false
 inheritProjectContext: true
 tools: read, grep, find, ls, bash
 thinking: medium
+subagentOnlyExtensions: /home/shay/extensions/pi-allow-reads/packages/pi-plugin/src/index.ts
 systemPromptMode: replace
 ---
 
@@ -36,6 +37,16 @@ systemPromptMode: replace
    - 测试断言的是行为还是只是渲染没崩
    - 死代码、重复、中文文案是否准确克制
 3. 没问题的地方也说一句「看过，没问题」，别只列问题。
+
+## 改动清点（每次必做，逐条给结论）
+
+前端审的是 `web/**` 的改动，所以清点也只看这几处。
+
+1. **杂物文件**：跑一次 `git status --short`，逐条看 `??` 项。`.src.tsx`、`tmp-*.test.ts`、`*.probe.*`、名字带 `zzz` 的，一律算杂物，报出来。
+2. **生产代码里的测试接缝**：diff 里出现 `TestHooks`、`setXxxTestHooks`、`__test`、`if (process.env.NODE_ENV === "test")` 这种只为测试存在的分支，一律 blocker——测试该测纯函数，不该往主程序里塞注入口。
+3. **探针残留**：diff 里出现 `PROBE`、`_tscProbe`、`console.log("probe"` 这类，报出来。
+4. **范围蔓延**：diff 里有没有任务书没要求的文件；有就点名，说明是必要还是顺手。生成物 `web/.gen` 被手改也算。
+5. **假绿**：测试文件里有没有无条件断言（例如 `expect(1).toBe(1)`、`describe('probe')`）、被 `skip` 的用例、或只断言「渲染没崩」的用例。
 
 ## 通用约定
 

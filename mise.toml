@@ -303,8 +303,11 @@ description = "Run the tests for the MiniMax Code daily sign-in"
 run = "node --experimental-strip-types test/minimax-checkin-check.ts"
 
 [tasks.proto]
-description = "Regenerate the TypeScript client from the contract"
-run = "buf generate"
+description = "Regenerate the TypeScript client from the contract (router and panel)"
+run = """
+buf generate
+cd web && pnpm run gen:sync
+"""
 
 [tasks."proto:lint"]
 description = "Check the contract"
@@ -358,3 +361,9 @@ depends = ["web.build", "image.build"]
 [tasks."image:build"]
 description = "Build the image that carries the router and the panel"
 run = "podman build --format docker -t localhost/buddy-proxy:latest ."
+
+# ── 检查 ──────────────────────────────────────────────────────────────────
+
+[tasks.check]
+description = "Type-check and run every test: router and panel"
+depends = ["typecheck", "web:typecheck", "test", "web:test"]

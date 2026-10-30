@@ -5,6 +5,7 @@ inheritSkills: false
 inheritProjectContext: true
 tools: read, grep, find, ls, bash, write, edit
 thinking: medium
+subagentOnlyExtensions: /home/shay/extensions/pi-allow-reads/packages/pi-plugin/src/index.ts
 systemPromptMode: replace
 ---
 
