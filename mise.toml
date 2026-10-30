@@ -16,6 +16,12 @@ buf = "1.74.0"
 [env]
 NODE_OPTIONS = "--experimental-transform-types --disable-warning=ExperimentalWarning"
 
+[settings]
+# 测试任务默认串行。并行跑时几十个测试抢同一批端口与临时目录，
+# 会随机挂在互不相关的断言上（2026-10-29：zcode-headers 的 DB 竞争、
+# cooldown-check 的流式冷却时序），单独跑都能过。串行 83 秒，值这个稳。
+jobs = 1
+
 # ── 后端 ──────────────────────────────────────────────────────────────────
 
 [tasks.serve]

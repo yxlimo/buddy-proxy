@@ -213,9 +213,12 @@ console.log("额度用尽：平台自己说得出什么时候回来");
 console.log("");
 console.log("额度用尽：平台说不出来的时候就说不知道");
 
+// 账号在下面那一段里建，编号要留给后面几段用。
+let wbId = "";
+
 {
   const wb = addAccount({ platform: "workbuddy-cn" });
-  const wbId = wb.id!;
+  wbId = wb.id!;
   setSecret(`session:provider:${wbId}`, "session", {
     accessToken: "wb-test-token",
     refreshToken: "wb-test-refresh",
@@ -229,11 +232,36 @@ console.log("额度用尽：平台说不出来的时候就说不知道");
     loginAtMs: now,
     refreshedAtMs: now,
   });
-  putHealthSnapshot({ workbuddy: { [wbId]: { credits: { daily: 0 } } } });
+  // WorkBuddy 的额度按真实积分账本判断（resources.total），不看签到积分。
+  putHealthSnapshot({
+    workbuddy: {
+      [wbId]: {
+        credits: { daily: 0 },
+        resources: { total: 0, plan: "体验版", paid: false, groups: [], lots: [] },
+      },
+    },
+  });
   const upstream = await upstreamOf("workbuddy-cn");
   check("状态是额度用尽", upstream.state === UpstreamState.OUT_OF_CREDITS, String(upstream.state));
   check("算不出恢复时间", upstream.recoversAtMs === 0n, String(upstream.recoversAtMs));
   check("原因句只有额度用尽", upstream.stateReason === "额度用尽", upstream.stateReason);
+}
+
+console.log("");
+console.log("额度：签到积分为 0 但账本还有余额，不算用尽");
+
+{
+  clearCooldown(wbId);
+  putHealthSnapshot({
+    workbuddy: {
+      [wbId]: {
+        credits: { daily: 0 },
+        resources: { total: 1867.97, plan: "体验版", paid: false, groups: [], lots: [] },
+      },
+    },
+  });
+  const upstream = await upstreamOf("workbuddy-cn");
+  check("还有余额就不是额度用尽", upstream.state !== UpstreamState.OUT_OF_CREDITS, String(upstream.state));
 }
 
 console.log("");

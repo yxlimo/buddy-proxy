@@ -22,6 +22,7 @@ import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
 import { type QoderRegion } from "../qoder/auth.ts";
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
+import { fetchWorkBuddyResources, type WorkBuddySnapshotEntry } from "../workbuddy/resources.ts";
 import {
   setWorkbuddyModelList,
   workbuddyModelList,
@@ -434,7 +435,11 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
       snapshot.zcode[row.id] = { quota: await zcodeQuota(300_000, row.id) };
       return;
     case "workbuddy":
-      snapshot.workbuddy[row.id] = { credits: await fetchWorkBuddyCredits(row.id) };
+      // 签到状态与积分账本是两件事：一个是连签，一个是平台自己的余额。
+      snapshot.workbuddy[row.id] = {
+        credits: await fetchWorkBuddyCredits(row.id),
+        resources: await fetchWorkBuddyResources(row.id),
+      } as WorkBuddySnapshotEntry;
       return;
     case "tokenrhythm":
       // 一个账号一行一个钱包：快照也按账号存。

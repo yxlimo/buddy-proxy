@@ -5,12 +5,21 @@
 //
 // Each check is one behaviour the official client has and the proxy did not.
 
-import { buildChatBody, conversationIdFor } from "../lib/workbuddy/transport.ts";
-import { clampEffort } from "../lib/workbuddy/models.ts";
-import { chatHeaders } from "../lib/workbuddy/auth.ts";
-import { uuidv7Hex } from "../lib/ids.ts";
-import { cliFetch } from "../lib/http.ts";
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// The store opens its file the first time it is asked for it, so the data
+// directory has to point at a temporary one before anything imports it.
+// The test never wants the real database: it reads no credential.
+process.env.BUDDY_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-check-"));
+
+const { buildChatBody, conversationIdFor } = await import("../lib/workbuddy/transport.ts");
+const { clampEffort } = await import("../lib/workbuddy/models.ts");
+const { chatHeaders } = await import("../lib/workbuddy/auth.ts");
+const { uuidv7Hex } = await import("../lib/ids.ts");
+const { cliFetch } = await import("../lib/http.ts");
 
 let pass = 0;
 let fail = 0;
@@ -259,6 +268,156 @@ console.log("the regions");
   const asCn = kind?.baseUrl({ id: "workbuddy-cn", region: "cn" } as any);
   check("the base URL follows the row: international", asGlobal === "https://www.workbuddy.ai", String(asGlobal));
   check("the base URL follows the row: China", asCn === "https://www.workbuddy.cn", String(asCn));
+}
+
+console.log("");
+console.log("the credit ledger");
+
+// The platform's own answers, recorded once. No network here: the parsing
+// is a pure function, so the recorded JSON is enough.
+const SUMMARY = {
+  TotalCredits: "1867.97000068",
+  SubscriptionPackageName: "体验版",
+  IsPaidUser: false,
+  CreditGroups: [
+    { Kind: "plan_base", Name: "套餐基础积分", CycleTotalCapacity: "500", CycleRemainCapacity: "0", CycleUsedCapacity: "500", TotalCount: 1 },
+    { Kind: "plan_bonus", Name: "套餐赠送积分", CycleTotalCapacity: "0", CycleRemainCapacity: "0", CycleUsedCapacity: "0", TotalCount: 0 },
+    { Kind: "addon", Name: "购买积分", CycleTotalCapacity: "0", CycleRemainCapacity: "0", CycleUsedCapacity: "0", TotalCount: 0 },
+    { Kind: "benefit", Name: "平台奖励积分", CycleTotalCapacity: "3522", CycleRemainCapacity: "1867.97000068", CycleUsedCapacity: "1654.02999932", TotalCount: 27 },
+  ],
+  Packages: [{ PackageCode: "TCACA_code_007_nzdH5h4Nl0", CycleTotalCapacity: "1972", CycleRemainCapacity: "1817.97000068", TotalCount: 25 }],
+};
+
+const PACKAGES = {
+  TotalCount: 28,
+  Accounts: [
+    {
+      ResourceId: "codebuddy-k8b012gcvqr17rj",
+      PackageName: "CodeBuddy个人版拉新权益包",
+      CapacityUnit: "credits",
+      CapacityType: 1,
+      CycleCapacitySize: 1500,
+      CycleCapacityRemain: 0,
+      CycleCapacityUsed: 1500,
+      ExpiredTime: "2026-10-28 14:31:15",
+      CycleEndTime: "2026-11-21 09:21:57",
+      Status: 3,
+      CreateTime: 1792545719000,
+    },
+    {
+      ResourceId: "codebuddy-aa11bb22cc33dd44",
+      PackageName: "CodeBuddy个人版加购包",
+      CapacityUnit: "credits",
+      CapacityType: 1,
+      CycleCapacitySize: 200,
+      CycleCapacityRemain: 200,
+      CycleCapacityUsed: 0,
+      ExpiredTime: "2026-12-31 23:59:59",
+      CycleEndTime: "2026-12-31 23:59:59",
+      Status: 0,
+      CreateTime: 1792545719000,
+    },
+  ],
+};
+
+{
+  const { parseWorkBuddyResources, fetchWorkBuddyResourcesWith } = await import("../lib/workbuddy/resources.ts");
+  const ledger = parseWorkBuddyResources(SUMMARY, PACKAGES);
+
+  check("四个分组都在", ledger.groups.length === 4, String(ledger.groups.length));
+  const base = ledger.groups[0];
+  check("分组的名字是平台给的", base?.name === "套餐基础积分", String(base?.name));
+  check("分组的种类是平台的 kind", base?.kind === "plan_base", String(base?.kind));
+  check("分组的总量", base?.total === 500, String(base?.total));
+  check("分组剩下的", base?.remaining === 0, String(base?.remaining));
+  check("分组用掉的", base?.used === 500, String(base?.used));
+  const benefit = ledger.groups[3];
+  check("奖励积分剩下的不是取整的", benefit?.remaining === 1867.97000068, String(benefit?.remaining));
+  check("奖励积分用掉的", benefit?.used === 1654.02999932, String(benefit?.used));
+  check("总量就是平台给的 TotalCredits", ledger.total === Number("1867.97000068"), String(ledger.total));
+  check("套餐名", ledger.plan === "体验版", ledger.plan);
+  check("付费标记", ledger.paid === false, String(ledger.paid));
+
+  check("批次都进来了", ledger.lots.length === 2, String(ledger.lots.length));
+  const lot = ledger.lots[0];
+  check("批次的 id 是 ResourceId", lot?.id === "codebuddy-k8b012gcvqr17rj", String(lot?.id));
+  check("批次的名字是 PackageName", lot?.name === "CodeBuddy个人版拉新权益包", String(lot?.name));
+  check("批次剩下的是 CycleCapacityRemain", lot?.remaining === 0, String(lot?.remaining));
+  check("批次的大小是 CycleCapacitySize", lot?.size === 1500, String(lot?.size));
+  check(
+    "到期时间是东八区本地时间解析出来的",
+    lot?.expiresAt === Date.parse("2026-10-28T14:31:15+08:00"),
+    String(lot?.expiresAt),
+  );
+  check(
+    "周期结束时间也是本地时间",
+    lot?.cycleEndsAt === Date.parse("2026-11-21T09:21:57+08:00"),
+    String(lot?.cycleEndsAt),
+  );
+  check("Status 3 是失效的", lot?.active === false, String(lot?.active));
+  check("Status 0 是有效的", ledger.lots[1]?.active === true, String(ledger.lots[1]?.active));
+
+  // 明细没到：总数照给，批次是空的。
+  const noLots = parseWorkBuddyResources(SUMMARY, null);
+  check("明细缺失时批次是空的", noLots.lots.length === 0, String(noLots.lots.length));
+  check("明细缺失时总量照给", noLots.total === Number("1867.97000068"), String(noLots.total));
+
+  // 明细那一问失败：同样不影响总数。
+  const failedLots = await fetchWorkBuddyResourcesWith(async (path) => {
+    if (path.includes("summary")) return { status: 200, body: { data: SUMMARY } };
+    return { status: 500, body: { msg: "boom" } };
+  });
+  check("明细失败时总量还在", failedLots?.total === Number("1867.97000068"), String(failedLots?.total));
+  check("明细失败时批次是空的", failedLots?.lots.length === 0, String(failedLots?.lots.length));
+
+  // 总览那一问失败：不知道，不是没有。
+  const failedSummary = await fetchWorkBuddyResourcesWith(async () => ({ status: 503, body: { msg: "nope" } }));
+  check("总览失败时是 null", failedSummary === null, String(failedSummary));
+
+  const answered = await fetchWorkBuddyResourcesWith(async (path) => {
+    if (path.includes("summary")) return { status: 200, body: { data: SUMMARY } };
+    return { status: 200, body: { data: PACKAGES } };
+  });
+  check("两问都到时批次齐了", answered?.lots.length === 2, String(answered?.lots.length));
+  check("两问都到时总量是平台的", answered?.total === Number("1867.97000068"), String(answered?.total));
+}
+
+console.log("");
+console.log("the panel's numbers");
+{
+  const { kindOf } = await import("../lib/provider-kinds.ts");
+  const kind = kindOf("workbuddy");
+  const row = { id: "workbuddy-cn", kind: "workbuddy", region: "cn", enabled: true } as any;
+
+  // 账本读不到：面板上就没有额度，不许编一条签到批次出来。
+  const without = kind?.quotas?.(row, { workbuddy: { "workbuddy-cn": { credits: { daily: 100, streakDays: 3 } } } } as any) ?? [];
+  check("账本读不到时是空的", without.length === 0, JSON.stringify(without));
+
+  const { parseWorkBuddyResources } = await import("../lib/workbuddy/resources.ts");
+  const resources = parseWorkBuddyResources(SUMMARY, PACKAGES);
+  const with_ = kind?.quotas?.(row, { workbuddy: { "workbuddy-cn": { credits: null, resources } } } as any) ?? [];
+  check("账本在时有一条额度", with_.length === 1, String(with_.length));
+  const credits = with_[0]?.credits;
+  check("剩余是平台的总积分", credits?.remaining === Number("1867.97000068"), String(credits?.remaining));
+  check("总量原样给", credits?.total === Number("1867.97000068"), String(credits?.total));
+  check("用掉的是各分组的和", credits?.used === 500 + 1654.02999932, String(credits?.used));
+  check("批次是平台的那些", credits?.lots?.length === 2, String(credits?.lots?.length));
+  check(
+    "批次的来源是平台给的名字",
+    credits?.lots?.[0]?.sourceLabel === "CodeBuddy个人版拉新权益包",
+    String(credits?.lots?.[0]?.sourceLabel),
+  );
+  check(
+    "批次的状态是有效还是已失效",
+    credits?.lots?.[0]?.status === "已失效" && credits?.lots?.[1]?.status === "有效",
+    `${credits?.lots?.[0]?.status}/${credits?.lots?.[1]?.status}`,
+  );
+  check(
+    "摘要里有套餐名和各组",
+    String(credits?.note).startsWith("套餐：体验版") && String(credits?.note).includes("套餐基础积分"),
+    String(credits?.note),
+  );
+  console.log(`  note: ${credits?.note}`);
 }
 
 console.log("");
