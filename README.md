@@ -5,15 +5,15 @@ dialects, and the model name decides which upstream the request goes to:
 
 | Process | Port | Upstreams | Dialect |
 |---------|------|-----------|---------|
-| `router-proxy.ts` | 6450 | MiniMax Code, MiniMax open platform, Qoder (two regions), WorkBuddy, TokenRhythm, ZCode, SenseNova, 书生·端砚 | OpenAI + Anthropic |
+| `router-proxy.ts` | 6450 | eleven platforms: MiniMax Code, ZCode, Qoder (two regions), WorkBuddy (two regions), TokenRhythm, SenseNova, 书生·端砚, 七牛云, 讯飞星火 | OpenAI + Anthropic |
 
 Point a client at it and it works with either dialect — see
-[Router](#router-router-proxyts-port-6450).
+[The router](#the-router).
 
 ## What is switched on
 
-There are nine upstreams behind this, and each has a switch. All of them
-start **off**; turn on the ones you actually use, in the panel.
+There are eleven platforms behind this, and each account on them has a switch.
+All of them start **off**; turn on the ones you actually use, in the panel.
 
 The switch is a row in the gateway's database, not an environment variable:
 the panel's 上游 tab has one switch per account, and the next request after you
@@ -28,16 +28,18 @@ two MiniMax Code subscriptions, or one relay-station tenant each.
 | Platform (path) | What it is |
 |-----------------|------------|
 | `minimax` | the MiniMax Code gateway |
-| `minimax-api` | the MiniMax open platform (api.minimax.cn), by API key |
 | `zcode` | ZCode (zcode.z.ai), the GLM coding client |
 | `qoder` | the Qoder global service (qoder.com) |
 | `qoder-cn` | the Qoder China service (qoder.cn) |
 | `workbuddy-cn` | WorkBuddy China (workbuddy.cn) |
+| `workbuddy-global` | WorkBuddy international (workbuddy.ai) |
 | `tokenrhythm` | the TokenRhythm relay station (tokenrhythm.studio) |
 | `sensenova` | SenseNova (token.sensenova.cn) |
-| `intern-ai` | InternAI's open platform (discovery-api.intern-ai.org.cn) |
+| `intern-ai` | 书生·端砚, InternAI's Discovery site (discovery-api.intern-ai.org.cn) |
+| `qiniu` | 七牛云 (api.qnaigc.com), by API key |
+| `xinghuo` | 讯飞星火 (maas-api.cn-huabei-1.xf-yun.com), by API key |
 
-A fresh install has no accounts at all: the panel's 上游 tab lists the nine
+A fresh install has no accounts at all: the panel's 上游 tab lists the eleven
 platforms, and you add an account to the one you want. An account that is
 switched off is not looked at: no credential is read, no login is attempted,
 and a request that would land on it goes to the other accounts of the platform
@@ -48,13 +50,13 @@ The policy — `single`, `fallback`, `expiry_first` — belongs to the platform,
 not to an account: it says how that platform's accounts take turns. A single
 account cannot decide on its own whether to hand a request to another one.
 
-The two Qoder regions are two upstreams of the same platform, and WorkBuddy's
-China account is a third one. One upstream can carry several **providers**
-(the accounts): the TokenRhythm relay has three, the MiniMax open platform
-has one per API key. The upstream's own policy decides which of its providers
-takes a request.
+The two Qoder regions are two platforms of the same kind, and WorkBuddy's China
+and international accounts are two more. One platform can carry several
+**accounts**: the TokenRhythm relay can have a tenant each, and the key-only
+platforms (七牛云, 讯飞星火) hold one account per API key. The platform's own
+policy decides which of its accounts takes a request.
 
-One process reads all nine.
+One process reads all eleven.
 
 This repository used to also proxy OpenCode's own free tier, by driving the
 real `opencode` binary's local server. That is gone: the free tier's
@@ -116,6 +118,30 @@ environment is not a source for them — it used to be, and it wrote itself
 back into the database on every read, so a deleted account got an identity
 back within a minute.
 
+### Where a setting's value comes from
+
+Three places, in this order:
+
+1. **the environment** — what the deployment sets (the process environment,
+   then the `.env` file)
+2. **the database** — what the management panel writes
+3. **the default in the code**
+
+The environment comes first: what the deployment pins, the deployment
+decides. The panel's value is kept in the database all the same, so removing
+the environment variable hands the setting back to the panel. The panel shows
+both — the value in effect and the one it wrote — and says which is which.
+
+`PERIODIC_ENABLED=false` turns the background timer off: the gateway then
+never refreshes a token, never checks in, and never scans balances. The
+reason it exists: a refresh rotates the refresh token, and that token is
+**one-shot** — two refreshes of the same session look like a replay, and the
+platform revokes the whole session. While debugging, reproducing or testing
+offline, a token that expires is better than a session that gets revoked.
+The panel's state read still works (it asks the platform, read-only), and
+the panel can still check in by hand. It is read once at startup — change it
+and restart.
+
 ## The background timer
 
 One timer (a minute per tick) runs everything periodic, in order: refresh a
@@ -142,14 +168,25 @@ lib/config.ts          the settings, and where they come from
 lib/store.ts           the database: the credentials, the settings, the cache
 lib/paths.ts           the one directory everything lives in
 lib/providers.ts       the providers: the rows, their kind, their secrets
+lib/platforms.ts       the platforms: the templates, their policy
 lib/provider-kinds.ts  what a kind of upstream can do: how to log in, what to ask
-lib/kinds.ts           the registry the panel and the router read
+lib/kinds/             the registry the panel and the router read, one file per kind
 lib/session.ts          the session: read it, write it, lock it, refresh it
 lib/credential.ts       the shared credential shapes, and the auth log
 lib/usage.ts            the request-level usage log
 lib/agent.ts            who sent the request: pi, opencode, dsh
 lib/aggregate.ts        the published models: the catalog, the targets, the traffic
 lib/benefits.ts         the daily credits of the China accounts
+lib/periodic.ts         the background timer: refresh, check in, scan balances
+lib/login.ts            the logins the panel drives
+lib/login-flow.ts       the shared login flow: start, poll, hand over
+lib/platform-keys.ts    the API keys a platform carries
+lib/credential-ids.ts   the names of the credentials
+lib/cooldown.ts         the accounts that are set aside for a while
+lib/health-cache.ts     the health snapshot, and how old it is
+lib/upstream-status.ts  what an upstream says about itself
+lib/upstream-session.ts the client's session id, mapped to the upstream's
+lib/catalog-models.ts   the model list shape every kind answers in
 lib/http.ts             the HTTP client (node:http, so no browser headers)
 lib/api-keys.ts         the front door: the keys the agents use
 lib/device-identity.ts  the fingerprint of an account
@@ -158,9 +195,17 @@ lib/env.ts             reading the environment
 lib/ids.ts             the id helpers
 lib/router/            the router's inside
   routes.ts            where a request goes: the model name and the path
+  handle.ts            one request, from the path to the upstream
+  app.ts               the Koa application: the middleware and the routes
   catalog.ts           the model lists, in both dialects
+  catalog-routes.ts    the model list routes
+  catalog-cache.ts     the cached catalogue of one upstream
   deliver.ts           how an answer reaches the agent
-  upstreams.ts         the upstream adapters
+  upstreams/           the upstream adapters, one file per kind
+  openai-platform.ts   the forwarding the open platforms share
+  compatible-platform.ts  what an open platform is declared with
+  provider-selection.ts the account the policy picks
+  selection.ts         the shared selection: the order, the fallback, the stop
 lib/dialect/           the conversion between the two dialects
   request.ts           the request
   stream.ts            the streaming answer
@@ -171,6 +216,8 @@ lib/admin/             the panel's side: the Connect service
   credentials.ts       the credential words, and the key writing
   config.ts            the settings the panel may change
   upstreams.ts         what each upstream has: the credential, the quota, the state
+  upstream-state.ts    the state of one upstream
+  policy.ts            the platform policy, read and written
   models.ts            the published models
   usage.ts             the usage summary
   benefits.ts          the daily check-in
@@ -189,9 +236,11 @@ lib/qoder/              Qoder: the session, the models, the two protocols
 lib/workbuddy/          WorkBuddy: the session, the models, the transport
   auth.ts               the browser login, the session, the refresh
   models.ts             the catalogue, curated the way the simulated client shows it
+  catalog-store.ts      the catalogue in the database, so a restart keeps it
   transport.ts          the chat endpoint
   api.ts                the account's own API
   credits.ts            what the account has left
+  resources.ts          the credit lots of the account
   benefits.ts           the check-in, the growth centre
 lib/minimax/            MiniMax: the session, the models, the gateway call
   auth.ts               picks the credential source
@@ -200,8 +249,8 @@ lib/minimax/            MiniMax: the session, the models, the gateway call
   models.ts             the model catalog
   transport.ts          the call to the MiniMax Code gateway
   credits.ts            what the accounts have left
+  points.ts             the points ledger, and the auto-spend switch
   checkin.ts            the daily sign-in
-  api.ts                the open platform: the tenants, their keys, their plans
 lib/zcode/              ZCode (the GLM coding client)
   auth.ts               the browser login, the session
   models.ts             the model catalog
@@ -210,6 +259,7 @@ lib/zcode/              ZCode (the GLM coding client)
 lib/tokenrhythm/        TokenRhythm: the accounts, the wallet, the relay call
   accounts.ts           the tenants, the session, the login
   wallet.ts             what the accounts have left, and which one to use
+  balance.ts            the balance of one account
   models.ts             the model catalog
   transport.ts          the relay call
   platform.ts           the platform's own API (the cookies, the writes)
@@ -219,13 +269,27 @@ lib/sensenova/          SenseNova: the login, the keys, the pools, the relay cal
   keys.ts               the API keys, and the pools they draw from
   models.ts             the model catalog
   quota.ts              the pools: how much is left in each
+  platform.ts           the console's own API (the cookies, the writes)
   transport.ts          the inference endpoint
+  register.ts           what SenseNova is, as a declaration
 lib/intern-ai/          书生·端砚: the login, the keys, the credits, the relay call
   auth.ts               the SSO session, the shared uaa-token
+  login-flow.ts         the login the panel drives
   keys.ts               the API keys of the two sub-sites
   models.ts             the model catalog, from the inference endpoint and the console
   quota.ts              the credits, and the packs they come in
   transport.ts          the inference endpoint
+  register.ts           what 书生·端砚 is, as a declaration
+lib/qiniu/              七牛云: the API key, the portal cookie, the resource packs
+  account.ts            the two credentials of one account
+  catalog.ts            the model list the key may use
+  models.ts             the models the gateway serves
+  quota.ts              the resource packs
+  register.ts           what 七牛云 is, as a declaration
+lib/xinghuo/            讯飞星火: the API key and the model list
+  account.ts            the API key of one account
+  models.ts             the models the gateway serves
+  register.ts           what 讯飞星火 is, as a declaration
 proto/buddy/admin/v1/   the contract the panel and the gateway share
 lib/gen/                the generated code for it (both sides use this copy)
 web/                    the panel: React, Vite, shadcn/ui, Connect
@@ -255,7 +319,9 @@ mise run build         # the panel and the image
 mise run proto         # regenerate the contract's code
 ```
 
-The test tasks are separate so a change can be checked on its own:
+The test tasks are separate so a change can be checked on its own. These are
+the ones worth knowing by name; `mise.toml` has the full list, including the
+tasks that check one small thing.
 
 | Task | What it covers |
 |------|----------------|
@@ -264,15 +330,33 @@ The test tasks are separate so a change can be checked on its own:
 | `test:admin:contract` | every method of the contract answers |
 | `test:admin:regression` | the panel's API, end to end |
 | `test:admin:login` | the login flows |
+| `test:admin:policy` | the platform policy: read, write, validation |
 | `test:admin:state` | what the panel says about each upstream |
 | `test:aggregate` | the published models and the fallback behind them |
 | `test:agent` | telling the agents apart by their headers |
 | `test:catalog-parity` | the model lists agree with the upstreams |
+| `test:catalog:persist` | the catalogue in the database survives a restart |
 | `test:config` | the settings, and the hot ones |
 | `test:effort` | the thinking levels |
 | `test:intern-ai` | 书生·端砚 |
+| `test:intern-ai:quota` | what the panel sees of 书生·端砚 |
 | `test:minimax:checkin` | the MiniMax sign-in |
+| `test:minimax:credits` | the MiniMax plan windows, the points, the auto-spend switch |
+| `test:qiniu` | 七牛云: the resource packs and the quota view |
+| `test:qiniu:keys` | 七牛云: the inference key and the portal cookie |
+| `test:xinghuo` | 讯飞星火: the registration, the catalogue, the key |
 | `test:qoder:benefits` | the Qoder campaigns |
+| `test:quota` | the quota readout of the MiniMax plan, the SenseNova pools, the ZCode quota |
+| `test:sensenova:intern` | SenseNova and 书生·端砚, against a fake upstream |
+| `test:token-plan` | the plan windows are read, the video window is not |
+| `test:model-visibility` | a spent account hides no model |
+| `test:upstream:cooldown` | the panel sees the cooldown |
+| `test:health:cooldown` | `/health` says which account is cooling down |
+| `test:periodic` | the timer refreshes the sessions and scans the balances |
+| `test:refresh-flow` | the shared refresh flow: not due, refused, failed, no session |
+| `test:balance-account` | the balance scan and the account it pins |
+| `test:workbuddy:catalog` | the WorkBuddy catalogue in the database |
+| `test:workbuddy:benefits` | the Buddy's trip to the growth centre |
 | `test:route` | the router, end to end |
 | `test:session` | the session, and the shared base |
 | `test:snapshot` | reading the health snapshot by provider id |
@@ -282,6 +366,7 @@ The test tasks are separate so a change can be checked on its own:
 | `test:session-map` | the client's session id mapped to the upstream's |
 | `test:zcode` | the ZCode login window |
 | `test:zcode:headers` | the ZCode request headers against the official client's |
+| `test:zcode:session` | the ZCode session: an unknown expiry is not an expired one |
 
 None of them spend anything: they run against the mock or the recorded
 fixtures.
@@ -332,8 +417,8 @@ Three different things, and they are never added together:
 | | What it is | Who has it |
 |---|---|---|
 | **余额 (balance)** | money | the relay stations (TokenRhythm) |
-| **积分 (credits)** | points | Qoder, WorkBuddy, SenseNova, InternAI, MiniMax |
-| **套餐额度 (token plan)** | a percentage per window (5 hours, weekly) | MiniMax's coding plan, the open platform |
+| **积分 (credits)** | points | Qoder, WorkBuddy, SenseNova, 书生·端砚, MiniMax, 七牛云 |
+| **套餐额度 (token plan)** | a percentage per window (5 hours, weekly) | MiniMax's coding plan, SenseNova's pools, 书生·端砚's windows |
 
 The upstream list shows the token plan when there is one, the credits
 otherwise, and the balance separately when there is one. A platform that does
@@ -403,10 +488,12 @@ panel) are dropped at startup and once an hour while it runs.
 Auth: `Authorization: Bearer <key>` (OpenAI) or `x-api-key: <key>` (Anthropic).
 Base URL: `http://localhost:6450` (use `.../v1` for OpenAI clients).
 
-Each upstream also has a path of its own — `/qoder/v1`, `/qoder-cn/v1`,
-`/workbuddy-cn/v1`, `/minimax/v1`, `/tokenrhythm/v1` — so a client can be
-pointed at one upstream, and the model name there is the real one. The root
-paths above take the model name with a prefix instead (`qoder-cn/glm-5.3`).
+Each platform also has a path of its own — `/qoder/v1`, `/qoder-cn/v1`,
+`/workbuddy-cn/v1`, `/workbuddy-global/v1`, `/minimax/v1`, `/zcode/v1`,
+`/tokenrhythm/v1`, `/sensenova/v1`, `/intern-ai/v1`, `/qiniu/v1`,
+`/xinghuo/v1` — so a client can be pointed at one platform, and the model name
+there is the real one. The root paths above take the model name with a prefix
+instead (`qoder-cn/glm-5.3`).
 
 ```bash
 # OpenAI format
@@ -427,9 +514,8 @@ on it: the panel decides which models exist, what they are called, and which
 upstream serves them. With nothing in the database the root route has nothing
 to publish and answers 404.
 
-The upstream's own paths (`/qoder/v1`, `/qoder-cn/v1`, `/workbuddy-cn/v1`,
-`/minimax/v1`, `/tokenrhythm/v1`) are unaffected: a client pointed at one
-upstream keeps the real model names there.
+Each platform's own path (`/qoder/v1`, `/minimax/v1`, …) is unaffected: a
+client pointed at one platform keeps the real model names there.
 
 A published model has one or more targets:
 
@@ -466,7 +552,7 @@ into `/data/admin-token` (0600). `/health` stays public.
 |--------|--------------|
 | `GetSystemStatus` | the upstreams, their credentials, the balances |
 | `RestartSystem` | ask the gateway to exit (the container brings it back) |
-| `ListUpstreams` / `SetUpstreamEnabled` | the upstream switches |
+| `ListUpstreams` / `SetAccountEnabled` | the upstream switches |
 | `ListConfig` / `SetConfig` | the settings and where each value comes from |
 | `ListAccounts` / `ListCredentials` | the accounts and their credentials |
 | `TestCredential` / `RefreshCredential` | try one credential, refresh it |
@@ -476,7 +562,8 @@ into `/data/admin-token` (0600). `/health` stays public.
 | `ListPublishedModels` / `SavePublishedModel` / `DeletePublishedModel` | the published models |
 | `GetBenefitStatus` / `RunBenefitNow` | the daily check-in |
 | `ListModels` | the catalogues of the upstreams |
-| `ListProviderKinds` / `AddProvider` / `UpdateProvider` / `DeleteProvider` | the upstreams themselves |
+| `ListProviderKinds` / `AddAccount` / `UpdateProvider` / `DeleteAccount` | the accounts themselves |
+| `SetPlatformPolicy` | the policy of a platform |
 | `SetProviderKeys` | the API keys of an upstream |
 | `BeginLogin` / `GetLoginStatus` / `CancelLogin` / `LoginWithPassword` / `ExchangeLoginCode` / `ImportLoginToken` | the logins |
 | `TailLog` | the log |
@@ -538,17 +625,19 @@ limit; the WorkBuddy gateway cuts the answer there.
 
 Each upstream is a path of its own, so the model ids are the real ones:
 
-| Provider | Base URL | Upstream |
+| Platform | Base URL | Upstream |
 |---|---|---|
-| `qoder_global` | `{router}/qoder/v1` | Qoder, global account |
-| `qoder_cn` | `{router}/qoder-cn/v1` | Qoder, China account |
-| `workbuddy_cn` | `{router}/workbuddy-cn/v1` | WorkBuddy, China account |
-| `minimax_code` | `{router}/minimax/v1` | the MiniMax Code gateway |
-| `minimax_api` | `{router}/minimax-api/v1` | the MiniMax open platform, by API key |
+| `qoder` | `{router}/qoder/v1` | Qoder, global account |
+| `qoder-cn` | `{router}/qoder-cn/v1` | Qoder, China account |
+| `workbuddy-cn` | `{router}/workbuddy-cn/v1` | WorkBuddy, China account |
+| `workbuddy-global` | `{router}/workbuddy-global/v1` | WorkBuddy, international account |
+| `minimax` | `{router}/minimax/v1` | the MiniMax Code gateway |
 | `zcode` | `{router}/zcode/v1` | ZCode (the GLM coding client) |
 | `sensenova` | `{router}/sensenova/v1` | SenseNova |
-| `intern_ai` | `{router}/intern-ai/v1` | 书生·端砚 (Discovery) |
+| `intern-ai` | `{router}/intern-ai/v1` | 书生·端砚 (Discovery) |
 | `tokenrhythm` | `{router}/tokenrhythm/v1` | the TokenRhythm relay station |
+| `qiniu` | `{router}/qiniu/v1` | 七牛云 |
+| `xinghuo` | `{router}/xinghuo/v1` | 讯飞星火 |
 
 The opencode **TUI** model picker lists each model exactly once: anything
 already shown under **Favorites** or **Recent** is not repeated in the
@@ -565,7 +654,145 @@ provider's models are not in there by default. Open the picker → **Manage
 models** → flip the provider's switch (one switch covers all its models). That
 is per-browser.
 
-## ZCode
+## The router
+
+One entry point, two dialects, eleven platforms. The model name decides the
+platform; the dialect decides how much translation happens.
+
+| Method | Path | Format |
+|--------|------|--------|
+| `GET`  | `/v1/models` | every enabled platform, prefixed ids (`?dialect=openai` for the OpenAI shape) |
+| `GET`  | `/{platform}/v1/models` | one platform, plain model ids |
+| `POST` | `/v1/messages` | Anthropic messages (stream supported) |
+| `POST` | `/{platform}/v1/messages` | the same, addressed to one platform |
+| `POST` | `/v1/chat/completions` | OpenAI chat (stream supported) |
+| `POST` | `/{platform}/v1/chat/completions` | the same, addressed to one platform |
+| `GET`  | `/health` | status of every enabled platform |
+
+`{platform}` is the platform's id: `minimax`, `zcode`, `qoder`, `qoder-cn`,
+`workbuddy-cn`, `workbuddy-global`, `tokenrhythm`, `sensenova`, `intern-ai`,
+`qiniu`, `xinghuo`.
+
+`/health` answers with the platforms in two parts: `providers` is the short
+list (id, name, kind, whether it can serve right now, how many accounts it
+has), and `upstreams` is the detail (the policy, the accounts, and for each
+account its credential, its cooldown and its health snapshot).
+
+### Routing
+
+The platform is chosen by the path, and the model id is the model's own name:
+
+| Base URL | Platform | Example request |
+|---|---|---|
+| `{router}/qoder/v1` | Qoder, global account | `{"model": "glm-5.3"}` |
+| `{router}/qoder-cn/v1` | Qoder, China account | `{"model": "glm-5.3"}` |
+| `{router}/workbuddy-cn/v1` | WorkBuddy, China account | `{"model": "glm-5.3-flash"}` |
+| `{router}/workbuddy-global/v1` | WorkBuddy, international account | `{"model": "glm-5.3-flash"}` |
+| `{router}/minimax/v1` | MiniMax | `{"model": "MiniMax-M3.1-Flash"}` |
+| `{router}/zcode/v1` | ZCode | `{"model": "GLM-5.3"}` |
+
+A client that can only use one base URL can put the platform in the model name
+instead — `qoder/glm-5.3`, `qoder-cn/glm-5.3`, `workbuddy-cn/glm-5.3`,
+`minimax/MiniMax-M3` — at `{router}/v1`. The server prefixes the model
+internally either way, so the two spellings mean the same thing.
+
+The prefixed form is also what `/v1/models` at the root lists, and the
+per-platform `/qoder/v1/models` lists the same models with their plain names.
+
+An unknown model gets a 400 that says which platform it was looked for in,
+rather than being sent somewhere at random.
+
+### Dialect handling
+
+Each dialect is cheapest on the platform that speaks it natively, so each
+request is translated at most once:
+
+| Request dialect | Platform | What happens |
+|---|---|---|
+| OpenAI | Qoder | passed through — the Qoder gateway is an OpenAI endpoint |
+| OpenAI | MiniMax | converted to Anthropic, and the response back to OpenAI |
+| Anthropic | Qoder | converted to OpenAI, and the response back to Anthropic |
+| Anthropic | MiniMax | passed through |
+
+The conversion covers tools (both schema directions), tool calls in the
+response, streaming and non-streaming, and the thinking channel: Anthropic
+`thinking` blocks become OpenAI `reasoning_content` and back. Tool arguments
+that arrive split across OpenAI stream fragments are buffered and emitted once
+they form valid JSON, because Anthropic expects a whole JSON document.
+
+### Environment
+
+| Variable | Default | What |
+|----------|---------|------|
+| `ROUTER_PORT` | `6450` | router port |
+| `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
+| `PERIODIC_ENABLED` | `true` | the background timer: refresh tokens near expiry, check in, scan balances (`false` turns all of it off) |
+| `SESSION_REFRESH_TIMEOUT_MS` | `30000` | how long one refresh may take before it is given up on |
+| `HEALTH_CACHE_MS` | `300000` | how long the live part of `/health` stays good |
+| `USAGE_RETENTION_DAYS` | `30` | how long the usage rows are kept |
+| `BENEFITS_INTERVAL_MS` | `3600000` | how often the daily check-in runs |
+
+The settings of a platform are in that platform's own section. Where a value
+comes from — the environment, the database, or the code — is in
+[The settings](#the-settings).
+
+## Credentials and sessions
+
+Every secret the gateway holds is in one SQLite file: the sessions of the
+platforms, the keys the agents authenticate with, the relay station's accounts
+and the salt the device fingerprint is derived from.
+
+One directory holds all of it — the database, the credential log and the salt:
+
+| Variable | Default | What |
+|----------|---------|------|
+| `BUDDY_DATA_DIR` | `/data` (`~/.buddy-proxy` outside Docker) | the directory: `buddy.db`, `auth.log`, `identity.salt` |
+
+```bash
+# what is in there
+node router-proxy.ts --clear            # lists the credentials
+# forget one, so that the next start logs in again
+node router-proxy.ts --clear session:qoder:cn
+```
+
+The file is 0600 and lives in the data volume. The refresh tokens rotate on
+every refresh, so only one holder of a session can refresh it — the database
+holds a lock for that, the same way the lock file used to.
+
+### How the sessions stay alive
+
+The official clients refresh their own tokens on a timer; nobody presses a
+button. The gateway does the same: a timer (every minute) looks at each
+session and swaps the token before it expires (`lib/session.ts`; each kind
+says how its own session is refreshed). A request never waits for a
+refresh, and the panel has no "refresh" button — a session that the platform
+refused is dead, and the way back is to authorize again.
+
+One session, one holder. The refresh token rotates on every refresh, so the
+old one dies immediately, and the platform withdraws **every** session of that
+account when it sees an old token used again. So a copy of the database
+running somewhere else is a second holder: it refreshes, and the copy here
+stops working. The same is true of the desktop client's own store — it must
+not keep a session of an account the gateway holds.
+
+A refresh that does not come back in time is given up on, not retried: the
+token is one-shot, so asking again could be the replay the platform punishes.
+The timer wakes again and tries then.
+
+### Health
+
+`/health` does not ask the upstreams. The live part — the account standing,
+the credits, the balances — is fetched in the background and kept in the
+database; the endpoint answers with the last known state and says how old it
+is.
+
+## The platforms
+
+Eleven platforms. What they have in common — the credentials, the sessions, the
+settings — is above; what is below is what makes some of them different: how
+it is reached, how it is logged into, what it serves and what it has left.
+
+### ZCode
 
 ZCode is 智谱's (Z.ai / BigModel) coding client. It is the one upstream whose
 credential is a plain browser OAuth: the CLI asks the platform for a flow, the
@@ -610,45 +837,18 @@ implement `refreshToken`, so when it expires the only way back is a new login
 in the panel. The panel says so instead of failing quietly.
 
 The models are the built-in table — ZCode keeps them in a static JSON, not
-behind an endpoint: `GLM-5.3-Flash`, `GLM-5.2`, `GLM-5-Turbo`.
+behind an endpoint: `GLM-5.3` and `GLM-5.3-Flash`. The platform also says
+which of them the account is allowed to use, and the published list follows
+that.
 
-The quota is the Start Plan's balance: one endpoint returns the buckets, and
-each bucket says which models it covers.
+The quota is the Start Plan's balance: one endpoint
+(`/api/v1/zcode-plan/billing/balance`) returns the buckets, and each bucket
+says which models it covers.
 
 The reverse engineering is written up in `docs/zcode/FINDINGS.md` (local, not in
 the repository).
 
-## MiniMax open platform
-
-Another upstream of the router, reached through `/minimax-api`: MiniMax's own
-platform, not the Code gateway. It is the ordinary OpenAI-compatible API, and
-the credential is an API key (`sk-cp-…`, the coding-plan kind).
-
-| Method | Path | Format |
-|--------|------|--------|
-| `POST` | `/minimax-api/v1/messages` | Anthropic messages (stream supported) |
-| `POST` | `/minimax-api/v1/chat/completions` | OpenAI chat completions |
-| `GET`  | `/minimax-api/v1/models` | model catalog |
-
-**Several tenants, one key each.** A key is a plan, so several keys are several
-plans. They belong to the account, and they are written in the panel: the
-account "MiniMax 开放平台" has an "API Key" button; one key per line, the first
-line is the first tenant.
-
-The gateway takes the tenants in turn, and a tenant that cannot serve the
-request (the plan ran out, the key was refused, the key is rate limited) is
-skipped for the next one.
-
-The environment is not a source for keys. It used to be, and it wrote itself
-into the database on every read — so a key that was set there survived the
-deletion of the account it belonged to, and the key set in the panel was
-overwritten by it. A key lives in the account, and deleting the account
-deletes the key.
-
-The quota of each tenant is its plan's own windows (five hours and a week) —
-the same thing the Code gateway's account has.
-
-## MiniMax Code gateway
+### MiniMax Code gateway
 
 One of the router's upstreams: the MiniMax Code LLM gateway, reached through
 the router's own `/minimax` path.
@@ -674,7 +874,7 @@ itself — `client_id=mcode-public`, `audience=agent-backend`, `scope=agent.defa
 — not a header trick. The token read from the desktop app's store is already a
 MiniMax Code credential.
 
-### Credential
+#### Credential
 
 Two sources, picked by `MINIMAX_AUTH_MODE` (`lib/minimax/auth.ts` dispatches):
 
@@ -712,7 +912,7 @@ answer `503` with a Chinese hint telling you to re-login, and `/health` reports
 the same. A warning is logged when the token enters the last 10 minutes, and a
 background watch logs the state every 5 minutes even without traffic.
 
-### Models
+#### Models
 
 The gateway has no `/models` route (`direct_route_not_configured`), so
 `GET /v1/models` is served from a local catalog (`lib/minimax/models.ts`):
@@ -732,7 +932,7 @@ The gateway does **not** validate model ids either: an unrecognized name (say
 `MiniMax-M3.1`) is silently routed to `MiniMax-M3` instead of failing. The
 `model` field in the response tells you what actually ran.
 
-### Clients
+#### Clients
 
 - **pi** — `~/.pi/agent/models.json` has a `minimax_code` provider
   (`baseUrl: http://<proxy-host>:6450/minimax`, `api: anthropic-messages`)
@@ -758,7 +958,7 @@ The gateway does **not** validate model ids either: an unrecognized name (say
 The `/v1` in the base URL is Anthropic's version segment, exactly like the
 official `https://api.anthropic.com/v1` example in the opencode docs.
 
-### Thinking and effort
+#### Thinking and effort
 
 The gateway speaks the Anthropic dialect for reasoning: thinking is
 `thinking: {type: "adaptive"}`, and the effort level rides along in
@@ -771,7 +971,7 @@ The gateway logs the outcome of every streamed response (`[RES] … done 1234ms
 bytes=… pings=…`, or `FAILED after … cause=…`), which is what tells an upstream
 failure apart from a connection dropped by a hop in front of the proxy.
 
-### Heartbeat
+#### Heartbeat
 
 The gateway sends one `event: ping` right after `message_start` and then stays
 silent for as long as the model thinks — a long thinking pause can keep the
@@ -784,7 +984,7 @@ A ping is only written on an SSE frame boundary — writing one in the middle of
 an upstream frame would corrupt the agent's parse — and only when the stream
 is actually idle, so a busy stream is not padded with useless events.
 
-### Environment
+#### Environment
 
 | Variable | Default | What |
 |----------|---------|------|
@@ -806,128 +1006,13 @@ is actually idle, so a busy stream is not padded with useless events.
 | `PERIODIC_ENABLED` | `true` | the background timer: refresh tokens near expiry, check in, scan balances (`false` turns all of it off) |
 | `MINIMAX_TOKEN_PLAN_KEY` | — | removed: the token plan's key belongs to the account, not to the environment |
 
-### Credentials
 
-Every secret the gateway holds is in one SQLite file: the sessions of the four
-clients, the keys the agents authenticate with, the relay station's accounts
-and the salt the device fingerprint is derived from.
+### Qoder
 
-One directory holds all of it — the database, the credential log and the salt:
+Qoder is served in two regions — `qoder` (qoder.com) and `qoder-cn`
+(qoder.cn) — and each one is a platform of its own.
 
-| Variable | Default | What |
-|----------|---------|------|
-| `BUDDY_DATA_DIR` | `/data` (`~/.buddy-proxy` outside Docker) | the directory: `buddy.db`, `auth.log`, `identity.salt` |
-
-```bash
-# what is in there
-node router-proxy.ts --clear            # lists the credentials
-# forget one, so that the next start logs in again
-node router-proxy.ts --clear session:qoder:cn
-```
-
-The file is 0600 and lives in the data volume. The refresh tokens rotate on
-every refresh, so only one holder of a session can refresh it — the database
-holds a lock for that, the same way the lock file used to.
-
-### How the sessions stay alive
-
-The official clients refresh their own tokens on a timer; nobody presses a
-button. The gateway does the same: a timer (every minute) looks at each
-session and swaps the token before it expires (`lib/session-refresh.ts`; each
-kind says how its own session is refreshed). A request never waits for a
-refresh, and the panel has no "refresh" button — a session that the platform
-refused is dead, and the way back is to authorize again.
-
-One session, one holder. The refresh token rotates on every refresh, so the
-old one dies immediately, and the platform withdraws **every** session of that
-account when it sees an old token used again. So a copy of the database
-running somewhere else is a second holder: it refreshes, and the copy here
-stops working. The same is true of the desktop client's own store — it must
-not keep a session of an account the gateway holds.
-
-A refresh that does not come back in time is given up on, not retried: the
-token is one-shot, so asking again could be the replay the platform punishes.
-The timer wakes again and tries then.
-
-| Variable | Default | What |
-|----------|---------|------|
-| `SESSION_REFRESH_TIMEOUT_MS` | `30000` | how long one refresh may take before it is given up on |
-
-### Health
-
-`/health` does not ask the upstreams. The live part — the account standing,
-the credits, the balances — is fetched in the background and kept in the
-database; the endpoint answers with the last known state and says how old it
-is.
-
-| Variable | Default | What |
-|----------|---------|------|
-| `HEALTH_CACHE_MS` | `300000` | how long the live part stays good |
-
-## Router (`router-proxy.ts`, port 6450)
-
-One entry point, two dialects, nine upstreams. The model name decides the
-upstream; the dialect decides how much translation happens.
-
-| Method | Path | Format |
-|--------|------|--------|
-| `GET`  | `/v1/models` | every enabled upstream, prefixed ids (`?dialect=openai` for the OpenAI shape) |
-| `GET`  | `/{upstream}/v1/models` | one upstream, plain model ids |
-| `POST` | `/v1/messages` | Anthropic messages (stream supported) |
-| `POST` | `/{upstream}/v1/messages` | the same, addressed to one upstream |
-| `POST` | `/v1/chat/completions` | OpenAI chat (stream supported) |
-| `POST` | `/{upstream}/v1/chat/completions` | the same, addressed to one upstream |
-| `GET`  | `/health` | status of every enabled upstream |
-
-The upstream switches are in the `providers` section — one entry per
-provider, with its id, name, kind and whether it is on. A provider you added
-yourself is in there too; the built-in list of nine is not written out
-anywhere. (This section used to be `enabled.<camelCase>`; the `providers`
-section carries the same facts and the ones you added.)
-
-`{upstream}` is one of `qoder`, `qoder-cn`, `workbuddy-cn`, `minimax`.
-
-### Routing
-
-The upstream is chosen by the path, and the model id is the model's own name:
-
-| Base URL | Upstream | Example request |
-|---|---|---|
-| `{router}/qoder/v1` | Qoder, global account | `{"model": "glm-5.3"}` |
-| `{router}/qoder-cn/v1` | Qoder, China account | `{"model": "glm-5.3"}` |
-| `{router}/workbuddy-cn/v1` | WorkBuddy, China account | `{"model": "glm-5.3-flash"}` |
-| `{router}/minimax/v1` | MiniMax | `{"model": "MiniMax-M3.1-Flash"}` |
-
-A client that can only use one base URL can put the upstream in the model name
-instead — `qoder/glm-5.3`, `qoder-cn/glm-5.3`, `workbuddy-cn/glm-5.3`,
-`minimax/MiniMax-M3` — at `{router}/v1`. The server prefixes the model
-internally either way, so the two spellings mean the same thing.
-
-The prefixed form is also what `/v1/models` at the root lists, and the
-per-upstream `/qoder/v1/models` lists the same models with their plain names.
-
-An unknown model gets a 400 that says which upstream it was looked for in,
-rather than being sent somewhere at random.
-
-### Dialect handling
-
-Each dialect is cheapest on the upstream that speaks it natively, so each
-request is translated at most once:
-
-| Request dialect | Upstream | What happens |
-|---|---|---|
-| OpenAI | Qoder | passed through — the Qoder gateway is an OpenAI endpoint |
-| OpenAI | MiniMax | converted to Anthropic, and the response back to OpenAI |
-| Anthropic | Qoder | converted to OpenAI, and the response back to Anthropic |
-| Anthropic | MiniMax | passed through |
-
-The conversion covers tools (both schema directions), tool calls in the
-response, streaming and non-streaming, and the thinking channel: Anthropic
-`thinking` blocks become OpenAI `reasoning_content` and back. Tool arguments
-that arrive split across OpenAI stream fragments are buffered and emitted once
-they form valid JSON, because Anthropic expects a whole JSON document.
-
-### Models
+#### Models
 
 Qoder's catalog splits in two.
 
@@ -968,7 +1053,7 @@ the legacy protocol, but the global catalog leaves them out and a request for
 one is refused with a clear message instead of being sent to an upstream that
 will not answer.
 
-### The CN region
+#### The CN region
 
 The Chinese gateway is the other way round: it has not deployed the new
 protocol (404/503 on `gateway.qoder.com.cn/model/v1/chat/completions`) and
@@ -996,7 +1081,7 @@ Which models are free depends on the account: the usage block reports
 `Sonus` come back `billable: false`, while the others report a small credit
 charge.
 
-### Credit multipliers
+#### Credit multipliers
 
 The model list carries the credit multiplier the Qoder client shows, so the
 picker says what a request costs before you pick one — `GLM-5.3 0.8×`,
@@ -1014,7 +1099,7 @@ calls the tool again — forever. `lib/qoder/legacy.ts` puts them there in the
 OpenAI shape the upstream itself uses (`{id, type, function:{name, arguments}}`).
 
 
-### Thinking levels
+#### Thinking levels
 
 Qoder's protocol has no per-request thinking switch — the tier *is* the
 switch. The proxy therefore reads the level from the request and translates it
@@ -1032,10 +1117,7 @@ mapping with `QODER_EFFORT_TIERS=low=efficient,medium=auto,high=ultimate,max=ult
 The upstream queues models and answers 403/429 while they wait. The proxy
 retries those the way the official CLI does.
 
-MiniMax's catalog is unchanged: `MiniMax-M3.1-Flash` (default) and
-`MiniMax-M3`.
-
-### Qoder login
+#### Login
 
 Qoder's CLI uses a PKCE device flow with no device-code endpoint: the challenge
 is computed locally, the user approves it in a browser, and the proxy polls with
@@ -1059,12 +1141,10 @@ The account's own standing is checked on `/health`: Qoder can hold an account
 back for reasons a valid token does not reveal (an IP the account may not be
 used from, a disabled app, a lapsed login).
 
-### Environment
+#### Environment
 
 | Variable | Default | What |
 |----------|---------|------|
-| `ROUTER_PORT` | `6450` | router port |
-| `MINIMAX_BASE_URL` | the gateway's own address | where the MiniMax gateway is |
 | `QODER_AUTH_CACHE_MS` | `5000` | how long a read of the session is reused |
 | `QODER_AUTH_WARN_MS` | `604800000` | warning window before expiry (a Qoder token lasts ~30 days) |
 | `QODER_REFRESH_BUFFER_MS` | `86400000` | refresh this far before expiry |
@@ -1073,39 +1153,14 @@ used from, a disabled app, a lapsed login).
 | `QODER_MAX_ATTEMPTS` | `3` | attempts for a new-protocol request before giving up |
 | `QODER_EFFORT_TIERS` | — | override the thinking level → tier mapping |
 | `QODER_LOG_ROUTE` | `false` | log the model and tier each request resolved to |
-| `REQUIRE_API_KEY` | `false` | enforce `api-keys.json` keys |
 
-### Where a setting's value comes from
-
-Three places, in this order:
-
-1. **the environment** — what the deployment sets (the process environment,
-   then the `.env` file)
-2. **the database** — what the management panel writes
-3. **the default in the code**
-
-The environment comes first: what the deployment pins, the deployment
-decides. The panel's value is kept in the database all the same, so removing
-the environment variable hands the setting back to the panel. The panel shows
-both — the value in effect and the one it wrote — and says which is which.
-
-`PERIODIC_ENABLED=false` turns the background timer off: the gateway then
-never refreshes a token, never checks in, and never scans balances. The
-reason it exists: a refresh rotates the refresh token, and that token is
-**one-shot** — two refreshes of the same session look like a replay, and the
-platform revokes the whole session. While debugging, reproducing or testing
-offline, a token that expires is better than a session that gets revoked.
-The panel's state read still works (it asks the platform, read-only), and
-the panel can still check in by hand. It is read once at startup — change it
-and restart.
-
-## WorkBuddy (China account)
+### WorkBuddy (China account)
 
 WorkBuddy is Tencent's coding assistant. This speaks to the China account
 (`workbuddy.cn`), which is a different account from the international one
 (`workbuddy.ai`) and needs its own login.
 
-### Protocol
+#### Protocol
 
 The upstream speaks the OpenAI chat-completions dialect, so a request body goes
 out almost unchanged. What it checks is the identity around it: the account,
@@ -1153,7 +1208,7 @@ UUIDv7). The headers it does not send are not sent here either.
 not in the repository) list every difference between this and the official
 client that the review found, with the evidence for it.
 
-### Login
+#### Login
 
 The login is the browser one: the proxy asks for a state, sends you to
 `https://www.workbuddy.cn/login`, and polls until you approve. The token is a
@@ -1164,7 +1219,7 @@ refresh, so the session file must survive restarts.
 node router-proxy.ts   # prints the login URL, once WorkBuddy is switched on
 ```
 
-### Models
+#### Models
 
 19 models as of 2026-10-22, from `hy3` and `step-5-preview` (free) through
 `kimi-k3-1` (the most expensive). The label carries the credit multiplier, so
@@ -1175,7 +1230,7 @@ way the official picker shows it (`hy3` and `hy3-x`).
 `glm-5.1` is in the upstream's own catalogue but every request for it is
 rejected with code 11133, so it is left out.
 
-### Environment
+#### Environment
 
 | Variable | Default | What |
 |----------|---------|------|
@@ -1188,14 +1243,14 @@ rejected with code 11133, so it is left out.
 | `WORKBUDDY_AUTH_WARN_MS` | `604800000` | warning window before expiry |
 | `WORKBUDDY_LOGIN_TIMEOUT_MS` | `600000` | how long to wait for the browser approval |
 
-## TokenRhythm (the relay station)
+### TokenRhythm (the relay station)
 
 TokenRhythm is a relay station: the models are other people's, the account
 holds the money, and the platform speaks the OpenAI dialect — so there is
 nothing private to reverse here. What the gateway adds is the part a relay
 does not do: it keeps several accounts and spends them in the right order.
 
-### The accounts
+#### The accounts
 
 Each account is a set of environment variables, and there can be many:
 
@@ -1223,7 +1278,7 @@ once as the `X-CSRF-Token` header — and the browser's `Sec-Fetch-Site:
 same-origin`, which a script has to say for itself. Without a key the account
 still shows its balance, it just cannot serve a request.
 
-### Which account pays
+#### Which account pays
 
 The gift money expires, the money that was paid for does not. So a request
 goes to the account whose gift runs out first, and the account with only paid
@@ -1259,7 +1314,7 @@ all of it expires on the same day. Its `nextExpiryAt` is the useful part: it
 points at the gift that runs out first, and it moves on when that gift is
 spent, which is how the gateway knows to change account.
 
-### When the relay is busy
+#### When the relay is busy
 
 The relay answers `503 SERVICE_BUSY` when its backends are all taken. That is
 a temporary state of the upstream, not a broken request, so the gateway tries
@@ -1274,19 +1329,19 @@ trace id, and the answer can simply be tried again.
 |----------|---------|------|
 | `TOKENRHYTHM_MAX_ATTEMPTS` | `3` | how often a busy relay is tried again, on the same account |
 
-### The thinking rule
+#### The thinking rule
 
 DeepSeek's thinking mode wants the assistant's `reasoning_content` back when
 the request ends with a tool result — even an empty string. A client that
 switched models mid-conversation leaves the field out, and the upstream
 answers 400. The gateway puts it back (`lib/tokenrhythm/transport.ts`).
 
-### Models
+#### Models
 
 One model for now: `deepseek-v4.1-flash-1017`, a million tokens of context and
 384000 of output.
 
-### Environment
+#### Environment
 
 | Variable | Default | What |
 |----------|---------|------|
