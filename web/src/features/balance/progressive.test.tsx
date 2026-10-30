@@ -107,6 +107,72 @@ describe('额度按上游并发拉', () => {
     expect(screen.getByText('acc-good')).toBeInTheDocument()
   }, 20000)
 
+  it('所有上游都没问出来：给一个统一入口，点一次两家都重问', async () => {
+    const user = userEvent.setup({ delay: null })
+    const asked: string[] = []
+    const client = mockAdminClient({
+      GetBalance: (input) => {
+        const upstreamId = input.upstreamId ?? ''
+        if (upstreamId === '') {
+          // 全量：只用来认上游。
+          return create(GetBalanceResponseSchema, {
+            quotas: ['minimax', 'qoder'].map((id) => quotaFor(id, `acc-${id}`)),
+          })
+        }
+        asked.push(upstreamId)
+        throw new Error('这一家炸了')
+      },
+    })
+
+    renderWithClient({ client, children: <BalancePage /> })
+
+    // 全家都挂了，统一入口出现。
+    await screen.findByRole(
+      'button',
+      { name: '全部重试' },
+      { timeout: 15000 }
+    )
+    expect(screen.getByText('所有上游都没问出来')).toBeInTheDocument()
+    expect(asked.filter((id) => id === 'minimax')).toHaveLength(1)
+    expect(asked.filter((id) => id === 'qoder')).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: '全部重试' }))
+
+    // 两家都重新问了一遍，不用逐卡点。
+    await waitFor(
+      () => {
+        expect(asked.filter((id) => id === 'minimax')).toHaveLength(2)
+        expect(asked.filter((id) => id === 'qoder')).toHaveLength(2)
+      },
+      { timeout: 5000 }
+    )
+  }, 20000)
+
+  it('只有一家失败：不出统一入口，还是逐卡各自报错', async () => {
+    const client = mockAdminClient({
+      GetBalance: (input) => {
+        if (input.upstreamId === 'bad') throw new Error('这一家炸了')
+        const ids = input.upstreamId ? [input.upstreamId] : ['good', 'bad']
+        return create(GetBalanceResponseSchema, {
+          quotas: ids.map((id) => quotaFor(id, `acc-${id}`)),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <BalancePage /> })
+
+    await screen.findByText('acc-good')
+    // 崩的那家自己报错，可以自己重试。
+    await screen.findByRole(
+      'button',
+      { name: '重试' },
+      { timeout: 15000 }
+    )
+    // 只有一家失败：没有统一入口。
+    expect(screen.queryByRole('button', { name: '全部重试' })).toBeNull()
+    expect(screen.queryByText('所有上游都没问出来')).toBeNull()
+  }, 20000)
+
   it('刷新之后各上游那条重新问一遍，卡片里的数换成新的', async () => {
     const user = userEvent.setup({ delay: null })
     const asked: { upstreamId: string; force: boolean }[] = []

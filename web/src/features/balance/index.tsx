@@ -131,6 +131,18 @@ export function BalancePage() {
   const pending = queries.some((query) => query.isPending)
   const failed = queries.some((query) => query.isError)
 
+  // 全家都没问出来：给一个统一入口，不用一张卡一张卡点重试。
+  // 只有部分失败不算 —— 那时逐卡报错更清楚是哪几家出的问题。
+  const allFailed = queries.length > 0 && queries.every((query) => query.isError)
+
+  const onRetryAll = () => {
+    for (const query of queries) {
+      if (query.isError) {
+        void query.refetch()
+      }
+    }
+  }
+
   return (
     <PageShell
       title='额度'
@@ -157,6 +169,9 @@ export function BalancePage() {
         <EmptyQuotaCard />
       ) : (
         <>
+          {allFailed ? (
+            <AllUpstreamsFailedNotice onRetry={onRetryAll} />
+          ) : null}
           {upstreamIds.map((upstreamId, index) => {
             const query = queries[index]
             if (!query) return null
@@ -217,6 +232,23 @@ function UpstreamQuotaCards({
         />
       ))}
     </>
+  )
+}
+
+/**
+ * 所有上游都没问出来：一行提示加一个统一重试。
+ *
+ * 逐卡点重试在「全军覆没」时最烦人 —— 每张卡底下都有一个重试按钮，
+ * 用户得挨个点。这里一次全部重问。
+ */
+function AllUpstreamsFailedNotice({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className='mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3'>
+      <p className='text-sm text-destructive'>所有上游都没问出来</p>
+      <Button variant='outline' size='sm' onClick={onRetry}>
+        全部重试
+      </Button>
+    </div>
   )
 }
 
