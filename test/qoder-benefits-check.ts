@@ -10,7 +10,7 @@
 //   3. 平台的 claimStatus 不按天重置：领过了就一直 CLAIMED。拿它当
 //      「今天领过」的依据就永远不再试领，所以认的是窗口起点。
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,7 +19,8 @@ import { join } from "node:path";
 // real data dir, and never talks to a real upstream. The old value goes back
 // afterwards, so a run that shares a process keeps its own data dir.
 const previousDataDir = process.env.BUDDY_DATA_DIR;
-process.env.BUDDY_DATA_DIR = mkdtempSync(join(tmpdir(), "buddy-qoder-benefits-"));
+const scratchDir = mkdtempSync(join(tmpdir(), "buddy-qoder-benefits-"));
+process.env.BUDDY_DATA_DIR = scratchDir;
 
 const { claimableCampaigns, qoderClaimHeaders, shouldAttemptClaim } = await import(
   "../lib/qoder/benefits.ts"
@@ -128,4 +129,5 @@ check(
 console.log("");
 console.log("结果");
 console.log(`pass=${pass} fail=${fail}`);
+rmSync(scratchDir, { recursive: true, force: true });
 process.exit(fail ? 1 : 0);
