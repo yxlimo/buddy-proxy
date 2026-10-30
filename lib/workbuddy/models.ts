@@ -503,7 +503,7 @@ export function clampEffort(requested: string | undefined, supported: string[]):
   return supported[0];
 }
 
-// The catalogue the gateway is serving right now.
+// The catalogue the gateway is serving right now, one per region.
 //
 // It lives here, with the thing that refreshes it, so the registry and the
 // router can both read it. The copy in the database is the one that counts;
@@ -511,16 +511,22 @@ export function clampEffort(requested: string | undefined, supported: string[]):
 // (lib/workbuddy/catalog-store.ts), so the first request already sees the
 // catalogue the upstream published — not the bootstrap table.
 //
-// Until then it holds the bootstrap list: a brand-new database has no
-// catalogue of its own, and something has to answer.
-let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
+// **Per region, not per kind.** workbuddy.cn and workbuddy.ai each publish their
+// own list, and the two barely overlap: a model one of them serves the other
+// does not serve at all. This used to be one shared array, so whichever region
+// fetched last won and the other one was handed a list of names its own
+// upstream has never heard of — every request to it answered
+// `11102 model [x] service info not found`.
+const workbuddyModelsByRegion = new Map<string, WorkBuddyModel[]>();
 
-/** The catalogue the gateway is serving right now. */
-export function workbuddyModelList(): WorkBuddyModel[] {
-  return workbuddyModels;
+/** The catalogue the gateway is serving right now, for one region. */
+export function workbuddyModelList(region: string = "cn"): WorkBuddyModel[] {
+  // The bundled table is the China catalogue, so it may only stand in for
+  // China. A region that has never been fetched has nothing to answer with.
+  return workbuddyModelsByRegion.get(region) ?? (region === "cn" ? workBuddyFallbackModels() : []);
 }
 
-/** Replace the catalogue (the upstream reported a new one, or the database had one). */
-export function setWorkbuddyModelList(models: WorkBuddyModel[]): void {
-  workbuddyModels = models;
+/** Replace one region's catalogue (the upstream reported a new one, or the database had one). */
+export function setWorkbuddyModelList(models: WorkBuddyModel[], region: string = "cn"): void {
+  workbuddyModelsByRegion.set(region, models);
 }

@@ -86,7 +86,8 @@ registerKind({
   // answers with the right host.
   baseUrl: (provider) => WORKBUDDY_ENDPOINTS[regionFrom(provider.region)].base,
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
-  models: () => workbuddyCatalogModels(workbuddyModelList()),
+  // 目录是区域的：cn 和 global 各自发布一份，不能共用。
+  models: (provider) => workbuddyCatalogModels(workbuddyModelList(regionFrom(provider.region))),
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),
   benefits: (provider) => runWorkBuddyBenefits(provider.id),
   // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。

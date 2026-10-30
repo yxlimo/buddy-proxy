@@ -30,9 +30,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-catalog-"));
 // opens the file the first time it is asked for it.
 process.env.BUDDY_DATA_DIR = tmp;
 
-const { CATALOG_ID, catalogTtlMs, readStoredCatalog, writeStoredCatalog, initWorkBuddyCatalog } =
+const { catalogId, catalogTtlMs, readStoredCatalog, writeStoredCatalog, initWorkBuddyCatalog } =
   await import("../lib/workbuddy/catalog-store.ts");
-const { store, listCached } = await import("../lib/store.ts");
+const { store, listCached, closeStore } = await import("../lib/store.ts");
 const { workbuddyModelList, setWorkbuddyModelList } = await import("../lib/workbuddy/models.ts");
 
 let pass = 0;
@@ -111,12 +111,16 @@ console.log("");
 console.log("a fresh database");
 
 check("no catalogue to read", readStoredCatalog() === null, JSON.stringify(readStoredCatalog()));
-check("nothing to load at startup", initWorkBuddyCatalog() === null, JSON.stringify(initWorkBuddyCatalog()));
+check("nothing to load at startup", initWorkBuddyCatalog().size === 0, JSON.stringify([...initWorkBuddyCatalog()]));
 check(
   "reading it did not write a row",
-  listCached(CATALOG_ID).length === 0,
-  JSON.stringify(listCached(CATALOG_ID)),
+  listCached(catalogId()).length === 0,
+  JSON.stringify(listCached(catalogId())),
 );
+// 写死的那张表是中国的：只有 cn 能拿它当引导值。国际区要是也拿到它，就会
+// 拿着一批自己上游没有的模型名去点名，上游回 11102。
+check("新库里 cn 有引导值", workbuddyModelList("cn").length > 0, String(workbuddyModelList("cn").length));
+check("新库里 global 没有引导值", workbuddyModelList("global").length === 0, String(workbuddyModelList("global").length));
 
 console.log("");
 console.log("what was written comes back");
@@ -131,8 +135,8 @@ check(
 );
 check(
   "the row is in the database",
-  listCached(CATALOG_ID).length === 1,
-  JSON.stringify(listCached(CATALOG_ID)),
+  listCached(catalogId()).length === 1,
+  JSON.stringify(listCached(catalogId())),
 );
 
 // The startup path: the process starts with an empty registry and the
@@ -141,8 +145,8 @@ setWorkbuddyModelList([]);
 const loaded = initWorkBuddyCatalog();
 check(
   "the startup reads it back",
-  ids(loaded?.models).join(",") === "wb-alpha,wb-beta",
-  ids(loaded?.models).join(","),
+  ids(loaded.get("cn")?.models).join(",") === "wb-alpha,wb-beta",
+  ids(loaded.get("cn")?.models).join(","),
 );
 check(
   "the registry is the stored one",
@@ -162,6 +166,51 @@ check(
 check("and it is not empty there", (afterRestart.ids?.length ?? 0) > 0, JSON.stringify(afterRestart));
 
 console.log("");
+console.log("the two regions do not overwrite each other");
+
+// 这是这次修的 bug：目录按区域存，一份不能顶掉另一份。早先只有一行
+// (`workbuddy:catalog`)，后抓的那个区把先抓的顶掉，另一个区就被喂了一份自己
+// 上游没有的模型名 —— 上游回 `11102 model [x] service info not found`。
+const GLOBAL_MODELS: WorkBuddyModel[] = [{ ...MODELS[0], id: "wb-global-alpha" }];
+writeStoredCatalog(MODELS, "cn");
+writeStoredCatalog(GLOBAL_MODELS, "global");
+check(
+  "cn keeps its own",
+  ids(readStoredCatalog("cn")?.models).join(",") === "wb-alpha,wb-beta",
+  ids(readStoredCatalog("cn")?.models).join(","),
+);
+check(
+  "global keeps its own",
+  ids(readStoredCatalog("global")?.models).join(",") === "wb-global-alpha",
+  ids(readStoredCatalog("global")?.models).join(","),
+);
+check(
+  "two rows in the database",
+  listCached(catalogId("cn")).length === 1 && listCached(catalogId("global")).length === 1,
+  `${listCached(catalogId("cn")).length} / ${listCached(catalogId("global")).length}`,
+);
+check(
+  "the registry holds both",
+  ids(workbuddyModelList("cn")).join(",") === "wb-alpha,wb-beta" &&
+    ids(workbuddyModelList("global")).join(",") === "wb-global-alpha",
+  `${ids(workbuddyModelList("cn"))} / ${ids(workbuddyModelList("global"))}`,
+);
+check(
+  "startup loads both regions",
+  (() => {
+    setWorkbuddyModelList([], "cn");
+    setWorkbuddyModelList([], "global");
+    const both = initWorkBuddyCatalog();
+    return (
+      both.size === 2 &&
+      ids(both.get("cn")?.models).join(",") === "wb-alpha,wb-beta" &&
+      ids(both.get("global")?.models).join(",") === "wb-global-alpha"
+    );
+  })(),
+  "",
+);
+
+console.log("");
 console.log("the ttl");
 
 check("48 minutes by default", catalogTtlMs() === 48 * 60 * 1000, String(catalogTtlMs()));
@@ -174,7 +223,7 @@ console.log("an old catalogue is still a catalogue");
 // The age of the row is what the transport looks at
 // (lib/workbuddy/transport.ts: Date.now() - stored.at < catalogTtlMs()).
 const old = Date.now() - 30 * 24 * 3600_000;
-store().prepare("UPDATE cache SET at = ? WHERE id = ?").run(old, CATALOG_ID);
+store().prepare("UPDATE cache SET at = ? WHERE id = ?").run(old, catalogId());
 const stale = readStoredCatalog();
 check("a stale row still reads", stale !== null);
 check(
@@ -187,7 +236,7 @@ check("and it is really stale", Date.now() - (stale?.at ?? 0) > catalogTtlMs(), 
 // The `at` a caller hands to writeStoredCatalog is kept in the payload, but
 // the age a reader sees is the row's own timestamp: the row is written now, so
 // it reads as fresh whatever the argument said.
-writeStoredCatalog(MODELS, old);
+writeStoredCatalog(MODELS, "cn", old);
 const rewritten = readStoredCatalog();
 check(
   "writing an old catalogue keeps the models",
@@ -211,27 +260,30 @@ writeStoredCatalog([]);
 check("nothing to read after an empty write", readStoredCatalog() === null, JSON.stringify(readStoredCatalog()));
 check(
   "the row now holds the empty list",
-  String(store().prepare("SELECT data FROM cache WHERE id = ?").get(CATALOG_ID)?.data ?? "").includes("[]"),
-  String(store().prepare("SELECT data FROM cache WHERE id = ?").get(CATALOG_ID)?.data ?? ""),
+  String(store().prepare("SELECT data FROM cache WHERE id = ?").get(catalogId())?.data ?? "").includes("[]"),
+  String(store().prepare("SELECT data FROM cache WHERE id = ?").get(catalogId())?.data ?? ""),
 );
 check("the registry is empty too", workbuddyModelList().length === 0, String(workbuddyModelList().length));
 
 console.log("");
 console.log("a broken row is not a crash");
 
-store().prepare("UPDATE cache SET data = ? WHERE id = ?").run("{not json", CATALOG_ID);
+store().prepare("UPDATE cache SET data = ? WHERE id = ?").run("{not json", catalogId());
 check("a broken row reads as nothing", readStoredCatalog() === null, JSON.stringify(readStoredCatalog()));
 
 store()
   .prepare("UPDATE cache SET data = ? WHERE id = ?")
-  .run(JSON.stringify({ models: 42 }), CATALOG_ID);
+  .run(JSON.stringify({ models: 42 }), catalogId());
 check("a row of the wrong shape reads as nothing", readStoredCatalog() === null, JSON.stringify(readStoredCatalog()));
 
 store()
   .prepare("UPDATE cache SET data = ? WHERE id = ?")
-  .run(JSON.stringify({ models: [] }), CATALOG_ID);
+  .run(JSON.stringify({ models: [] }), catalogId());
 check("an empty list in the row reads as nothing", readStoredCatalog() === null, JSON.stringify(readStoredCatalog()));
 
+// Close the database before removing its directory: on Windows an open handle
+// makes the removal fail with EPERM. On Linux it makes no difference.
+closeStore();
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log("");
