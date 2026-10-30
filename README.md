@@ -52,6 +52,37 @@ podman run -d --name buddy-proxy \
 `./data` is the volume the service works in. It has to survive a rebuild: it
 holds the sessions, and a lost session means logging in again.
 
+#### With docker compose
+
+The same image, run by compose:
+
+```yaml
+services:
+  buddy-proxy:
+    image: yxlimo/buddy-proxy:0.2.1
+    container_name: buddy-proxy
+    restart: unless-stopped
+    ports:
+      - "6450:6450"
+    volumes:
+      # /data has to be persistent: the sessions live in it, and a lost
+      # session means logging in again.
+      - ./data:/data
+    environment:
+      ROUTER_PORT: "6450"
+      BUDDY_DATA_DIR: /data
+```
+
+```bash
+docker compose up -d
+docker compose logs -f
+xdg-open http://localhost:6450/admin/    # the panel (on macOS: open)
+```
+
+The service answers on `http://<host>:6450`, and the panel is at
+`http://<host>:6450/admin/`. Sign in with the token in `./data/admin-token` —
+it is written on the first start.
+
 The service starts with no account enabled and waits for you to say which ones
 to serve.
 
