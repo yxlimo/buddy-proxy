@@ -30,11 +30,17 @@ FROM node:24-alpine
 WORKDIR /app
 
 # Dependencies first so this layer is cached.
-# pnpm-workspace.yaml 一起 COPY：它写着 virtualStoreType 与 addMissingPeerTypes，
-# 后者会写进 lockfile 的 settings。少了它，install 仍然能跑（pnpm 12 容忍这个
-# 差异），但装出来的布局与 lockfile 记的不一致，也不利于以后升级 pnpm。
+#
+# pnpm-workspace.yaml 要一起 COPY：lockfile 里记着 settings.addMissingPeerTypes
+# （来自这个文件），容器里的 pnpm 会严格比对，缺了文件就报
+# ERR_PNPM_LOCKFILE_CONFIG_MISMATCH。
+#
+# 但虚拟仓库类型要用命令行覆盖成 project：文件里写的是 global，node_modules 里
+# 就只剩指向 store 的符号链接，而 store 在 /root/.local/share/pnpm（drwx------），
+# 运行用户是 node(1000) 进不去，容器一启动就是 ERR_MODULE_NOT_FOUND。
+# project 布局把包装进本目录 .pnpm/，镜像自包含（2026-10-30 实测）。
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile --prod
+RUN corepack enable && pnpm install --frozen-lockfile --prod --config.virtualStoreType=project
 
 # Only what the router actually loads: the entry point and lib/. There is no login
 # program: the router runs the device flow itself when a credential is missing.
