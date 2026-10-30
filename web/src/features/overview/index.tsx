@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { QuotaSummary } from '@/features/balance/quota'
+import { DailyCheckinPanel } from '@/features/benefits/daily-checkin'
 import { useSystemStatus, useUsageSummary } from '@/features/overview/api'
 import { formatCompact, formatCount, formatUptime } from '@/lib/format'
 
@@ -46,6 +47,10 @@ export function OverviewPage() {
       title='总览'
       description='网关当前状态：上游概况与今日用量。'
     >
+
+      <div className='mb-4'>
+        <DailyCheckinPanel />
+      </div>
 
       {/* 额度不在这里求和：余额（钱）、积分（点数）、套餐额度（百分比）
           单位不同，加起来没有意义。各上游的额度去「上游」页看。 */}

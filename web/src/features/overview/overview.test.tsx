@@ -5,7 +5,9 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import {
   BalanceSummarySchema,
+  BenefitStatusSchema,
   CreditSummarySchema,
+  GetBenefitStatusResponseSchema,
   GetSystemStatusResponseSchema,
   GetUsageSummaryResponseSchema,
   UpstreamQuotaSchema,
@@ -146,5 +148,56 @@ describe('总览页', () => {
     expect(screen.getAllByText('余额').length).toBeGreaterThan(0)
     expect(screen.getByText('剩 1,200 点')).toBeInTheDocument()
     expect(screen.getByText('¥42.50')).toBeInTheDocument()
+  })
+
+  it('最上方是每日签到统一区', async () => {
+    const client = mockAdminClient({
+      GetSystemStatus: () =>
+        create(GetSystemStatusResponseSchema, {
+          version: '1.0.0',
+          uptimeSec: 3600n,
+          publishedModelCount: 3,
+          upstreams: [],
+        }),
+      GetUsageSummary: () =>
+        create(GetUsageSummaryResponseSchema, {
+          total: create(UsageSummarySchema, {
+            requests: 1n,
+            succeeded: 1n,
+            failed: 0n,
+          }),
+        }),
+      GetBenefitStatus: () =>
+        create(GetBenefitStatusResponseSchema, {
+          benefits: [
+            create(BenefitStatusSchema, {
+              upstreamId: 'minimax',
+              summary: '签到成功',
+              lines: [],
+              checkedAt: 0n,
+              credits: 12,
+              ok: true,
+            }),
+          ],
+        }),
+    })
+
+    renderOverview(client)
+
+    await screen.findByRole(
+      'heading',
+      { name: '总览' },
+      { timeout: 5000 }
+    )
+
+    const checkin = await screen.findAllByText('每日签到')
+    expect(checkin.length).toBeGreaterThan(0)
+    // 签到区排在今日请求之前。
+    const request = screen.getAllByText('今日请求')[0]
+    expect(
+      checkin[0].compareDocumentPosition(request) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(screen.getByText('+12 点')).toBeInTheDocument()
   })
 })
