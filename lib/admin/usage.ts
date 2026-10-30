@@ -22,6 +22,107 @@ export interface UsageBucketView {
   summary: UsageTotals;
 }
 
+/** 一个桶的原始 id、算出来的显示名与累计数字。 */
+interface NamedBucket {
+  id: string;
+  label: string;
+  summary: UsageTotals;
+}
+
+/**
+ * 记一笔「这一档里出现过这个名字」。
+ *
+ * 显示名不能取某一个事件的快照：一个会话里可能混着几个 agent，一个主会话
+ * 下面可能有好几个子代理。所以先记次数，最后取最多的那个。
+ */
+function countName(
+  counter: Map<string, Map<string, number>>,
+  id: string,
+  name: string | undefined,
+): void {
+  if (!id || !name) return;
+  let inner = counter.get(id);
+  if (!inner) {
+    inner = new Map<string, number>();
+    counter.set(id, inner);
+  }
+  inner.set(name, (inner.get(name) ?? 0) + 1);
+}
+
+/**
+ * 出现次数最多的那个名字。
+ *
+ * 并列时取字典序最小的 —— 不然同一份数据两次跑出来可能换名字。
+ */
+function topName(counter: Map<string, number> | undefined): string {
+  if (!counter) return "";
+  let best = "";
+  let bestCount = 0;
+  for (const [name, count] of counter) {
+    if (count > bestCount || (count === bestCount && name < best)) {
+      best = name;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * 会话 id 的短样子。
+ *
+ * opencode 的 id 都带 `ses_` / `ses-` 前缀，直接切前 8 位就只剩 4 位能用，
+ * 面板上几个会话看起来一模一样。所以先剥前缀再截；本来就短的就不用截了。
+ */
+function shortSessionId(id: string): string {
+  const bare = id.replace(/^ses[_-]/, "");
+  return bare.length <= 12 ? bare : bare.slice(0, 8);
+}
+
+/**
+ * 会话 / 主会话的显示名。
+ *
+ * 有名字的优先显示名字：子代理的名字比一串 id 有用得多。没有名字的退回
+ * 「客户端 + 短 id」。
+ */
+function sessionLabel(
+  id: string,
+  agents: Map<string, number> | undefined,
+  agentNames: Map<string, number> | undefined,
+  isRoot: boolean,
+): string {
+  const shortId = shortSessionId(id);
+  const named = topName(agentNames);
+  if (named) return `${named} · ${shortId}`;
+  const agent = topName(agents) || "未知";
+  return isRoot ? `${agent} 主会话 ${shortId}` : `${agent} ${shortId}`;
+}
+
+/**
+ * 显示名可能撞车：两个会话的短 id 一样，两个主会话都叫同一个 agent。
+ *
+ * 撞车的按 id 字典序排，第一个保留原名，后面的依次加 #2、#3 —— 名字是给人
+ * 看的，后缀只是让人分得清两行，不影响它们各自仍是独立的一档。
+ */
+function withUniqueLabels(buckets: NamedBucket[]): UsageBucketView[] {
+  const order = [...buckets].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const seen = new Map<string, number>();
+  const used = new Set<string>();
+  const out: UsageBucketView[] = [];
+  for (const bucket of order) {
+    let n = (seen.get(bucket.label) ?? 0) + 1;
+    seen.set(bucket.label, n);
+    let key = n === 1 ? bucket.label : `${bucket.label} #${n}`;
+    // 极端情况：某个标签本身就叫「X #2」，跟后缀撞上了，再往后挪一位。
+    while (used.has(key)) {
+      n += 1;
+      key = `${bucket.label} #${n}`;
+    }
+    used.add(key);
+    out.push({ key, summary: bucket.summary });
+  }
+  return out;
+}
+
 /** 窗口有多长（毫秒）。空的是全部。 */
 function windowMs(window: string): number {
   const key = String(window ?? "").trim().toLowerCase();
@@ -58,6 +159,9 @@ function windowMs(window: string): number {
  *
  * 按上游、按模型、按天各一份。「今天」是从本地零点算起的一段，不是一天
  * （24 小时）—— 早上八点看「今天」，要的是零点到现在。
+ *
+ * 会话与主会话两维的 key 是给人看的显示名（agent 名或客户端名 + 短 id），
+ * 不是会话 id；累计数字仍按事件累加。
  */
 export function usageSummary(
   upstreamId = "",
@@ -118,6 +222,11 @@ export function usageSummary(
   const parentSessions = new Map<string, UsageTotals>();
   const agentNames = new Map<string, UsageTotals>();
   const subagents = new Map<string, UsageTotals>();
+  // 显示名要用的统计：每一档里出现过哪些 agent、哪些 agent 名，各多少次。
+  const sessionAgents = new Map<string, Map<string, number>>();
+  const sessionAgentNames = new Map<string, Map<string, number>>();
+  const rootAgents = new Map<string, Map<string, number>>();
+  const rootAgentNames = new Map<string, Map<string, number>>();
 
   for (const event of events) {
     addToTotals(total, event);
@@ -140,11 +249,16 @@ export function usageSummary(
     const session = sessions.get(sessionKey) ?? emptyTotals();
     addToTotals(session, event);
     sessions.set(sessionKey, session);
+    countName(sessionAgents, sessionKey, event.agent);
+    countName(sessionAgentNames, sessionKey, event.agentName);
     // 主会话：子代理的请求并进主代理那一档。没有会话 id 的算一档「未知」。
     const rootKey = event.sessionId ? rootSession(event.sessionId) : "未知";
     const root = parentSessions.get(rootKey) ?? emptyTotals();
     addToTotals(root, event);
     parentSessions.set(rootKey, root);
+    // 主会话这一档含主代理自己的请求与所有子代理的请求，所以统计的是整棵子树。
+    countName(rootAgents, rootKey, event.agent);
+    countName(rootAgentNames, rootKey, event.agentName);
     // agent 名：子代理的种类（be-match、reviewer……）。子代理的会话 id 每次
     // 运行都不同，所以这一维才是跨运行能比的。
     const agentKey = event.agentName || "未知";
@@ -180,13 +294,29 @@ export function usageSummary(
   const byAgent = [...agents.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort(byTokens);
-  const bySession = [...sessions.entries()]
-    .map(([key, summary]) => ({ key, summary }))
-    .sort(byTokens);
+  // 会话：显示名带 agent 名或客户端名，不再是一串裸 id。分桶仍按完整 id，
+  // 名字只是标签 —— 两个会话不会因为短 id 一样被并成一档。
+  const bySession = withUniqueLabels(
+    [...sessions.entries()].map(([id, summary]) => ({
+      id,
+      label:
+        id === "未知"
+          ? "未知"
+          : sessionLabel(id, sessionAgents.get(id), sessionAgentNames.get(id), false),
+      summary,
+    })),
+  ).sort(byTokens);
   // 主会话：子代理的已经并进去了。
-  const byParentSession = [...parentSessions.entries()]
-    .map(([key, summary]) => ({ key, summary }))
-    .sort(byTokens);
+  const byParentSession = withUniqueLabels(
+    [...parentSessions.entries()].map(([id, summary]) => ({
+      id,
+      label:
+        id === "未知"
+          ? "未知"
+          : sessionLabel(id, rootAgents.get(id), rootAgentNames.get(id), true),
+      summary,
+    })),
+  ).sort(byTokens);
   const byAgentName = [...agentNames.entries()]
     .map(([key, summary]) => ({ key, summary }))
     .sort(byTokens);

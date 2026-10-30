@@ -48,8 +48,9 @@ export function UsagePage() {
 
   const upstreamFilter = search.upstream ?? ''
   const modelFilter = search.model ?? ''
-  // 默认看今天：这个页面最常问的是「今天用了多少」。
-  const windowFilter = search.window ?? 'today'
+  // 默认看最近一周：按天那张表在「今天」这一档下永远只有一行。
+  // 'week' 就是选项列表里那档最近一周（后端 windowMs 也按 7 天算）。
+  const windowFilter = search.window ?? 'week'
 
   const summary = useUsageSummary({
     upstreamId: upstreamFilter,

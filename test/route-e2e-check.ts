@@ -478,12 +478,12 @@ const bySession = (summary as any).bySession ?? [];
 const byParent = (summary as any).byParentSession ?? [];
 check(
   "面板的用量摘要里按会话分了组",
-  bySession.some((b: any) => b.key === "ses-e2e-1"),
+  bySession.some((b: any) => b.key === "be-match · e2e-1"),
   JSON.stringify(bySession.map((b: any) => b.key)),
 );
 check(
   "面板的用量摘要里按父会话分了组",
-  byParent.some((b: any) => b.key === "ses-e2e-parent"),
+  byParent.some((b: any) => b.key === "be-match · e2e-parent"),
   JSON.stringify(byParent.map((b: any) => b.key)),
 );
 const byAgentName = (summary as any).byAgentName ?? [];
