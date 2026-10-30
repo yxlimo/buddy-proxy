@@ -28,7 +28,7 @@ import {
   CONFIG_PATH,
   type WorkBuddySession,
 } from "./auth.ts";
-import { clampEffort, curateCatalog, parseRemoteCatalog, type WorkBuddyModel } from "./models.ts";
+import { clampEffort, curateCatalog, parseRemoteCatalog, workBuddyFallbackModels, type WorkBuddyModel } from "./models.ts";
 import { cliFetch } from "../http.ts";
 import { readOpenAIChunks, SSE_DONE } from "../sse-stream.ts";
 import { catalogTtlMs, readStoredCatalog, writeStoredCatalog } from "./catalog-store.ts";
@@ -314,7 +314,7 @@ export async function fetchWorkBuddyCatalog(
     const payload = await res.json().catch(() => null);
     const remote = parseRemoteCatalog(payload);
     if (!remote) return stored?.models ?? null;
-    const models = curateCatalog(remote);
+    const models = curateCatalog(remote, region === "cn" ? workBuddyFallbackModels().map((m) => m.id) : []);
     if (!models.length) return stored?.models ?? null;
     // 抓到了新的：写进库（那是往后的事实），内存里的那份也换掉。
     writeStoredCatalog(models, region);

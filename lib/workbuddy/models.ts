@@ -419,7 +419,7 @@ export function parseRemoteCatalog(payload: any): RemoteCatalog | null {
  * `hy4-preview-x` — so both are published here too. The picker shows what
  * each one costs, and the agent decides.
  */
-export function curateCatalog(remote: RemoteCatalog): WorkBuddyModel[] {
+export function curateCatalog(remote: RemoteCatalog, extra: string[] = []): WorkBuddyModel[] {
   const credits: Record<string, number> = {};
   for (const [id, m] of Object.entries(remote.meta)) {
     if (typeof m.credits === "number") credits[id] = m.credits;
@@ -430,10 +430,19 @@ export function curateCatalog(remote: RemoteCatalog): WorkBuddyModel[] {
     if (credits[m.id] === undefined) credits[m.id] = m.credits;
   }
 
+  // The upstream catalogue is a view of what a region offers, not the boundary
+  // of it: measured 2026-10-31, the China backend answers `deepseek-v4.1-flash`
+  // with 200 while its own /v3/config never names it, and every model in the
+  // bundled China table answered too. So the caller may hand in models that are
+  // known to work and are missing from the list; they go in the same door and
+  // are filtered by the same rules.
   const out: string[] = [];
-  for (const id of remote.ids) {
+  const seen = new Set<string>();
+  for (const id of [...remote.ids, ...extra]) {
+    if (!id || seen.has(id)) continue;
     if (!isChatModel(id)) continue;
     if (BROKEN_MODELS.has(id)) continue;
+    seen.add(id);
     out.push(id);
   }
   return mergeWorkBuddyCatalog(out, remote.meta);
