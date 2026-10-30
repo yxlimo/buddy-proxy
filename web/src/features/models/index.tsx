@@ -46,6 +46,27 @@ import { UnpublishedReason } from '@/gen/buddy/admin/v1/admin_pb'
 import { ModelDialog } from '@/features/models/model-dialog'
 import { formatCount, formatDate } from '@/lib/format'
 
+/**
+ * The target the route really points at right now.
+ *
+ * The route tries targets by weight and the first one that can serve takes the
+ * request. No target can serve means there is nothing to point at — saying so
+ * is honest, naming one anyway is not.
+ */
+function CurrentTargetLine({ model }: { model: PublishedModel }) {
+  const current = model.targets.find((target) => target.current)
+  if (!current) {
+    return (
+      <span className='text-xs text-muted-foreground'>当前没有可用目标</span>
+    )
+  }
+  return (
+    <span className='text-xs font-medium text-emerald-600 dark:text-emerald-400'>
+      当前指向：{current.groupName} / {current.upstreamModel}
+    </span>
+  )
+}
+
 export function PublishedModelsPage() {
   const models = usePublishedModels()
   const save = useSavePublishedModel()
@@ -219,6 +240,7 @@ export function PublishedModelsPage() {
                     </TableCell>
                     <TableCell>
                       <div className='grid gap-1'>
+                        <CurrentTargetLine model={model} />
                         {model.targets.length === 0 ? (
                           <span className='text-xs text-muted-foreground'>
                             没有目标
@@ -229,9 +251,24 @@ export function PublishedModelsPage() {
                               key={`${target.groupName}-${target.upstreamModel}`}
                               className='grid gap-0.5'
                             >
-                              <span className='max-w-[200px] font-mono text-xs break-all'>
-                                {target.groupName} → {target.upstreamModel}
-                              </span>
+                              <div className='flex items-center gap-1'>
+                                <span
+                                  className={[
+                                    'max-w-[200px] font-mono text-xs break-all',
+                                    target.current
+                                      ? 'text-emerald-600 dark:text-emerald-400'
+                                      : '',
+                                  ].join(' ')}
+                                >
+                                  {target.groupName} → {target.upstreamModel}
+                                </span>
+                                {target.current ? (
+                                  // Mark the target in force; the other rows stay as they are.
+                                  <span className='rounded border border-emerald-500/40 px-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400'>
+                                    当前
+                                  </span>
+                                ) : null}
+                              </div>
                               <span className='text-xs text-muted-foreground'>
                                 {formatCount(target.requests)} 次
                                 {target.failed > 0n

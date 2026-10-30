@@ -18,11 +18,14 @@ import {
 } from "../aggregate.ts";
 import {
   catalogGroups,
+  outOfCredits,
   upstreamCredential,
   upstreamEnabled,
   type UpstreamId,
 } from "./upstreams.ts";
 import { hasUsableCredential } from "./credentials.ts";
+import { accountsOfPlatform } from "../providers.ts";
+import { isCoolingDown } from "../cooldown.ts";
 import { aggregateCatalog, type AggregateEntry, type CatalogGroup } from "../router/catalog.ts";
 import { UnpublishedReason } from "../gen/buddy/admin/v1/admin_pb.ts";
 
@@ -76,6 +79,13 @@ export interface PublishedTargetView {
   enabled: boolean;
   requests: number;
   failed: number;
+  /**
+   * 现在真的会被用到的那一个目标（工作模型）。
+   *
+   * 同一时刻最多一个为 true。没有为 true 的目标时全部为 false —— 不指一个
+   * 就是没有，别指一个假的。
+   */
+  current: boolean;
 }
 
 /**
@@ -127,6 +137,42 @@ function targetBlocker(target: AggregateTarget, groups: CatalogGroup[]): Unpubli
 }
 
 /**
+ * 一个平台的账号现在接得上吗：有一个账号开着、没在冷却、还有额度。
+ *
+ * 停用的账号不算：路由不会拿它接请求 —— 一个开着但在冷却的账号，配上一个
+ * 停用但不在冷却的账号，这个平台还是接不上。
+ * 额度读不出来时不算用尽：不知道不等于没有。
+ */
+function platformUsable(group: UpstreamId): boolean {
+  if (!isPlatform(group)) return false;
+  return accountsOfPlatform(group).some(
+    (row) => row.enabled && !isCoolingDown(row.id) && !outOfCredits(row.id),
+  );
+}
+
+/** 目标的标识：同一个模型下 group + 上游模型 才唯一。 */
+function targetKey(target: AggregateTarget): string {
+  return `${target.group}\u0000${target.upstreamModel}`;
+}
+
+/**
+ * 现在真的会被用到的那一个目标（工作模型）。
+ *
+ * 路由的选法：目标按权重从大到小试，第一个「能用」的接住 —— 能用是指目标
+ * 开着、上游开着、上游目录里还有这个模型、平台下有账号没在冷却、账号还有
+ * 额度。一个都没有的时候不指：随便指一个就是在骗人。
+ */
+function currentTargetKey(model: AggregateModel, groups: CatalogGroup[]): string | null {
+  const candidates = model.targets.filter(
+    (target) => target.enabled && targetBlocker(target, groups) === UnpublishedReason.UNSPECIFIED,
+  );
+  const usable = candidates.filter((target) => platformUsable(target.group as UpstreamId));
+  if (!usable.length) return null;
+  const sorted = [...usable].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
+  return targetKey(sorted[0]);
+}
+
+/**
  * 公布的模型，面板看的形状。
  *
  * 元数据是**库里存的那个**，不是合出来的：存的是空（继承）就是没有，客户端
@@ -153,6 +199,8 @@ export function publishedModels(): PublishedModelView[] {
     // 一个判断，两处用：公布了就是没有理由，没公布就有理由。
     const reason = unpublishedReason(model, groups);
     const inherited = effective.get(model.id);
+    // The target in force right now: null means nothing can serve this model.
+    const current = currentTargetKey(model, groups);
     return {
       id: model.id,
       displayName: model.displayName,
@@ -191,6 +239,7 @@ export function publishedModels(): PublishedModelView[] {
           enabled: target.enabled,
           requests: row?.requests ?? 0,
           failed: row?.failed ?? 0,
+          current: current === targetKey(target),
         };
       }),
     };

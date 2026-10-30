@@ -765,6 +765,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
               enabled: target.enabled,
               requests: BigInt(target.requests),
               failed: BigInt(target.failed),
+              // The target the route points at right now: at most one per model.
+              current: target.current === true,
             }),
           ),
         }),
