@@ -19,6 +19,7 @@ import {
   aggregateAnthropicCatalog,
   aggregateCatalog,
   aggregateOpenAICatalog,
+  declaredModels,
   groupCatalog,
   platformGroups,
   type AggregateEntry,
@@ -81,7 +82,11 @@ export function modelsOfPlatform(platform: string): string[] {
   if (!kind) return [];
   const accounts = accountsOfPlatform(platform);
   if (!accounts.length) return [];
-  return kind.models(accounts[0]).map((m) => m.id);
+  const listed = kind.models(accounts[0]).map((m) => m.id);
+  // 已发布模型的目标里手填过的名字，也算这个平台的模型（见 catalog.ts 的
+  // declaredModels）。随手乱写的名字不在这里，仍然会被 routeInGroup 拒掉。
+  const declared = declaredModels().get(platform) ?? [];
+  return [...new Set([...listed, ...declared])];
 }
 
 /**
