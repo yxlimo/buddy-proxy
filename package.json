@@ -1,6 +1,6 @@
 {
   "name": "buddy-proxy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Eleven model providers behind OpenAI and Anthropic compatible APIs",
   "type": "module",
   "main": "router-proxy.ts",
