@@ -26,18 +26,28 @@ fi
 # The relay station needs an account and a key; without them it stays off.
 # The upstream switch lives in the database now, so the test turns it on there
 # (test/fake-sessions.ts does it) instead of through an environment variable.
+# The matrix in e2e.sh tests the relay station too, so it has to be skipped
+# there as well when there is no key to test it with.
 if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
   export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax,tokenrhythm"
 else
   export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax"
+  export E2E_SKIP="${E2E_SKIP:+$E2E_SKIP }tokenrhythm"
 fi
+
+# The log directory. A path relative to the repository root is used on purpose:
+# the router (Node) and this script (bash) resolve it the same way, while the
+# absolute path "/tmp" means different things to the two of them on Windows
+# (Node resolves it against the current drive, bash against %TEMP%).
+LOG_DIR="test/.smoke-logs"
+mkdir -p "$LOG_DIR"
 
 # 网关与假上游都交给 test/serve.ts 起：端口由共享 helper 挑（撞了就换号重来），
 # 起来之后它把基址写进 ready 文件；收尾时它自己把网关与假上游都收掉。
 READY="$(mktemp -d)/ready.json"
 node --experimental-strip-types test/serve.ts --mock --ready-file "$READY" \
   --env "TEST_UPSTREAMS=$TEST_UPSTREAMS" \
-  --log-file /tmp/opencode/smoke-router.log > /tmp/opencode/smoke-serve.log 2>&1 &
+  --log-file "$LOG_DIR/smoke-router.log" > "$LOG_DIR/smoke-serve.log" 2>&1 &
 ROUTER_PID=$!
 
 cleanup() {
@@ -60,7 +70,7 @@ for _ in $(seq 1 120); do
 done
 if [ -z "$BASE" ]; then
   echo "the router did not start:"
-  tail -20 /tmp/opencode/smoke-serve.log
+  tail -20 "$LOG_DIR/smoke-serve.log"
   exit 1
 fi
 
@@ -97,6 +107,6 @@ fi
 
 if [ "$status" -ne 0 ]; then
   echo "--- router log ---"
-  tail -20 /tmp/opencode/smoke-router.log
+  tail -20 "$LOG_DIR/smoke-router.log"
 fi
 exit $status
