@@ -1,11 +1,16 @@
 import { create } from '@bufbuild/protobuf'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { GetBalanceRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { describeError } from '@/lib/errors'
 
-const balanceKeys = {
+export const balanceKeys = {
   all: (upstreamId: string) => ['balance', upstreamId] as const,
 }
 
@@ -21,6 +26,26 @@ export function useBalance(upstreamId: string) {
     queryKey: balanceKeys.all(upstreamId),
     queryFn: () =>
       client.getBalance(create(GetBalanceRequestSchema, { upstreamId })),
+  })
+}
+
+/**
+ * 按上游各问一趟额度，谁先回来谁先渲染。
+ *
+ * 一次全量要等所有平台，慢的平台拖累快的。拆成一条上游一条查询之后，
+ * 各自独立：慢的那家只是它自己那张卡慢着。
+ *
+ * 查询键跟 useBalance 用同一个（balanceKeys.all），这样「刷新额度」写回来的
+ * 数据能同时喂到两边。
+ */
+export function useBalances(upstreamIds: string[]) {
+  const client = useAdminClient()
+  return useQueries({
+    queries: upstreamIds.map((upstreamId) => ({
+      queryKey: balanceKeys.all(upstreamId),
+      queryFn: () =>
+        client.getBalance(create(GetBalanceRequestSchema, { upstreamId })),
+    })),
   })
 }
 
