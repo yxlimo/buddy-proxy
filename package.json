@@ -1,7 +1,7 @@
 {
   "name": "buddy-proxy",
-  "version": "1.0.0",
-  "description": "Free model providers (MiniMax Code, Qoder, WorkBuddy, TokenRhythm) behind OpenAI/Anthropic compatible APIs",
+  "version": "0.2.0",
+  "description": "Eleven model providers behind OpenAI and Anthropic compatible APIs",
   "type": "module",
   "main": "router-proxy.ts",
   "scripts": {
