@@ -24,6 +24,22 @@ function percentTone(percent: number): string {
 }
 
 /**
+ * 距离重置还有多久。
+ *
+ * 平台给的是 unix 毫秒时间戳。已经到点就等后端刷新。
+ */
+export function remainingUntil(endsAt: bigint): string {
+  const diff = Number(endsAt) - Date.now()
+  if (diff <= 0) return '已到时间，等待刷新'
+  const hours = Math.floor(diff / 3_600_000)
+  if (hours < 1) {
+    return `剩 ${Math.max(1, Math.round(diff / 60_000))} 分`
+  }
+  const minutes = Math.floor((diff % 3_600_000) / 60_000)
+  return `剩 ${hours} 小时 ${minutes} 分`
+}
+
+/**
  * 套餐额度：MiniMax 的 5 小时窗口与周窗口各剩多少。
  *
  * 平台给的是「还剩多少个百分点」，所以 100 是全满。
@@ -95,7 +111,13 @@ function QuotaMeter({
       </div>
       <Progress value={value} />
       <span className='text-xs text-muted-foreground'>
-        {endsAt > 0n ? `${formatDateTime(endsAt)} 重置` : '不重置'}
+        {endsAt > 0n ? (
+          <>
+            重置：{formatDateTime(endsAt)}（{remainingUntil(endsAt)}）
+          </>
+        ) : (
+          '平台未给重置时间'
+        )}
       </span>
     </div>
   )

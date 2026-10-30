@@ -18,9 +18,21 @@ import { formatDate, formatPoints, isFarFuture, remainingDays } from '@/lib/form
  *
  * 到期时间原样显示平台的日期：平台用 2099-12-31 标记「永不过期」，这里
  * 不翻译它。倒计时那一列对这种批次给「—」。
+ *
+ * 表里只留还有点的批次，快用完的排前面，永不过期的排最后。
  */
 export function CreditLotsTable({ lots }: { lots: CreditLot[] }) {
-  if (lots.length === 0) {
+  const visible = lots
+    .filter((lot) => lot.remaining > 0)
+    .sort((a, b) => {
+      const farA = isFarFuture(a.expiresAt)
+      const farB = isFarFuture(b.expiresAt)
+      if (farA !== farB) return farA ? 1 : -1
+      if (a.expiresAt === b.expiresAt) return 0
+      return a.expiresAt < b.expiresAt ? -1 : 1
+    })
+
+  if (visible.length === 0) {
     return (
       <EmptyState
         title='没有积分批次'
@@ -42,7 +54,7 @@ export function CreditLotsTable({ lots }: { lots: CreditLot[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {lots.map((lot) => (
+        {visible.map((lot) => (
           <CreditLotRow key={lot.id} lot={lot} />
         ))}
       </TableBody>
