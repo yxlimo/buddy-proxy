@@ -9,9 +9,6 @@
 // a weekly one, and what is left of each is a percentage. The balance is the
 // money on the platform account — the cash, the vouchers and the credits, with
 // the credits being the ones that were given rather than paid for.
-//
-// The open platform (lib/minimax/api.ts) reads each tenant's plan with that
-// tenant's own key — that is a different upstream with its own keys.
 
 import { configString } from "../config.ts";
 

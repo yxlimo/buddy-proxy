@@ -67,9 +67,9 @@ function stubKind(kind: string): void {
 }
 
 stubKind("tokenrhythm");
-stubKind("minimax-api");
+stubKind("qiniu");
 addAccount({ platform: "tokenrhythm", alias: "第一个" });
-addAccount({ platform: "minimax-api", alias: "第二个" });
+addAccount({ platform: "qiniu", alias: "第二个" });
 
 console.log("定时器关了：不换令牌，也不扫余额");
 

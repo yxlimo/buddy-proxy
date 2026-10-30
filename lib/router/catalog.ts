@@ -20,7 +20,6 @@ export type { CatalogModel };
 export {
   internAiCatalogModels,
   minimaxCatalogModels,
-  miniMaxApiCatalogModels,
   qoderCatalogModels,
   senseNovaCatalogModels,
   tokenRhythmCatalogModels,

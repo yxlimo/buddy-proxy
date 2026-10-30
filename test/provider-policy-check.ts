@@ -128,9 +128,9 @@ check(
   policiesOfKind("tokenrhythm").join(","),
 );
 check(
-  "minimax-api 两个",
-  policiesOfKind("minimax-api").join(",") === "single,fallback",
-  policiesOfKind("minimax-api").join(","),
+  "七牛云两个",
+  policiesOfKind("qiniu").join(",") === "single,fallback",
+  policiesOfKind("qiniu").join(","),
 );
 for (const kind of ["minimax", "qoder", "workbuddy", "sensenova", "intern-ai", "zcode"]) {
   check(
@@ -191,18 +191,18 @@ check("设完就是余额到期优先", platformPolicy("tokenrhythm") === "expir
 const trSingle = await setPolicy("tokenrhythm", ContractPolicy.SINGLE);
 check("中转站能设回单一", trSingle.ok === true && platformPolicy("tokenrhythm") === "single");
 
-const apiFallback = await setPolicy("minimax-api", ContractPolicy.FALLBACK);
-check("开放平台能设降级", apiFallback.ok === true, JSON.stringify(apiFallback));
-const apiExpiry = await setPolicy("minimax-api", ContractPolicy.EXPIRY_FIRST);
-check("开放平台不收余额到期优先", apiExpiry.ok === false, JSON.stringify(apiExpiry));
+const apiFallback = await setPolicy("qiniu", ContractPolicy.FALLBACK);
+check("七牛云能设降级", apiFallback.ok === true, JSON.stringify(apiFallback));
+const apiExpiry = await setPolicy("qiniu", ContractPolicy.EXPIRY_FIRST);
+check("七牛云不收余额到期优先", apiExpiry.ok === false, JSON.stringify(apiExpiry));
 // 文案由 lib/platforms.ts 生成（它列的是策略 id），这里只核对它说了哪些。
 check(
   "拒收的话说了这个平台支持哪几个",
   String(apiExpiry.message).includes("single") && String(apiExpiry.message).includes("fallback"),
   String(apiExpiry.message),
 );
-check("拒收的没写进库", platformPolicy("minimax-api") === "fallback", platformPolicy("minimax-api"));
-await setPolicy("minimax-api", ContractPolicy.SINGLE);
+check("拒收的没写进库", platformPolicy("qiniu") === "fallback", platformPolicy("qiniu"));
+await setPolicy("qiniu", ContractPolicy.SINGLE);
 
 // 降级是所有平台都有的选项：逐个平台设一遍，再读回来，再设回单一。
 for (const platform of ["qoder", "minimax", "workbuddy-cn", "sensenova", "intern-ai"]) {

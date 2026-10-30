@@ -40,7 +40,7 @@ run = "node --experimental-strip-types check-file-size.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:api:policy", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config"]
 
 
 [tasks."helper:sync"]
@@ -70,10 +70,6 @@ run = "node --experimental-strip-types test/upstream-status-check.ts"
 [tasks."test:upstream:cooldown"]
 description = "Check that the panel sees the cooldown (the state, the deadline, the reason)"
 run = "node --experimental-strip-types test/upstream-cooldown-check.ts"
-
-[tasks."test:minimax:api:policy"]
-description = "Check the open platform's policy (one key, the switch, the business code)"
-run = "node --experimental-strip-types test/minimax-api-policy-check.ts"
 
 [tasks."test:policy:e2e"]
 description = "Check that the policy takes effect at once (a fake upstream, no tokens spent)"

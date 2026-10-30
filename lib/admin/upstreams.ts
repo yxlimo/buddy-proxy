@@ -9,7 +9,6 @@
 
 import { configNumber, configString } from "../config.ts";
 import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
-import { miniMaxApiTenantPlans } from "../minimax/api.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
@@ -380,7 +379,6 @@ export async function refreshHealthSnapshot(): Promise<void> {
   const snapshot: HealthSnapshot = {
     qoder: {},
     minimax: {},
-    minimaxApi: {},
     zcode: {},
     workbuddy: {},
     tokenrhythm: {},
@@ -428,9 +426,6 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
       };
       return;
     }
-    case "minimax-api":
-      snapshot.minimaxApi[row.id] = { tenants: await miniMaxApiTenantPlans(row.id) };
-      return;
     case "zcode":
       snapshot.zcode[row.id] = { quota: await zcodeQuota(300_000, row.id) };
       return;

@@ -139,14 +139,14 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "十二个上游都在",
-  list(status.body?.upstreams).length === 12,
+  "十一个上游都在",
+  list(status.body?.upstreams).length === 11,
   String(status.body?.upstreams?.length),
 );
 check(
   "上游的名字与 id 都对",
   list(status.body?.upstreams).every((u: any) => typeof u.id === "string" && typeof u.label === "string") &&
-    ["minimax", "minimax-api", "zcode", "qoder", "qoder-cn", "workbuddy-cn", "workbuddy-global", "tokenrhythm", "sensenova", "intern-ai", "qiniu", "xinghuo"].every((id) =>
+    ["minimax", "zcode", "qoder", "qoder-cn", "workbuddy-cn", "workbuddy-global", "tokenrhythm", "sensenova", "intern-ai", "qiniu", "xinghuo"].every((id) =>
       list(status.body?.upstreams).some((u: any) => u.id === id),
     ),
   JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
@@ -164,12 +164,12 @@ console.log("");
 console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
-check("上游列表有十二个", list(upstreams.body?.upstreams).length === 12, String(list(upstreams.body?.upstreams).length));
+check("上游列表有十一个", list(upstreams.body?.upstreams).length === 11, String(list(upstreams.body?.upstreams).length));
 
 // 启动不再插行：新库里一个账号都没有。后面要用的账号按面板的做法加出来 ——
 // 平台是模板，账号才是 provider 表里的行。
 const created: Record<string, string> = {};
-for (const platform of ["qoder-cn", "qoder", "tokenrhythm", "minimax-api"]) {
+for (const platform of ["qoder-cn", "qoder", "tokenrhythm", "qiniu"]) {
   const res = await call("AddAccount", { platform, alias: `${platform} 主账号` }, token);
   created[platform] = String(res.body?.id ?? "");
 }
@@ -181,22 +181,24 @@ check(
   JSON.stringify(created),
 );
 
-// MiniMax 开放平台的 key 从面板写进去，挂在账号下面（upstream_id 是账号 id）。
-const apiAccountId = created["minimax-api"];
-const keys = await call("SetProviderKeys", { upstreamId: apiAccountId, keys: ["sk-cp-test-one", "sk-cp-test-two"] }, token);
+// 七牛云的凭据从面板写进去，挂在账号下面（upstream_id 是账号 id）：两段，
+// 推理用的 key 与门户 cookie。
+const qiniuAccountId = created["qiniu"];
+const keys = await call("SetProviderKeys", { upstreamId: qiniuAccountId, keys: ["sk-qiniu-test-one", "portal=pc"] }, token);
 check("key 写进去了", keys.body?.ok === true && Number(keys.body?.count) === 2, JSON.stringify(keys.body));
-const afterKeys = await call("ListCredentials", { accountId: apiAccountId }, token);
+const afterKeys = await call("ListCredentials", { accountId: qiniuAccountId }, token);
 check(
-  "一个账号下有两把 key",
-  list(afterKeys.body?.credentials).filter((c: any) => c.kind === "api_key").length === 2,
+  "一个账号下有推理 key 与门户 cookie",
+  list(afterKeys.body?.credentials).some((c: any) => c.kind === "api_key") &&
+    list(afterKeys.body?.credentials).some((c: any) => c.kind === "cookie"),
   JSON.stringify(list(afterKeys.body?.credentials).map((c: any) => c.kind)),
 );
 const afterKeysUp = await call("ListUpstreams", {}, token);
-const miniMaxApi = list(afterKeysUp.body?.upstreams).find((u: any) => u.id === "minimax-api");
-check("开放平台下就是一个账号", miniMaxApi?.accountCount === 1, String(miniMaxApi?.accountCount));
+const qiniuUpstream = list(afterKeysUp.body?.upstreams).find((u: any) => u.id === "qiniu");
+check("七牛云下就是一个账号", qiniuUpstream?.accountCount === 1, String(qiniuUpstream?.accountCount));
 const badKeys = await call("SetProviderKeys", { upstreamId: "no-such-account", keys: ["x"] }, token);
 check("别的 Provider 不收 key", badKeys.body?.ok === false, JSON.stringify(badKeys.body));
-await call("SetProviderKeys", { upstreamId: apiAccountId, keys: [] }, token);
+await call("SetProviderKeys", { upstreamId: qiniuAccountId, keys: [] }, token);
 
 const config = await call("ListConfig", {}, token);
 check("配置项列出来了", Array.isArray(config.body?.items) && config.body.items.length > 0);
@@ -319,7 +321,6 @@ await call("SetPlatformPolicy", { platform: "tokenrhythm", policy: "PROVIDER_POL
 const kinds = await call("ListProviderKinds", {}, token);
 const kindPolicies = (kind: string) => list(list(kinds.body?.kinds).find((k: any) => k.kind === kind)?.policies);
 check("中转站三个策略", kindPolicies("tokenrhythm").length === 3, JSON.stringify(kindPolicies("tokenrhythm")));
-check("开放平台两个策略", kindPolicies("minimax-api").length === 2, JSON.stringify(kindPolicies("minimax-api")));
 check("其余两个策略", kindPolicies("qoder").length === 2, JSON.stringify(kindPolicies("qoder")));
 check(
   "中转站那三个是单一、降级、余额到期优先",
@@ -335,7 +336,7 @@ const counts = await call("ListUpstreams", {}, token);
 const countList = list(counts.body?.upstreams);
 const accountRows = list((await call("ListAccounts", {}, token)).body?.accounts);
 // 账号数是 provider 表的行数：跟账号列表里那几行一致。
-for (const platform of ["qoder", "qoder-cn", "tokenrhythm", "minimax-api", "workbuddy-cn"]) {
+for (const platform of ["qoder", "qoder-cn", "tokenrhythm", "qiniu", "workbuddy-cn"]) {
   const upstream = countList.find((u: any) => u.id === platform);
   const rows = accountRows.filter((a: any) => a.platform === platform);
   check(

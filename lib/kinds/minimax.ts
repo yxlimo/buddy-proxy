@@ -1,19 +1,14 @@
-// lib/kinds/minimax.ts — the two MiniMax kinds.
+// lib/kinds/minimax.ts — the MiniMax Code kind.
 //
-// MiniMax Code is the closed client's gateway (a device login, an Anthropic
-// endpoint). The open platform is the paid API with keys: several tenants under
-// one upstream, so a key is a tenant and the tenants can be tried in turn.
+// MiniMax Code is the closed client's gateway: a device login, an Anthropic
+// endpoint, one session per account.
 
-import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import { declareNoLoginFlow } from "../login-flow.ts";
-import { tokenFingerprint } from "../credential.ts";
-import { minimaxCatalogModels, miniMaxApiCatalogModels } from "../catalog-models.ts";
+import { minimaxCatalogModels } from "../catalog-models.ts";
 import {
   fromUpstreamStatus,
   isIgnoredPlanWindow,
   registerKind,
   tokenPlanView,
-  type CredentialView,
   type HealthSnapshot,
   type ProviderRow,
   type QuotaView,
@@ -25,33 +20,6 @@ import { runMiniMaxBenefits } from "../minimax/checkin.ts";
 import { MINIMAX_MODELS } from "../minimax/models.ts";
 import { isLotExpired } from "../minimax/points.ts";
 import { MINIMAX_UPSTREAM } from "../minimax/transport.ts";
-import { miniMaxApiTenants, MINIMAX_API_MODELS, miniMaxApiBase } from "../minimax/api.ts";
-
-/** 一把 key 就是一个租户时的凭据。 */
-function apiKeyCredential(keys: string[], detail: string): CredentialView {
-  if (!keys.length) {
-    return {
-      kind: "api_key",
-      status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "未配置 API Key",
-      generation: 0,
-    };
-  }
-  return {
-    kind: "api_key",
-    status: CredentialState.AUTHENTICATED,
-    fingerprint: tokenFingerprint(keys[0]),
-    expiresAt: 0,
-    remainingSec: 0,
-    warning: false,
-    detail,
-    generation: 0,
-  };
-}
 
 function minimaxQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
   const balance = snapshot.minimax?.[provider.id]?.balance as any;
@@ -87,15 +55,6 @@ function minimaxQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaVi
       ...(plan ? { tokenPlan: plan } : {}),
     },
   ];
-}
-
-function miniMaxApiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
-  const tenants = (snapshot.minimaxApi?.[provider.id]?.tenants ?? []) as any[];
-  return tenants.map((t: any) => ({
-    upstreamId: provider.id,
-    accountId: `${provider.id}:${t.index}`,
-    ...(t.plan ? { tokenPlan: t.plan } : {}),
-  }));
 }
 
 /** The plan of one provider, out of the snapshot. */
@@ -197,43 +156,3 @@ registerKind({
     return planRecovery(windows);
   },
 });
-
-registerKind({
-  kind: "minimax-api",
-  // 开放 API 平台：请求直接转发，会话相关的头也跟着过去。
-  openPlatform: true,
-  label: "MiniMax 开放平台",
-  login: "password",
-  // 一把 key 一个租户：租户之间可以换着来。
-  policies: ["single", "fallback"],
-  baseUrl: () => miniMaxApiBase(),
-  credential: (provider) => {
-    const tenants = miniMaxApiTenants(provider.id);
-    return apiKeyCredential(
-      tenants.map((t) => t.key),
-      tenants.length === 1 ? "1 个租户" : `${tenants.length} 个租户`,
-    );
-  },
-  models: (provider) =>
-    // 开放平台一把 key 一个租户：没有 key 就没有模型可公布。
-    miniMaxApiTenants(provider.id).length ? miniMaxApiCatalogModels(MINIMAX_API_MODELS) : [],
-  quotas: (provider, snapshot) => miniMaxApiQuotas(provider, snapshot),
-  outOfCredits: (provider, snapshot) => {
-    const mine = (snapshot.minimaxApi?.[provider.id] ?? {}) as any;
-    const tenants = (mine.tenants ?? []) as any[];
-    const windows = tenants.flatMap((t: any) => (t.plan?.windows ?? []) as any[]);
-    if (!windows.length) return false;
-    return windows.some(
-      (w: any) => Number(w.intervalPercent ?? 100) <= 0 || Number(w.weeklyPercent ?? 100) <= 0,
-    );
-  },
-  recoverAt: (provider, snapshot) => {
-    const mine = (snapshot.minimaxApi?.[provider.id] ?? {}) as any;
-    const tenants = (mine.tenants ?? []) as any[];
-    const windows = tenants.flatMap((t: any) => (t.plan?.windows ?? []) as any[]);
-    return planRecovery(windows);
-  },
-});
-
-// 开放平台发的是请求，没有会话：面板上点「登录」只有一个「贴 API Key」的说明。
-declareNoLoginFlow("minimax-api", "开放平台用 API Key，没有会话登录");

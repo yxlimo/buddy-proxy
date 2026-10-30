@@ -167,10 +167,9 @@ function cooldownOf(
   return { untilMs: row.untilMs, reason: row.reason };
 }
 
-/** 快照里一个账号的那一段：桶的名字跟 kind 不同名（minimaxApi、internAi）。 */
+/** 快照里一个账号的那一段：桶的名字跟 kind 不同名（internAi）。 */
 const SNAPSHOT_BUCKET: Record<string, string> = {
   minimax: "minimax",
-  "minimax-api": "minimaxApi",
   zcode: "zcode",
   qoder: "qoder",
   workbuddy: "workbuddy",

@@ -146,9 +146,9 @@ check(
   String(kindOf("workbuddy")?.label),
 );
 check(
-  "MiniMax Code 与 MiniMax 开放平台是两个名字",
-  kindOf("minimax")?.label !== kindOf("minimax-api")?.label,
-  `${kindOf("minimax")?.label} / ${kindOf("minimax-api")?.label}`,
+  "MiniMax Code 与七牛云是两个名字",
+  kindOf("minimax")?.label !== kindOf("qiniu")?.label,
+  `${kindOf("minimax")?.label} / ${kindOf("qiniu")?.label}`,
 );
 
 // 「qoder 与 qoder-cn 是同一个模拟端」这句话本身：两个平台 id 不同，

@@ -356,27 +356,6 @@ console.log("降级的分类");
 }
 
 console.log("");
-console.log("平台自己的业务码（200 答复里的）");
-
-{
-  const { MiniMaxApiBusinessError, miniMaxApiBusinessCode } = await import("../lib/minimax/api.ts");
-
-  const quota = miniMaxApiBusinessCode({ base_resp: { status_code: 2067, status_msg: "套餐额度已用完" } });
-  check("200 里的业务码被认出来", quota === 2067, String(quota));
-  const quotaFailure = classifyUpstreamError(new MiniMaxApiBusinessError(quota!, "套餐额度已用完"));
-  check("2067 → 降级", quotaFailure.degradable === true, quotaFailure.kind);
-  check("2067 → quota", quotaFailure.kind === "quota", quotaFailure.kind);
-
-  const wrong = miniMaxApiBusinessCode({ base_resp: { status_code: 2013, status_msg: "参数错误" } });
-  check("2013 被认出来", wrong === 2013, String(wrong));
-  const wrongFailure = classifyUpstreamError(new MiniMaxApiBusinessError(wrong!, "参数错误"));
-  check("2013 → 不降级", wrongFailure.degradable === false, wrongFailure.kind);
-  check("2013 → request", wrongFailure.kind === "request", wrongFailure.kind);
-
-  check("没有业务码就是没有", miniMaxApiBusinessCode({ base_resp: { status_code: 0 } }) === null);
-}
-
-console.log("");
 console.log("平台自己的业务码");
 
 {

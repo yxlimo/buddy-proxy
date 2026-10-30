@@ -33,12 +33,12 @@ vi.mock('sonner', () => ({
   Toaster: () => null,
 }))
 
-/** 一个开放平台的账号。 */
-function account(): Account {
+/** 一个开放平台的账号：七牛云（一段推理 key 加一段门户 cookie）。 */
+function qiniuAccount(id = 'qiniu-1', alias = '七牛一'): Account {
   return create(AccountSchema, {
-    id: 'minimax-api',
-    platform: 'minimax-api',
-    alias: '租户一',
+    id,
+    platform: 'qiniu',
+    alias,
     enabled: true,
     status: 'missing',
     credentialCount: 0,
@@ -79,7 +79,7 @@ function accountOf(id: string, platform: string, alias: string): Account {
 /**
  * key 挂在账号上。
  *
- * 一个账号一份 key：点了哪一个账号的「API Key」，就写到那个账号上，不写到别处
+ * 一个账号一份凭据：点了哪一个账号的「凭据」，就写到那个账号上，不写到别处
  * 去。
  */
 describe('账号的 API Key', () => {
@@ -98,18 +98,24 @@ describe('账号的 API Key', () => {
         create(ListUpstreamsResponseSchema, {
           upstreams: [
             create(UpstreamSchema, {
-              id: 'minimax-api',
-              kind: 'minimax-api',
-              label: 'MiniMax 开放平台',
+              id: 'qiniu',
+              kind: 'qiniu',
+              label: '七牛云',
               state: UpstreamState.NO_CREDENTIAL,
               policy: ProviderPolicy.SINGLE,
               policies: [ProviderPolicy.SINGLE],
               accountCount: 1,
-              accounts: [account()],
+              accounts: [qiniuAccount()],
             }),
           ],
         }),
-      ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [account()] }),
+      // 后端说七牛云是 api_key 登录：面板据此给「凭据」按钮。
+      ListProviderKinds: () =>
+        create(ListProviderKindsResponseSchema, {
+          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
+        }),
+      ListAccounts: () =>
+        create(ListAccountsResponseSchema, { accounts: [qiniuAccount()] }),
       ListCredentials: () =>
         create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
@@ -127,19 +133,19 @@ describe('账号的 API Key', () => {
     // 展开那一行，账号在里面。
     await user.click(
       await screen.findByRole('button', {
-        name: '展开 minimax-api 的账号与凭据',
+        name: '展开 qiniu 的账号与凭据',
       })
     )
-    await user.click(await screen.findByRole('button', { name: 'API Key' }))
+    await user.click(await screen.findByRole('button', { name: '凭据' }))
 
     await user.type(
-      await screen.findByLabelText('key（每行一把）'),
+      await screen.findByLabelText('推理 API Key'),
       'sk-tenant-one'
     )
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
-      expect(sent).toEqual(['minimax-api'])
+      expect(sent).toEqual(['qiniu-1'])
     })
   })
 
@@ -152,25 +158,22 @@ describe('账号的 API Key', () => {
         create(ListUpstreamsResponseSchema, {
           upstreams: [
             create(UpstreamSchema, {
-              id: 'minimax-api',
-              kind: 'minimax-api',
-              label: 'MiniMax 开放平台',
+              id: 'qiniu',
+              kind: 'qiniu',
+              label: '七牛云',
               policy: ProviderPolicy.SINGLE,
               policies: [ProviderPolicy.SINGLE],
               accountCount: 2,
               accounts: [
-                account(),
-                create(AccountSchema, {
-                  id: 'minimax-api-2',
-                  platform: 'minimax-api',
-                  alias: '租户二',
-                  enabled: true,
-                  status: 'missing',
-                  credentialCount: 0,
-                }),
+                qiniuAccount(),
+                qiniuAccount('qiniu-2', '七牛二'),
               ],
             }),
           ],
+        }),
+      ListProviderKinds: () =>
+        create(ListProviderKindsResponseSchema, {
+          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
         }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () =>
@@ -185,23 +188,23 @@ describe('账号的 API Key', () => {
 
     await user.click(
       await screen.findByRole('button', {
-        name: '展开 minimax-api 的账号与凭据',
+        name: '展开 qiniu 的账号与凭据',
       })
     )
 
-    // 两个账号各有一个「API Key」按钮：点第二个账号那一行的。
-    const row = (await screen.findByText('租户二')).closest('tr')
+    // 两个账号各有一个「凭据」按钮：点第二个账号那一行的。
+    const row = (await screen.findByText('七牛二')).closest('tr')
     await user.click(
-      within(row as HTMLElement).getByRole('button', { name: 'API Key' })
+      within(row as HTMLElement).getByRole('button', { name: '凭据' })
     )
     await user.type(
-      await screen.findByLabelText('key（每行一把）'),
+      await screen.findByLabelText('推理 API Key'),
       'sk-tenant-two'
     )
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
-      expect(sent).toEqual(['minimax-api-2'])
+      expect(sent).toEqual(['qiniu-2'])
     })
   })
 
@@ -215,15 +218,19 @@ describe('账号的 API Key', () => {
         create(ListUpstreamsResponseSchema, {
           upstreams: [
             create(UpstreamSchema, {
-              id: 'minimax-api',
-              kind: 'minimax-api',
-              label: 'MiniMax 开放平台',
+              id: 'qiniu',
+              kind: 'qiniu',
+              label: '七牛云',
               policy: ProviderPolicy.SINGLE,
               policies: [ProviderPolicy.SINGLE],
               accountCount: gone ? 0 : 1,
-              accounts: gone ? [] : [account()],
+              accounts: gone ? [] : [qiniuAccount()],
             }),
           ],
+        }),
+      ListProviderKinds: () =>
+        create(ListProviderKindsResponseSchema, {
+          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
         }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () =>
@@ -239,10 +246,10 @@ describe('账号的 API Key', () => {
 
     await user.click(
       await screen.findByRole('button', {
-        name: '展开 minimax-api 的账号与凭据',
+        name: '展开 qiniu 的账号与凭据',
       })
     )
-    await user.click(await screen.findByRole('button', { name: 'API Key' }))
+    await user.click(await screen.findByRole('button', { name: '凭据' }))
     await screen.findByRole('dialog')
 
     // 账号没了：重取列表之后它不在了。
@@ -256,18 +263,6 @@ describe('账号的 API Key', () => {
     expect(sent).toEqual([])
   })
 })
-
-/** 七牛云的账号：一段推理 key 加一段门户 cookie。 */
-function qiniuAccount(): Account {
-  return create(AccountSchema, {
-    id: 'qiniu-1',
-    platform: 'qiniu',
-    alias: '七牛一',
-    enabled: true,
-    status: 'missing',
-    credentialCount: 0,
-  })
-}
 
 /**
  * 七牛云要两段凭据：推理 API Key 与门户 cookie。
@@ -409,8 +404,8 @@ describe('七牛云的凭据', () => {
 /**
  * 给不给「填 key」的入口，由后端说的 kind ⇒ login 决定。
  *
- * 以前是按平台名一个个写死，写死就漏：新平台上线的第一次必漏（minimax-api、
- * qiniu、xinghuo 各漏过一次）。
+ * 以前是按平台名一个个写死，写死就漏：新平台上线的第一次必漏（qiniu、
+ * xinghuo 各漏过一次）。
  */
 describe('按 kind 的 login 给入口', () => {
   beforeEach(() => {
@@ -483,28 +478,6 @@ describe('按 kind 的 login 给入口', () => {
     // 控制组：登录按钮还在，只是不给填 key 的入口。
     expect(
       within(row as HTMLElement).getByRole('button', { name: '登录' })
-    ).toBeInTheDocument()
-  })
-
-  it('后端没说过这一类怎么登录：历史特例仍然给按钮', async () => {
-    const user = userEvent.setup({ delay: null })
-
-    renderWithClient({
-      client: kindsClient(
-        [upstream('minimax-api', 'minimax-api', 'MiniMax 开放平台', [account()])],
-        // 后端的列表里没有 minimax-api：login 未知。
-        []
-      ),
-      children: <UpstreamsPage />,
-    })
-
-    await user.click(
-      await screen.findByRole('button', { name: '展开 minimax-api 的账号与凭据' })
-    )
-
-    const row = (await screen.findByText('租户一')).closest('tr')
-    expect(
-      within(row as HTMLElement).getByRole('button', { name: 'API Key' })
     ).toBeInTheDocument()
   })
 

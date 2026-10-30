@@ -85,7 +85,6 @@ function snapshotWith(quota: unknown): any {
   return {
     qoder: {},
     minimax: {},
-    minimaxApi: {},
     zcode: {},
     workbuddy: {},
     tokenrhythm: {},

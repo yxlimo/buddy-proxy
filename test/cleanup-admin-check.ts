@@ -56,8 +56,8 @@ const { PLATFORMS } = await import("../lib/platforms.ts");
 const builtIn = listProviders();
 check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
 check(
-  "十二个平台是模板，不是表里的行",
-  PLATFORMS.length === 12 && PLATFORMS.every((p) => typeof p.id === "string"),
+  "十一个平台是模板，不是表里的行",
+  PLATFORMS.length === 11 && PLATFORMS.every((p) => typeof p.id === "string"),
   PLATFORMS.map((p) => p.id).join(","),
 );
 check(
@@ -77,7 +77,8 @@ const { parseCredentialId } = await import("../lib/admin/credentials.ts");
 
 const shapes: [string, string, number | null][] = [
   ["session:provider:qoder", "session", null],
-  ["key:provider:minimax-api:key-1", "api_key", 1],
+  // 一把 key 一个租户的那种形状：解析器照样认得。
+  ["key:provider:qiniu:key-1", "api_key", 1],
   ["key:provider:sensenova:account", "login", null],
   ["key:provider:intern-ai:account", "login", null],
   ["key:provider:tokenrhythm:account", "login", null],
@@ -121,8 +122,9 @@ writeSecret("session:provider:minimax", "session", { accessToken: "a" });
 // 旧库里留下的套餐 key：账号注销时也要跟着删干净。
 writeSecret("key:provider:minimax:plan", "account", { key: "b" });
 writeSecret("session:provider:minimax-code-m-plan", "session", { accessToken: "c" });
-writeSecret("session:provider:minimax-api", "session", { accessToken: "d" });
-writeSecret("key:provider:minimax-api:key-1", "account", { key: "e" });
+// 另一个平台的凭据：前缀不一样，删 minimax 不该动它。
+writeSecret("session:provider:qiniu", "session", { accessToken: "d" });
+writeSecret("key:provider:qiniu:key-1", "account", { key: "e" });
 
 const dropped = deleteProviderCredentials("minimax");
 check("删掉了自己的凭据", dropped === 2, String(dropped));
@@ -133,9 +135,9 @@ check(
   getSecret("session:provider:minimax-code-m-plan") !== null,
 );
 check(
-  "同前缀的另一个上游还在（开放平台）",
-  getSecret("session:provider:minimax-api") !== null &&
-    getSecret("key:provider:minimax-api:key-1") !== null,
+  "别的上游的凭据没动（七牛云）",
+  getSecret("session:provider:qiniu") !== null &&
+    getSecret("key:provider:qiniu:key-1") !== null,
 );
 
 /* ------------------------------------------------------------------ *
@@ -452,7 +454,7 @@ try {
 }
 check(
   "环境里的开关被忽略了（一个账号都没有）",
-  envRun_body.platforms === 12 && envRun_body.rows.length === 0,
+  envRun_body.platforms === 11 && envRun_body.rows.length === 0,
   JSON.stringify(envRun_body),
 );
 fs.rmSync(ENV_DIR, { recursive: true, force: true });

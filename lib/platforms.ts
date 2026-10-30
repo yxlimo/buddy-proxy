@@ -1,7 +1,6 @@
 // lib/platforms.ts — 平台：代码里写死的模板。
 //
-// 一个平台是一个服务，不是一份登录：Qoder 的全球区与中国区是两个平台，
-// MiniMax Code 与 MiniMax 开放平台也是两个。
+// 一个平台是一个服务，不是一份登录：Qoder 的全球区与中国区是两个平台。
 //
 // 平台的 id 就是请求路径里那一段（`/minimax/v1/messages`），所以它是契约的
 // 一部分，改名等于把调用方的 base_url 打断。新增一个平台只在代码里加一条。
@@ -31,14 +30,13 @@ export interface Platform {
 }
 
 /**
- * 十二个平台。
+ * 十一个平台。
  *
  * The region and the name live with the platform rather than with the account:
  * they are properties of the service, not of who is logged in.
  */
 export const PLATFORMS: Platform[] = [
   { id: "minimax", kind: "minimax", label: "MiniMax Code", region: "cn" },
-  { id: "minimax-api", kind: "minimax-api", label: "MiniMax 开放平台", region: "cn" },
   { id: "zcode", kind: "zcode", label: "ZCode", region: "cn" },
   { id: "qoder", kind: "qoder", label: "Qoder（全球区）", region: "global" },
   { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },

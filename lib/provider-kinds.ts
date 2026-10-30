@@ -140,8 +140,6 @@ export interface HealthSnapshot {
       creditFallbackEnabled?: { enabled: boolean | null; at: number };
     }
   >;
-  /** MiniMax 开放平台：每个租户一份套餐额度。 */
-  minimaxApi: Record<string, { tenants: unknown }>;
   /** ZCode 的 Start Plan 额度。 */
   zcode: Record<string, { quota: unknown }>;
   workbuddy: Record<string, { credits: unknown }>;
@@ -169,7 +167,7 @@ export interface ProviderKind {
   /** 这个种类要区域吗（Qoder 有全球区与中国区之分）。 */
   needsRegion?: boolean;
   /**
-   * 是开放 API 平台吗（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）。
+   * 是开放 API 平台吗（TokenRhythm、SenseNova、书生·端砚）。
    *
    * 平台是直接转发的：agent 写的请求原样过去，会话相关的头也跟着过去。
    * 模拟客户端的那些（Qoder、WorkBuddy、MiniMax Code、ZCode）是按客户端的

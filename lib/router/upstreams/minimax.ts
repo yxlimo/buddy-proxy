@@ -1,28 +1,16 @@
-// lib/router/upstreams/minimax.ts — MiniMax Code and the MiniMax open platform.
+// lib/router/upstreams/minimax.ts — the MiniMax Code upstream.
 //
-// MiniMax Code speaks the Anthropic dialect natively; the open platform
-// speaks the OpenAI one. They are two upstreams with two kinds of
-// credential, so they have two adapters.
+// MiniMax Code speaks the Anthropic dialect natively.
 
 import type Koa from "koa";
 import { AuthError } from "../../credential.ts";
-import { anthropicToOpenAI, openaiToAnthropic } from "../../dialect/request.ts";
+import { openaiToAnthropic } from "../../dialect/request.ts";
 import { MINIMAX_MODELS } from "../../minimax/models.ts";
-import {
-  miniMaxApiBusinessCode,
-  miniMaxApiChat,
-  miniMaxApiTenants,
-  peekMiniMaxApiStream,
-  MiniMaxApiBusinessError,
-} from "../../minimax/api.ts";
 import { gatewayErrorMessage, minimaxChat, PING_MS } from "../../minimax/transport.ts";
-import { deliverAnthropicStream, deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
-import { byOrder, describeUpstreamError, isDegradableUpstreamError, selectProvider } from "../provider-selection.ts";
+import { deliverAnthropicStream, deliverJson, type Dialect } from "../deliver.ts";
 import { withBusinessCode, withCooldownUntil, withUpstreamStatus, retryAfterMs } from "../../upstream-status.ts";
-import { accountsOfPlatform } from "../../providers.ts";
-import { platformPolicy } from "../../platforms.ts";
-import { platformWithoutAccount, upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, accountFailure, keepUpstreamTruth, settlement, underPolicy } from "./policy.ts";
+import { upstreamModel, type Route } from "../routes.ts";
+import { type UpstreamContext, keepUpstreamTruth, settlement, underPolicy } from "./policy.ts";
 
 /** The output limit of a MiniMax model, as its own catalog says. */
 function minimaxMaxOutput(model: string): number {
@@ -136,102 +124,4 @@ async function minimaxRejection(res: Response): Promise<AuthError> {
 function trailingCode(text: string): number | null {
   const found = /\((\d{3,6})\)\s*$/.exec(String(text ?? "").trim());
   return found ? Number(found[1]) : null;
-}
-
-/**
- *
- * 平台说的是 OpenAI 方言，所以 Anthropic 的请求在方言层转过去（跟别的
- * 上游一样）。哪个租户出钱由上游自己的策略定：单一只调一把 key，降级按 key
- * 的次序换下一个。
- */
-export async function toMiniMaxApi(
-  ctx: UpstreamContext,
-  body: Record<string, unknown>,
-  route: Route,
-  dialect: Dialect,
-  stream: boolean,
-  out: Koa.Context,
-): Promise<void> {
-  const model = upstreamModel(route);
-  const openaiBody = dialect === "openai" ? { ...body } : anthropicToOpenAI(body);
-  openaiBody.model = model;
-  openaiBody.stream = stream;
-
-  // 生效上限：客户端给了就用它的，没给才是目录默认值。日志拿它算用掉多少。
-  if (typeof (openaiBody as any).max_tokens === "number") {
-    ctx.upstreamMaxTokens = (openaiBody as any).max_tokens;
-  }
-
-  // 一个账号可以有不止一把 key，所以候选是「账号 × key」：账号之间按策略
-  // 换，账号自己名下的 key 也按同一个策略换。
-  const accounts = accountsOfPlatform(route.platform);
-  const serving = accounts.filter((row) => row.enabled);
-  if (!serving.length) throw platformWithoutAccount(route.platform, accounts.length);
-  const policy = platformPolicy(route.platform);
-  const slots = serving.flatMap((account) =>
-    miniMaxApiTenants(account.id).map((tenant) => ({ account, tenant })),
-  );
-  if (!slots.length) {
-    throw new AuthError(
-      "no minimax api key is configured",
-      "MiniMax 开放平台的账号都还没有 API Key。在面板上给账号配一把。",
-      503,
-    );
-  }
-
-  const ids = slots.map(({ account, tenant }) => `${account.id}#${tenant.index}`);
-  const candidates = byOrder(
-    slots.map(({ account, tenant }, position) => ({
-      id: ids[position],
-      // 权重是账号的：一个账号下几把 key 谁先，按 key 的次序。
-      weight: account.weight,
-      run: async () => {
-        if (ctx.logRoute) {
-          console.log(
-            `[ROUTE] minimax-api model=${route.model} policy=${policy} account=${account.id} key=${tenant.index} stream=${stream}`,
-          );
-        }
-        const response = await miniMaxApiChat(tenant, openaiBody, "cn", ctx.clientHeaders);
-        if (stream) {
-          // 平台有时候用 200 回答一个失败的请求；流式的失败在第一个帧里。
-          // 在写给客户端之前看：答复还没开始，换一把 key 还来得及。
-          return { response: await peekMiniMaxApiStream(response), json: null as any };
-        }
-        const json = await response.json();
-        // 平台有时用 200 回答一个失败的请求（base_resp.status_code 不为 0）。
-        // 那不是答复，交给客户端会让它以为答完了。
-        const code = miniMaxApiBusinessCode(json);
-        if (code !== null) {
-          throw new MiniMaxApiBusinessError(code, String(json?.base_resp?.status_msg ?? ""));
-        }
-        return { response, json };
-      },
-    })),
-  );
-
-  const result = await selectProvider(policy, candidates, {
-    degradable: isDegradableUpstreamError,
-    onAttempt: (candidate, error) => {
-      if (!error) return;
-      const at = ids.indexOf(candidate.id);
-      // 只有真的要换才说「试下一个」：不可降级的错误就地抛出去。
-      const moves = isDegradableUpstreamError(error);
-      const next = moves && policy === "fallback" ? ids[at + 1] : undefined;
-      console.log(
-        `[ROUTE] minimax-api ${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
-          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no key left" : ", not switching"),
-      );
-    },
-    failure: (lastError) =>
-      accountFailure(lastError, {
-        message: "no minimax api account can serve the request",
-        hint: "MiniMax 开放平台的账号都没有额度了（402 余额不足）。充值后恢复。",
-      }),
-  });
-
-  if (!stream) {
-    deliverJson(out, dialect, "openai", result.json, route.label ?? model, ctx.onUsage);
-    return;
-  }
-  await deliverOpenAIStream(out, result.response.body!, dialect, route.label ?? model, undefined, ctx.onUsage);
 }

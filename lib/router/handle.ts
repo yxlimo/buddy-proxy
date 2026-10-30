@@ -31,7 +31,6 @@ import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } fr
 import { outOfCredits, workbuddyCatalog } from "../admin/upstreams.ts";
 import {
   toMinimax,
-  toMiniMaxApi,
   toZcode,
   toQoder,
   toTokenRhythm,
@@ -463,9 +462,6 @@ async function callUpstream(
         await (kind?.dispatch
           ? kind.dispatch(uctx, body, route, dialect, stream, ctx)
           : toInternAi(uctx, body, route, dialect, stream, ctx));
-        break;
-      case "minimax-api":
-        await toMiniMaxApi(uctx, body, route, dialect, stream, ctx);
         break;
       // MiniMax Code 有自己的 case：它没有登记 dispatch（登记的是它的种类
       // 模板，不是转发）。漏了它，default 会把它当成「还没接的上游」。

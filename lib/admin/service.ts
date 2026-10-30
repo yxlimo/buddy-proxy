@@ -644,7 +644,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async setProviderKeys(request) {
     const upstreamId = String(request.upstreamId ?? "");
     // 位置有意义（七牛的凭据是两段：推理 key 与门户 cookie），空串留着占位。
-    // 各分支自己决定怎么处理空串：minimax-api 跳过空的那几把。
+    // 各分支自己决定怎么处理空串。
     const keys = (request.keys ?? []).map((k) => String(k).trim());
     const result = setProviderKeys(upstreamId, keys);
     return create(SetProviderKeysResponseSchema, {

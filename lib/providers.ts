@@ -194,7 +194,7 @@ function nextAccountId(platform: string): string {
  * The ids follow the pattern `session:provider:<id>`,
  * `key:provider:<id>…` and `account:<id>…`. The boundary is the colon: a
  * provider named `minimax` owns `key:provider:minimax:plan`, but not
- * `session:provider:minimax-api` nor `session:provider:minimax-code-m-plan`
+ * `session:provider:qiniu` nor `session:provider:minimax-code-m-plan`
  * — those belong to providers of their own.
  */
 export function deleteProviderCredentials(id: string): number {

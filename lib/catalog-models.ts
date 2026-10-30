@@ -7,7 +7,6 @@
 import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "./qoder/models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "./workbuddy/models.ts";
 import type { MiniMaxModel } from "./minimax/models.ts";
-import type { MiniMaxApiModel } from "./minimax/api.ts";
 import type { ZcodeModel } from "./zcode/models.ts";
 import { TOKENRHYTHM_MODELS } from "./tokenrhythm/models.ts";
 import type { SenseNovaModel } from "./sensenova/models.ts";
@@ -73,18 +72,6 @@ export function minimaxCatalogModels(models: MiniMaxModel[]): CatalogModel[] {
     contextWindow: m.context,
     maxOutputTokens: m.output,
     effortOptions: m.effortOptions,
-  }));
-}
-
-/** MiniMax 开放平台的模型。 */
-export function miniMaxApiCatalogModels(models: MiniMaxApiModel[]): CatalogModel[] {
-  return models.map((m) => ({
-    id: m.id,
-    displayName: m.displayName,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    contextWindow: m.context,
-    maxOutputTokens: m.output,
   }));
 }
 

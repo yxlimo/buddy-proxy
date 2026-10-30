@@ -7,7 +7,6 @@
 // 敏感的值只写不读：列表里给的是掩码与指纹。
 
 import crypto from "node:crypto";
-import { miniMaxApiTenantSecretId, miniMaxApiTenants } from "../minimax/api.ts";
 import { deleteProviderCredentials, deleteProviderRow, listProviders, provider } from "../providers.ts";
 import { getSecret, listSecrets } from "../store.ts";
 import { clearDeadSession, deadSession } from "../session.ts";
@@ -188,15 +187,6 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
       out.push(sessionRow(sessionId, account, "登录会话", session.data, session.updatedAt));
-      return out;
-    }
-    case "minimax-api": {
-      // 开放平台：一个账号下可以有几把 key，一把 key 一个配额。
-      for (const t of miniMaxApiTenants(account.id)) {
-        const keyId = miniMaxApiTenantSecretId(t.index, account.id);
-        const keyRow = secretOf(keyId);
-        out.push(plainRow(keyId, account, "api_key", `key ${t.index}`, t.key, keyRow.updatedAt));
-      }
       return out;
     }
     case "qoder":
@@ -543,13 +533,6 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
       return key
         ? { ok: true, message: "推理 key（Discovery）已配置" }
         : { ok: false, message: "没有配置推理 key（Discovery）" };
-    }
-    case "minimax-api": {
-      if (target.tenant === null) return { ok: false, message: "这条凭据没有序号" };
-      const tenant = miniMaxApiTenants(p.id).find((t) => t.index === target.tenant);
-      return tenant
-        ? { ok: true, message: `key ${tenant.index} 已配置` }
-        : { ok: false, message: `没有第 ${target.tenant} 把 key` };
     }
     case "tokenrhythm": {
       const credential = tokenRhythmCredentialOf(p.id);

@@ -43,7 +43,7 @@ let failScanWith: Error | null = null;
  * 一个种类，只记下「刷新过」「扫过」。
  *
  * 平台是代码里的模板，种类名必须是那九个之一，所以这里直接顶掉两个真种类：
- * 定时器看的是注册表，与上游没有关系。选的这两个（中转站与开放平台）在没有
+ * 定时器看的是注册表，与上游没有关系。选的这两个（中转站与七牛云）在没有
  * 凭据时不会去问上游，测试全程离线。
  */
 function stubKind(kind: string): void {
@@ -77,16 +77,16 @@ function stubKind(kind: string): void {
 }
 
 stubKind("tokenrhythm");
-stubKind("minimax-api");
+stubKind("qiniu");
 
 addAccount({ platform: "tokenrhythm", alias: "第一个" });
-addAccount({ platform: "minimax-api", alias: "第二个" });
+addAccount({ platform: "qiniu", alias: "第二个" });
 
 console.log("定时刷新");
 
 await runPeriodicOnce();
 check("两个账号都刷了", refreshed.length === 2, JSON.stringify(refreshed));
-check("刷的是账号自己的 id", refreshed.includes("tokenrhythm") && refreshed.includes("minimax-api"), JSON.stringify(refreshed));
+check("刷的是账号自己的 id", refreshed.includes("tokenrhythm") && refreshed.includes("qiniu"), JSON.stringify(refreshed));
 check("余额也扫了", scanned.length === 2, JSON.stringify(scanned));
 
 console.log("");

@@ -7,13 +7,8 @@
 // status 仍是字符串），那是给人看的词。
 
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import {
-  MAX_MINIMAX_API_TENANTS,
-  miniMaxApiTenantSecretId,
-} from "../minimax/api.ts";
 import { writeQiniuAccount } from "../qiniu/account.ts";
 import { writeXinghuoKey } from "../xinghuo/account.ts";
-import { deleteSecret, setSecret } from "../store.ts";
 import { providerKindOf } from "../providers.ts";
 
 /**
@@ -30,8 +25,6 @@ import { providerKindOf } from "../providers.ts";
  *
  * upstreamId 是账号行的 id：key 挂在账号下面，同一个平台下有两个账号时各写
  * 各的。
- *
- * MiniMax 开放平台：一把 key 一个配额，key 列表就是一个账号下的几把 key。
  *
  * 七牛云：推理用的 API key 与门户 cookie 两段。讯飞星火：一把推理用的 key。
  *
@@ -79,19 +72,8 @@ export function setProviderKeys(
       count,
     };
   }
-  if (upstreamId !== "minimax-api") {
-    return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
-  }
-  const cleaned = keys.map((k) => String(k).trim()).filter((k) => k.length > 0);
-  if (cleaned.length > MAX_MINIMAX_API_TENANTS) {
-    return { ok: false, message: `最多 ${MAX_MINIMAX_API_TENANTS} 把 key`, count: 0 };
-  }
-  for (let index = 1; index <= MAX_MINIMAX_API_TENANTS; index++) {
-    const key = cleaned[index - 1] ?? "";
-    if (key) setSecret(miniMaxApiTenantSecretId(index, upstreamId), "key", { key });
-    else deleteSecret(miniMaxApiTenantSecretId(index, upstreamId));
-  }
-  return { ok: true, message: `写了 ${cleaned.length} 把 key`, count: cleaned.length };
+  // 别的平台没有「贴一把 key」这一步：它们的凭据各有各的形状。
+  return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
 }
 
 export function credentialState(status: string): CredentialState {
@@ -152,7 +134,7 @@ export function hasUsableCredential(state: CredentialState): boolean {
  *
  * 凭据的 id 就是它在数据库里的地址（见 lib/providers.ts 的 providerSecretId）：
  * 会话是 session:provider:<账号>，钥匙是 key:provider:<账号>:<后缀>。后缀各家
- * 不同（开放平台一把 key 一个配额是 key-1，账号密码是 account），所以认出它是
+ * 不同（一把 key 一个配额的是 key-1，账号密码是 account），所以认出它是
  * 哪一种要靠后缀。
  *
  * 账号就是 provider 表那一行的 id —— 账号模型里一行一个登录，所以凭据的 id
@@ -163,7 +145,7 @@ export interface CredentialRef {
   accountId: string;
   /** session / api_key / login。 */
   form: string;
-  /** 第几把 key：只有一把 key 一个配额的平台（MiniMax 开放平台）才有。 */
+  /** 第几把 key：只有一把 key 一个配额的那种形状才有。 */
   tenant: number | null;
   /** 从账号里派生出来的那一条：api_key、discovery_key。 */
   derived: string;

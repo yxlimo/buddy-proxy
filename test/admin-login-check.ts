@@ -227,7 +227,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
 // 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
-for (const platform of ["minimax", "minimax-api", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
+for (const platform of ["minimax", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
   if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
@@ -323,20 +323,6 @@ check(
 const unknown = await call("BeginLogin", { upstreamId: "nope" });
 check("不认识的上游不开始", unknown.body?.ok !== true, JSON.stringify(unknown.body));
 check("说的是人话", typeof unknown.body?.message === "string" && unknown.body.message.length > 0);
-
-// 开放平台没有登录：它用 API Key。点它的时候要说清楚，别让人以为是坏了。
-const minimaxApi = await call("BeginLogin", { upstreamId: "minimax-api" });
-check("开放平台不开始登录", minimaxApi.body?.ok !== true, JSON.stringify(minimaxApi.body));
-check(
-  "开放平台说该用 API Key",
-  String(minimaxApi.body?.message ?? "").includes("API Key"),
-  JSON.stringify(minimaxApi.body?.message),
-);
-check(
-  "开放平台不再说「没有登录的办法」",
-  !String(minimaxApi.body?.message ?? "").includes("还没有登录的办法"),
-  JSON.stringify(minimaxApi.body?.message),
-);
 
 // 七牛云也是 API-key 平台：点登录要说清楚用 API Key 按钮，别让人以为是坏了。
 const qiniu = await call("BeginLogin", { upstreamId: "qiniu" });
