@@ -208,6 +208,7 @@ async function claimAll(
   now: number,
   region: QoderRegion,
   upstream: string,
+  hasDailyCampaign: boolean,
 ): Promise<{ credits: number; lines: string[] }> {
   const lines: string[] = [];
   let credits = 0;
@@ -219,8 +220,10 @@ async function claimAll(
     const lastAttempted = claimedWindows.get(windowKey) ?? 0;
     if (!shouldAttemptClaim(row, now, lastAttempted)) {
       // Current behaviour: a campaign that is already claimed says so, and
-      // anything else is skipped quietly.
-      if (row.claimStatus === "CLAIMED") {
+      // anything else is skipped quietly. Where the platform has no daily
+      // campaign at all, that line would stand in for a check-in that does
+      // not exist, so it stays quiet there.
+      if (row.claimStatus === "CLAIMED" && hasDailyCampaign) {
         lines.push(`活动「${key}」已领过`);
       }
       continue;
@@ -267,7 +270,8 @@ export async function runQoderBenefits(providerId = "qoder-cn"): Promise<Benefit
     // (the global region only carries VIEW_DETAILS ones), and saying
     // "claimed" there would claim a win that never happened. This line comes
     // first so it is not hidden behind the per-campaign lines.
-    if (!rows.some((r: any) => r.actionType === "CLAIM_BENEFIT")) {
+    const hasDailyCampaign = rows.some((r: any) => r.actionType === "CLAIM_BENEFIT");
+    if (!hasDailyCampaign) {
       report.push("平台没有每日签到活动（列表里没有 CLAIM_BENEFIT 活动）");
     }
     if (!rows.length) {
@@ -277,7 +281,7 @@ export async function runQoderBenefits(providerId = "qoder-cn"): Promise<Benefit
     const creditCampaigns = rows.filter(
       (r: any) => r.actionType === "CLAIM_BENEFIT" || r.actionType === "VIEW_DETAILS",
     ).length;
-    const outcome = await claimAll(session, rows, now, region, upstream);
+    const outcome = await claimAll(session, rows, now, region, upstream, hasDailyCampaign);
     credits += outcome.credits;
     report.push(...outcome.lines);
     if (!creditCampaigns) report.push("无可领取积分的活动");
