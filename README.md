@@ -107,7 +107,7 @@ keeps working with that platform's own model names.
 
 The platform is part of the model id:
 
-```
+```text
 base url : http://<host>:6450/v1
 model    : qoder-cn/glm-5.3
 ```
@@ -116,7 +116,7 @@ model    : qoder-cn/glm-5.3
 
 The model id is the platform's own:
 
-```
+```text
 base url : http://<host>:6450/qoder-cn/v1
 model    : glm-5.3
 ```
@@ -126,7 +126,7 @@ say the first.
 
 ### An OpenAI client
 
-```
+```text
 base_url = "http://<host>:6450/v1"
 api_key  = "<the deployment's key>"
 model    = "qoder-cn/glm-5.3"
@@ -137,7 +137,7 @@ model    = "qoder-cn/glm-5.3"
 The Anthropic SDK appends `/v1/messages` to the base url, so the base url is
 the plain root:
 
-```
+```text
 base_url = "http://<host>:6450"
 api_key  = "<the deployment's key>"
 model    = "qoder-cn/glm-5.3"
