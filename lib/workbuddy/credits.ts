@@ -23,7 +23,7 @@ export async function fetchWorkBuddyCredits(providerId = "workbuddy-cn"): Promis
   const session = loadWorkBuddySession(providerId);
   if (!session) return null;
   try {
-    const res = await workbuddyApi(session, "/v2/billing/meter/checkin-activity-status", "POST");
+    const res = await workbuddyApi(session, "/v2/billing/meter/checkin-activity-status", "POST", undefined, providerId);
     // A failed query is "unknown", not "no credits".
     if (res.status !== 200) {
       // 上游拒了这个令牌：记下来，于是下一次拿凭据时会换一个。
