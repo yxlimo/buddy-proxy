@@ -44,26 +44,19 @@ import {
 import { UNPUBLISHED_REASON_LABELS } from '@/features/upstreams/state'
 import { UnpublishedReason } from '@/gen/buddy/admin/v1/admin_pb'
 import { ModelDialog } from '@/features/models/model-dialog'
-import { formatCount, formatDate } from '@/lib/format'
+import { formatCount, formatDate, formatLocalMoment } from '@/lib/format'
 
 /**
- * The target the route really points at right now.
+ * 一个目标都没有的时候说一句话。
  *
- * The route tries targets by weight and the first one that can serve takes the
- * request. No target can serve means there is nothing to point at — saying so
- * is honest, naming one anyway is not.
+ * 「当前指向」那行删了：颜色高亮已经说明路由落在哪个目标上，再写一遍名字
+ * 是重复。目标都在但全被 ban 的情况，每个目标自己会写明为什么接不了，
+ * 这里也不重复。
  */
-function CurrentTargetLine({ model }: { model: PublishedModel }) {
-  const current = model.targets.find((target) => target.current)
-  if (!current) {
-    return (
-      <span className='text-xs text-muted-foreground'>当前没有可用目标</span>
-    )
-  }
+function NoTargetLine({ model }: { model: PublishedModel }) {
+  if (model.targets.length > 0) return null
   return (
-    <span className='text-xs font-medium text-emerald-600 dark:text-emerald-400'>
-      当前指向：{current.groupName} / {current.upstreamModel}
-    </span>
+    <span className='text-xs text-muted-foreground'>当前没有可用目标</span>
   )
 }
 
@@ -240,12 +233,8 @@ export function PublishedModelsPage() {
                     </TableCell>
                     <TableCell>
                       <div className='grid gap-1'>
-                        <CurrentTargetLine model={model} />
-                        {model.targets.length === 0 ? (
-                          <span className='text-xs text-muted-foreground'>
-                            没有目标
-                          </span>
-                        ) : (
+                        <NoTargetLine model={model} />
+                        {model.targets.length === 0 ? null : (
                           model.targets.map((target) => (
                             <div
                               key={`${target.groupName}-${target.upstreamModel}`}
@@ -255,17 +244,23 @@ export function PublishedModelsPage() {
                                 <span
                                   className={[
                                     'max-w-[200px] font-mono text-xs break-all',
+                                    // 当前目标只靠颜色认：文字标记一律不要。
                                     target.current
                                       ? 'text-emerald-600 dark:text-emerald-400'
-                                      : '',
+                                      : target.blocked
+                                        ? 'text-red-600 dark:text-red-400'
+                                        : '',
                                   ].join(' ')}
                                 >
                                   {target.groupName} → {target.upstreamModel}
                                 </span>
-                                {target.current ? (
-                                  // Mark the target in force; the other rows stay as they are.
-                                  <span className='rounded border border-emerald-500/40 px-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400'>
-                                    当前
+                                {target.blocked ? (
+                                  // 接不了的目标标红，写明为什么、什么时候能再接。
+                                  <span
+                                    className='rounded border border-red-500/40 px-1 text-[10px] font-medium text-red-600 dark:text-red-400'
+                                    title={target.blockedReason}
+                                  >
+                                    接不了：{target.blockedReason}
                                   </span>
                                 ) : null}
                               </div>
@@ -275,6 +270,9 @@ export function PublishedModelsPage() {
                                   ? ` · 失败 ${formatCount(target.failed)}`
                                   : ''}
                                 {!target.enabled ? ' · 已停用' : ''}
+                                {target.blocked && target.recoversAtMs > 0n
+                                  ? ` · 恢复 ${formatLocalMoment(target.recoversAtMs)}`
+                                  : ''}
                               </span>
                             </div>
                           ))

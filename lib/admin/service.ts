@@ -767,6 +767,10 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
               failed: BigInt(target.failed),
               // The target the route points at right now: at most one per model.
               current: target.current === true,
+              // 为什么接不了，以及什么时候能再接。只读：每次查询现算。
+              blocked: target.blocked === true,
+              blockedReason: target.blockedReason ?? "",
+              recoversAtMs: BigInt(target.recoversAtMs ?? 0),
             }),
           ),
         }),

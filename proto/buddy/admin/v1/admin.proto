@@ -685,6 +685,12 @@ message PublishedTarget {
   // 现在真的会被用到的那一个目标。同一时刻最多一个为 true：路由按权重
   // 从大到小试，第一个「能用又没在冷却、也还有额度」的目标就是它。
   bool current = 7;
+  // 这个目标现在接不了：平台在冷却、账号额度用尽、模型下架、凭据失效。
+  bool blocked = 8;
+  // 为什么接不了，一句话，直接给人看（如「额度用尽，窗口 11-03 18:28 结束」）。
+  string blocked_reason = 9;
+  // 它什么时候能再接（unix 毫秒）。0 = 算不出来（不猜，前端不显示时间）。
+  int64 recovers_at_ms = 10;
 }
 
 message ListPublishedModelsRequest {}
