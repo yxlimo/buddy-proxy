@@ -5,8 +5,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export const FIXTURE_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures");
+// The path of this file, as the platform sees it. `new URL(...).pathname` is
+// a POSIX path — on Windows it starts with a slash ("/D:/projects/..."), and
+// joining it with path.join() yields "\D:\projects\...", which does not exist.
+// fileURLToPath() is the one that gives the native path.
+export const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 /** A name for the fixture: the method, the whole path and the variant. */
 export function fixtureName(method: string, route: string, variant: string): string {

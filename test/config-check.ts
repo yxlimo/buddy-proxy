@@ -104,5 +104,10 @@ check(
   "general",
 );
 
+// Close the database before removing its directory. On Windows an open file
+// cannot be deleted — the removal fails with EPERM — so the handle has to go
+// first. On Linux it makes no difference.
+const { closeStore } = await import("../lib/store.ts");
+closeStore();
 fs.rmSync(path.dirname(dbFile), { recursive: true, force: true });
 console.log(`\nconfig checks: ${passed} passed`);
