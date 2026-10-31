@@ -137,19 +137,23 @@ interface PlatformState {
  *   3. 目标全被停用了          → TARGET_DISABLED
  *   4. 目标的上游关着          → UPSTREAM_DISABLED
  *   5. 目标的上游没登录        → NO_CREDENTIAL
- *   6. 上游不列这个模型了      → MODEL_GONE
+ *
+ * 上游目录里有没有这个模型，**不在这里判**。目录不是「这个上游能服务什么」的
+ * 完整清单（见 savePublishedModel 的注释），拿它判会把能用的模型标成「已下架」。
+ * 目标里填过的名字会并进那个平台的目录（lib/router/catalog-routes.ts 的
+ * modelsOfPlatform），所以填了就算数。
  *
  * 有一个目标能用，就是公布了（UNSPECIFIED）。多个目标有的能用有的不能时，
  * 能用的那些说了算 —— 理由留空。
  */
-function unpublishedReason(model: AggregateModel, groups: CatalogGroup[]): UnpublishedReason {
+function unpublishedReason(model: AggregateModel): UnpublishedReason {
   if (!model.enabled) return UnpublishedReason.DISABLED;
   if (!model.targets.length) return UnpublishedReason.NO_TARGET;
   const enabled = model.targets.filter((target) => target.enabled);
   if (!enabled.length) return UnpublishedReason.TARGET_DISABLED;
   let firstBlocker: UnpublishedReason = UnpublishedReason.UNSPECIFIED;
   for (const target of enabled) {
-    const blocker = targetBlocker(target, groups);
+    const blocker = targetBlocker(target);
     if (!blocker) return UnpublishedReason.UNSPECIFIED; // 有能用的目标 → 公布了
     if (firstBlocker === UnpublishedReason.UNSPECIFIED) firstBlocker = blocker;
   }
@@ -157,17 +161,17 @@ function unpublishedReason(model: AggregateModel, groups: CatalogGroup[]): Unpub
 }
 
 /** 一个目标为什么不能用。空 = 能用。 */
-function targetBlocker(target: AggregateTarget, groups: CatalogGroup[]): UnpublishedReason {
+function targetBlocker(target: AggregateTarget): UnpublishedReason {
   const group = target.group as UpstreamId;
   // 不认识的分组：不是九个平台之一，没有开关也没有目录 —— 当作关着。
   if (!isPlatform(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   if (!upstreamEnabled(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   const credential = upstreamCredential(group);
   if (!hasUsableCredential(credential.status)) return UnpublishedReason.NO_CREDENTIAL;
-  const upstream = groups.find((g) => g.group === target.group);
-  if (!upstream || !upstream.models.some((m) => m.id === target.upstreamModel)) {
-    return UnpublishedReason.MODEL_GONE;
-  }
+  // 目录里有没有这个模型，**不算** blocker。上游的 /v3/config 不是它实际能服务
+  // 什么的完整清单（实测 workbuddy.cn 的 deepseek-v4.1-flash、kimi-k3.1-pro
+  // 后端都正常出话，目录里一个字都没提），拿它当"模型已下架"的判据会把能用的
+  // 模型标成下架。真的没有的话，第一次请求上游会回 11102，那才是准的。
   return UnpublishedReason.UNSPECIFIED;
 }
 
@@ -222,11 +226,10 @@ function targetKey(target: AggregateTarget): string {
  */
 function currentTargetKey(
   model: AggregateModel,
-  groups: CatalogGroup[],
   platformUsableOf: (group: UpstreamId) => boolean,
 ): string | null {
   const candidates = model.targets.filter(
-    (target) => target.enabled && targetBlocker(target, groups) === UnpublishedReason.UNSPECIFIED,
+    (target) => target.enabled && targetBlocker(target) === UnpublishedReason.UNSPECIFIED,
   );
   const usable = candidates.filter((target) => platformUsableOf(target.group as UpstreamId));
   if (!usable.length) return null;
@@ -271,10 +274,10 @@ export function publishedModels(): PublishedModelView[] {
   };
   return listAggregateModels().map((model) => {
     // 一个判断，两处用：公布了就是没有理由，没公布就有理由。
-    const reason = unpublishedReason(model, groups);
+    const reason = unpublishedReason(model);
     const inherited = effective.get(model.id);
     // The target in force right now: null means nothing can serve this model.
-    const current = currentTargetKey(model, groups, (group) => stateOf(group).usable);
+    const current = currentTargetKey(model, (group) => stateOf(group).usable);
     return {
       id: model.id,
       displayName: model.displayName,
@@ -308,7 +311,7 @@ export function publishedModels(): PublishedModelView[] {
         );
         // 目标自己接不了（模型没了、平台关了、没登录）是目标的事；目标没问题
         // 但平台接不上（冷却、额度用尽）是平台的事 —— 两种都说清楚。
-        const blocker = targetBlocker(target, groups);
+        const blocker = targetBlocker(target);
         const state = stateOf(target.group as UpstreamId);
         const blocked = target.enabled && (blocker !== UnpublishedReason.UNSPECIFIED || !state.usable);
         const blockedReason = blocked
@@ -392,25 +395,23 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
   if (targets.some((t) => !t.upstreamModel)) {
     return { ok: false, id, message: "每个目标都需要填写上游模型 id" };
   }
-  // 目标的上游模型得是真的存在。写错一个字（"Minmax-M3.1-Flash" 而不是
-  // "MiniMax-M3.1-Flash"）的话，模型能存进去，但根路由不会公布它 ——
-  // 客户端连不上，界面上只写「未公布」，没人看得出原因。
-  // 那个上游没有目录的时候说不了，存。
+  // 目录里没有这个名字，不拦。
+  //
+  // 上游的 /v3/config 不是「它实际能服务什么」的完整清单：实测 workbuddy.cn
+  // 的 deepseek-v4.1-flash 和 kimi-k3.1-pro 后端都正常出话，那份目录里一个字
+  // 都没提。拿一份不全的目录当边界，拦掉的是能用的模型 —— 这比放过一个拼错
+  // 的名字更糟，而且被拦的人还看不出是目录的锅。
+  //
+  // 所以只记下来，写进回执：拼错了要有人提醒，但决定权在填的人手上。真的没
+  // 这个模型的话，第一次请求上游会回 11102，那才是准的。
   const groups = catalogGroups();
+  const unlisted: string[] = [];
   for (const target of targets) {
     const group = groups.find((g) => g.group === target.group);
     if (!group || group.models.length === 0) continue;
     const wanted = target.upstreamModel.toLowerCase();
-    const found = group.models.some((m) => m.id.toLowerCase() === wanted);
-    if (!found) {
-      return {
-        ok: false,
-        id,
-        message: `上游 ${target.group} 里没有模型「${target.upstreamModel}」。目录里有：${group.models
-          .slice(0, 6)
-          .map((m) => m.id)
-          .join("、")}${group.models.length > 6 ? " …" : ""}`,
-      };
+    if (!group.models.some((m) => m.id.toLowerCase() === wanted)) {
+      unlisted.push(`${target.group}/${target.upstreamModel}`);
     }
   }
   const model = saveAggregateModel({
@@ -429,7 +430,11 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
   // The published models are read once and then kept, so the panel's change has
   // to be picked up: the model is live right away, no restart needed.
   reloadAggregate();
-  return { ok: true, id: model.id, message: `保存了 ${model.id}（${model.targets.length} 个目标）` };
+  // 目录里没有的，回执里说一句 —— 存是存了，但可能是拼错了，也可能是目录漏了。
+  const note = unlisted.length
+    ? `；目录里没有 ${unlisted.join("、")}，按填的原样存了`
+    : "";
+  return { ok: true, id: model.id, message: `保存了 ${model.id}（${model.targets.length} 个目标）${note}` };
 }
 
 /** 删掉一个公布的模型。 */

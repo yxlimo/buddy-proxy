@@ -19,11 +19,13 @@ import {
   aggregateAnthropicCatalog,
   aggregateCatalog,
   aggregateOpenAICatalog,
+  declaredModels,
   groupCatalog,
   platformGroups,
   type AggregateEntry,
 } from "./catalog.ts";
 import { fetchWorkBuddyCatalog } from "../workbuddy/transport.ts";
+import { regionOf, type WorkBuddyRegion } from "../workbuddy/auth.ts";
 import { refreshSenseNovaCatalog } from "../sensenova/transport.ts";
 import { refreshInternAiCatalog } from "../intern-ai/transport.ts";
 
@@ -35,23 +37,27 @@ import { refreshInternAiCatalog } from "../intern-ai/transport.ts";
 // database starts with, before the upstream answers for the first time.
 /** The upstream catalogue, refreshed when the one in the database is old. */
 export async function refreshWorkBuddyCatalog(force = false): Promise<void> {
-  // The catalogue is the kind's, not a platform's: any logged-in account of any
-  // WorkBuddy region can fetch it, and the first one that is on answers. Asking
-  // only the China platform would leave a database with nothing but an
-  // international account stuck on the bundled table for ever.
-  const accounts = PLATFORMS.filter((template) => template.kind === "workbuddy")
-    .flatMap((template) => enabledAccounts(template.id));
-  if (!accounts.length) return;
-  try {
-    // The catalogue is the platform's, but the request that fetches it needs an
-    // account's session: the first account that is on answers.
-    // 库里那份不旧就不必问上游（传输层自己判）。
-    const models = await fetchWorkBuddyCatalog(accounts[0].id, { force });
-    if (models?.length) {
-      console.log(`  [WORKBUDDY] catalogue: ${models.length} models`);
+  // 目录是**区域**的，不是 kind 的：workbuddy.cn 和 workbuddy.ai 各自发布一份，
+  // 两边几乎不重叠。所以每个区域都要自己去问一次，用自己区的一个账号；只问
+  // 一个账号的话，另一个区永远拿不到自己的目录。
+  const byRegion = new Map<WorkBuddyRegion, string>();
+  for (const template of PLATFORMS) {
+    if (template.kind !== "workbuddy") continue;
+    const accounts = enabledAccounts(template.id);
+    if (!accounts.length) continue;
+    const region = regionOf(template.id);
+    if (!byRegion.has(region)) byRegion.set(region, accounts[0].id);
+  }
+  for (const [region, providerId] of byRegion) {
+    try {
+      // 库里那份不旧就不必问上游（传输层自己判）。
+      const models = await fetchWorkBuddyCatalog(providerId, { force });
+      if (models?.length) {
+        console.log(`  [WORKBUDDY] ${region} catalogue: ${models.length} models`);
+      }
+    } catch (e) {
+      console.warn(`[WORKBUDDY] ${region} catalogue refresh failed: ${(e as Error).message}`);
     }
-  } catch (e) {
-    console.warn(`[WORKBUDDY] catalogue refresh failed: ${(e as Error).message}`);
   }
 }
 /* ------------------------------------------------------------------ *
@@ -76,7 +82,11 @@ export function modelsOfPlatform(platform: string): string[] {
   if (!kind) return [];
   const accounts = accountsOfPlatform(platform);
   if (!accounts.length) return [];
-  return kind.models(accounts[0]).map((m) => m.id);
+  const listed = kind.models(accounts[0]).map((m) => m.id);
+  // 已发布模型的目标里手填过的名字，也算这个平台的模型（见 catalog.ts 的
+  // declaredModels）。随手乱写的名字不在这里，仍然会被 routeInGroup 拒掉。
+  const declared = declaredModels().get(platform) ?? [];
+  return [...new Set([...listed, ...declared])];
 }
 
 /**

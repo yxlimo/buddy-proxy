@@ -223,6 +223,21 @@ export const WORKBUDDY_CN_MODELS: WorkBuddyModel[] = [
     onlyReasoning: true,
     efforts: [],
   },
+  // 上游的 /v3/config 里没有这个名字（cn 的注册表和 agents 列表都没有），但
+  // 后端对 `kimi-k3.1-pro` 正常出话，桌面端的选择器里也把它列成 0.97×。目录
+  // 是滞后的一份视图，所以这里按实测补上。
+  {
+    id: "kimi-k3.1-pro",
+    display_name: "Kimi-K3.1-Pro",
+    credits: 0.97,
+    context: 1000000,
+    maxOutput: 32000,
+    vision: true,
+    tools: true,
+    reasoning: true,
+    onlyReasoning: true,
+    efforts: [],
+  },
   {
     id: "kimi-k2.8-preview",
     display_name: "Kimi-K2.8-Preview",
@@ -419,7 +434,7 @@ export function parseRemoteCatalog(payload: any): RemoteCatalog | null {
  * `hy4-preview-x` — so both are published here too. The picker shows what
  * each one costs, and the agent decides.
  */
-export function curateCatalog(remote: RemoteCatalog): WorkBuddyModel[] {
+export function curateCatalog(remote: RemoteCatalog, extra: string[] = []): WorkBuddyModel[] {
   const credits: Record<string, number> = {};
   for (const [id, m] of Object.entries(remote.meta)) {
     if (typeof m.credits === "number") credits[id] = m.credits;
@@ -430,10 +445,19 @@ export function curateCatalog(remote: RemoteCatalog): WorkBuddyModel[] {
     if (credits[m.id] === undefined) credits[m.id] = m.credits;
   }
 
+  // The upstream catalogue is a view of what a region offers, not the boundary
+  // of it: measured 2026-10-31, the China backend answers `deepseek-v4.1-flash`
+  // with 200 while its own /v3/config never names it, and every model in the
+  // bundled China table answered too. So the caller may hand in models that are
+  // known to work and are missing from the list; they go in the same door and
+  // are filtered by the same rules.
   const out: string[] = [];
-  for (const id of remote.ids) {
+  const seen = new Set<string>();
+  for (const id of [...remote.ids, ...extra]) {
+    if (!id || seen.has(id)) continue;
     if (!isChatModel(id)) continue;
     if (BROKEN_MODELS.has(id)) continue;
+    seen.add(id);
     out.push(id);
   }
   return mergeWorkBuddyCatalog(out, remote.meta);
@@ -503,7 +527,7 @@ export function clampEffort(requested: string | undefined, supported: string[]):
   return supported[0];
 }
 
-// The catalogue the gateway is serving right now.
+// The catalogue the gateway is serving right now, one per region.
 //
 // It lives here, with the thing that refreshes it, so the registry and the
 // router can both read it. The copy in the database is the one that counts;
@@ -511,16 +535,22 @@ export function clampEffort(requested: string | undefined, supported: string[]):
 // (lib/workbuddy/catalog-store.ts), so the first request already sees the
 // catalogue the upstream published — not the bootstrap table.
 //
-// Until then it holds the bootstrap list: a brand-new database has no
-// catalogue of its own, and something has to answer.
-let workbuddyModels: WorkBuddyModel[] = workBuddyFallbackModels();
+// **Per region, not per kind.** workbuddy.cn and workbuddy.ai each publish their
+// own list, and the two barely overlap: a model one of them serves the other
+// does not serve at all. This used to be one shared array, so whichever region
+// fetched last won and the other one was handed a list of names its own
+// upstream has never heard of — every request to it answered
+// `11102 model [x] service info not found`.
+const workbuddyModelsByRegion = new Map<string, WorkBuddyModel[]>();
 
-/** The catalogue the gateway is serving right now. */
-export function workbuddyModelList(): WorkBuddyModel[] {
-  return workbuddyModels;
+/** The catalogue the gateway is serving right now, for one region. */
+export function workbuddyModelList(region: string = "cn"): WorkBuddyModel[] {
+  // The bundled table is the China catalogue, so it may only stand in for
+  // China. A region that has never been fetched has nothing to answer with.
+  return workbuddyModelsByRegion.get(region) ?? (region === "cn" ? workBuddyFallbackModels() : []);
 }
 
-/** Replace the catalogue (the upstream reported a new one, or the database had one). */
-export function setWorkbuddyModelList(models: WorkBuddyModel[]): void {
-  workbuddyModels = models;
+/** Replace one region's catalogue (the upstream reported a new one, or the database had one). */
+export function setWorkbuddyModelList(models: WorkBuddyModel[], region: string = "cn"): void {
+  workbuddyModelsByRegion.set(region, models);
 }

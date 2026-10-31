@@ -63,7 +63,7 @@ type Dialect = "anthropic" | "openai";
  */
 
 /** What the adapters need to know about the router they run in. */
-function upstreamContext(): UpstreamContext {
+function upstreamContext(platform?: string): UpstreamContext {
   const uctx: UpstreamContext = {
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
@@ -73,8 +73,9 @@ function upstreamContext(): UpstreamContext {
     // 开放 API 平台直接转发，所以会话相关的头跟着走；模拟客户端的那些
     // 自己重建请求，这些头不会出网关。
     clientHeaders: {},
-    workbuddyMaxOutput: (model: string) => workbuddyCatalog().find((m) => m.id === model)?.maxOutput ?? 64000,
-    workbuddyModel: (model: string) => workbuddyCatalog().find((m) => m.id === model) ?? null,
+    // 目录是区域的，所以查表要先知道这条路由落在哪个平台。
+    workbuddyMaxOutput: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model)?.maxOutput ?? 64000,
+    workbuddyModel: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model) ?? null,
   };
   // Keep the usage the upstream reported, so the caller can write it down once
   // the call is over. The upstream may report it in pieces — the Anthropic
@@ -179,7 +180,7 @@ async function handleAggregate(
       // though the upstream knows the model by another one.
       route.label = entry.id;
 
-      const uctx = upstreamContext();
+      const uctx = upstreamContext(route.platform);
       try {
         await callUpstream(uctx, body, route, dialect, stream, ctx);
       } catch (e) {
@@ -410,7 +411,7 @@ export async function handle(
 
   const stream = body.stream === true;
   try {
-    await callUpstream(upstreamContext(), body, route, dialect, stream, ctx);
+    await callUpstream(upstreamContext(route.platform), body, route, dialect, stream, ctx);
   } catch (e) {
     sendError(ctx, e);
   }

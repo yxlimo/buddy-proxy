@@ -27,6 +27,7 @@ import {
   workbuddyModelList,
   type WorkBuddyModel,
 } from "../workbuddy/models.ts";
+import { regionOf } from "../workbuddy/auth.ts";
 import { tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
 import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
 import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
@@ -178,14 +179,14 @@ export function qoderVisible(region: QoderRegion): QoderModel[] {
  * 目录住在 lib/workbuddy/models.ts —— 刷新它的东西也住在那里，注册表与路由
  * 读的是同一份，不会出现「面板看见的」与「路由得到的」两份目录。
  */
-/** WorkBuddy 现在的模型目录。 */
-export function workbuddyCatalog(): WorkBuddyModel[] {
-  return workbuddyModelList();
+/** WorkBuddy 现在的模型目录（按区域：cn 和 global 各一份）。 */
+export function workbuddyCatalog(providerId = "workbuddy-cn"): WorkBuddyModel[] {
+  return workbuddyModelList(regionOf(providerId));
 }
 
-/** 换掉 WorkBuddy 的模型目录（上游刷新之后）。 */
-export function setWorkbuddyCatalog(models: WorkBuddyModel[]): void {
-  setWorkbuddyModelList(models);
+/** 换掉某个区域的 WorkBuddy 模型目录（上游刷新之后）。 */
+export function setWorkbuddyCatalog(models: WorkBuddyModel[], providerId = "workbuddy-cn"): void {
+  setWorkbuddyModelList(models, regionOf(providerId));
 }
 
 /** 现在开着的 Qoder 区域。 */
