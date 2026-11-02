@@ -57,6 +57,8 @@ process.env.BUDDY_DATA_DIR = UNIT_DIR;
 
 const { addAccount, setProviderEnabled } = await import("../lib/providers.ts");
 const { platformAvailability } = await import("../lib/router/availability.ts");
+const { inferenceCredentialOf } = await import("../lib/admin/accounts.ts");
+const { hasUsableCredential } = await import("../lib/admin/credentials.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { putHealthSnapshot, clearHealthSnapshot } = await import("../lib/health-cache.ts");
 const { setCooldown, clearCooldown } = await import("../lib/cooldown.ts");
@@ -79,6 +81,17 @@ check("没有凭据 → 没有恢复时间（等不出来）", noKey.untilMs ===
 check("没有凭据 → 账号数是 1", noKey.accounts === 1, String(noKey.accounts));
 check("没有凭据 → 目录还是平台的（恒为全量）", noKey.ids.length === 5, JSON.stringify(noKey.ids));
 
+// 只填门户 cookie：额度问得到，推理发不出去 —— 那不是推理凭据。
+writeQiniuAccount(accountId, { portalCookie: "pc-test-cookie" });
+const cookieOnly = platformAvailability("qiniu");
+check("只有门户 cookie → inferenceCredentialOf 返回 null", inferenceCredentialOf(accountId) === null);
+check("只有门户 cookie → 平台状态是 no_credential", cookieOnly.state === "no_credential", cookieOnly.state);
+check(
+  "只有门户 cookie → 没有能接的账号",
+  cookieOnly.usable.length === 0 && cookieOnly.serving.length === 0,
+  cookieOnly.state,
+);
+
 // 账号都关着：跟「没有凭据」是两件事。
 setProviderEnabled(accountId, false);
 const off = platformAvailability("qiniu");
@@ -93,6 +106,17 @@ const ready = platformAvailability("qiniu");
 check("填上凭据 → ready", ready.state === "ready", ready.state);
 check("就绪 → 有一个能接的账号", ready.usable.length === 1, String(ready.usable.length));
 check("就绪 → 目录还是那一份", ready.ids.length === 5, JSON.stringify(ready.ids));
+const inference = inferenceCredentialOf(accountId);
+check(
+  "填上 apiKey → inferenceCredentialOf 返回那把 key",
+  inference?.kind === "api_key",
+  JSON.stringify(inference?.kind ?? null),
+);
+check(
+  "填上 apiKey → 返回的那一条确实能推理",
+  inference?.inference === true && hasUsableCredential(inference.status),
+  JSON.stringify({ inference: inference?.inference ?? null, status: inference?.status ?? null }),
+);
 
 // 额度用尽：还是就绪的样子，但接不了。
 putHealthSnapshot({

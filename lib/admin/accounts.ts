@@ -33,7 +33,7 @@ import { wallet as tokenRhythmWallet } from "../tokenrhythm/wallet.ts";
 import { forgetAccountSnapshot } from "./upstreams.ts";
 import { clearCooldown } from "../cooldown.ts";
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import { credentialStateText, parseCredentialId } from "./credentials.ts";
+import { credentialStateText, hasUsableCredential, parseCredentialId } from "./credentials.ts";
 import type { ProviderRow } from "../providers.ts";
 
 /** 一个账号：provider 表的一行，也就是一份登录身份。 */
@@ -63,6 +63,13 @@ export interface CredentialRow {
   platform: string;
   /** session / api_key / login。 */
   kind: string;
+  /**
+   * 这条凭据能不能拿去推理。
+   *
+   * 有些平台配了两份：会话（问额度用）与 key（推理用）。只有推理的那一份
+   * 是 true —— 别的配了也不算数，所以「这个账号能不能推理」按它判。
+   */
+  inference: boolean;
   label: string;
   /** 掩码后的值：只留前几位。 */
   masked: string;
@@ -94,6 +101,7 @@ function sessionRow(
   account: ProviderRow,
   label: string,
   raw: any,
+  inference: boolean,
   updatedAt = 0,
 ): CredentialRow {
   if (!raw) {
@@ -103,6 +111,7 @@ function sessionRow(
       platform: account.platform,
       kind: "session",
       label,
+      inference,
       masked: "",
       fingerprint: "",
       status: CredentialState.MISSING,
@@ -125,6 +134,7 @@ function sessionRow(
     platform: account.platform,
     kind: "session",
     label,
+    inference,
     masked: maskOf(token),
     fingerprint: fingerprintOf(token),
     status: refused || expired ? CredentialState.EXPIRED : CredentialState.USABLE,
@@ -143,6 +153,7 @@ function plainRow(
   form: string,
   label: string,
   value: string,
+  inference: boolean,
   updatedAt = 0,
 ): CredentialRow {
   return {
@@ -151,6 +162,7 @@ function plainRow(
     platform: account.platform,
     kind: form,
     label,
+    inference,
     masked: maskOf(value),
     fingerprint: fingerprintOf(value),
     status: value ? CredentialState.USABLE : CredentialState.MISSING,
@@ -186,7 +198,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       // MiniMax Code 只有会话：额度也跟着会话走，没有第二把 key。
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
-      out.push(sessionRow(sessionId, account, "登录会话", session.data, session.updatedAt));
+      out.push(sessionRow(sessionId, account, "登录会话", session.data, true, session.updatedAt));
       return out;
     }
     case "qoder":
@@ -194,24 +206,27 @@ export function credentialsOf(accountId: string): CredentialRow[] {
     case "zcode": {
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
-      out.push(sessionRow(sessionId, account, "登录会话", session.data, session.updatedAt));
+      // 这一类平台的推理凭据就是会话本身：access token 直接当 Bearer 发。
+      out.push(sessionRow(sessionId, account, "登录会话", session.data, true, session.updatedAt));
       return out;
     }
     case "sensenova": {
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
-      out.push(sessionRow(sessionId, account, "登录会话", session.data, session.updatedAt));
+      // 会话只用来问额度：推理端点要的是那把 key，不是它。
+      out.push(sessionRow(sessionId, account, "登录会话", session.data, false, session.updatedAt));
       const loginId = `key:provider:${account.id}:account`;
       const loginRow = secretOf(loginId);
       const login = loginRow.data;
       if (login?.user) {
-        out.push(plainRow(loginId, account, "login", "登录账号", String(login.user), loginRow.updatedAt));
+        // 登录账号也不是推理凭据：它只是账号本身。
+        out.push(plainRow(loginId, account, "login", "登录账号", String(login.user), false, loginRow.updatedAt));
       }
       // 推理用的 key：推理端点要的是它，不是 cookie。
       const apiKey = String(login?.apiKey ?? "");
       if (apiKey) {
         out.push({
-          ...plainRow(`${loginId}#api_key`, account, "api_key", "推理 key", apiKey, loginRow.updatedAt),
+          ...plainRow(`${loginId}#api_key`, account, "api_key", "推理 key", apiKey, true, loginRow.updatedAt),
         });
       }
       return out;
@@ -230,6 +245,9 @@ export function credentialsOf(accountId: string): CredentialRow[] {
           "session",
           sites.length ? `子站 token（${sites.map((s: any) => s.name).join(" / ")}）` : "登录会话",
           token,
+          // 子站 token 不能推理（推理要的是 Discovery 那把 key），但它仍然有用：
+          // 拿它去补 key、问额度。
+          false,
           sessionRowData.updatedAt,
         ),
         status: token ? CredentialState.USABLE : CredentialState.MISSING,
@@ -241,7 +259,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const discoveryKey = String(loginRow.data?.discoveryKey ?? "");
       if (discoveryKey) {
         out.push(
-          plainRow(`${loginId}#discovery_key`, account, "api_key", "推理 key（Discovery）", discoveryKey, loginRow.updatedAt),
+          plainRow(`${loginId}#discovery_key`, account, "api_key", "推理 key（Discovery）", discoveryKey, true, loginRow.updatedAt),
         );
       }
       return out;
@@ -253,7 +271,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
         const loginId = `key:provider:${account.id}:account`;
         const loginRow = secretOf(loginId);
         out.push({
-          ...plainRow(loginId, account, "login", "登录账号", credential.account, loginRow.updatedAt),
+          ...plainRow(loginId, account, "login", "登录账号", credential.account, false, loginRow.updatedAt),
           status:
             credential.account && credential.password
               ? CredentialState.USABLE
@@ -263,11 +281,12 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const key = String(credential?.apiKey ?? "");
       if (key) {
         out.push({
-          ...plainRow(`key:provider:${account.id}:account#api_key`, account, "api_key", "推理 key", key),
+          ...plainRow(`key:provider:${account.id}:account#api_key`, account, "api_key", "推理 key", key, true),
         });
       }
       const sessionId = tokenRhythmSessionId(account.id);
-      out.push(sessionRow(sessionId, account, "会话 cookie", loadTokenRhythmSession(account.id)));
+      // 会话 cookie 只用来登录与查余额：转发要的是那把 api key。
+      out.push(sessionRow(sessionId, account, "会话 cookie", loadTokenRhythmSession(account.id), false));
       return out;
     }
     case "qiniu": {
@@ -278,13 +297,15 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const secretId = qiniuAccountId(account.id);
       const stored = secretOf(secretId);
       if (qiniu.apiKey) {
-        out.push(plainRow(secretId, account, "api_key", "推理 API key", qiniu.apiKey, stored.updatedAt));
+        out.push(plainRow(secretId, account, "api_key", "推理 API key", qiniu.apiKey, true, stored.updatedAt));
       }
       if (qiniu.portalCookie) {
         // 门户 cookie 是同一份记录里的另一段：id 用派生的写法（#cookie），
         // 免得造一个 parseCredentialId 认不出来的后缀。
+        //
+        // 它不是推理凭据：门户 cookie 只用来问额度，推理端点不认它。
         out.push(
-          plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, stored.updatedAt),
+          plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, false, stored.updatedAt),
         );
       }
       return out;
@@ -296,12 +317,29 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       if (!xinghuo) return out;
       const secretId = xinghuoAccountId(account.id);
       const stored = secretOf(secretId);
-      out.push(plainRow(secretId, account, "api_key", "推理 API key", xinghuo.apiKey, stored.updatedAt));
+      out.push(plainRow(secretId, account, "api_key", "推理 API key", xinghuo.apiKey, true, stored.updatedAt));
       return out;
     }
     default:
       return out;
   }
+}
+
+/**
+ * 这个账号拿去推理的那一条凭据。
+ *
+ * 有些平台配了两份凭据：会话（问额度用）与 key（推理用）。只有推理的那一份
+ * 算数 —— 别的配了也不算数，所以这里按 `inference` 挑，不按「有没有凭据」挑。
+ *
+ * 找不到就是 null：面板上要说「没有推理凭据」，路由也不该把它算成能接。
+ */
+export function inferenceCredentialOf(accountId: string): CredentialRow | null {
+  for (const row of credentialsOf(accountId)) {
+    if (!row.inference) continue;
+    if (!hasUsableCredential(row.status)) continue;
+    return row;
+  }
+  return null;
 }
 
 /**

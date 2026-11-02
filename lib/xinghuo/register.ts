@@ -20,6 +20,8 @@ export const xinghuoKind = registerCompatiblePlatform({
   // 面板上填一把 key 就行：没有登录这一说。
   login: "api_key",
   baseUrl: () => XINGHUO_INFER_BASE,
+  // 只有这一把 key：它既是推理凭据，也是这个账号唯一的凭据。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),

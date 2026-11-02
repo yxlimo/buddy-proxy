@@ -78,6 +78,8 @@ export const senseNovaKind = registerCompatiblePlatform({
   login: "password",
   policies: ["single", "fallback"],
   baseUrl: () => SENSENOVA_INFER_BASE,
+  // 推理用的是账号里那把 apiKey：会话与 cookie 只用来问额度。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => senseNovaInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
