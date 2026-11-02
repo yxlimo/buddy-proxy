@@ -25,6 +25,7 @@ import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { zcodeStatus } from "../zcode/auth.ts";
 import { qiniuAccountId, qiniuAccountOf } from "../qiniu/account.ts";
 import { xinghuoAccountId, xinghuoAccountOf } from "../xinghuo/account.ts";
+import { clearOpenPlatformKey, openPlatformKeyId, openPlatformKeyOf } from "../open-platform-credentials.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
@@ -39,7 +40,7 @@ import { wallet as tokenRhythmWallet } from "../tokenrhythm/wallet.ts";
 import { forgetAccountSnapshot } from "./upstreams.ts";
 import { clearCooldown } from "../cooldown.ts";
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import { credentialStateText, hasUsableCredential, parseCredentialId } from "./credentials.ts";
+import { credentialStateText, hasUsableCredential, openPlatformOfAccount, parseCredentialId } from "./credentials.ts";
 import type { ProviderRow } from "../providers.ts";
 
 /** 一个账号：provider 表的一行，也就是一份登录身份。 */
@@ -216,6 +217,28 @@ export function credentialsOf(accountId: string): CredentialRow[] {
   const out: CredentialRow[] = [];
   const account = provider(accountId);
   if (!account) return out;
+  // 开放平台还没有登记的 kind，所以下面那个 switch 里没有它的那一档：它按
+  // 属于哪个平台来判。
+  if (openPlatformOfAccount(account.id)) {
+    // 开放平台的凭据只有一把推理用的 API key。没有就什么都不列 —— 面板上不能
+    // 出现「有凭据」却没有凭据的行（跟七牛云、讯飞星火一个规矩）。
+    const key = openPlatformKeyOf(account.id);
+    if (!key) return out;
+    const secretId = openPlatformKeyId(account.id);
+    const stored = secretOf(secretId);
+    out.push(
+      plainRow(
+        secretId,
+        account,
+        "api_key",
+        "推理 API key",
+        key.apiKey,
+        canInfer(account.kind, "api_key"),
+        stored.updatedAt,
+      ),
+    );
+    return out;
+  }
   switch (account.kind) {
     case "minimax": {
       // MiniMax Code 只有会话：额度也跟着会话走，没有第二把 key。
@@ -527,6 +550,9 @@ export function logoutAccount(accountId: string): { ok: boolean; message: string
  */
 export function forgetAccountRecords(accountId: string, kind?: string): number {
   let removed = deleteProviderCredentials(accountId);
+  // 开放平台的凭据自己清一遍：那把 key 是这个账号的全部身份，删账号就得删它
+  // —— 不然它就成了一条没人认领的孤儿记录（存凭据的地方换了位置也不怕）。
+  clearOpenPlatformKey(accountId);
   // 旧位置的记录（按租户号存的那份）也要删：留着它，启动时的归位会把账号
   // 带回来 —— 删了又活，凭据还串着。
   removed += forgetLegacyTenantRecords(accountId);
