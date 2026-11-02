@@ -132,12 +132,17 @@ export function store(): DatabaseSync {
   );
   // 开放平台：用户自己加的平台，一行一个。
   //
-  // 代码里的模板（lib/platforms.ts）与这张表是两处数据源：模板优先 ——
+  // 代码里的模板（lib/platform-templates.ts）与这张表是两处数据源：模板优先 ——
   // 模板里有的 id，表里的那一行当没有。这样把模板加回代码时不用先清库，
   // 回滚是安全的。
   //
-  // `models` 存的是整个目录（模型名、自动不自动、上次什么时候拉的、哪来的），
-  // `models_auto` 是同一件事里能查的那一格。
+  // 这一张表的 `id` 就是**平台 id**：跟 provider.platform、
+  // platform_policy.platform 是同一个东西 —— 请求路径里那一段
+  // （`<平台>/v1/messages`）用的就是它。
+  //
+  // `models` 存的是整个目录（模型名、上次什么时候拉的、哪来的），
+  // `models_auto` 是「以后允不允许自动拉覆盖」那一格 —— 自动不自动不在 JSON
+  // 里（早期存过的那一份，忽略就是）。
   db.exec(
     `CREATE TABLE IF NOT EXISTS platform (
       id           TEXT PRIMARY KEY,

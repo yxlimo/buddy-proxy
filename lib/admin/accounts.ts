@@ -39,7 +39,7 @@ import type { ProviderRow } from "../providers.ts";
 /** 一个账号：provider 表的一行，也就是一份登录身份。 */
 export interface AccountView {
   id: string;
-  /** 它属于哪个平台：九个模板之一。 */
+  /** 它属于哪个平台：代码里的模板，或者表里的开放平台。 */
   platform: string;
   /** 面板上用来分辨同平台的两个账号。 */
   alias: string;

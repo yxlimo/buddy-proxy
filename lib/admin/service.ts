@@ -118,7 +118,7 @@ import {
   provider,
   updateProvider,
 } from "../providers.ts";
-import { allPlatforms, platformOfAny, platformPolicies, platformPolicy, setPlatformPolicy as writePlatformPolicy } from "../platforms.ts";
+import { PLATFORMS, platformOfAny, platformPolicies, setPlatformPolicy as writePlatformPolicy, type Platform } from "../platforms.ts";
 import { kindOf, selectableKinds } from "../provider-kinds.ts";
 import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
@@ -247,9 +247,11 @@ export function quotaMessage(quota: QuotaView) {
  *
  * 平台有两处数据源：代码里的模板与表里的开放平台，所以这一条可能来自任意
  * 一处；它名下的账号是数据，有几个算几个 —— 一个没有就是空的账号列表。
+ *
+ * 平台的样子（名字、kind）由调用方给：它一次问齐了所有平台的样子，免得每个
+ * 平台再查一遍库。
  */
-function platformMessage(id: string) {
-  const template = platformOfAny(id);
+function platformMessage(id: string, platform: Platform | null) {
   const credential = upstreamCredential(id);
   const quota = upstreamQuota(id);
   // 冷却：路由绕开这个账号到什么时候，面板要看得见。
@@ -258,8 +260,8 @@ function platformMessage(id: string) {
     id,
     // 平台的名字是模板里的那个（“Qoder（全球区）”）—— 账号的别名不能顶在这里：
     // 一个平台下有几个账号时，用哪个的别名都是错的。
-    label: template?.label ?? id,
-    kind: template?.kind ?? "",
+    label: platform?.label ?? id,
+    kind: platform?.kind ?? "",
     // 现在在生效的值：名下有没有开着的账号。平台自己没有开关，开关在账号上。
     enabled: accountsOfPlatform(id).some((row) => row.enabled),
     // 名下的多个账号怎么选。策略在平台层。
@@ -399,10 +401,18 @@ function loginErrorText(e: unknown): string {
   return hint || code || "登录未成功。";
 }
 
-/** 平台：模板与表里的开放平台，面板看的那一层。 */
+/**
+ * 平台：模板与表里的开放平台，面板看的那一层。
+ *
+ * 这一阶段只列代码里的模板：开放平台的 kind 还没接进 kind 注册表（那是下一个
+ * 阶段的事），列出来是一行接不了请求的东西 —— 半死的行比不出现更糟。
+ * 开放平台等 kind 接线后再进这个列表。
+ */
 function platformMessages() {
-  return allPlatforms().flatMap((platform) => {
-    const message = platformMessage(platform.id);
+  // 平台的样子一次问齐（platformOfAny），别每个平台再查一遍库。
+  const known = new Map(PLATFORMS.map((p) => [p.id, platformOfAny(p.id)]));
+  return PLATFORMS.flatMap((platform) => {
+    const message = platformMessage(platform.id, known.get(platform.id) ?? null);
     return message ? [message] : [];
   });
 }

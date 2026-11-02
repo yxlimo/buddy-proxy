@@ -5,9 +5,9 @@
 // 平台的 id 就是请求路径里那一段（`/minimax/v1/messages`），所以它是契约的
 // 一部分，改名等于把调用方的 base_url 打断。
 //
-// 平台有两处数据源：这里的模板（PLATFORMS）与表里的开放平台
-// （lib/open-platforms.ts）。模板优先：id 撞了算模板的 —— 把模板加回代码时
-// 不用先清库，回滚是安全的。
+// 平台有两处数据源：模板（lib/platform-templates.ts 里的 PLATFORMS）与表里
+// 的开放平台（lib/open-platforms.ts）。模板优先：id 撞了算模板的 —— 把模板
+// 加回代码时不用先清库，回滚是安全的。
 //
 // 账号不在这里：账号是 provider 表里的行，同一个平台下可以有多行。平台说
 // 「怎么说话」（kind）、「在哪个区域」、「支持哪些选账号的策略」；账号说
@@ -16,56 +16,29 @@
 import { store } from "./store.ts";
 import { PROVIDER_POLICIES, type ProviderPolicy } from "./providers.ts";
 import { kindOf } from "./provider-kinds.ts";
-import { listOpenPlatforms, openPlatformOf, registerTemplateIds } from "./open-platforms.ts";
+import { listOpenPlatforms, openPlatformOf } from "./open-platforms.ts";
+import { PLATFORMS, type Platform } from "./platform-templates.ts";
 // 注册表要有内容，`kindOf` 才答得出「这个平台支持哪几个策略」。这条 import 会
 // 绕成 platforms → kinds → … 的环，所以环上任何模块都不能在模块求值期读别人的
 // 常量（lib/qoder/benefits.ts 就是为此改成函数内取值的）。
 import "./kinds/index.ts";
 
-/** 一个平台：代码里的模板，或者表里的开放平台。 */
-export interface Platform {
-  /** 路径里那一段。改它等于打断调用方。 */
-  id: string;
-  /** 怎么跟它说话 —— 也就是 kind 注册表里的那一类。 */
-  kind: string;
-  /** 面板上给人看的名字。 */
-  label: string;
-  /** 区域：cn / global / 空。 */
-  region: string;
-}
-
-/**
- * 代码里的模板。
- *
- * The region and the name live with the platform rather than with the account:
- * they are properties of the service, not of who is logged in.
- */
-export const PLATFORMS: Platform[] = [
-  { id: "minimax", kind: "minimax", label: "MiniMax Code", region: "cn" },
-  { id: "qoder", kind: "qoder", label: "Qoder（全球区）", region: "global" },
-  { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },
-  { id: "workbuddy-cn", kind: "workbuddy", label: "WorkBuddy（中国区）", region: "cn" },
-  { id: "workbuddy-global", kind: "workbuddy", label: "WorkBuddy（国际区）", region: "global" },
-  { id: "tokenrhythm", kind: "tokenrhythm", label: "TokenRhythm", region: "" },
-  { id: "sensenova", kind: "sensenova", label: "SenseNova", region: "" },
-  { id: "intern-ai", kind: "intern-ai", label: "书生·端砚", region: "" },
-  { id: "qiniu", kind: "qiniu", label: "七牛云", region: "" },
-  { id: "xinghuo", kind: "xinghuo", label: "讯飞星火", region: "" },
-];
+// 模板住在叶子模块里（lib/platform-templates.ts）：表里的开放平台也要认得
+// 模板的 id 名单，而它不引这一层（会成环）。这里转出去，调用方的 import
+// 不用改。
+export { PLATFORMS };
+export type { Platform };
 
 const BY_ID = new Map(PLATFORMS.map((p) => [p.id, p]));
 
-// 模板的 id 名单交给下面那层：它不引这一层（会成环），但要认得哪些 id 是
-// 模板的 —— 表里的开放平台不能跟模板重名。
-registerTemplateIds(PLATFORMS.map((p) => p.id));
-
 /**
- * 开放平台的 kind。
+ * 开放平台的 kind 名字。
  *
- * 还没注册到 kind 注册表里（那件事是后面的阶段）：现在它只是平台列表里的
- * 一行，还接不了请求。
+ * 它**还不是** kind 注册表里的 kind：`kindOf("openai")` 现在是 null，
+ * 开放平台还接不了请求（接线是下一个阶段的事）。这里只是先给这些平台一个
+ * 占位的 kind 名字，别把它跟方言名（OpenAI 方言）混成一回事。
  */
-const OPEN_PLATFORM_KIND = "openai";
+const OPEN_PLATFORM_KIND_NAME = "openai";
 
 /**
  * 全部平台：代码里的模板，加上表里的开放平台。
@@ -75,8 +48,13 @@ const OPEN_PLATFORM_KIND = "openai";
 export function allPlatforms(): Platform[] {
   const extra: Platform[] = [];
   for (const row of listOpenPlatforms()) {
-    if (BY_ID.has(row.id)) continue;
-    extra.push({ id: row.id, kind: OPEN_PLATFORM_KIND, label: row.label, region: "" });
+    if (BY_ID.has(row.id)) {
+      // 模板优先：表里这一行当没有。说一声是哪一行不生效 —— 不然表里躺着
+      // 一行死平台，没人数得清它为什么不见了。
+      console.warn(`[PLATFORM] 表里的 ${row.id} 跟代码里的模板重名，这一行不生效`);
+      continue;
+    }
+    extra.push({ id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" });
   }
   return [...PLATFORMS, ...extra];
 }
@@ -86,7 +64,7 @@ export function platformOfAny(id: string): Platform | null {
   const template = BY_ID.get(id);
   if (template) return template;
   const row = openPlatformOf(id);
-  return row ? { id: row.id, kind: OPEN_PLATFORM_KIND, label: row.label, region: "" } : null;
+  return row ? { id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" } : null;
 }
 
 /** 这个 id 是哪个平台。不认识的 id 就是 null。 */
@@ -99,9 +77,13 @@ export function platformsOfKind(kind: string): Platform[] {
   return PLATFORMS.filter((p) => p.kind === kind);
 }
 
-/** 这个 id 是不是一个平台。 */
+/**
+ * 这个 id 是不是一个平台。
+ *
+ * 模板或表里的开放平台都算：两处数据源都是平台。
+ */
 export function isPlatform(id: string): boolean {
-  return BY_ID.has(id);
+  return platformOfAny(id) !== null;
 }
 
 /**

@@ -16,6 +16,7 @@
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
 import { allPlatforms, platformOf, platformOfAny, platformPolicy } from "./platforms.ts";
+import { openPlatformOf } from "./open-platforms.ts";
 
 /** 一个账号。 */
 export interface ProviderRow {
@@ -182,11 +183,19 @@ export function addAccount(input: {
   return { ok: true, message: `加好了：${alias}`, id };
 }
 
-/** 这个平台下一个没人用的账号 id。 */
+/**
+ * 这个平台下一个没人用的账号 id。
+ *
+ * 账号 id 与平台 id 共用一个命名空间：账号 id 不能跟平台表里的 id 撞 ——
+ * 撞了面板分不清那个 id 说的是平台还是账号（账号 id 是 `<平台>-<序号>`，
+ * 跟平台 id 长得一样）。
+ */
 function nextAccountId(platform: string): string {
   for (let n = 1; ; n++) {
     const id = n === 1 ? platform : `${platform}-${n}`;
-    if (!provider(id)) return id;
+    if (provider(id)) continue;
+    if (openPlatformOf(id)) continue;
+    return id;
   }
 }
 
