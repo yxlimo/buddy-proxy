@@ -97,9 +97,12 @@ export function isPlatform(id: string): boolean {
  * 这个平台支持哪些选账号的策略。
  *
  * 注册表说一类上游支持什么，平台照搬；没登记的只给单一。
+ *
+ * 平台有两处数据源（模板与表里的开放平台），两处都认：开放平台的 kind 登记了
+ * 「单一 / 降级」，只认模板的话它会被说成只支持单一。
  */
 export function platformPolicies(platform: string): ProviderPolicy[] {
-  const p = platformOf(platform);
+  const p = platformOfAny(platform);
   if (!p) return ["single"];
   const policies = kindOf(p.kind)?.policies;
   return policies && policies.length ? policies : ["single"];
@@ -131,13 +134,16 @@ export function setPlatformPolicy(
   platform: string,
   policy: ProviderPolicy,
 ): { ok: boolean; message: string } {
-  if (!platformOf(platform)) return { ok: false, message: `没有这个平台：${platform}` };
+  // 平台有两处数据源：模板与表里的开放平台。只认模板的话，开放平台的策略
+  // 改不了（面板会说「没有这个平台」）。
+  const known = platformOfAny(platform);
+  if (!known) return { ok: false, message: `没有这个平台：${platform}` };
   const supported = platformPolicies(platform);
   if (!supported.includes(policy)) {
     const names = supported.map((p) => `${POLICY_TEXT[p] ?? p}（${p}）`).join("、");
     return {
       ok: false,
-      message: `${platformOf(platform)?.label} 不支持这个策略，它只支持：${names}。`,
+      message: `${known.label} 不支持这个策略，它只支持：${names}。`,
     };
   }
   store()
@@ -147,6 +153,16 @@ export function setPlatformPolicy(
     )
     .run(platform, policy, Date.now());
   return { ok: true, message: `策略改成了${POLICY_TEXT[policy] ?? policy}。` };
+}
+
+/**
+ * 忘掉这个平台的生效策略。
+ *
+ * 平台没了，那一行就是一根没人认的指针：下次用同一个 id 建回来，它会凭空
+ * 继承旧策略。没有行就是默认（单一），所以删掉是对的。
+ */
+export function forgetPlatformPolicy(platform: string): void {
+  store().prepare("DELETE FROM platform_policy WHERE platform = ?").run(platform);
 }
 
 /** 给人看的策略名。 */

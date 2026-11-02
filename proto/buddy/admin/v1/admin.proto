@@ -88,6 +88,12 @@ message Upstream {
   int64 recovers_at_ms = 20;
   // 一句给面板直接用的话（比如「冷却到 12:23（rate-limit）」）。没有就空串。
   string state_reason = 21;
+  // 额度插件：开放平台填的插件 id（模板平台没有这一格，空串）。
+  string quota_plugin = 22;
+  // 模型目录以后允不允许自动拉覆盖（模板平台没有这一格，恒为 false）。
+  bool models_auto = 23;
+  // 这是不是一个开放平台（表里的那一行，不是代码里的模板）。
+  bool is_open_platform = 24;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -511,6 +517,104 @@ message ListProviderKindsResponse {
   repeated ProviderKind kinds = 1;
 }
 
+// ── 开放平台 ────────────────────────────────────────────────────────────
+
+// 一个开放平台：表里的一行（代码里的模板不是开放平台）。
+message OpenPlatform {
+  string id = 1;
+  string label = 2;
+  string base_url = 3;
+  // 额度插件的 id。空串 = 不选插件。
+  string quota_plugin = 4;
+  // 模型目录（模型名）。
+  repeated string models = 5;
+  // 以后允不允许自动拉覆盖这一份目录。
+  bool models_auto = 6;
+  // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。
+  int64 models_fetched_at_ms = 7;
+  // 这份目录是哪来的：auto（自动拉的）/ manual（人写的）。
+  string models_source = 8;
+}
+
+// 加一个开放平台。先建空平台，再加账号 —— 这里不接 key、不接模型清单。
+message AddPlatformRequest {
+  string id = 1;
+  string label = 2;
+  string base_url = 3;
+}
+
+message AddPlatformResponse {
+  bool ok = 1;
+  string message = 2;
+  OpenPlatform platform = 3;
+}
+
+// 改一个开放平台。
+//
+// proto3 的 string 没有 presence 位，所以约定：空串 = 清空该字段。但 label 与
+// base_url 空串要 ok=false（平台必须有名字与地址）；quota_plugin 空串 = 不选
+// 插件；models_auto=false 且 models 非空 = 改成手工目录；models_auto=true 时
+// 不动现有清单（让它自动拉）；models 为空时不动清单，只翻自动那一格。
+message UpdatePlatformRequest {
+  string id = 1;
+  string label = 2;
+  string base_url = 3;
+  string quota_plugin = 4;
+  bool models_auto = 5;
+  repeated string models = 6;
+}
+
+message UpdatePlatformResponse {
+  bool ok = 1;
+  string message = 2;
+  OpenPlatform platform = 3;
+}
+
+// 删一个开放平台。名下账号、凭据、额度、冷却一并清掉；指向它的已发布模型按现有
+// 规矩处理。模板平台删不掉。
+message DeletePlatformRequest {
+  string id = 1;
+}
+
+message DeletePlatformResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+// 现在去问一次上游的模型目录。拉不到不是错误：ok=false 且保留原来那份。
+message RefreshPlatformModelsRequest {
+  string platform_id = 1;
+}
+
+message RefreshPlatformModelsResponse {
+  bool ok = 1;
+  string message = 2;
+  repeated string models = 3;
+}
+
+// 面板能选的额度插件。
+message ListQuotaPluginsRequest {}
+
+// 一个插件要的一段凭据。
+//
+// name 不是给人看的名字（那是 label）：它是这段凭据在库里的 id 后缀。
+message QuotaPluginField {
+  string name = 1;
+  string label = 2;
+  // 面板上要遮蔽显示。
+  bool secret = 3;
+}
+
+message QuotaPlugin {
+  string id = 1;
+  string label = 2;
+  repeated QuotaPluginField fields = 3;
+}
+
+message ListQuotaPluginsResponse {
+  repeated QuotaPlugin plugins = 1;
+}
+
 // ── 余额 ──────────────────────────────────────────────────────────────────
 
 message GetBalanceRequest {
@@ -915,6 +1019,12 @@ service AdminService {
   // 删一个账号：行与它的凭据一起删。平台删不掉。
   rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse);
   rpc ListProviderKinds(ListProviderKindsRequest) returns (ListProviderKindsResponse);
+  // 开放平台是表里的一行，不是代码里的模板。这几个方法管它。
+  rpc AddPlatform(AddPlatformRequest) returns (AddPlatformResponse);
+  rpc UpdatePlatform(UpdatePlatformRequest) returns (UpdatePlatformResponse);
+  rpc DeletePlatform(DeletePlatformRequest) returns (DeletePlatformResponse);
+  rpc RefreshPlatformModels(RefreshPlatformModelsRequest) returns (RefreshPlatformModelsResponse);
+  rpc ListQuotaPlugins(ListQuotaPluginsRequest) returns (ListQuotaPluginsResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
 

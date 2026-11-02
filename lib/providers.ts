@@ -15,7 +15,7 @@
 
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
-import { allPlatforms, platformOf, platformOfAny, platformPolicy } from "./platforms.ts";
+import { allPlatforms, platformOfAny, platformPolicy } from "./platforms.ts";
 import { openPlatformOf } from "./open-platforms.ts";
 
 /** 一个账号。 */
@@ -129,7 +129,9 @@ function policyOfValue(value: unknown): ProviderPolicy {
  * 账号行。
  */
 export function policyOf(idOrPlatform: string): ProviderPolicy {
-  const platform = platformOf(idOrPlatform) ? idOrPlatform : provider(idOrPlatform)?.platform;
+  // 平台有两处数据源：模板与表里的开放平台。只认模板的话，开放平台上的策略
+  // 读不出来（面板上永远是「单一」）。
+  const platform = platformOfAny(idOrPlatform) ? idOrPlatform : provider(idOrPlatform)?.platform;
   return platform ? platformPolicy(platform) : "single";
 }
 

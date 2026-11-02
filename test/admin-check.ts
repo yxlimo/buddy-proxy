@@ -159,7 +159,7 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "上游列表就是代码里的模板（这一阶段开放平台还接不了请求）",
+  "上游列表就是代码里的模板（这个库里没有开放平台）",
   sameIds(
     list(status.body?.upstreams).map((u: any) => String(u.id)),
     PLATFORMS.map((p) => p.id),
@@ -186,7 +186,7 @@ console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
 check(
-  "上游列表就是代码里的模板（这一阶段开放平台还接不了请求）",
+  "上游列表就是代码里的模板（这个库里没有开放平台）",
   sameIds(
     list(upstreams.body?.upstreams).map((u: any) => String(u.id)),
     PLATFORMS.map((p) => p.id),
