@@ -113,10 +113,16 @@ function refreshLiveCatalogs(): void {
     // 人写死的目录不动（那是明确的意思，不是默认值）；刚拉过的也不必再问上游
     // —— 目录刷新在请求路径上，每个请求都问一次上游是白花钱。
     if (!row?.models.auto || !openPlatformCatalogStale(row)) continue;
-    // 拉目录是后台的事：不等它，答复不能被上游的慢拖住。拉不到只记一行，不
-    // 影响别的平台。
-    void refreshOpenPlatformCatalog(platform).then((outcome) => {
-      if (!outcome.ok) console.warn(`[OPEN-PLATFORM] ${platform} 的模型目录没拉到：${outcome.message}`);
+    // 拉目录是后台的事：不等它，答复不能被上游的慢拖住。
+    //
+    // 双保险：refreshOpenPlatformCatalog 自己不 reject（库开不了、SQLITE_BUSY
+    // 都归一成 { ok: false }），这里再兜一层 —— 请求路径上一个没人接的
+    // rejection 就是一次未处理的 rejection（Node 当它致命）。
+    //
+    // 拉不到的那一行告警由目录自己写（lib/open-platform-catalog.ts），这里不
+    // 重复：同一次失败只留一行，两处都写就是刷屏。
+    void refreshOpenPlatformCatalog(platform).catch(() => {
+      /* 目录自己记了告警，这里只保证不 reject */
     });
   }
 }

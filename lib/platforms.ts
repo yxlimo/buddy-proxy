@@ -27,7 +27,7 @@ import "./kinds/index.ts";
 // 模板的 id 名单，而它不引这一层（会成环）。这里转出去，调用方的 import
 // 不用改。
 export { PLATFORMS };
-export type { Platform};
+export type { Platform };
 
 // 开放平台的 kind 名字住在 lib/open-platforms.ts（那一层不引这一层，环上读它
 // 的常量不会踩到求值顺序）。这里转出去：调用方的 import 不用改。

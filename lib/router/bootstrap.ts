@@ -37,9 +37,10 @@ import { loadSession as loadInternAiSession } from "../intern-ai/auth.ts";
 import { listOpenPlatforms } from "../open-platforms.ts";
 import {
   openPlatformCatalogStale,
+  openPlatformHasKey,
   refreshOpenPlatformCatalog,
 } from "../open-platform-catalog.ts";
-import { PLATFORMS } from "../platforms.ts";
+import { PLATFORMS, platformOf } from "../platforms.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { benefits } from "../admin/benefits.ts";
 import { pruneUsage } from "../usage.ts";
@@ -101,11 +102,22 @@ export function startUpstreams(): void {
   // 明确的意思），刚拉过的也不必再问 —— 启动时拉一次，新加的平台不用等谁来
   // 问 /v1/models 才有目录可用。
   for (const row of listOpenPlatforms()) {
+    // 模板优先：表里这一行跟代码里的模板重名时不生效（拉回来的目录写回去也
+    // 会被拒），别白拉一次。
+    if (platformOf(row.id)) continue;
     if (!row.models.auto || !openPlatformCatalogStale(row)) continue;
-    void refreshOpenPlatformCatalog(row.id).then((outcome) => {
-      if (outcome.ok) console.log(`  [OPEN-PLATFORM] ${row.id} 模型目录：${outcome.message}`);
-      else console.warn(`  [OPEN-PLATFORM] ${row.id} 的模型目录没拉到：${outcome.message}`);
-    });
+    // 没有 key 是正常状态（平台刚建、还没填 key）：不问上游，也不说话。
+    if (!openPlatformHasKey(row.id)) continue;
+    // 双保险：refreshOpenPlatformCatalog 自己不 reject（库开不了、SQLITE_BUSY
+    // 都归一成 { ok: false }），这里再兜一层 —— 后台的 promise 没人接，reject
+    // 出去就是一次未处理的 rejection（Node 当它致命，网关就退了）。
+    void refreshOpenPlatformCatalog(row.id)
+      .then((outcome) => {
+        if (outcome.ok) console.log(`  [OPEN-PLATFORM] ${row.id} 模型目录：${outcome.message}`);
+        // 拉不到的那一行告警由目录自己写（lib/open-platform-catalog.ts）：同一
+        // 次失败只留一行，两处都写就是刷屏。
+      })
+      .catch((e) => console.warn(`  [OPEN-PLATFORM] ${row.id} 的模型目录没拉到：${(e as Error).message}`));
   }
 
   for (const provider of providersNeedingLogin("workbuddy")) {
