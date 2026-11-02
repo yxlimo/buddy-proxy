@@ -45,7 +45,9 @@ jobs:
       - name: Install mise and the toolchain it pins (node 26, pnpm 12.16.1)
         uses: jdx/mise-action@v2
         with:
-          version: latest
+          # No `version`: the input defaults to the latest mise release. Writing
+          # `latest` here is taken literally and downloads the tag `vlatest`,
+          # which does not exist.
           install: true
           # Cache the installed toolchain (the node and the pnpm build).
           cache: true
