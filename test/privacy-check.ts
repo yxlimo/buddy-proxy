@@ -235,6 +235,46 @@ const ADDED_TOKEN = "sk-ADDEDfakeADDEDfake12345"; // privacy:allow
 }
 
 console.log("");
+console.log("只删不改");
+
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-delete-"));
+  try {
+    gitIn(dir, ["init", "-q"]);
+    gitIn(dir, ["config", "user.email", "ci@example.com"]);
+    gitIn(dir, ["config", "user.name", "Privacy Check"]);
+
+    fs.writeFileSync(
+      path.join(dir, "history.txt"),
+      `first line\nkey = ${HISTORY_TOKEN}\nlast line\n`,
+    );
+    gitIn(dir, ["add", "-A"]);
+    gitIn(dir, ["commit", "-qm", "the history"]);
+
+    // The change takes one line out and puts none in: the shape behind the
+    // file belongs to the past, not to this change
+    fs.writeFileSync(path.join(dir, "history.txt"), `first line\nkey = ${HISTORY_TOKEN}\n`);
+    const deleted = runScanner(dir, []);
+    check("只删一行的改动不报历史里的形状", deleted.code === 0, `${deleted.code} ${deleted.out}`);
+    check("历史里的 token 没有进报告", !deleted.out.includes("sk-H***"), deleted.out);
+
+    // The same file, one line with a shape of its own: now it belongs to the
+    // change and is reported, the history still is not
+    fs.writeFileSync(
+      path.join(dir, "history.txt"),
+      `first line\nkey = ${HISTORY_TOKEN}\nlast line\nadded = ${ADDED_TOKEN}\n`,
+    );
+    const added = runScanner(dir, []);
+    check("新增的行被抓到", added.code === 1, `${added.code} ${added.out}`);
+    check("报的是新增的那一行", added.out.includes("history.txt:4"), added.out);
+    check("新增的那一行是打码的", added.out.includes("sk-A***"), added.out);
+    check("历史里的 token 仍不报", !added.out.includes("sk-H***"), added.out);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log("");
 console.log(`pass=${pass} fail=${fail}`);
 process.exit(fail === 0 ? 0 : 1);
 
