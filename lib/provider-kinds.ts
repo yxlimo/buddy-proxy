@@ -183,6 +183,13 @@ export interface HealthSnapshot {
   internAi: Record<string, { balance: unknown; packs: unknown }>;
   /** 七牛云的资源包。 */
   qiniu: Record<string, { quota: unknown }>;
+  /**
+   * 额度插件问回来的东西：插件 id → 账号 id → 原始答复。
+   *
+   * 上面那几个桶是一个平台一个：平台是代码，可以有自己那一桶。开放平台是数据，
+   * 它没有桶 —— 它的额度只能由平台那一行指名的插件问回来。
+   */
+  plugins: Record<string, Record<string, unknown>>;
 }
 
 /* ------------------------------------------------------------------ *
