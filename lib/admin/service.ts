@@ -18,6 +18,7 @@ import {
   AdminService,
   BalanceLotSchema,
   AddAccountResponseSchema,
+  AddPlatformResponseSchema,
   BalanceSummarySchema,
   BeginLoginResponseSchema,
   BenefitStatusSchema,
@@ -29,6 +30,7 @@ import {
   CreditLotSchema,
   CreditSummarySchema,
   DeleteAccountResponseSchema,
+  DeletePlatformResponseSchema,
   DeletePublishedModelResponseSchema,
   ExchangeLoginCodeResponseSchema,
   GetBalanceResponseSchema,
@@ -44,14 +46,19 @@ import {
   ListCredentialsResponseSchema,
   ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
+  ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
   ListUsageEventsResponseSchema,
   LoginSessionSchema,
   LoginWithPasswordResponseSchema,
   PublishedModelSchema,
   ModelMetadataSchema,
+  OpenPlatformSchema,
   PublishedTargetSchema,
+  QuotaPluginFieldSchema,
+  QuotaPluginSchema,
   RefreshCredentialResponseSchema,
+  RefreshPlatformModelsResponseSchema,
   SetProviderKeysResponseSchema,
   RestartSystemResponseSchema,
   RunBenefitNowResponseSchema,
@@ -62,6 +69,7 @@ import {
   TailLogResponseSchema,
   TestCredentialResponseSchema,
   LogoutAccountResponseSchema,
+  UpdatePlatformResponseSchema,
   UpdateProviderResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
@@ -122,7 +130,26 @@ import {
   provider,
   updateProvider,
 } from "../providers.ts";
-import { PLATFORMS, platformOfAny, platformPolicies, setPlatformPolicy as writePlatformPolicy, type Platform } from "../platforms.ts";
+import {
+  createOpenPlatform,
+  deleteOpenPlatform,
+  listOpenPlatforms,
+  openPlatformOf,
+  updateOpenPlatform,
+  type OpenPlatformRow,
+} from "../open-platforms.ts";
+import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
+import { allQuotaPlugins } from "../quota-plugins.ts";
+import { listAggregateModels } from "../aggregate.ts";
+import {
+  PLATFORMS,
+  allPlatforms,
+  forgetPlatformPolicy,
+  platformOfAny,
+  platformPolicies,
+  setPlatformPolicy as writePlatformPolicy,
+  type Platform,
+} from "../platforms.ts";
 import { kindOf, selectableKinds } from "../provider-kinds.ts";
 import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
@@ -261,6 +288,7 @@ function platformMessage(
   platform: Platform | null,
   availability: PlatformAvailability | null,
   accounts: Map<string, AccountView>,
+  open: OpenPlatformRow | null,
 ) {
   const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
   const quota = upstreamQuota(id);
@@ -306,6 +334,11 @@ function platformMessage(
     quota: quota ? quotaMessage(quota) : undefined,
     baseUrl: upstreamBaseUrl(id),
     region: upstreamRegion(id),
+    // 额度插件与模型目录：只有开放平台有这两格（模板平台是空串与 false）。
+    quotaPlugin: open?.quotaPlugin ?? "",
+    modelsAuto: open?.models.auto ?? false,
+    // 这是不是一个开放平台：表里的那一行，不是代码里的模板。
+    isOpenPlatform: open !== null,
     // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
     cooldownUntilMs: BigInt(cooling.cooldownUntilMs),
     cooldownReason: cooling.cooldownReason,
@@ -432,25 +465,51 @@ function loginErrorText(e: unknown): string {
 /**
  * 平台：模板与表里的开放平台，面板看的那一层。
  *
- * 这一阶段只列代码里的模板：开放平台的 kind 还没接进 kind 注册表（那是下一个
- * 阶段的事），列出来是一行接不了请求的东西 —— 半死的行比不出现更糟。
- * 开放平台等 kind 接线后再进这个列表。
+ * 两处数据源都在列：代码里的模板与表里的开放平台（allPlatforms）。开放平台的
+ * kind 已经接进注册表（lib/kinds/openai.ts），列出来不是一行接不了请求的东西。
  */
 function platformMessages() {
   // 平台的样子一次问齐（platformOfAny），别每个平台再查一遍库。
-  const known = new Map(PLATFORMS.map((p) => [p.id, platformOfAny(p.id)]));
+  const platforms = allPlatforms();
+  const known = new Map(platforms.map((p) => [p.id, platformOfAny(p.id)]));
   // 判定也一次算齐：面板与路由看的必须是同一个答案。
-  const availabilities = platformAvailabilities(PLATFORMS);
+  const availabilities = platformAvailabilities(platforms);
   // 账号视图也一次算齐：每个账号行自己去读凭据的话，平台一多就是 O(N²)。
   const accounts = new Map(listAccounts().map((a) => [a.id, a]));
-  return PLATFORMS.flatMap((platform) => {
+  // 开放平台那一行：表里的行减去跟代码模板重名的那些（模板优先，那一行不生效）。
+  const templateIds = new Set(PLATFORMS.map((p) => p.id));
+  const openRows = new Map(
+    listOpenPlatforms()
+      .filter((row) => !templateIds.has(row.id))
+      .map((row) => [row.id, row]),
+  );
+  return platforms.flatMap((platform) => {
     const message = platformMessage(
       platform.id,
       known.get(platform.id) ?? null,
       availabilities.get(platform.id) ?? null,
       accounts,
+      openRows.get(platform.id) ?? null,
     );
     return message ? [message] : [];
+  });
+}
+
+/**
+ * 一个开放平台，面板看的形状。
+ *
+ * 只报表里那一行：模板平台不是开放平台，它们没有这一行可报。
+ */
+function openPlatformMessage(row: OpenPlatformRow) {
+  return create(OpenPlatformSchema, {
+    id: row.id,
+    label: row.label,
+    baseUrl: row.baseUrl,
+    quotaPlugin: row.quotaPlugin,
+    models: row.models.items,
+    modelsAuto: row.models.auto,
+    modelsFetchedAtMs: BigInt(row.models.fetchedAt),
+    modelsSource: row.models.source,
   });
 }
 
@@ -569,6 +628,137 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       ok: result.ok,
       pendingRestart: pendingRestart(),
       message: result.message,
+    });
+  },
+
+  /* ---------------- 开放平台 ---------------- */
+
+  async addPlatform(request) {
+    const id = String(request.id ?? "");
+    // 校验与归一都在那一层（id 的规矩、地址的归一、模板与账号的重名）。
+    const result = createOpenPlatform({
+      id,
+      label: String(request.label ?? ""),
+      baseUrl: String(request.baseUrl ?? ""),
+    });
+    if (!result.ok) {
+      return create(AddPlatformResponseSchema, { ok: false, message: result.message });
+    }
+    console.log(`[ADMIN] 加了开放平台 ${id}`);
+    const row = openPlatformOf(id.trim());
+    return create(AddPlatformResponseSchema, {
+      ok: true,
+      message: result.message,
+      platform: row ? openPlatformMessage(row) : undefined,
+    });
+  },
+
+  async updatePlatform(request) {
+    const id = String(request.id ?? "").trim();
+    // 契约的约定：空串 = 清空那一格。名字与地址除外（平台得有名字与地址，
+    // 空串是错，不是清空）。
+    const models = (request.models ?? []).map((m) => String(m).trim()).filter(Boolean);
+    const patch: {
+      label?: string;
+      baseUrl?: string;
+      quotaPlugin?: string;
+      models?: string[];
+      modelsAuto?: boolean;
+      source?: "auto" | "manual";
+    } = {
+      label: String(request.label ?? ""),
+      baseUrl: String(request.baseUrl ?? ""),
+      // 空串 = 不选插件。
+      quotaPlugin: String(request.quotaPlugin ?? ""),
+    };
+    if (!request.modelsAuto && models.length) {
+      // 手工目录：写死的那一份，自动拉不许覆盖它。
+      patch.models = models;
+      patch.modelsAuto = false;
+      patch.source = "manual";
+    } else {
+      // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
+      // 只翻自动那一格。
+      patch.modelsAuto = request.modelsAuto === true;
+    }
+    const result = updateOpenPlatform(id, patch);
+    if (!result.ok) {
+      return create(UpdatePlatformResponseSchema, { ok: false, message: result.message });
+    }
+    console.log(`[ADMIN] 开放平台 ${id} 改了`);
+    const row = openPlatformOf(id.trim());
+    return create(UpdatePlatformResponseSchema, {
+      ok: true,
+      message: result.message,
+      platform: row ? openPlatformMessage(row) : undefined,
+    });
+  },
+
+  async deletePlatform(request) {
+    const id = String(request.id ?? "").trim();
+    // 模板平台删不掉：它是代码，不是数据。
+    if (PLATFORMS.some((p) => p.id === id)) {
+      return create(DeletePlatformResponseSchema, { ok: false, message: "这个 id 是代码里的平台，删不了" });
+    }
+    const row = openPlatformOf(id);
+    if (!row) {
+      return create(DeletePlatformResponseSchema, { ok: false, message: `没有这个平台：${id}` });
+    }
+    // 名下的账号：连凭据、冷却、健康快照里它的那一段一起删（走删账号那条路，
+    // 它知道每个平台的凭据放在哪）。
+    const accounts = accountsOfPlatform(id);
+    for (const account of accounts) deleteAccount(account.id);
+    // 指向这个平台的已发布模型：目标留着，面板上它显示「平台已停用」——
+    // 这与平台停用、账号被删时的做法一样（lib/admin/models.ts 的 targetBlocker：
+    // 不认识的分组当作关着）。删掉目标就是发明新规则了。
+    const affected = listAggregateModels().filter((model) =>
+      model.targets.some((target) => target.group === id),
+    );
+    const deleted = deleteOpenPlatform(id);
+    if (!deleted.ok) {
+      return create(DeletePlatformResponseSchema, { ok: false, message: deleted.message });
+    }
+    // 平台自己的策略也清掉：平台没了，那一行就是一根没人认的指针（下次用
+    // 同一个 id 建回来，它会凭空继承旧策略）。
+    forgetPlatformPolicy(id);
+    const notes = [`删掉了 ${row.label}`, `清了 ${accounts.length} 个账号`];
+    if (affected.length) {
+      notes.push(`${affected.length} 个已发布模型指向它，现在接不了（面板上写着平台已停用）`);
+    }
+    console.log(`[ADMIN] 删了开放平台 ${id}（连 ${accounts.length} 个账号一起）`);
+    return create(DeletePlatformResponseSchema, { ok: true, message: notes.join("，") });
+  },
+
+  async refreshPlatformModels(request) {
+    const id = String(request.platformId ?? "").trim();
+    // 拉不到不是错误：原来那份目录留着（答复里说的就是现在这份）。
+    const outcome = await refreshOpenPlatformCatalog(id).catch((e) => ({
+      ok: false,
+      message: `拉不到模型目录：${(e as Error)?.message ?? String(e)}`,
+    }));
+    const row = openPlatformOf(id);
+    return create(RefreshPlatformModelsResponseSchema, {
+      ok: outcome.ok,
+      message: outcome.message,
+      models: row?.models.items ?? [],
+    });
+  },
+
+  async listQuotaPlugins() {
+    return create(ListQuotaPluginsResponseSchema, {
+      plugins: allQuotaPlugins().map((plugin) =>
+        create(QuotaPluginSchema, {
+          id: plugin.id,
+          label: plugin.label,
+          fields: plugin.fields.map((field) =>
+            create(QuotaPluginFieldSchema, {
+              name: field.name,
+              label: field.label,
+              secret: field.secret,
+            }),
+          ),
+        }),
+      ),
     });
   },
 
