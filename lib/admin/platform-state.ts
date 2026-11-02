@@ -12,7 +12,7 @@
 //   accounts_off    有账号，但一个都没开
 //   no_credential   有开着的账号，但一个能推理的凭据都没有
 //   out_of_credits  凭据有了，额度用尽了
-//   cooling         凭据有了，账号都在冷却里
+//   cooling         凭据有了，没有能接的账号（有账号在冷却里）
 //   ready           至少有一个账号现在就能接
 //
 // 「有账号且都关着」与「有账号开着但都没凭据」是两件事：前者是开关的问题，
@@ -70,6 +70,17 @@ export interface PlatformAvailability {
   serving: ProviderRow[];
   /** 平台名下的账号总数。 */
   accounts: number;
+  /** 平台名下的账号行。面板要逐个看账号时不用再读一遍表。 */
+  rows: ProviderRow[];
+  /** 名下开着的账号有几个。平台的开关就是这个：账号自己管自己。 */
+  on: number;
+  /**
+   * 面板上该做什么：一句话。
+   *
+   * 三件要改的地方不一样的事 —— 加一个账号、打开一个账号、填凭据。只说
+   * 「不可用」的话，人只能一个个试。
+   */
+  advice: string;
   /** 平台的模型目录（带元数据）。恒为平台全量。 */
   catalog: CatalogModel[];
   /** 平台的模型 id：目录里的那些。 */
@@ -203,9 +214,32 @@ function reasonOf(
     case "out_of_credits":
       return `平台 ${platformId} 的额度用尽了`;
     case "cooling":
-      return `平台 ${platformId} 的账号都在冷却里`;
+      return `平台 ${platformId} 现在没有能接的账号（有账号在冷却）`;
     case "ready":
       return `平台 ${platformId} 有 ${usable} 个账号能接请求`;
+  }
+}
+
+/**
+ * 面板上该做什么。
+ *
+ * 与 reason 的分工：reason 是给日志看的一句话（这个平台为什么接不了），
+ * advice 是给面板看的一句人话（该去改哪一处）。
+ */
+function adviceOf(state: PlatformState): string {
+  switch (state) {
+    case "no_account":
+      return "这个平台还没有账号：在「上游」页加一个账号并登录";
+    case "accounts_off":
+      return "这个平台的账号都关着：在「上游」页打开一个";
+    case "no_credential":
+      return "没有可用凭据：在「上游」页填 API Key 或登录";
+    case "out_of_credits":
+      return "额度用尽了：等额度回来，或者换个账号";
+    case "cooling":
+      return "账号都在冷却里：等一会儿再试";
+    case "ready":
+      return "";
   }
 }
 
@@ -231,16 +265,18 @@ function judge(
   const cooling = (row: ProviderRow): boolean => cooldowns.has(row.id);
   const usable = serving.filter((row) => !spent(row) && !cooling(row));
   const allSpent = serving.length > 0 && serving.every(spent);
-  // 「在冷却」是明说出来的：serving 里有账号在冷却，而不是「没全用尽就说明有
-  // 一个在冷却」那种推理。
-  const someCooling = serving.some(cooling);
+  // 「在冷却」是接不了的原因之一：没有账号能接，而有的账号在冷却。
+  //
+  // 一个账号在冷却、另一个还热着时，平台接得了 —— 那是那个账号的事，不是平台
+  // 的事，报「冷却」会让人以为整个平台都停用了。
+  const blockedByCooling = usable.length === 0 && serving.some(cooling);
 
   let state: PlatformState;
   if (accounts.length === 0) state = "no_account";
   else if (on.length === 0) state = "accounts_off";
   else if (serving.length === 0) state = "no_credential";
   else if (allSpent) state = "out_of_credits";
-  else if (someCooling) state = "cooling";
+  else if (blockedByCooling) state = "cooling";
   else state = "ready";
 
   const catalog = platformCatalog(platform, accounts, declared);
@@ -251,6 +287,9 @@ function judge(
     usable,
     serving,
     accounts: accounts.length,
+    rows: accounts,
+    on: on.length,
+    advice: adviceOf(state),
     catalog,
     ids: catalog.map((m) => m.id),
     // 没有凭据的时候也是 null：等一会儿不会让凭据长出来，那种情况要人去面板上填。
