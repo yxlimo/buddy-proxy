@@ -83,14 +83,17 @@ import {
   upstreamAccountCount,
   upstreamBaseUrl,
   upstreamCredential,
+  upstreamCredentialOf,
   upstreamModelCount,
   upstreamPolicy,
   upstreamRegion,
   upstreamState,
+  upstreamStateOf,
   upstreamCooling,
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
+import { platformAvailabilities, type PlatformAvailability } from "./platform-state.ts";
 import { coolingOf } from "./upstream-state.ts";
 import {
   deleteAccount,
@@ -249,13 +252,24 @@ export function quotaMessage(quota: QuotaView) {
  * 一处；它名下的账号是数据，有几个算几个 —— 一个没有就是空的账号列表。
  *
  * 平台的样子（名字、kind）由调用方给：它一次问齐了所有平台的样子，免得每个
- * 平台再查一遍库。
+ * 平台再查一遍库。判定也是一次算齐的：面板与路由看的必须是同一个答案
+ * （lib/admin/platform-state.ts）。
  */
-function platformMessage(id: string, platform: Platform | null) {
-  const credential = upstreamCredential(id);
+function platformMessage(
+  id: string,
+  platform: Platform | null,
+  availability: PlatformAvailability | null,
+) {
+  const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
   const quota = upstreamQuota(id);
   // 冷却：路由绕开这个账号到什么时候，面板要看得见。
   const cooling = upstreamCooling(id);
+  // 面板上该做什么：冷却与额度那一层的话更细（几点的窗口、为什么冷却、几个
+  // 账号里的几个），别的（没有账号、账号都关着、没有凭据）只有判定说得清。
+  const stateReason = availability ? cooling.stateReason || availability.advice : cooling.stateReason;
+  const enabled = availability
+    ? availability.on > 0
+    : accountsOfPlatform(id).some((row) => row.enabled);
   return create(UpstreamSchema, {
     id,
     // 平台的名字是模板里的那个（“Qoder（全球区）”）—— 账号的别名不能顶在这里：
@@ -263,18 +277,18 @@ function platformMessage(id: string, platform: Platform | null) {
     label: platform?.label ?? id,
     kind: platform?.kind ?? "",
     // 现在在生效的值：名下有没有开着的账号。平台自己没有开关，开关在账号上。
-    enabled: accountsOfPlatform(id).some((row) => row.enabled),
+    enabled,
     // 名下的多个账号怎么选。策略在平台层。
     policy: upstreamPolicy(id),
     // 这个平台支持哪几个策略：面板只给它支持的那几个。
     policies: platformPolicies(id).map(policyEnum),
     // 名下有几个账号。面板用它判「策略有没有用」。
-    accountCount: upstreamAccountCount(id),
+    accountCount: availability ? availability.accounts : upstreamAccountCount(id),
     // 名下有没有开着的账号 —— 跟 enabled 同一个答案，两个名字一个是给机器判
     // 断用的、一个是给面板画开关用的，别让它们各说各话。
-    hasEnabledAccount: accountsOfPlatform(id).some((row) => row.enabled),
+    hasEnabledAccount: enabled,
     // 现在能不能接：额度用尽、正在登录这些面板自己拼不出来的事，后端知道。
-    state: upstreamState(id),
+    state: availability ? upstreamStateOf(availability) : upstreamState(id),
     modelCount: upstreamModelCount(id),
     // 凭据在账号上：这里报的是名下最好的那一份，要逐个看就在 accounts 里。
     credential: create(CredentialStatusSchema, {
@@ -293,9 +307,14 @@ function platformMessage(id: string, platform: Platform | null) {
     // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
     cooldownUntilMs: BigInt(cooling.cooldownUntilMs),
     cooldownReason: cooling.cooldownReason,
+    // 最早能再接的时刻：面板自己的那个（0 = 算不出来，不猜）。
+    //
+    // 判定那边也有一个时刻（untilMs），但那是路由用的「最早能试的时刻」：算不
+    // 出来时它会给一个固定时长，而面板的契约说 0 是「算不出来」。两处的口径
+    // 不一样，记在交付记录里。
     recoversAtMs: BigInt(cooling.recoversAtMs),
-    stateReason: cooling.stateReason,
-    accounts: accountsOfPlatform(id).flatMap((row) => {
+    stateReason,
+    accounts: (availability ? availability.rows : accountsOfPlatform(id)).flatMap((row) => {
       const account = accountRowMessage(row.id);
       return account ? [account] : [];
     }),
@@ -411,8 +430,14 @@ function loginErrorText(e: unknown): string {
 function platformMessages() {
   // 平台的样子一次问齐（platformOfAny），别每个平台再查一遍库。
   const known = new Map(PLATFORMS.map((p) => [p.id, platformOfAny(p.id)]));
+  // 判定也一次算齐：面板与路由看的必须是同一个答案。
+  const availabilities = platformAvailabilities(PLATFORMS);
   return PLATFORMS.flatMap((platform) => {
-    const message = platformMessage(platform.id, known.get(platform.id) ?? null);
+    const message = platformMessage(
+      platform.id,
+      known.get(platform.id) ?? null,
+      availabilities.get(platform.id) ?? null,
+    );
     return message ? [message] : [];
   });
 }

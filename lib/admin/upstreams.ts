@@ -45,6 +45,8 @@ import {
 import { isPlatform, platformOf } from "../platforms.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds/index.ts";
+// The judgment lives here: the panel and the route must read the same answer.
+import { platformAvailability, type PlatformAvailability } from "./platform-state.ts";
 import { kindOf } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import type {
@@ -61,7 +63,7 @@ export type { BalanceView, CreditView, CredentialView, HealthSnapshot, QuotaView
 import { CredentialState, ProviderPolicy as ContractPolicy, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { hasUsableCredential } from "./credentials.ts";
 import { loginActivity } from "./login.ts";
-import { coolingOf, coolingAccounts, platformCooling, type CoolingInfo, type PlatformCooling } from "./upstream-state.ts";
+import { coolingOf, platformCooling, type CoolingInfo, type PlatformCooling } from "./upstream-state.ts";
 import { policyEnum } from "./policy.ts";
 import { type CatalogGroup } from "../router/catalog.ts";
 
@@ -89,9 +91,16 @@ function accountsFor(id: string): ProviderRow[] {
  *
  * 平台自己没有开关 —— 开关在账号上，一个平台下有两个账号时可以只开一个。
  * 传账号 id 时问的就是那一个账号。
+ *
+ * 答案取自判定（platform-state.ts）：「开着没有」这件事只能有一个答案，面板
+ * 与路由看的必须是同一份。
  */
 export function upstreamEnabled(id: string): boolean {
-  return accountsFor(id).some((row) => row.enabled);
+  if (!isPlatform(id)) {
+    const row = provider(id);
+    return row ? row.enabled : false;
+  }
+  return platformAvailability(id).on > 0;
 }
 
 /** 一个上游的开关状态。 */
@@ -144,7 +153,8 @@ export function upstreamPolicy(id: string): ContractPolicy {
  * 的名单去数（那样同一个平台下的两个账号会被数成一个）。
  */
 export function upstreamAccountCount(id: string): number {
-  return accountsFor(id).length;
+  if (!isPlatform(id)) return accountsFor(id).length;
+  return platformAvailability(id).accounts;
 }
 
 /**
@@ -198,7 +208,7 @@ export function qoderRegions(): QoderRegion[] {
 }
 
 /**
- * 每个平台的模型目录，面板与 /v1/models 共用。
+ * 每个平台的模型目录 —— 面板这一层要的是**全量**。
  *
  * 一组一个**平台**：路径里那一段是平台 id，同一个平台下有两个账号也只有一组
  * 目录 —— 按账号分组会把同一批模型公布两遍。目录本身是平台的 kind 说的，跟
@@ -206,6 +216,10 @@ export function qoderRegions(): QoderRegion[] {
  *
  * 只收有开着账号的平台：一个关着的上游不公布模型，请求它的时候也给一句清楚
  * 的「没启用」，而不是把它丢给一个不会回答的上游。
+ *
+ * 与 /v1/models 的差别是故意留着的：那边公布的是「现在接得了的」，用的是
+ * 判定（lib/admin/platform-state.ts）—— 面板与路由必须是同一个答案；这边
+ * 列的是全量：目标要在登录之前就能配上，先看见模型才谈得上配。
  */
 export function catalogGroups(): CatalogGroup[] {
   const groups: CatalogGroup[] = [];
@@ -688,29 +702,59 @@ async function freshPlatformSnapshot(id: string, force = false): Promise<HealthS
  * 凭据在账号上，所以平台报的是它名下那些账号里最好的那一份：有能用的就说
  * 能用，全都没有才说没有。要逐个看的话在账号列表里（ListAccounts）。
  *
+ * 「能用的」指的是**能推理的那一份**：门户 cookie 与登录会话配了也发不出一个
+ * 请求。七牛云只填了门户 cookie 时，这一层说的是「没有可用凭据」—— 与判定
+ * （platform-state.ts）、与路由说的是同一个词。
+ *
  * 各家上游的会话形状不一样，但状态字段是同一套，所以这里把它们抹平。
  */
 export function upstreamCredential(id: string): CredentialView {
-  const rows = accountsFor(id);
-  // 一份坏掉的会话不该把整个面板打成 500：读不出来的那一条当作没有凭据。
-  const views = rows.flatMap((row) => {
+  if (!isPlatform(id)) {
+    const row = provider(id);
+    const view = row ? safeCredential(row) : null;
+    return view ?? missingCredential("这个账号的凭据读不出来");
+  }
+  return upstreamCredentialOf(platformAvailability(id));
+}
+
+/** 一个平台的凭据状态（判定已经在手上了就用这个：不重读表）。 */
+export function upstreamCredentialOf(availability: PlatformAvailability): CredentialView {
+  const views = availability.rows.flatMap((row) => {
     const view = safeCredential(row);
-    return view ? [view] : [];
+    return view ? [{ row, view }] : [];
   });
-  const pick = views.find((view) => hasUsableCredential(view.status)) ?? views[0];
-  if (!pick) {
+  // 能推理的那一份优先：别的配了也发不出请求。
+  const servingIds = new Set(availability.serving.map((row) => row.id));
+  const serving = views.filter((entry) => servingIds.has(entry.row.id));
+  const pick =
+    serving.find((entry) => hasUsableCredential(entry.view.status)) ??
+    serving[0] ??
+    views.find((entry) => hasUsableCredential(entry.view.status)) ??
+    views[0];
+  if (!pick) return missingCredential("这个平台还没有账号");
+  // 平台看着有凭据，但没有一个账号有能推理的那一份：那是「没有可用凭据」。
+  if (!serving.length && hasUsableCredential(pick.view.status)) {
     return {
-      kind: "session",
+      ...pick.view,
       status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "这个平台还没有账号",
-      generation: 0,
+      detail: "没有可用凭据：在「上游」页填 API Key 或登录",
     };
   }
-  return pick;
+  return pick.view;
+}
+
+/** 一份「没有凭据」的样子。 */
+function missingCredential(detail: string): CredentialView {
+  return {
+    kind: "session",
+    status: CredentialState.MISSING,
+    fingerprint: "",
+    expiresAt: 0,
+    remainingSec: 0,
+    warning: false,
+    detail,
+    generation: 0,
+  };
 }
 
 /** 一个账号的凭据状态。会话坏了就是读不出来，不抛。 */
@@ -923,46 +967,68 @@ function accountState(row: ProviderRow, cooling?: Map<string, CoolingInfo>): Ups
   return UpstreamState.READY;
 }
 
-/** 严重程度：同时有几种时，面板先要看哪一种。 */
-const STATE_ORDER: UpstreamState[] = [
-  UpstreamState.LOGGING_IN,
-  UpstreamState.CREDENTIAL_REJECTED,
-  UpstreamState.CREDENTIAL_EXPIRED,
-  UpstreamState.NO_CREDENTIAL,
-  // 冷却先于额度用尽：额度用尽要等窗口，冷却到点就好 —— 面板先说快恢复的那个。
-  UpstreamState.COOLING,
-  UpstreamState.OUT_OF_CREDITS,
-];
-
 /**
  * 这个上游现在能不能接请求。
  *
- * 判据的顺序（先说最要紧的）：
+ * 判定住在 lib/admin/platform-state.ts —— 路由、目录、/health 与面板问的是
+ * 同一件事，必须是同一个答案。这里只把它的话翻成契约里的枚举。
  *
- *   1. 开关关着            → DISABLED（别的都不用看）
- *   2. 正在登录            → LOGGING_IN（用户正在点授权，面板该等）
- *   3. 凭据被拒过          → CREDENTIAL_REJECTED（面板该让人重登，而不是
- *                           让人以为「没登录」）
- *   4. 没有凭据            → NO_CREDENTIAL
- *   5. 凭据过期            → CREDENTIAL_EXPIRED
- *   6. 额度用尽            → OUT_OF_CREDITS（比冷却持久，先说它）
- *   7. 在冷却              → COOLING（路由暂时绕开这个账号）
- *   8. 其余                → READY
- *
- * 平台名下有几个账号时，有一个能接就算能接（READY）；都接不了就报最要紧的
- * 那一种：面板要的是「为什么接不了」，而不是一串状态。
+ * 翻的时候有一层细的：判定说「没有可用凭据」，面板还要能分出正在登录、
+ * 登录被拒、凭据过期 —— 三件事要人做的东西不一样。那是账号上的事，判定
+ * 不记，所以这里补一层；补的只是「为什么没有凭据」，不会把「没有凭据」
+ * 说成别的。
  */
 export function upstreamState(id: UpstreamId): UpstreamState {
-  const rows = accountsFor(id);
-  if (!rows.length) return UpstreamState.NO_CREDENTIAL;
-  if (!rows.some((row) => row.enabled)) return UpstreamState.DISABLED;
-  const cooling = coolingAccounts();
-  const states = rows.filter((row) => row.enabled).map((row) => accountState(row, cooling));
-  if (states.includes(UpstreamState.READY)) return UpstreamState.READY;
-  for (const state of STATE_ORDER) {
-    if (states.includes(state)) return state;
+  if (!isPlatform(id)) {
+    // 账号 id：只问那一个账号。
+    const row = provider(id);
+    return row ? accountState(row) : UpstreamState.NO_CREDENTIAL;
   }
-  return states[0] ?? UpstreamState.NO_CREDENTIAL;
+  return upstreamStateOf(platformAvailability(id));
+}
+
+/** 判定已经在手上了就用这个：不重读表。 */
+export function upstreamStateOf(availability: PlatformAvailability): UpstreamState {
+  switch (availability.state) {
+    case "no_account":
+      // 平台上一个账号都没有：没有凭据可谈。面板靠 accountCount 分得出
+      // 「没有账号」与「没有凭据」这两件事。
+      return UpstreamState.NO_CREDENTIAL;
+    case "accounts_off":
+      return UpstreamState.DISABLED;
+    case "no_credential":
+      return credentialTrouble(availability.rows) ?? UpstreamState.NO_CREDENTIAL;
+    case "out_of_credits":
+      return UpstreamState.OUT_OF_CREDITS;
+    case "cooling":
+      return UpstreamState.COOLING;
+    case "ready":
+      return UpstreamState.READY;
+  }
+}
+
+/**
+ * 「没有可用凭据」背后的那件更细的事。
+ *
+ * 判定只说「没有凭据」；面板要能说出是正在登录、登录被拒，还是凭据过期 ——
+ * 三件事要人做的东西不一样。
+ *
+ * 只看开着的账号：关着的账号说什么都与这个平台无关。
+ */
+function credentialTrouble(rows: ProviderRow[]): UpstreamState | null {
+  let expired = false;
+  for (const row of rows) {
+    if (!row.enabled) continue;
+    const activity = loginActivity(row.id);
+    if (activity.loggingIn) return UpstreamState.LOGGING_IN;
+    // 登录被拒过：面板上要说的是「被拒了」—— 用户能照着改密码。
+    if (activity.rejected) return UpstreamState.CREDENTIAL_REJECTED;
+    const view = safeCredential(row);
+    if (!view) continue;
+    if (view.status === CredentialState.ERROR) return UpstreamState.CREDENTIAL_REJECTED;
+    if (view.status === CredentialState.EXPIRED) expired = true;
+  }
+  return expired ? UpstreamState.CREDENTIAL_EXPIRED : null;
 }
 
 /**
