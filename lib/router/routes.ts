@@ -208,12 +208,46 @@ function canonicalModel(raw: string, kind: string, ids: Set<string>): string | n
 }
 
 /**
- * 这个平台接不了请求：没有账号、账号都关着，或者没有可用凭据。
+ * 凭据这一档的故障：过期了，或者读不出来。
  *
- * 三件是要改的地方不一样的事：加一个账号、打开一个账号、在面板上填 key 或者
- * 登录。提示里得说清是哪一件，不然人只能一个个试。
+ * 两件不是一回事：
  *
- * 都是 400：这是运维没配好，不是「等一会儿再来」。
+ *   过期     凭据在，但过期了（等人刷新或重新登录）—— 要人动手。
+ *   读不出来 网关自己读不出凭据 —— 那是网关的故障，不是运维没配好。
+ *
+ * 状态码由调用方给：平台前缀那条路说 400（整个平台接不了，是人要动手的事），
+ * 派发这边说 503（这一刻网关接不了这个请求，不是请求本身的问题）。两处都
+ * 不带 Retry-After：等一会儿不会让凭据自己好 —— 过期要等人刷新或重新登录，
+ * 读不出来要人去修网关。说「一分钟后再试」是骗人。
+ */
+export function credentialFaultError(
+  platformId: string,
+  state: "credential_expired" | "credential_unknown",
+  status: number,
+): AuthError {
+  if (state === "credential_expired") {
+    return new AuthError(
+      `platform ${platformId} has an expired credential`,
+      `这个平台的凭据过期了：等它自动刷新，或者重新登录`,
+      status,
+    );
+  }
+  return new AuthError(
+    `platform ${platformId} has an unreadable credential`,
+    `这个平台的凭据读不出来：看日志`,
+    status,
+  );
+}
+
+/**
+ * 这个平台接不了请求：没有账号、账号都关着、没有可用凭据、凭据过期，或者凭据
+ * 读不出来。
+ *
+ * 要改的地方不一样的事：加一个账号、打开一个账号、在面板上填 key 或者登录、
+ * 等凭据刷新、查日志。提示里得说清是哪一件，不然人只能一个个试。
+ *
+ * 状态码：前三件是 400（运维没配好，不是「等一会儿再来」）；凭据过期也是 400
+ * （等人刷新或重新登录，是人动手）；凭据读不出来是 503（网关自己的故障）。
  */
 export function platformWithoutAccount(platformId: string, state: PlatformState): AuthError {
   if (state === "no_credential") {
@@ -230,7 +264,15 @@ export function platformWithoutAccount(platformId: string, state: PlatformState)
       400,
     );
   }
-  // 账号都关着。另外两个状态到不了这里：它们说明账号与凭据都在。
+  // 凭据过期：账号开着，凭据在，只是它过期了。要人刷新或重新登录。
+  if (state === "credential_expired") {
+    return credentialFaultError(platformId, "credential_expired", 400);
+  }
+  // 凭据读不出来：网关自己的故障 —— 503，不是 400（那说的是运维没配好）。
+  if (state === "credential_unknown") {
+    return credentialFaultError(platformId, "credential_unknown", 503);
+  }
+  // 账号都关着。别的状态到不了这里：它们说明账号与凭据都在。
   return new AuthError(
     `platform ${platformId} has no account turned on`,
     `这个平台的账号都关着。在面板的「上游」页打开一个账号。`,
