@@ -828,13 +828,20 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
 export function forgetAccountSnapshot(accountId: string): void {
   const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data;
   if (!snapshot) return;
-  // 快照的每个桶都是「账号 id → 那一份」。摊成一张表就能按账号 id 找。
-  // 删的是桶里那张表本身，快照对象没换 —— 不需要再写回去。
-  const buckets: Record<string, unknown> = { ...snapshot };
-  for (const bucket of Object.values(buckets)) {
+  // 快照的每个桶都是「账号 id → 那一份」。删的是桶里那张表本身，快照对象没换
+  // —— 不需要再写回去。
+  for (const [name, bucket] of Object.entries(snapshot)) {
     if (!bucket || typeof bucket !== "object") continue;
-    const table = bucket as Record<string, unknown>;
-    delete table[accountId];
+    // 插件那一桶是两层：插件 id → 账号 id → 那一份。账号在里层，只删一层就
+    // 删不到：那一份额度会留在快照里，直到下一轮全量刷新才没。
+    if (name === "plugins") {
+      for (const table of Object.values(bucket as Record<string, unknown>)) {
+        if (!table || typeof table !== "object") continue;
+        delete (table as Record<string, unknown>)[accountId];
+      }
+      continue;
+    }
+    delete (bucket as Record<string, unknown>)[accountId];
   }
 }
 

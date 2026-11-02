@@ -15,17 +15,33 @@ import { providerSecretId } from "../credential-ids.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 
+/**
+ * 账号凭据在库里的那一段（id 的后缀）。
+ *
+ * 推理 key 与门户 cookie 都在这一段里。额度插件要的那一段凭据说的就是它
+ * （lib/quota-plugin-credentials.ts）：插件字段的 name 就是这个后缀 —— 名字
+ * 只有这一个来源，两处各写一份就会读不到。
+ */
+export const QINIU_ACCOUNT_FIELD = "account";
+
 /** 数据库里那份账号凭据的样子。 */
 export interface QiniuAccount {
   /** 推理用的 API key。 */
   apiKey: string;
   /** 门户的 cookie 串（额度只认它）。没有就查不了额度，不是错误。 */
   portalCookie?: string;
+  /**
+   * 通用的一段凭据：额度插件写进来的那一种。
+   *
+   * 开放平台的账号没有七牛这样的两段，只有一把推理 key；额度插件要的那一段
+   * （门户 cookie）就放在这里，形状是 {"value": "..."}。
+   */
+  value?: string;
 }
 
 /** 这个账号的凭据在数据库里的 id。 */
 export function qiniuAccountId(providerId: string): string {
-  return providerSecretId(providerId, "account");
+  return providerSecretId(providerId, QINIU_ACCOUNT_FIELD);
 }
 
 /**
@@ -37,7 +53,9 @@ export function qiniuAccountOf(providerId: string): QiniuAccount | null {
   const stored = getSecret<QiniuAccount>(qiniuAccountId(providerId));
   if (!stored) return null;
   const apiKey = String(stored.apiKey ?? "").trim();
-  const portalCookie = String(stored.portalCookie ?? "").trim();
+  // 门户 cookie 有两个位置：七牛自己的账号行里是 portalCookie，开放平台的账号
+  // 里那一行是额度插件写的通用形状（{"value": "..."}）。两处都认，才读得到。
+  const portalCookie = String(stored.portalCookie || stored.value || "").trim();
   if (!apiKey && !portalCookie) return null;
   return { apiKey, ...(portalCookie ? { portalCookie } : {}) };
 }

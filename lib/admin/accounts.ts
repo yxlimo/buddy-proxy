@@ -7,7 +7,7 @@
 // 敏感的值只写不读：列表里给的是掩码与指纹。
 
 import crypto from "node:crypto";
-import { deleteProviderCredentials, deleteProviderRow, listProviders, provider } from "../providers.ts";
+import { deleteProviderCredentials, deleteProviderRow, listProviders, provider, providerSecretId } from "../providers.ts";
 import { getSecret, listSecrets } from "../store.ts";
 import { clearDeadSession, deadSession } from "../session.ts";
 import { authLog, tokenFingerprint } from "../credential.ts";
@@ -26,6 +26,9 @@ import { zcodeStatus } from "../zcode/auth.ts";
 import { qiniuAccountId, qiniuAccountOf } from "../qiniu/account.ts";
 import { xinghuoAccountId, xinghuoAccountOf } from "../xinghuo/account.ts";
 import { clearOpenPlatformKey, openPlatformKeyId, openPlatformKeyOf } from "../open-platform-credentials.ts";
+import { quotaPluginOf } from "../quota-plugins.ts";
+import { pluginFieldOf } from "../quota-plugin-credentials.ts";
+import type { OpenPlatformRow } from "../open-platforms.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
@@ -205,6 +208,37 @@ function secretOf(id: string): { data: any; updatedAt: number } {
 }
 
 /**
+ * 额度插件要的那几段凭据，面板上各占一行。
+ *
+ * 它们只用来问额度（门户 cookie 之类），不是推理凭据：能拿去推理的只有 :key
+ * 那一把。所以这里的 inference 一律是 false。
+ *
+ * 没有值也列一行（missing）：面板上要看得见「这段还没填」，而不是看不见。
+ * 平台没选插件、或插件没登记：一行都不列。
+ */
+function pluginCredentialRows(account: ProviderRow, open: OpenPlatformRow): CredentialRow[] {
+  const plugin = quotaPluginOf(open.quotaPlugin?.trim() ?? "");
+  if (!plugin) return [];
+  const out: CredentialRow[] = [];
+  for (const field of plugin.fields) {
+    const secretId = providerSecretId(account.id, field.name);
+    const stored = secretOf(secretId);
+    out.push(
+      plainRow(
+        secretId,
+        account,
+        "cookie",
+        field.label,
+        pluginFieldOf(account.id, field.name),
+        false,
+        stored.updatedAt,
+      ),
+    );
+  }
+  return out;
+}
+
+/**
  * 一个账号的凭据。
  *
  * 账号下面有几条：一个登录会话、一把推理 key，也许还有一个登录账号。列表里
@@ -219,24 +253,29 @@ export function credentialsOf(accountId: string): CredentialRow[] {
   if (!account) return out;
   // 开放平台的 kind 登记了（"openai"），但下面那个 switch 里没有它的那一档：
   // 它的凭据只有一把推理用的 API key，按属于哪个平台来判。
-  if (openPlatformOfAccount(account.id)) {
-    // 开放平台的凭据只有一把推理用的 API key。没有就什么都不列 —— 面板上不能
-    // 出现「有凭据」却没有凭据的行（跟七牛云、讯飞星火一个规矩）。
+  const open = openPlatformOfAccount(account.id);
+  if (open) {
+    // 开放平台的凭据有一把推理用的 API key，加上额度插件要的那几段（门户 cookie
+    // 之类）。推理 key 没有就不列它 —— 面板上不能出现「有凭据」却没有凭据的行
+    // （跟七牛云、讯飞星火一个规矩）。
     const key = openPlatformKeyOf(account.id);
-    if (!key) return out;
-    const secretId = openPlatformKeyId(account.id);
-    const stored = secretOf(secretId);
-    out.push(
-      plainRow(
-        secretId,
-        account,
-        "api_key",
-        "推理 API key",
-        key.apiKey,
-        canInfer(account.kind, "api_key"),
-        stored.updatedAt,
-      ),
-    );
+    if (key) {
+      const secretId = openPlatformKeyId(account.id);
+      const stored = secretOf(secretId);
+      out.push(
+        plainRow(
+          secretId,
+          account,
+          "api_key",
+          "推理 API key",
+          key.apiKey,
+          canInfer(account.kind, "api_key"),
+          stored.updatedAt,
+        ),
+      );
+    }
+    // 插件要的那几段：只用来问额度，不是推理凭据。
+    out.push(...pluginCredentialRows(account, open));
     return out;
   }
   switch (account.kind) {
@@ -453,7 +492,11 @@ function accountDetail(
   // 有推理凭据但用不了：说得出是哪一条、什么状态。
   if (inference.length) return `${inference[0].label} ${credentialStateText(inference[0].status)}`;
   // 一点推理凭据都没有：说清是「只配了旁门的凭据」还是「什么都没配」。
-  if (credentials.some((c) => c.kind === "cookie")) return "没有推理用的凭据（只有门户 cookie）";
+  // 只算真的配上的那一条：额度插件的那一段没填时是 missing，拿它说「只有门户
+  // cookie」就是拿没配的东西说配了。
+  if (credentials.some((c) => c.kind === "cookie" && hasUsableCredential(c.status))) {
+    return "没有推理用的凭据（只有门户 cookie）";
+  }
   // 会话型平台的推理凭据就是会话：那时候说的是「还没登录」。
   if (kindOf(account.kind)?.inferWith === "session") return "还没登录";
   return "还没配推理 key";

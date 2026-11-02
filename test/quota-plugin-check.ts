@@ -25,8 +25,8 @@ await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
 const { parseRespackOverview } = await import("../lib/qiniu/quota.ts");
 const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
-const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
-const { createOpenPlatform, updateOpenPlatform } = await import("../lib/open-platforms.ts");
+const { writeQiniuAccount, qiniuAccountId } = await import("../lib/qiniu/account.ts");
+const { createOpenPlatform, openPlatformOf, updateOpenPlatform } = await import("../lib/open-platforms.ts");
 
 let pass = 0;
 let fail = 0;
@@ -289,9 +289,14 @@ check(
 );
 
 // 插件要的那一份凭据：门户 cookie 那一段。
-const cookieField = qiniuQuotaPlugin.fields.find((f) => f.name === "portalCookie");
+const cookieField = qiniuQuotaPlugin.fields.find((f) => f.name === "account");
 check("插件要门户 cookie 那一段", cookieField !== undefined);
 check("门户 cookie 要遮起来显示", cookieField?.secret === true);
+check(
+  "字段名就是凭据在库里的那一段",
+  qiniuAccountId("some-account").endsWith(`:${cookieField?.name ?? ""}`),
+  `${qiniuAccountId("some-account")} / ${cookieField?.name}`,
+);
 
 /* ------------------------------------------------------------------ *
  * 种类还是那一份
@@ -319,7 +324,12 @@ check(
   "种类的用尽判定还是那些",
   qiniuKind?.outOfCredits(QINIU_ACCOUNT, kindSnapshot) === false,
 );
-check("种类没有恢复时间", (qiniuKind?.recoverAt?.(QINIU_ACCOUNT, kindSnapshot) ?? null) === null);
+check(
+  "种类没有恢复时间",
+  // 分得出「没有钩子」与「钩子答 null」：这里钩子在，答的是 null（不知道）。
+  typeof qiniuKind?.recoverAt === "function" && qiniuKind.recoverAt(QINIU_ACCOUNT, kindSnapshot) === null,
+  String(qiniuKind?.recoverAt?.(QINIU_ACCOUNT, kindSnapshot)),
+);
 
 /* ------------------------------------------------------------------ *
  * 开放平台：额度走插件
@@ -443,6 +453,14 @@ console.warn = (...args: unknown[]) => {
 };
 let assertThrew = false;
 try {
+  // 又填错一个插件 id：写进去的时候说一次（一个平台的这个插件只说一次）。
+  createOpenPlatform({
+    id: "quota-demo-bad-2",
+    label: "填错插件的开放平台二",
+    baseUrl: "https://example.invalid/v1",
+    quotaPlugin: "no-such-plugin",
+  });
+  // 启动校验说的是同一件事：它不再重复说（去重就是干这个的）。
   assertQuotaPlugins();
 } catch {
   assertThrew = true;
@@ -452,12 +470,12 @@ try {
 check("填错了插件 id → 不抛", !assertThrew);
 check(
   "填错了插件 id → warn 一行",
-  warnings.some((line) => line.includes("这个平台填的额度插件没登记：no-such-plugin")),
+  warnings.length === 1 && warnings[0].includes("这个平台填的额度插件没登记：no-such-plugin"),
   warnings.join(" / "),
 );
 check(
   "警告说的是那个 id",
-  warnings.every((line) => !line.includes("这个平台填的额度插件没登记：qiniu")),
+  warnings.length === 1 && !warnings[0].includes("这个平台填的额度插件没登记：qiniu"),
   warnings.join(" / "),
 );
 
@@ -472,6 +490,119 @@ check(
   "声明了就有理由",
   noQuotaPluginReason("dummy-declared") === "只是测一下",
   String(noQuotaPluginReason("dummy-declared")),
+);
+
+/* ------------------------------------------------------------------ *
+ * 插件要的那几段凭据：开放平台的账号怎么装得下
+ * ------------------------------------------------------------------ */
+
+section("插件凭据");
+
+const { pluginFieldOf, writePluginField } = await import("../lib/quota-plugin-credentials.ts");
+const { setProviderKeys } = await import("../lib/admin/credentials.ts");
+const { credentialsOf } = await import("../lib/admin/accounts.ts");
+const { addAccount, provider } = await import("../lib/providers.ts");
+const { CredentialState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts");
+
+// 一段字段就是一行凭据：写了读得回，空串清掉，没写过就是空串。
+const FIELD_ACCOUNT = "quota-cred-no-account";
+check("没写过的字段是空串", pluginFieldOf(FIELD_ACCOUNT, "account") === "", pluginFieldOf(FIELD_ACCOUNT, "account"));
+check("写进去说写了", writePluginField(FIELD_ACCOUNT, "account", "fake-cookie=1") === true);
+check(
+  "读回来是那个值",
+  pluginFieldOf(FIELD_ACCOUNT, "account") === "fake-cookie=1",
+  pluginFieldOf(FIELD_ACCOUNT, "account"),
+);
+check("写空串说没写", writePluginField(FIELD_ACCOUNT, "account", "") === false);
+check("清掉之后是空串", pluginFieldOf(FIELD_ACCOUNT, "account") === "", pluginFieldOf(FIELD_ACCOUNT, "account"));
+
+// 端到端：开放平台的账号装得下插件要的那一段，额度也真读得到。
+// 另建一个平台：上面那节把 quota-demo 的插件换成了没有字段的假插件。
+createOpenPlatform({
+  id: "quota-demo-qiniu",
+  label: "带七牛额度的开放平台",
+  baseUrl: "https://example.invalid/v1",
+  quotaPlugin: "qiniu",
+});
+const e2e = addAccount({ platform: "quota-demo-qiniu" });
+const e2eId = e2e.id ?? "";
+check("账号加得起来", e2e.ok === true && e2eId !== "", e2e.message);
+
+const setBoth = setProviderKeys(e2eId, ["sk-demo-inference", "fake-portal-cookie=1"]);
+check("两段都写进去了", setBoth.count === 2, String(setBoth.count));
+check(
+  "文案说的是这两段",
+  setBoth.message.includes("API key") && setBoth.message.includes("门户 cookie"),
+  setBoth.message,
+);
+
+const rows = credentialsOf(e2eId);
+check("凭据表里有两行", rows.length === 2, JSON.stringify(rows.map((r) => [r.kind, r.label, r.inference])));
+check(
+  "第一行是推理 API key",
+  rows[0]?.label === "推理 API key" && rows[0]?.inference === true,
+  JSON.stringify(rows[0]),
+);
+check("第二行是门户 cookie", rows[1]?.label === "门户 cookie", JSON.stringify(rows[1]));
+check("门户 cookie 不是推理凭据", rows[1]?.inference === false, JSON.stringify(rows[1]));
+check("门户 cookie 是能用的", rows[1]?.status === CredentialState.USABLE, String(rows[1]?.status));
+check("门户 cookie 有掩码", Boolean(rows[1]?.masked), String(rows[1]?.masked));
+check("门户 cookie 有指纹", Boolean(rows[1]?.fingerprint), String(rows[1]?.fingerprint));
+
+const e2eAccount = provider(e2eId) as any;
+const e2ePayload = await qiniuQuotaPlugin.fetch(e2eAccount);
+check("插件从开放平台的账号上问到了额度", e2ePayload !== null, JSON.stringify(e2ePayload));
+const e2eViews = qiniuQuotaPlugin.quotas(e2eAccount, e2ePayload);
+check("额度读得到", e2eViews.length === 1, JSON.stringify(e2eViews));
+check("剩下的还是那些", e2eViews[0]?.credits?.remaining === 5000, JSON.stringify(e2eViews[0]?.credits));
+
+// 只给推理 key：额度是「不知道」，不是「没有」。
+const bare = addAccount({ platform: "quota-demo-qiniu" });
+const bareId = bare.id ?? "";
+check("账号加得起来", bare.ok === true && bareId !== "", bare.message);
+const setBare = setProviderKeys(bareId, ["sk-demo-bare"]);
+check("只写进去一段", setBare.count === 1, String(setBare.count));
+check("门户 cookie 那段是空的", pluginFieldOf(bareId, "account") === "", pluginFieldOf(bareId, "account"));
+const bareAccount = provider(bareId) as any;
+const barePayload = await qiniuQuotaPlugin.fetch(bareAccount);
+check("没有门户 cookie → 拿不到额度", barePayload === null, JSON.stringify(barePayload));
+check("没有额度视图", qiniuQuotaPlugin.quotas(bareAccount, barePayload).length === 0);
+check("不算用尽", qiniuQuotaPlugin.outOfCredits?.(bareAccount, barePayload) === false);
+
+// 平台没选插件却给了两把 key：多的那把没地方去，忽略掉，不报错。
+const plain = addAccount({ platform: "quota-demo-none" });
+const plainId = plain.id ?? "";
+check("账号加得起来", plain.ok === true && plainId !== "", plain.message);
+const setPlain = setProviderKeys(plainId, ["sk-demo-plain", "should-not-be-written"]);
+check("只写了推理 key", setPlain.count === 1, String(setPlain.count));
+check("文案说清了只写了推理 key", setPlain.message.includes("多余的 key 没写"), setPlain.message);
+check("第二把没落到任何地方", pluginFieldOf(plainId, "account") === "", pluginFieldOf(plainId, "account"));
+
+// 填错了插件 id：说一声，但照样写进去（用户可能先填 id 再让我们上线那个插件）。
+const updateWarnings: string[] = [];
+const realUpdateWarn = console.warn;
+console.warn = (...args: unknown[]) => {
+  updateWarnings.push(args.map((a) => String(a)).join(" "));
+};
+let updateThrew = false;
+try {
+  updateOpenPlatform("quota-demo-none", { quotaPlugin: "no-such-plugin-3" });
+} catch {
+  updateThrew = true;
+} finally {
+  console.warn = realUpdateWarn;
+}
+check("填错了插件 id → 不抛", !updateThrew);
+check(
+  "填错了插件 id → 写进去了",
+  (openPlatformOf("quota-demo-none")?.quotaPlugin ?? "") === "no-such-plugin-3",
+  String(openPlatformOf("quota-demo-none")?.quotaPlugin),
+);
+check(
+  "填错了插件 id → warn 一行",
+  updateWarnings.length === 1 &&
+    updateWarnings[0].includes("这个平台填的额度插件没登记：no-such-plugin-3"),
+  updateWarnings.join(" / "),
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
