@@ -466,7 +466,11 @@ export async function underPolicy<T>(
 ): Promise<T> {
   const accounts = accountsOfPlatform(platform);
   const serving = servingAccounts(platform);
-  if (!serving.length) throw platformWithoutAccount(platform, accounts.length);
+  // 一个开着的账号都没有：没账号，或者账号都关着。两种都要改，面板上改的地方
+  // 不一样（加一个账号，还是打开一个）。
+  if (!serving.length) {
+    throw platformWithoutAccount(platform, accounts.length === 0 ? "no_account" : "accounts_off");
+  }
   const policy = platformPolicy(platform);
   const now = Date.now();
 

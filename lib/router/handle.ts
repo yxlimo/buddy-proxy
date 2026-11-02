@@ -16,11 +16,8 @@ import Koa from "koa";
 import { configFlag, configNumber } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { LimitError } from "../qoder/transport.ts";
-import { PLATFORMS, platformOf } from "../platforms.ts";
-import { accountsOfPlatform, type ProviderRow } from "../providers.ts";
-import { cooldownUntil, isCoolingDown, unavailableCooldownMs } from "../cooldown.ts";
+import { allPlatforms, platformOf } from "../platforms.ts";
 import { upstreamStatusOf } from "../upstream-status.ts";
-import { planWindowEndsAt } from "./account-cooldown.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { recordAggregateUsage } from "../aggregate.ts";
 import type { AggregateEntry } from "./catalog.ts";
@@ -28,7 +25,7 @@ import { select, SelectionStop, byWeight } from "./selection.ts";
 import { describeUpstreamError } from "./provider-selection.ts";
 import { recordUsage, maxTotals, usageTotals } from "../usage.ts";
 import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } from "../agent.ts";
-import { outOfCredits, workbuddyCatalog } from "../admin/upstreams.ts";
+import { workbuddyCatalog } from "../admin/upstreams.ts";
 import {
   toMinimax,
   toZcode,
@@ -45,6 +42,7 @@ import {
   type RoutingContext,
 } from "./routes.ts";
 import { findAggregate, modelsOfPlatform } from "./catalog-routes.ts";
+import { platformAvailabilities, type PlatformAvailability, type PlatformState } from "./availability.ts";
 import { ClientGoneError, sendError } from "./deliver.ts";
 
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
@@ -93,45 +91,30 @@ function upstreamContext(platform?: string): UpstreamContext {
  * One entry per platform, not per account: the path names the platform, and
  * which of its accounts pays is the platform policy's business at call time.
  */
-function routingContext(): RoutingContext {
-  const platforms = new Map<string, { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null }>();
-  const now = Date.now();
-  for (const template of PLATFORMS) {
-    const kind = kindOf(template.kind);
-    if (!kind) continue;
-    const accounts = accountsOfPlatform(template.id);
-    const on = accounts.filter((row) => row.enabled);
-    // 模型目录恒为平台全量：额度用尽或者账号在冷却，说的是「这个平台现在接不了
-    // 这个请求」，不是「这个平台没有这个模型」。前者答 503 并说什么时候恢复，
-    // 后者答 400。把模型从目录里摘掉，客户端看到的是一个不存在的模型名 ——
-    // 它会去改配置，而真正该做的是等一会儿再试
-    const ids = new Set(modelsOfPlatform(template.id));
-    // 开着的账号全都接不了：算一下最早什么时候能试
-    const noCredits = on.length > 0 && outOfCredits(template.id);
-    const usable = noCredits ? [] : on.filter((row) => !isCoolingDown(row.id, now));
-    const untilMs = on.length > 0 && usable.length === 0 ? recoveryTime(on, noCredits, now) : null;
-    platforms.set(template.id, {
-      kind: template.kind,
-      enabled: on.length > 0,
-      accounts: accounts.length,
-      ids,
-      untilMs,
+function routingContext(availabilities: Map<string, PlatformAvailability>): RoutingContext {
+  const platforms = new Map<
+    string,
+    { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null; state: PlatformState }
+  >();
+  for (const [id, availability] of availabilities) {
+    // 开放平台的 kind 还没登记：它们这一阶段进不了路由（预期之中）。
+    if (!kindOf(availability.kind)) continue;
+    platforms.set(id, {
+      kind: availability.kind,
+      // 开着**而且**有可用凭据的账号才算数：账号建了但没填 key、没登录的，
+      // 进不了路由 —— 那是面板上要填的事，不是等一会儿就会好的事。
+      enabled: availability.serving.length > 0,
+      accounts: availability.accounts,
+      // 模型目录恒为平台全量：额度用尽或者账号在冷却，说的是「这个平台现在接不了
+      // 这个请求」，不是「这个平台没有这个模型」。前者答 503 并说什么时候恢复，
+      // 后者答 400。把模型从目录里摘掉，客户端看到的是一个不存在的模型名 ——
+      // 它会去改配置，而真正该做的是等一会儿再试
+      ids: new Set(availability.ids),
+      untilMs: availability.untilMs,
+      state: availability.state,
     });
   }
   return { platforms };
-}
-
-/**
- * 这个平台的账号最早什么时候能接请求。
- *
- * 额度用尽的看套餐窗口什么时候结束（窗口一换就是新的额度），冷却中的看冷却到
- * 什么时候。都算不出来就按固定冷却时长给一个 —— 客户端要的是一个能照着的数字
- */
-function recoveryTime(rows: ProviderRow[], noCredits: boolean, now: number): number {
-  const times = rows
-    .map((row) => (noCredits ? planWindowEndsAt(row.id, now) : null) ?? cooldownUntil(row.id))
-    .filter((at): at is number => typeof at === "number" && at > now);
-  return times.length ? Math.min(...times) : now + unavailableCooldownMs();
 }
 /**
  * Send the request to the upstream behind a published model.
@@ -145,9 +128,10 @@ async function handleAggregate(
   entry: AggregateEntry,
   body: Json,
   dialect: Dialect,
+  availabilities: Map<string, PlatformAvailability>,
 ): Promise<void> {
   const stream = body.stream === true;
-  const rctx = routingContext();
+  const rctx = routingContext(availabilities);
   const started = Date.now();
 
   // The targets are the candidates: the heaviest one first, and `single` only
@@ -397,11 +381,16 @@ export async function handle(
 ): Promise<void> {
   const body = (ctx.request.body ?? {}) as Json;
 
+  // allPlatforms() 每次调用读一次 platform 表（开放平台在那张表里）。
+  const templates = allPlatforms();
+  // 同一批表在这个请求里只读一遍：可用性算一次，下面都用它。
+  const availabilities = platformAvailabilities(templates);
+
   // The root route serves the published models and nothing else: the database
   // decides which models exist and which upstream serves them.
   if (!platform) {
     const wanted = String(body.model ?? "").trim();
-    const entry = findAggregate(wanted);
+    const entry = findAggregate(wanted, availabilities);
     if (!entry) {
       ctx.status = 404;
       ctx.body = {
@@ -410,13 +399,13 @@ export async function handle(
       };
       return;
     }
-    await handleAggregate(ctx, entry, body, dialect);
+    await handleAggregate(ctx, entry, body, dialect, availabilities);
     return;
   }
 
   let route: Route;
   try {
-    const rctx = routingContext();
+    const rctx = routingContext(availabilities);
     route = routeInGroup(platform!, String(body.model ?? "").trim(), rctx);
   } catch (e) {
     sendError(ctx, e);

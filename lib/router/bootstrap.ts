@@ -38,7 +38,7 @@ import { PLATFORMS } from "../platforms.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { benefits } from "../admin/benefits.ts";
 import { pruneUsage } from "../usage.ts";
-import { enabledAccounts, refreshWorkBuddyCatalog } from "./catalog-routes.ts";
+import { refreshWorkBuddyCatalog } from "./catalog-routes.ts";
 
 /** The background work of a start: the logins, the catalogues, the timers. */
 export function startUpstreams(): void {
@@ -128,7 +128,10 @@ export function startUpstreams(): void {
   }
 
   // 账号一行一个：谁的会话没了就补谁的，不停在整个平台上。
-  for (const row of enabledAccounts("sensenova")) {
+  //
+  // 这里要的是「开着的账号」，不是「能服务的账号」：没有凭据的那个正是要
+  // 登录的那一个（enabledAccounts 只给已经拿着凭据的那些）。
+  for (const row of accountsOfPlatform("sensenova").filter((account) => account.enabled)) {
     // 推理端点要的是一把 key，不是 cookie。账号上有会话却没有 key 的（老版本
     // 登录留下的），在这里补一把 —— 登录完了上游才是 READY 的。
     void (async () => {
@@ -145,7 +148,7 @@ export function startUpstreams(): void {
     })().catch((e) => console.warn(`  [SENSENOVA] ${row.id}: ${(e as Error).message}`));
   }
 
-  for (const row of enabledAccounts("intern-ai")) {
+  for (const row of accountsOfPlatform("intern-ai").filter((account) => account.enabled)) {
     // 与 SenseNova 一样：推理端点认的是 Discovery 子站那把 key。
     void (async () => {
       const session = loadInternAiSession(row.id);
