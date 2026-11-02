@@ -19,8 +19,11 @@ import {
   withUpstreamStatus,
 } from "../../upstream-status.ts";
 import { clearCooldown, setCooldown } from "../../cooldown.ts";
+<<<<<<< HEAD
 import { listCooldowns } from "../../cooldown.ts";
 import { scrubForLog } from "../../log-scrub.ts";
+=======
+>>>>>>> d04c0c6 (Out of credits and cooling are different answers)
 import { cooldownForFailure, cooldownStamp, errorTextOf } from "../account-cooldown.ts";
 import { type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
@@ -268,10 +271,10 @@ function servingAccounts(judged: PlatformAvailability): ProviderRow[] {
  * 上游的 401 是「这把 key 被上游拒了」，两件事不能撞在同一个状态码上。所以
  * 上游的租户级错误分三档报给客户端：
  *
- *   1. 余额真的用完了（上游 402，或者 MiniMax 的业务码 1008）→ 402，提示说
- *      充值后恢复。那是客户端唯一能动手的一件事。
- *   2. 别的租户级错误（凭据被拒、配额打满、额度用尽的业务码）→ 503。这是
- *      网关的凭据或配额问题，客户端无从处理；提示里带上游的状态与原文。
+ *   1. 余额与额度用尽（上游 402，MiniMax 的 1008，别的额度用尽码）→ 402，
+ *      提示说充值后恢复。那是客户端唯一能动手的一件事，所以是 402，不是 503。
+ *   2. 别的租户级错误（凭据被拒、配额打满）→ 503。这是网关的凭据或配额问题，
+ *      客户端无从处理；提示里带上游的状态与原文。
  *   3. 请求本身的问题（上游 400/404/413）→ 原样抛出去：传输层已经报成 502，
  *      提示里带着上游的原文。
  *
@@ -294,8 +297,8 @@ export function accountFailure(
   }
   const tenant = tenantLevelFailure(lastError);
   if (tenant) {
-    // 网关自己的 503：凭据或配额的问题，客户端处理不了。
-    const error = new AuthError(tenant.message, tenant.hint, 503);
+    // 网关自己的状态码：这个账号接不了这个请求，客户端处理不了（或者要充值）。
+    const error = new AuthError(tenant.message, tenant.hint, tenant.status);
     if (tenant.type) error.type = tenant.type;
     return keepUpstreamTruth(error, lastError);
   }
@@ -306,12 +309,12 @@ export function accountFailure(
 /**
  * 租户级错误：这个账号接不了这个请求，客户端也无从处理。
  *
- * 凭据被拒、配额打满、额度用尽 —— 都是网关这边要处理的事，所以客户端看到
- * 503；上游的状态与原文写进提示里，排查时不用猜。
+ * 凭据被拒、配额打满 → 503（网关这边要处理的事）；额度用尽 → 402（客户端能
+ * 动手：充值或者等额度）。上游的状态与原文写进提示里，排查时不用猜。
  */
 function tenantLevelFailure(
   error: unknown,
-): { message: string; hint: string; type?: string } | null {
+): { message: string; hint: string; status: number; type?: string } | null {
   const kind = classifyUpstreamError(error).kind;
   if (kind !== "credential" && kind !== "rate-limit" && kind !== "quota") return null;
   const status = upstreamSaidStatus(error);
@@ -327,7 +330,12 @@ function tenantLevelFailure(
     message: `upstream account cannot serve the request${because}`,
     hint:
       `网关这边的账号接不了这个请求${because}：${upstreamDetail(error)}。` +
-      "凭据或配额是网关这边的事，客户端处理不了；等网关换好账号或额度恢复后再试。",
+      (kind === "quota"
+        ? "额度用尽了：充值或者等额度回来就能再试。"
+        : "凭据或配额是网关这边的事，客户端处理不了；等网关换好账号或额度恢复后再试。"),
+    // 额度用尽是 402：客户端看到的是「充值/等额度」。其余的租户级错误是网关
+    // 自己的事，客户端处理不了，503。
+    status: kind === "quota" ? 402 : 503,
     // The client reads the type too. A refused credential keeps the type the
     // rest of the gateway uses for a credential problem (the 503 default),
     // and the two quota-ish ones say what they are.
@@ -491,13 +499,13 @@ export async function underPolicy<T>(
   const policy = platformPolicy(platform);
   const now = Date.now();
 
-  // 冷却表读一遍：判定已经把它算进去了（usable 里没有冷却中的账号），这里要的
-  // 是「哪个账号在冷却、到什么时候」—— 日志与提示里要说。
-  const cooling = new Map(listCooldowns(now).map((row) => [row.providerId, row.untilMs]));
+  // 冷却表：判定已经读过一次了（usable 里没有冷却中的账号），这里要的
+  // 是「哪个账号在冷却、到什么时候」—— 判定把它带下来，别再读一遍表。
+  const cooling = judged.cooling;
 
   if (policy === "single") {
-    // single 只用一个账号：权重最大的那个。它在冷却，就说清楚冷却到什么时候。
-    // 不去打上游（打了也是白打），也不悄悄换到别的账号身上去——面板说的是 single。
+    // single 的语义是「就用这一个账号，接不了就说清楚」：面板上写着单一，流量
+    // 悄悄落到别的账号上，那就不是面板说的那样了。所以接不了就说接不了。
     const only = serving[0];
     const onlyUntil = cooling.get(only.id);
     if (onlyUntil !== undefined) {
@@ -505,6 +513,15 @@ export async function underPolicy<T>(
         `[ROUTE] ${what} account=${only.id} cooling down (until ${cooldownStamp(onlyUntil)}), not switching`,
       );
       throw coolingError(only.id, onlyUntil);
+    }
+    // 额度见底同样要明确拒绝：见底的账号打过去只会换一个 402，而判定已经知道
+    // 它没钱了。不去打，也不悄悄换到别的账号身上去。
+    const onlySpent = judged.spent.get(only.id);
+    if (onlySpent !== undefined) {
+      console.log(
+        `[ROUTE] ${what} account=${only.id} is out of credits (until ${cooldownStamp(onlySpent)}), not switching`,
+      );
+      throw accountSpentError(platform, only.id, onlySpent);
     }
   }
 
@@ -641,16 +658,41 @@ export function coolingError(accountId: string, untilMs: number, all = false, wh
 /**
  * 额度用尽：所有账号都没额度了。
  *
- * 503：这是网关这边的账号接不了，不是请求本身的问题，客户端处理不了。额度
- * 什么时候回来跟着错误走（Retry-After）：那是平台自己说的窗口，不是猜的。
+ * 402：额度用尽是客户端能动手的事（充值，或者等额度回来），所以是 402，不是
+ * 503 —— 503 说的是「等一会儿就好」，而额度等的是窗口。
+ *
+ * 额度什么时候回来跟着错误走（Retry-After）：那是平台自己说的窗口，不是猜的。
  */
 export function spentError(untilMs: number): AuthError {
   const minutes = Math.max(1, Math.ceil((untilMs - Date.now()) / 60_000));
   const when = cooldownStamp(untilMs);
   const error = new AuthError(
     "every upstream account is out of credits",
-    `网关这边所有账号的额度都用尽了，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试。`,
-    503,
+    `网关这边所有账号的额度都用尽了，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；急的话只能给这个上游充值。`,
+    402,
+    "usage_limit_error",
+  );
+  return withRetryAfter(error, untilMs);
+}
+
+/**
+ * 额度用尽：那个账号没钱了。
+ *
+ * 402：与「所有账号都没额度」是同一个口径 —— 额度用尽就是 402，客户端看到的是
+ * 「充值/等额度」。单打独斗的那个账号见底时说清楚是哪个账号：这个上游的策略
+ * 是「单一」，不会换到别的账号身上去，客户端要知道自己在等的是哪一个。
+ *
+ * Retry-After 跟着错误走（deliver.ts 把它写进头里）：什么时候恢复是平台自己
+ * 说的窗口，不是猜的。
+ */
+export function accountSpentError(platform: string, accountId: string, untilMs: number): AuthError {
+  const minutes = Math.max(1, Math.ceil((untilMs - Date.now()) / 60_000));
+  const when = cooldownStamp(untilMs);
+  const error = new AuthError(
+    "upstream account is out of credits",
+    `上游 ${platform} 的账号 ${accountId} 的额度用尽了，最早 ${when} 恢复（约 ${minutes} 分钟后）。` +
+      `这个上游的生效策略是「单一」，不会换到别的账号；能做的就是充值或者等额度。`,
+    402,
     "usage_limit_error",
   );
   return withRetryAfter(error, untilMs);

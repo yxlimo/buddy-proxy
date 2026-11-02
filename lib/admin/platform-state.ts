@@ -85,6 +85,22 @@ export interface PlatformAvailability {
    * 这个请求。
    */
   serving: ProviderRow[];
+  /**
+   * 在冷却的账号：键是账号 id，值是冷却到什么时候。
+   *
+   * 判定已经把冷却表读过了（usable 里没有冷却中的账号），这里把它带下来：
+   * 派发要的是「哪个账号在冷却、到什么时候」，自己再读一遍表就是同一批数据
+   * 读两次。
+   */
+  cooling: Map<string, number>;
+  /**
+   * 额度见底的账号：键是账号 id，值是额度什么时候回来。
+   *
+   * 见底是按账号判的：平台上还有一个账号有额度，这个平台就还能接 —— 所以
+   * 「哪个账号见底、什么时候回来」得逐个账号说得清，平台那一档的 untilMs
+   * 回答不了这个问题。
+   */
+  spent: Map<string, number>;
   /** 平台名下的账号总数。 */
   accounts: number;
   /** 平台名下的账号行。面板要逐个看账号时不用再读一遍表。 */
@@ -241,6 +257,28 @@ function recoveryTime(
   return times.length ? Math.min(...times) : now + unavailableCooldownMs();
 }
 
+/**
+ * 这个账号的额度什么时候回来。
+ *
+ * 平台自己说（每个种类知道自己的窗口/批次什么时候满），说不出来才退回套餐
+ * 窗口，再说不出来就是冷却表上的时刻，最后才用固定时长。跟平台那一档
+ * （recoveryTime）用的是同一套来源 —— 两处算出来的恢复时刻必须一样。
+ */
+function creditRecoveryAt(
+  row: ProviderRow,
+  snapshot: HealthSnapshot | null,
+  cooldowns: Map<string, number>,
+  now: number,
+): number {
+  const kind = kindOf(row.kind);
+  const said = snapshot ? (kind?.recoverAt?.(row, snapshot) ?? null) : null;
+  const at = said ?? exhaustedPlanWindowEndsAt(row.id, now);
+  if (typeof at === "number" && at > now) return at;
+  const cooling = cooldowns.get(row.id);
+  if (typeof cooling === "number" && cooling > now) return cooling;
+  return now + unavailableCooldownMs();
+}
+
 /** 一句给日志用的话：这个平台为什么（不）能接请求。 */
 function reasonOf(
   state: PlatformState,
@@ -346,6 +384,20 @@ function judge(
   const cooling = (row: ProviderRow): boolean => cooldowns.has(row.id);
   const usable = ready.filter((row) => !spent(row) && !cooling(row));
   const allSpent = ready.length > 0 && ready.every(spent);
+  // 逐个账号说清「谁接不了、到什么时候」：派发是按账号回答的（单一策略问的
+  // 就是权重最大的那个账号接不接得了），平台那一档的 untilMs 回答不了这个。
+  //
+  // 冷却是这张表里这个平台名下账号的那几行（派发问的就是它们）；见底只算
+  // 凭据能用的那些账号 —— 凭据读不出来的账号连「有没有额度」都谈不上。
+  const coolingUntil = new Map<string, number>();
+  for (const row of accounts) {
+    const until = cooldowns.get(row.id);
+    if (until !== undefined) coolingUntil.set(row.id, until);
+  }
+  const spentUntil = new Map<string, number>();
+  for (const row of ready) {
+    if (spent(row)) spentUntil.set(row.id, creditRecoveryAt(row, snapshot, cooldowns, now));
+  }
   // 「在冷却」是接不了的原因之一：没有账号能接，而有的账号在冷却。
   //
   // 一个账号在冷却、另一个还热着时，平台接得了 —— 那是那个账号的事，不是平台
@@ -373,6 +425,8 @@ function judge(
     state,
     usable,
     serving,
+    cooling: coolingUntil,
+    spent: spentUntil,
     accounts: accounts.length,
     rows: accounts,
     on: on.length,

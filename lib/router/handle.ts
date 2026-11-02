@@ -40,6 +40,8 @@ import {
   routeInGroup,
   publishedModelUnavailable,
   unreachableUpstreams,
+  emptyCatalogTargets,
+  catalogueNotReady,
   type Route,
   type RoutingContext,
 } from "./routes.ts";
@@ -406,6 +408,14 @@ export async function handle(
     const availabilities = platformAvailabilities(allPlatforms());
     const entry = findAggregate(wanted, availabilities);
     if (!entry) {
+      // 目标平台接得了，但它的目录是空的：目录还没拿到（账号刚加、目录还没
+      // 同步）。这不是「没有这个模型」—— 平台前缀那条路对同样情况答 503，根
+      // 路由也得一样：两处答的不一样，客户端就会去改模型名，而模型名是对的。
+      const emptyCatalog = emptyCatalogTargets(published.targets, availabilities);
+      if (emptyCatalog.length) {
+        sendError(ctx, catalogueNotReady(emptyCatalog));
+        return;
+      }
       // 发布着，却没有能接的目标：说清是哪个上游、什么状态、该做什么。
       // 答「没有这个模型」会让客户端去改模型名，而模型确实发布过。
       const unreachable = unreachableUpstreams(published.targets, availabilities);

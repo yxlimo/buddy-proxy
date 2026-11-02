@@ -22,6 +22,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { PlatformAvailability } from "../lib/router/availability.ts";
+import type { RoutingContext } from "../lib/router/routes.ts";
 import { startFakeQoder } from "./fake-qoder-upstream.ts";
 import { startGateway } from "./harness.ts";
 
@@ -169,24 +171,7 @@ updateProvider(light.id, { weight: 100 });
 
 const { setSecret } = await import("../lib/store.ts");
 // Qoder 的推理凭据就是登录会话本身。
-const sessionNow = Date.now();
-const year = sessionNow + 365 * 24 * 3600 * 1000;
-setSecret(`session:provider:${light.id}`, "session", {
-  schemaVersion: 1,
-  region: "global",
-  clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
-  accessToken: "dt-test-token",
-  refreshToken: "drt-test-token",
-  userId: "test-user",
-  expiresAtMs: year,
-  refreshExpiresAtMs: year,
-  machineId: "test-machine",
-  machineToken: "test-machine-token",
-  machineType: "test",
-  generation: 1,
-  loginAtMs: sessionNow,
-  refreshedAtMs: sessionNow,
-});
+setSecret(`session:provider:${light.id}`, "session", qoderSessionSecret());
 
 const { underPolicy } = await import("../lib/router/upstreams/policy.ts");
 const tried: string[] = [];
@@ -200,6 +185,171 @@ check(
   `${chosen}（试过：${tried.join(",")}）`,
 );
 check("没有凭据的账号根本没被试", !tried.includes(heavy.id), tried.join(","));
+
+/* ------------------------------------------------------------------ *
+ * 一之三、答复：额度用尽是 402，冷却是 503，都点名平台
+ * ------------------------------------------------------------------ */
+
+section("答复：额度用尽 402，冷却 503，点名平台");
+
+const { routeInGroup, emptyCatalogTargets, catalogueNotReady } = await import("../lib/router/routes.ts");
+
+/** 路由看到的那个平台：与 handle.ts 的 routingContext 同一个形状。 */
+function routingContextOf(availability: PlatformAvailability): RoutingContext {
+  return {
+    platforms: new Map([
+      [
+        availability.platform,
+        {
+          kind: availability.kind,
+          enabled: availability.serving.length > 0,
+          accounts: availability.accounts,
+          ids: new Set(availability.ids),
+          untilMs: availability.untilMs,
+          state: availability.state,
+        },
+      ],
+    ]),
+  };
+}
+
+/** 跑一次，拿到它抛出来的错（没有抛就是 null）。 */
+function caught(run: () => unknown): any {
+  try {
+    run();
+  } catch (e) {
+    return e;
+  }
+  return null;
+}
+
+/** Qoder 的会话：形状与真的那份一致（凭据就是登录会话本身）。 */
+function qoderSessionSecret(): Record<string, unknown> {
+  const now = Date.now();
+  const year = now + 365 * 24 * 3600 * 1000;
+  return {
+    schemaVersion: 1,
+    region: "global",
+    clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
+    accessToken: "dt-test-token",
+    refreshToken: "drt-test-token",
+    userId: "test-user",
+    expiresAtMs: year,
+    refreshExpiresAtMs: year,
+    machineId: "test-machine",
+    machineToken: "test-machine-token",
+    machineType: "test",
+    generation: 1,
+    loginAtMs: now,
+    refreshedAtMs: now,
+  };
+}
+
+// 额度用尽：402，类型是 usage_limit_error，文案点名平台。
+putHealthSnapshot({
+  qiniu: {
+    [accountId]: {
+      quota: { respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }] },
+    },
+  },
+} as any);
+const spentPlatform = platformAvailability("qiniu");
+check("额度用尽 → 判定是 out_of_credits", spentPlatform.state === "out_of_credits", spentPlatform.state);
+const spentAnswer = caught(() => routeInGroup("qiniu", spentPlatform.ids[0], routingContextOf(spentPlatform)));
+check("额度用尽 → 答 402", spentAnswer?.status === 402, String(spentAnswer?.status));
+check("额度用尽 → 类型是 usage_limit_error", spentAnswer?.type === "usage_limit_error", String(spentAnswer?.type));
+check("额度用尽 → 文案点名了平台", String(spentAnswer?.hint ?? "").includes("qiniu"), String(spentAnswer?.hint));
+check("额度用尽 → 文案说了什么时候恢复", String(spentAnswer?.hint ?? "").includes("恢复"), String(spentAnswer?.hint));
+clearHealthSnapshot();
+
+// 冷却：503，点名平台，说清什么时候再试。
+setCooldown(accountId, Date.now() + 10 * 60_000, "test");
+const coolingPlatform = platformAvailability("qiniu");
+check("冷却中 → 判定是 cooling", coolingPlatform.state === "cooling", coolingPlatform.state);
+const coolingRouteAnswer = caught(() =>
+  routeInGroup("qiniu", coolingPlatform.ids[0], routingContextOf(coolingPlatform)),
+);
+check("冷却 → 答 503", coolingRouteAnswer?.status === 503, String(coolingRouteAnswer?.status));
+check(
+  "冷却 → 文案点名了平台",
+  String(coolingRouteAnswer?.hint ?? "").includes("qiniu"),
+  String(coolingRouteAnswer?.hint),
+);
+check(
+  "冷却 → 文案说了在冷却",
+  String(coolingRouteAnswer?.hint ?? "").includes("冷却"),
+  String(coolingRouteAnswer?.hint),
+);
+clearCooldown(accountId);
+
+/* ------------------------------------------------------------------ *
+ * 一之四、单一策略：权重最大的账号接不了就说清楚，不换账号
+ * ------------------------------------------------------------------ */
+
+section("单一策略：权重最大的账号额度见底也不换账号");
+
+// 两个账号：权重大的那个额度见底，权重小的那个好着。
+// 见底是按账号判的，所以两个都要有凭据 —— 没有凭据的账号不算「见底」。
+const drained = addAccount({ platform: "qoder", alias: "额度见底的" });
+const spare = addAccount({ platform: "qoder", alias: "好着的" });
+if (!drained.ok || !drained.id || !spare.ok || !spare.id) {
+  throw new Error(`qoder 的账号建不出来：${drained.message} ${spare.message}`);
+}
+updateProvider(drained.id, { weight: 900 });
+updateProvider(spare.id, { weight: 100 });
+setSecret(`session:provider:${drained.id}`, "session", qoderSessionSecret());
+setSecret(`session:provider:${spare.id}`, "session", qoderSessionSecret());
+putHealthSnapshot({
+  qoder: {
+    [drained.id]: {
+      credits: { quotaExceeded: true, resetsAt: new Date(Date.now() + 3600_000).toISOString() },
+    },
+  },
+} as any);
+
+const served: string[] = [];
+let singleFailure: any = null;
+try {
+  await underPolicy("qoder", "test", async (account) => {
+    served.push(account.id);
+    return account.id;
+  });
+} catch (e) {
+  singleFailure = e;
+}
+check("见底 → 答 402", singleFailure?.status === 402, String(singleFailure?.status));
+check("见底 → 类型是 usage_limit_error", singleFailure?.type === "usage_limit_error", String(singleFailure?.type));
+check("见底 → 文案说了是哪个账号", String(singleFailure?.hint ?? "").includes(drained.id), String(singleFailure?.hint));
+check("见底 → 没有打到别的账号", served.length === 0, served.join(","));
+clearHealthSnapshot();
+
+/* ------------------------------------------------------------------ *
+ * 一之五、目录没拿到：答 503，不是 404
+ * ------------------------------------------------------------------ */
+
+section("目录没拿到：503，不是 404");
+
+// 一个目录为空的平台：kind 登记了、账号有凭据（所以就绪），但目录没拿到。
+const noCatalog = addAccount({ platform: "sensenova", alias: "目录空的" });
+if (!noCatalog.ok || !noCatalog.id) throw new Error(`sensenova 的账号建不出来：${noCatalog.message}`);
+// SenseNova 的推理凭据是账号里那把 apiKey（会话只用来问额度）。
+setSecret(`key:provider:${noCatalog.id}:account`, "account", { user: "test-user", apiKey: "sk-test-key" });
+const noCatalogPlatform = platformAvailability("sensenova");
+check("目录空的平台 → 就绪", noCatalogPlatform.state === "ready", noCatalogPlatform.state);
+check("目录空的平台 → 目录确实是空的", noCatalogPlatform.ids.length === 0, JSON.stringify(noCatalogPlatform.ids));
+
+const emptyTargets = emptyCatalogTargets(
+  [{ group: "sensenova", enabled: true }],
+  new Map([["sensenova", noCatalogPlatform]]),
+);
+check("目录没拿到 → 说的是那个平台", emptyTargets.includes("sensenova"), JSON.stringify(emptyTargets));
+const catalogueAnswer = catalogueNotReady(emptyTargets);
+check("目录没拿到 → 答 503", catalogueAnswer.status === 503, String(catalogueAnswer.status));
+check(
+  "目录没拿到 → 文案说目录还没拿到",
+  String(catalogueAnswer.hint).includes("目录"),
+  String(catalogueAnswer.hint),
+);
 
 /* ------------------------------------------------------------------ *
  * 二、路由与健康检查
@@ -482,6 +632,11 @@ writeCooldown("qoder", Date.now() + 10 * 60_000);
 const coolingAnswer = await chat("qoder", "glm-5.3");
 check("冷却的时候答 503", coolingAnswer.status === 503, `HTTP ${coolingAnswer.status} ${coolingAnswer.text.slice(0, 160)}`);
 check("提示里说了在冷却", String(coolingAnswer.json?.hint ?? "").includes("冷却"), JSON.stringify(coolingAnswer.json));
+check(
+  "提示里点名了是哪个上游",
+  String(coolingAnswer.json?.hint ?? "").includes("qoder"),
+  JSON.stringify(coolingAnswer.json),
+);
 clearCooldownRow("qoder");
 const afterCooldown = await chat("qoder", "glm-5.3");
 check("冷却结束之后又通了", afterCooldown.status === 200, `HTTP ${afterCooldown.status}`);
