@@ -15,6 +15,12 @@
 //
 // 然后把 API key 填上：两边同时变成可用。
 //
+// 另外两种「凭据的事」也要分得清：会话过期了（定时器还没刷好，不是没配好）
+// 与凭据读不出来（网关自己的故障）。这两件都跟「没有凭据」不是一回事。
+//
+// 最后验一遍：九个 kind 的推理凭据由注册表说了算 —— 凭据表里每一段的
+// inference 标记都得跟注册表一致。
+//
 // 另外三种「接不了」也要分得清：没有账号、账号都关着、没有可用凭据 ——
 // 要人做的东西不一样，面板得说得出是哪一件。
 //
@@ -68,6 +74,10 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 
 const { addAccount, setProviderEnabled } = await import("../lib/providers.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
+const { writeXinghuoKey } = await import("../lib/xinghuo/account.ts");
+const { setSecret, store } = await import("../lib/store.ts");
+const { allKinds } = await import("../lib/provider-kinds.ts");
+const { canInfer, credentialsOf } = await import("../lib/admin/accounts.ts");
 const { platformAvailability } = await import("../lib/router/availability.ts");
 const {
   healthRefreshing,
@@ -129,7 +139,7 @@ check("面板的状态 → UPSTREAM_STATE_NO_CREDENTIAL", upstreamState("qiniu")
 const credential = upstreamCredential("qiniu");
 check("面板的凭据 → CREDENTIAL_STATE_MISSING", credential.status === CredentialState.MISSING, String(credential.status));
 check("面板的凭据说得出没有推理凭据", credential.detail.includes("推理"), credential.detail);
-check("面板的凭据不给令牌", !credential.fingerprint.includes("sk-"), credential.fingerprint);
+check("面板的凭据不给令牌", credential.fingerprint === "", credential.fingerprint);
 
 const qiniuRow = await platformRow("qiniu");
 check("平台行的状态 → UPSTREAM_STATE_NO_CREDENTIAL", qiniuRow?.state === UpstreamState.NO_CREDENTIAL, show(qiniuRow?.state));
@@ -185,12 +195,208 @@ check("判定说有一个能接的账号", ready.usable.length === 1, String(rea
 check("面板的状态 → UPSTREAM_STATE_READY", upstreamState("qiniu") === UpstreamState.READY, String(upstreamState("qiniu")));
 const readyCredential = upstreamCredential("qiniu");
 check("面板的凭据 → 有能用的凭据", readyCredential.status === CredentialState.AUTHENTICATED, String(readyCredential.status));
+check(
+  "填上 key 之后凭据只给前 10 个字符",
+  readyCredential.fingerprint.startsWith("sk-test-key".slice(0, 10)) &&
+    !readyCredential.fingerprint.includes("sk-test-key"),
+  readyCredential.fingerprint,
+);
 const readyRow = await platformRow("qiniu");
 check("平台行的状态 → UPSTREAM_STATE_READY", readyRow?.state === UpstreamState.READY, show(readyRow?.state));
 check("平台行没有该说的话", !String(readyRow?.stateReason ?? "").includes("没有可用凭据"), String(readyRow?.stateReason));
 const readyModel = publishedModels().find((m) => m.id === "parity-qiniu");
 check("模型层 → 公布了", readyModel?.published === true, show(readyModel?.published));
 check("目标不再接不了", readyModel?.targets?.[0]?.blocked === false, show(readyModel?.targets?.[0]));
+
+/* ------------------------------------------------------------------ *
+ * 五、会话过期：不是「没有凭据」
+ * ------------------------------------------------------------------ */
+
+section("会话过期了");
+
+// 会话型平台的推理凭据就是登录会话。会话过期只说明定时器还没刷好 —— 说成
+// 「没有凭据」会把人引到「填 API Key」上，而这类平台压根没有 API Key 这一说。
+const expiredAccount = addAccount({ platform: "qoder", alias: "会话过期的" });
+if (!expiredAccount.ok || !expiredAccount.id) {
+  throw new Error(`加不了 Qoder 的账号：${expiredAccount.message}`);
+}
+const expiredId = String(expiredAccount.id);
+setSecret(`session:provider:${expiredId}`, "session", {
+  accessToken: "dt-expired-token",
+  // 已经过期：定时器还没刷到这一轮。
+  expiresAtMs: Date.now() - 60_000,
+  generation: 1,
+});
+
+const expiredJudged = platformAvailability("qoder");
+check("会话过期 → credential_expired", expiredJudged.state === "credential_expired", expiredJudged.state);
+check("会话过期 → 说的是过期，不是没有凭据", expiredJudged.advice.includes("过期"), expiredJudged.advice);
+check(
+  "会话过期 → 没有恢复时刻（等刷新不是定时器能算的事）",
+  expiredJudged.untilMs === null,
+  String(expiredJudged.untilMs),
+);
+check("会话过期 → 那个账号接不了", expiredJudged.usable.length === 0, String(expiredJudged.usable.length));
+check(
+  "面板的状态 → CREDENTIAL_EXPIRED",
+  upstreamState("qoder") === UpstreamState.CREDENTIAL_EXPIRED,
+  String(upstreamState("qoder")),
+);
+const expiredRow = await platformRow("qoder");
+check(
+  "平台行的状态 → CREDENTIAL_EXPIRED",
+  expiredRow?.state === UpstreamState.CREDENTIAL_EXPIRED,
+  show(expiredRow?.state),
+);
+check("平台行说得出「过期」", String(expiredRow?.stateReason ?? "").includes("过期"), String(expiredRow?.stateReason));
+
+/* ------------------------------------------------------------------ *
+ * 六、九个 kind 的推理凭据：注册表说了算
+ * ------------------------------------------------------------------ */
+
+section("九个 kind 的推理凭据");
+
+const kinds = allKinds();
+check("注册表里有九个 kind", kinds.length === 9, kinds.map((k) => k.kind).join(","));
+
+for (const kind of kinds) {
+  // 注册表说这一类上游的推理凭据是哪一份（inferWith）；判定函数说的必须是同一件
+  // 事 —— 凭据的形态（session / api_key）说它自己是不是那一份。
+  check(
+    `${kind.kind}：会话是不是推理凭据跟注册表一致`,
+    canInfer(kind.kind, "session") === (kind.inferWith === "session"),
+    kind.inferWith,
+  );
+  check(
+    `${kind.kind}：key 是不是推理凭据跟注册表一致`,
+    canInfer(kind.kind, "api_key") === (kind.inferWith === "api_key"),
+    kind.inferWith,
+  );
+  check(`${kind.kind}：登录账号不是推理凭据`, canInfer(kind.kind, "login") === false);
+  check(`${kind.kind}：门户 cookie 不是推理凭据`, canInfer(kind.kind, "cookie") === false);
+}
+
+// 没登记的 kind（开放平台那种）：一律不是推理凭据 —— 没有登记就没有这一类
+// 上游的规矩，猜不得。
+check(
+  "没登记的 kind 不是推理凭据",
+  canInfer("openai", "api_key") === false && canInfer("", "session") === false,
+);
+
+/**
+ * 给一个账号把凭据配齐（每家的形状不一样）。
+ *
+ * 配的是**每一段**凭据：会话、登录账号、key、门户 cookie 都配上 —— 这样才
+ * 看得出「哪一段才是推理用的那一份」。
+ */
+function seedCredentials(kind: string, accountId: string): void {
+  const session = `session:provider:${accountId}`;
+  const account = `key:provider:${accountId}:account`;
+  const year = Date.now() + 365 * 24 * 3600 * 1000;
+  if (kind === "minimax" || kind === "qoder" || kind === "workbuddy" || kind === "zcode") {
+    setSecret(session, "session", { accessToken: "at-test", expiresAtMs: year, generation: 1 });
+    return;
+  }
+  if (kind === "sensenova") {
+    setSecret(session, "session", { accessToken: "at-test", expiresAtMs: year, generation: 1 });
+    setSecret(account, "account", { user: "tester", apiKey: "sk-sense-test" });
+    return;
+  }
+  if (kind === "intern-ai") {
+    setSecret(session, "session", { sites: [{ name: "子站", token: "site-token" }], obtainedAtMs: Date.now() });
+    setSecret(account, "account", { discoveryKey: "dk-test" });
+    return;
+  }
+  if (kind === "tokenrhythm") {
+    setSecret(account, "account", { account: "tester", password: "pw", apiKey: "sk-tr-test" });
+    setSecret(session, "session", {
+      cookie: "c=1",
+      csrf: "csrf",
+      userId: "u",
+      name: "n",
+      obtainedAtMs: Date.now(),
+      expiresAtMs: year,
+    });
+    return;
+  }
+  if (kind === "qiniu") {
+    writeQiniuAccount(accountId, { apiKey: "sk-qiniu-test", portalCookie: "pc=1" });
+    return;
+  }
+  if (kind === "xinghuo") {
+    writeXinghuoKey(accountId, "sk-xinghuo-test");
+    return;
+  }
+}
+
+// 每个 kind 用哪个平台建账号。zcode 没有平台模板（它的 kind 是从平台派生
+// 的），所以那一类只能验注册表那一半。
+const KIND_PLATFORM: Record<string, string> = {
+  minimax: "minimax",
+  qoder: "qoder",
+  workbuddy: "workbuddy-cn",
+  zcode: "",
+  sensenova: "sensenova",
+  "intern-ai": "intern-ai",
+  tokenrhythm: "tokenrhythm",
+  qiniu: "qiniu",
+  xinghuo: "xinghuo",
+};
+
+for (const kind of kinds) {
+  const platform = KIND_PLATFORM[kind.kind] ?? "";
+  if (!platform) {
+    check(`${kind.kind}：还没有平台模板（这一类只能验注册表那一半）`, true);
+    continue;
+  }
+  const made = addAccount({ platform, alias: `测试 ${kind.kind}` });
+  if (!made.ok || !made.id) {
+    check(`${kind.kind}：账号建得起来`, false, made.message);
+    continue;
+  }
+  seedCredentials(kind.kind, String(made.id));
+  const rows = credentialsOf(String(made.id));
+  const inferred = rows.filter((r) => r.inference).map((r) => r.kind);
+  check(
+    `${kind.kind}：推理凭据只有 ${kind.inferWith} 那一段`,
+    inferred.length === 1 && inferred[0] === kind.inferWith,
+    inferred.join(",") || "（一段都没有）",
+  );
+  check(
+    `${kind.kind}：每一段的 inference 都跟注册表一致`,
+    rows.every((r) => r.inference === canInfer(kind.kind, r.kind)),
+    rows.map((r) => `${r.kind}:${r.inference ? "是" : "否"}`).join(","),
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 七、凭据读不出来：不是「平台没配好」
+ * ------------------------------------------------------------------ */
+
+section("凭据读不出来");
+
+// 让凭据真的读不出来：把 secrets 表拿走。这是网关自己的故障，不是运维没配好
+// —— 判定读到的是异常，它要说的是「读不出来」，不是「没有凭据」。
+store().exec("DROP TABLE secrets");
+
+const broken = platformAvailability("qiniu");
+check("凭据读不出来 → credential_unknown", broken.state === "credential_unknown", broken.state);
+check(
+  "读不出来的账号不进 usable（不可验证的账号不该被派发挑中）",
+  broken.usable.length === 0,
+  String(broken.usable.length),
+);
+check("读不出来的账号仍算名下有账号", broken.serving.length > 0, String(broken.serving.length));
+check("说的是「凭据读不出来」", broken.advice.includes("读不出来"), broken.advice);
+check(
+  "没有恢复时刻（读不出来不是定时器能算的事）",
+  broken.untilMs === null,
+  String(broken.untilMs),
+);
+const authLogText = fs.existsSync(path.join(DATA_DIR, "auth.log"))
+  ? fs.readFileSync(path.join(DATA_DIR, "auth.log"), "utf8")
+  : "";
+check("读凭据失败落了 auth.log", authLogText.includes("的凭据失败"), authLogText.slice(-160));
 
 /* ------------------------------------------------------------------ *
  * 收尾

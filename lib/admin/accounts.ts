@@ -11,6 +11,11 @@ import { deleteProviderCredentials, deleteProviderRow, listProviders, provider }
 import { getSecret, listSecrets } from "../store.ts";
 import { clearDeadSession, deadSession } from "../session.ts";
 import { tokenFingerprint } from "../credential.ts";
+import { kindOf } from "../provider-kinds.ts";
+// The kinds register themselves; importing the file is what makes them known.
+// 这一条 import 绕成 accounts → kinds → … → platform-state → accounts 的环，
+// 所以环上的模块不能在求值期读别人的常量（这里读的都是函数，调用时才取值）。
+import "../kinds/index.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { loadSession as loadQoderSession } from "../qoder/auth.ts";
 import { checkAccountHealth } from "../qoder/credits.ts";
@@ -82,6 +87,23 @@ export interface CredentialRow {
   lastOkAt: number;
   lastError: string;
   updatedAt: number;
+}
+
+/**
+ * 这一条凭据能不能拿去推理。
+ *
+ * 判据只有一处：注册表说这一类上游的推理凭据是哪一份（inferWith），凭据的
+ * 形态（session / api_key）说它自己是不是那一份。login 与 cookie 永远不是
+ * —— 它们只是账号本身与查额度用的旁门。
+ *
+ * kind 没登记时一律 false：没有登记就没有这一类上游的规矩，猜不得（开放平台
+ * 就是这样：它还没有登记的 kind，所以它的账号没有推理凭据）。
+ */
+export function canInfer(kindName: string, form: string): boolean {
+  const kind = kindOf(kindName);
+  if (!kind) return false;
+  if (form !== "session" && form !== "api_key") return false;
+  return kind.inferWith === form;
 }
 
 /** 指纹：同一个值永远是同一个指纹，换一个值就是另一个。 */
@@ -198,7 +220,9 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       // MiniMax Code 只有会话：额度也跟着会话走，没有第二把 key。
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
-      out.push(sessionRow(sessionId, account, "登录会话", session.data, true, session.updatedAt));
+      out.push(
+        sessionRow(sessionId, account, "登录会话", session.data, canInfer(account.kind, "session"), session.updatedAt),
+      );
       return out;
     }
     case "qoder":
@@ -207,26 +231,40 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
       // 这一类平台的推理凭据就是会话本身：access token 直接当 Bearer 发。
-      out.push(sessionRow(sessionId, account, "登录会话", session.data, true, session.updatedAt));
+      out.push(
+        sessionRow(sessionId, account, "登录会话", session.data, canInfer(account.kind, "session"), session.updatedAt),
+      );
       return out;
     }
     case "sensenova": {
       const sessionId = `session:provider:${account.id}`;
       const session = secretOf(sessionId);
       // 会话只用来问额度：推理端点要的是那把 key，不是它。
-      out.push(sessionRow(sessionId, account, "登录会话", session.data, false, session.updatedAt));
+      out.push(
+        sessionRow(sessionId, account, "登录会话", session.data, canInfer(account.kind, "session"), session.updatedAt),
+      );
       const loginId = `key:provider:${account.id}:account`;
       const loginRow = secretOf(loginId);
       const login = loginRow.data;
       if (login?.user) {
         // 登录账号也不是推理凭据：它只是账号本身。
-        out.push(plainRow(loginId, account, "login", "登录账号", String(login.user), false, loginRow.updatedAt));
+        out.push(
+          plainRow(loginId, account, "login", "登录账号", String(login.user), canInfer(account.kind, "login"), loginRow.updatedAt),
+        );
       }
       // 推理用的 key：推理端点要的是它，不是 cookie。
       const apiKey = String(login?.apiKey ?? "");
       if (apiKey) {
         out.push({
-          ...plainRow(`${loginId}#api_key`, account, "api_key", "推理 key", apiKey, true, loginRow.updatedAt),
+          ...plainRow(
+            `${loginId}#api_key`,
+            account,
+            "api_key",
+            "推理 key",
+            apiKey,
+            canInfer(account.kind, "api_key"),
+            loginRow.updatedAt,
+          ),
         });
       }
       return out;
@@ -247,7 +285,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
           token,
           // 子站 token 不能推理（推理要的是 Discovery 那把 key），但它仍然有用：
           // 拿它去补 key、问额度。
-          false,
+          canInfer(account.kind, "session"),
           sessionRowData.updatedAt,
         ),
         status: token ? CredentialState.USABLE : CredentialState.MISSING,
@@ -259,7 +297,15 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const discoveryKey = String(loginRow.data?.discoveryKey ?? "");
       if (discoveryKey) {
         out.push(
-          plainRow(`${loginId}#discovery_key`, account, "api_key", "推理 key（Discovery）", discoveryKey, true, loginRow.updatedAt),
+          plainRow(
+            `${loginId}#discovery_key`,
+            account,
+            "api_key",
+            "推理 key（Discovery）",
+            discoveryKey,
+            canInfer(account.kind, "api_key"),
+            loginRow.updatedAt,
+          ),
         );
       }
       return out;
@@ -271,7 +317,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
         const loginId = `key:provider:${account.id}:account`;
         const loginRow = secretOf(loginId);
         out.push({
-          ...plainRow(loginId, account, "login", "登录账号", credential.account, false, loginRow.updatedAt),
+          ...plainRow(loginId, account, "login", "登录账号", credential.account, canInfer(account.kind, "login"), loginRow.updatedAt),
           status:
             credential.account && credential.password
               ? CredentialState.USABLE
@@ -281,12 +327,19 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const key = String(credential?.apiKey ?? "");
       if (key) {
         out.push({
-          ...plainRow(`key:provider:${account.id}:account#api_key`, account, "api_key", "推理 key", key, true),
+          ...plainRow(
+            `key:provider:${account.id}:account#api_key`,
+            account,
+            "api_key",
+            "推理 key",
+            key,
+            canInfer(account.kind, "api_key"),
+          ),
         });
       }
       const sessionId = tokenRhythmSessionId(account.id);
       // 会话 cookie 只用来登录与查余额：转发要的是那把 api key。
-      out.push(sessionRow(sessionId, account, "会话 cookie", loadTokenRhythmSession(account.id), false));
+      out.push(sessionRow(sessionId, account, "会话 cookie", loadTokenRhythmSession(account.id), canInfer(account.kind, "session")));
       return out;
     }
     case "qiniu": {
@@ -297,7 +350,9 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       const secretId = qiniuAccountId(account.id);
       const stored = secretOf(secretId);
       if (qiniu.apiKey) {
-        out.push(plainRow(secretId, account, "api_key", "推理 API key", qiniu.apiKey, true, stored.updatedAt));
+        out.push(
+          plainRow(secretId, account, "api_key", "推理 API key", qiniu.apiKey, canInfer(account.kind, "api_key"), stored.updatedAt),
+        );
       }
       if (qiniu.portalCookie) {
         // 门户 cookie 是同一份记录里的另一段：id 用派生的写法（#cookie），
@@ -305,7 +360,7 @@ export function credentialsOf(accountId: string): CredentialRow[] {
         //
         // 它不是推理凭据：门户 cookie 只用来问额度，推理端点不认它。
         out.push(
-          plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, false, stored.updatedAt),
+          plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, canInfer(account.kind, "cookie"), stored.updatedAt),
         );
       }
       return out;
@@ -317,12 +372,25 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       if (!xinghuo) return out;
       const secretId = xinghuoAccountId(account.id);
       const stored = secretOf(secretId);
-      out.push(plainRow(secretId, account, "api_key", "推理 API key", xinghuo.apiKey, true, stored.updatedAt));
+      out.push(
+        plainRow(secretId, account, "api_key", "推理 API key", xinghuo.apiKey, canInfer(account.kind, "api_key"), stored.updatedAt),
+      );
       return out;
     }
     default:
       return out;
   }
+}
+
+/**
+ * 这个账号的**全部**推理凭据。
+ *
+ * 与 inferenceCredentialOf 的区别：那个只给「现在能用」的那一条，这个给所有
+ * 推理凭据 —— 判定要分得出「有凭据但过期了」与「压根没有凭据」：前者等人
+ * 刷新或重新登录，后者要人去面板上填。
+ */
+export function inferenceCredentialsOf(accountId: string): CredentialRow[] {
+  return credentialsOf(accountId).filter((row) => row.inference);
 }
 
 /**
@@ -334,12 +402,37 @@ export function credentialsOf(accountId: string): CredentialRow[] {
  * 找不到就是 null：面板上要说「没有推理凭据」，路由也不该把它算成能接。
  */
 export function inferenceCredentialOf(accountId: string): CredentialRow | null {
-  for (const row of credentialsOf(accountId)) {
-    if (!row.inference) continue;
+  for (const row of inferenceCredentialsOf(accountId)) {
     if (!hasUsableCredential(row.status)) continue;
     return row;
   }
   return null;
+}
+
+/**
+ * 账号那一行的话：说的是**推理凭据**。
+ *
+ * 以前这里说的是「有可用的 key」—— 门户 cookie 与登录账号也算 key，于是七牛云
+ * 只填了门户 cookie 时那一行说「有可用的 key」，与平台行、与路由都矛盾：那个
+ * 账号一个请求也发不出去。
+ */
+function accountDetail(
+  account: ProviderRow,
+  credentials: CredentialRow[],
+  inference: CredentialRow[],
+  usable: CredentialRow | undefined,
+): string {
+  if (usable) {
+    // 会话型平台的推理凭据就是登录会话。
+    return usable.kind === "session" ? `会话 ${credentialStateText(usable.status)}` : "有可用的推理 key";
+  }
+  // 有推理凭据但用不了：说得出是哪一条、什么状态。
+  if (inference.length) return `${inference[0].label} ${credentialStateText(inference[0].status)}`;
+  // 一点推理凭据都没有：说清是「只配了旁门的凭据」还是「什么都没配」。
+  if (credentials.some((c) => c.kind === "cookie")) return "没有推理用的凭据（只有门户 cookie）";
+  // 会话型平台的推理凭据就是会话：那时候说的是「还没登录」。
+  if (kindOf(account.kind)?.inferWith === "session") return "还没登录";
+  return "还没配推理 key";
 }
 
 /**
@@ -352,31 +445,19 @@ export function listAccounts(): AccountView[] {
   const out: AccountView[] = [];
   for (const row of listProviders()) {
     const credentials = credentialsOf(row.id);
-    const sessions = credentials.filter((c) => c.kind === "session");
-    const session = sessions[0];
-    // 账号的状态：有一条能用的凭据就算登录了。
-    //
-    // 开放平台的凭据是 key（不是会话），只认会话的话，那个账号明明有 key 却
-    // 一直说「没有凭据」。
-    const usable = credentials.filter(
-      (c) => c.status === CredentialState.USABLE || c.status === CredentialState.AUTHENTICATED,
-    );
-    const status = session
-      ? session.status
-      : usable.length
-        ? CredentialState.USABLE
-        : CredentialState.MISSING;
+    // 账号的状态看**推理凭据**：配了门户 cookie 或登录账号不算「有凭据」，
+    // 那些东西一个请求也发不出去。开放平台的凭据是 key（不是会话），所以看
+    // 推理凭据而不是看会话 —— 那个账号明明有 key 却一直说「没有凭据」。
+    const inference = credentials.filter((c) => c.inference);
+    const usable = inference.find((c) => hasUsableCredential(c.status));
+    const status = usable ? usable.status : inference.length ? inference[0].status : CredentialState.MISSING;
     out.push({
       id: row.id,
       platform: row.platform,
       alias: row.alias,
       status,
       credentialCount: credentials.length,
-      detail: session
-        ? `会话 ${credentialStateText(session.status)}`
-        : usable.length
-          ? "有可用的 key"
-          : "暂无凭据",
+      detail: accountDetail(row, credentials, inference, usable),
       enabled: row.enabled,
       weight: row.weight,
       createdAt: row.createdAt,

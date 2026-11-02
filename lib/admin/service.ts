@@ -102,6 +102,7 @@ import {
   logoutAccount,
   refreshCredential,
   testCredential,
+  type AccountView,
 } from "./accounts.ts";
 import { credentialStateText, setProviderKeys } from "./credentials.ts";
 import {
@@ -259,6 +260,7 @@ function platformMessage(
   id: string,
   platform: Platform | null,
   availability: PlatformAvailability | null,
+  accounts: Map<string, AccountView>,
 ) {
   const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
   const quota = upstreamQuota(id);
@@ -315,8 +317,10 @@ function platformMessage(
     recoversAtMs: BigInt(cooling.recoversAtMs),
     stateReason,
     accounts: (availability ? availability.rows : accountsOfPlatform(id)).flatMap((row) => {
-      const account = accountRowMessage(row.id);
-      return account ? [account] : [];
+      // 账号视图是外面算好的那一份：这里再读一遍凭据的话，一个平台下的每个
+      // 账号都要把全部账号的凭据读一遍（面板打开一次就是 O(N²)）。
+      const account = accounts.get(row.id);
+      return account ? [accountRowMessage(account)] : [];
     }),
   });
 }
@@ -359,13 +363,18 @@ function credentialStatusMessage(credentialId: string) {
 /** 一个账号，面板看的形状。 */
 function accountMessage(accountId: string) {
   if (!accountId) return undefined;
-  return accountRowMessage(accountId);
+  const row = listAccounts().find((a) => a.id === accountId);
+  return row ? accountRowMessage(row) : undefined;
 }
 
-/** 一个账号行，面板看的形状。 */
-function accountRowMessage(accountId: string) {
-  const row = listAccounts().find((a) => a.id === accountId);
-  if (!row) return undefined;
+/**
+ * 一个账号行，面板看的形状。
+ *
+ * 账号视图（凭据、状态）由调用方算好传进来：账号行自己再去读一遍凭据的话，
+ * 一个平台下的每个账号都要把全部账号的凭据重读一遍 —— 面板打开一次就是
+ * O(N²) 次读库。
+ */
+function accountRowMessage(row: AccountView) {
   // 额度是**这个账号自己的**：平台行上那个是名下账号合起来的，账号行上要
   // 看得见自己那份（两个 MiniMax 账号各有各的套餐）。
   const quota = upstreamQuota(row.id);
@@ -432,11 +441,14 @@ function platformMessages() {
   const known = new Map(PLATFORMS.map((p) => [p.id, platformOfAny(p.id)]));
   // 判定也一次算齐：面板与路由看的必须是同一个答案。
   const availabilities = platformAvailabilities(PLATFORMS);
+  // 账号视图也一次算齐：每个账号行自己去读凭据的话，平台一多就是 O(N²)。
+  const accounts = new Map(listAccounts().map((a) => [a.id, a]));
   return PLATFORMS.flatMap((platform) => {
     const message = platformMessage(
       platform.id,
       known.get(platform.id) ?? null,
       availabilities.get(platform.id) ?? null,
+      accounts,
     );
     return message ? [message] : [];
   });

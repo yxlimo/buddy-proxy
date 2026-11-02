@@ -184,6 +184,8 @@ const STATE_TEXT: Record<PlatformState, string> = {
   no_account: "没有账号",
   accounts_off: "账号都关着",
   no_credential: "没有可用凭据",
+  credential_expired: "凭据过期了",
+  credential_unknown: "凭据读不出来",
   out_of_credits: "额度用尽",
   cooling: "账号都在冷却里",
   ready: "就绪",
@@ -198,6 +200,10 @@ function remedyOf(state: PlatformState): string {
       return "在面板的「上游」页打开一个账号";
     case "no_credential":
       return "在面板的「上游」页填 API Key 或者登录";
+    case "credential_expired":
+      return "等它自动刷新，或者重新登录";
+    case "credential_unknown":
+      return "看日志";
     case "out_of_credits":
       return "等额度恢复";
     case "cooling":

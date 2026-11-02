@@ -15,7 +15,9 @@
 // 有一个账号现在就能接，这个上游就能接 —— 恢复时间就是现在（0）。
 
 import { listCooldowns } from "../cooldown.ts";
-import { planWindowEndsAt } from "../router/account-cooldown.ts";
+// admin 层不引路由层：套餐窗口那一问住在 lib/plan-window.ts，两边问的是同一件
+// 事，答案也必须是同一个。
+import { exhaustedPlanWindowEndsAt } from "../plan-window.ts";
 import { kindOf } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import type { HealthSnapshot } from "../provider-kinds.ts";
@@ -110,7 +112,9 @@ export function platformCooling(options: {
     // 说不出来就说不知道 —— 猜一个时间比空着更坏。
     let creditEndsAt: number | null = null;
     if (exhausted && snapshot) {
-      const said = kind?.recoverAt?.(row, snapshot) ?? planWindowEndsAt(row.id, now);
+      // 见底的窗口什么时候结束才是恢复时刻：窗口还有额度的时候，它的到期点
+      // 只是一个边界（账号现在就能干活），拿它冒充恢复时间是在骗人。
+      const said = kind?.recoverAt?.(row, snapshot) ?? exhaustedPlanWindowEndsAt(row.id, now);
       if (said !== null && said > now) creditEndsAt = said;
     }
     if (exhausted) {
