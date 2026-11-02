@@ -51,14 +51,17 @@ section("新装好的服务");
 
 const { listProviders, addAccount } = await import("../lib/providers.ts");
 const { PLATFORMS } = await import("../lib/platforms.ts");
+const { listOpenPlatforms } = await import("../lib/open-platforms.ts");
 
 // 启动不再插行：新装好的服务里一个账号都没有，平台是代码里的模板。
 const builtIn = listProviders();
 check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
 check(
-  "十个平台是模板，不是表里的行",
-  PLATFORMS.length === 10 && PLATFORMS.every((p) => typeof p.id === "string"),
-  PLATFORMS.map((p) => p.id).join(","),
+  "平台是模板，不是表里的行",
+  PLATFORMS.length > 0 &&
+    PLATFORMS.every((p) => typeof p.id === "string" && p.id.length > 0) &&
+    listOpenPlatforms().length === 0,
+  `${PLATFORMS.map((p) => p.id).join(",")} / ${listOpenPlatforms().length}`,
 );
 check(
   "上游的开关不在环境里了",
@@ -436,9 +439,14 @@ const envRun = spawnSync(
   ["--experimental-strip-types", "-e", `
     const { listProviders } = await import("${pathToFileURL(path.join(ROOT, "lib/providers.ts")).href}");
     const { PLATFORMS } = await import("${pathToFileURL(path.join(ROOT, "lib/platforms.ts")).href}");
+    const { listOpenPlatforms } = await import("${pathToFileURL(path.join(ROOT, "lib/open-platforms.ts")).href}");
     // 环境里那几个开关还在，但没人读了：一个账号都不该冒出来。
     const rows = listProviders();
-    console.log(JSON.stringify({ platforms: PLATFORMS.length, rows: rows.map((r) => [r.id, r.enabled]) }));
+    console.log(JSON.stringify({
+      platforms: PLATFORMS.length,
+      platformRows: listOpenPlatforms().length,
+      rows: rows.map((r) => [r.id, r.enabled]),
+    }));
   `],
   {
     cwd: ROOT,
@@ -447,15 +455,21 @@ const envRun = spawnSync(
   },
 );
 check("带着环境开关起进程没报错", envRun.status === 0, envRun.stderr?.slice(-300) ?? "");
-let envRun_body: { platforms: number; rows: [string, boolean][] } = { platforms: 0, rows: [] };
+let envRun_body: { platforms: number; platformRows: number; rows: [string, boolean][] } = {
+  platforms: 0,
+  platformRows: 0,
+  rows: [],
+};
 try {
   envRun_body = JSON.parse(envRun.stdout.trim().split("\n").pop() ?? "{}");
 } catch {
-  envRun_body = { platforms: 0, rows: [] };
+  envRun_body = { platforms: 0, platformRows: 0, rows: [] };
 }
 check(
   "环境里的开关被忽略了（一个账号都没有）",
-  envRun_body.platforms === 10 && envRun_body.rows.length === 0,
+  envRun_body.platforms === PLATFORMS.length &&
+    envRun_body.platformRows === 0 &&
+    envRun_body.rows.length === 0,
   JSON.stringify(envRun_body),
 );
 fs.rmSync(ENV_DIR, { recursive: true, force: true });

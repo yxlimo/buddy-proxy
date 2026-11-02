@@ -1,8 +1,8 @@
 // lib/providers.ts — 账号：一行一个登录身份。
 //
-// 平台是代码里的模板（lib/platforms.ts）：九个服务，路径里那一段就是它的 id。
-// 账号是这张表里的行：同一个平台下可以有多行 —— MiniMax Code 的主账号与 M
-// plan 是两行，中转站的每个租户也是一行。
+// 平台是代码里的模板与表里的开放平台（lib/platforms.ts）：请求路径里那一段
+// 就是它的 id。账号是这张表里的行：同一个平台下可以有多行 —— MiniMax Code 的
+// 主账号与 M plan 是两行，中转站的每个租户也是一行。
 //
 // 一行有三个来处：
 //
@@ -15,13 +15,13 @@
 
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
-import { PLATFORMS, platformOf, platformPolicy } from "./platforms.ts";
+import { allPlatforms, platformOf, platformOfAny, platformPolicy } from "./platforms.ts";
 
 /** 一个账号。 */
 export interface ProviderRow {
   /** 账号 id。路径里不用它，路径里是平台 id。 */
   id: string;
-  /** 它属于哪个平台：九个模板之一，也是路径里那一段。 */
+  /** 它属于哪个平台：模板或者表里的开放平台，也是路径里那一段。 */
   platform: string;
   /** 派生自平台：怎么跟它说话。 */
   kind: string;
@@ -161,13 +161,16 @@ export function addAccount(input: {
   alias?: string;
 }): { ok: boolean; message: string; id?: string } {
   const platform = String(input.platform ?? "").trim();
-  if (!platformOf(platform)) {
-    return { ok: false, message: `没有这个平台：${platform}。可选：${PLATFORMS.map((p) => p.id).join("、")}` };
+  // 平台有两个数据源：代码里的模板与表里的开放平台。可选的那些从两处合起来
+  // 拿 —— 只认模板的话，用户自己加的平台在面板上就没法选。
+  const platforms = allPlatforms();
+  if (!platforms.some((p) => p.id === platform)) {
+    return { ok: false, message: `没有这个平台：${platform}。可选：${platforms.map((p) => p.id).join("、")}` };
   }
   const id = nextAccountId(platform);
   const now = Date.now();
   const existing = accountsOfPlatform(platform).length;
-  const alias = String(input.alias ?? "").trim() || `${platformOf(platform)?.label}${existing ? ` ${existing + 1}` : ""}`;
+  const alias = String(input.alias ?? "").trim() || `${platformOfAny(platform)?.label ?? platform}${existing ? ` ${existing + 1}` : ""}`;
   // 新账号排在现有的后面：权重比现在最小的那个再低一点。
   const lowest = accountsOfPlatform(platform).reduce((min, row) => Math.min(min, row.weight), 100);
   const weight = Math.max(1, lowest - 10);
