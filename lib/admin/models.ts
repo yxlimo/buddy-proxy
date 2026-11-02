@@ -163,7 +163,7 @@ function unpublishedReason(model: AggregateModel): UnpublishedReason {
 /** 一个目标为什么不能用。空 = 能用。 */
 function targetBlocker(target: AggregateTarget): UnpublishedReason {
   const group = target.group as UpstreamId;
-  // 不认识的分组：不是九个平台之一，没有开关也没有目录 —— 当作关着。
+  // 不认识的分组：不是一个平台，没有开关也没有目录 —— 当作关着。
   if (!isPlatform(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   if (!upstreamEnabled(group)) return UnpublishedReason.UPSTREAM_DISABLED;
   const credential = upstreamCredential(group);

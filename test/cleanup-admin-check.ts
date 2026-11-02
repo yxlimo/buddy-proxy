@@ -50,17 +50,25 @@ function section(title: string): void {
 section("新装好的服务");
 
 const { listProviders, addAccount } = await import("../lib/providers.ts");
-const { PLATFORMS } = await import("../lib/platforms.ts");
+const { PLATFORMS, allPlatforms } = await import("../lib/platforms.ts");
 const { listOpenPlatforms } = await import("../lib/open-platforms.ts");
 
 // 启动不再插行：新装好的服务里一个账号都没有，平台是代码里的模板。
 const builtIn = listProviders();
 check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
+// 模板的 id 必须是唯一的：平台 id 与账号 id 共用一个命名空间（账号 id 是
+// `<平台>-<序号>`，跟平台 id 长得一样），重了就分不清。
+const templateIds = PLATFORMS.map((p) => p.id);
+check(
+  "模板的 id 是唯一的",
+  new Set(templateIds).size === templateIds.length,
+  templateIds.join(","),
+);
 check(
   "平台是模板，不是表里的行",
-  PLATFORMS.length > 0 &&
-    PLATFORMS.every((p) => typeof p.id === "string" && p.id.length > 0) &&
-    listOpenPlatforms().length === 0,
+  PLATFORMS.every((p) => typeof p.id === "string" && p.id.length > 0) &&
+    listOpenPlatforms().length === 0 &&
+    allPlatforms().length === PLATFORMS.length,
   `${PLATFORMS.map((p) => p.id).join(",")} / ${listOpenPlatforms().length}`,
 );
 check(

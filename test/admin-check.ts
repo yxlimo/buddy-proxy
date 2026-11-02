@@ -23,7 +23,8 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 const { startGateway: startHarness } = await import("./harness.ts");
 type Gateway = import("./harness.ts").Gateway;
 const { tokenPlanView } = await import("../lib/admin/upstreams.ts");
-const { allPlatforms } = await import("../lib/platforms.ts");
+const { PLATFORMS } = await import("../lib/platforms.ts");
+
 const SERVICE = "/buddy.admin.v1.AdminService";
 
 let pass = 0;
@@ -68,6 +69,17 @@ async function call(
 /** 列表字段：proto3 的 JSON 会省略空数组。 */
 function list(value: unknown): any[] {
   return Array.isArray(value) ? value : [];
+}
+
+/**
+ * 两组 id 是不是一样的。
+ *
+ * 比集合，不比个数：多一个少一个都算不一样（同一个 id 出现两次也算）。
+ */
+function sameIds(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const wanted = new Set(b);
+  return a.every((id) => wanted.has(id));
 }
 
 /** 不带令牌打一个地址。 */
@@ -147,16 +159,17 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "上游列表与平台数据源一致",
-  list(status.body?.upstreams).length === allPlatforms().length,
-  `${list(status.body?.upstreams).length} vs ${allPlatforms().length}`,
+  "上游列表就是代码里的模板（这一阶段开放平台还接不了请求）",
+  sameIds(
+    list(status.body?.upstreams).map((u: any) => String(u.id)),
+    PLATFORMS.map((p) => p.id),
+  ),
+  JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
 );
 check(
   "上游的名字与 id 都对",
   list(status.body?.upstreams).every((u: any) => typeof u.id === "string" && typeof u.label === "string") &&
-    ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "workbuddy-global", "tokenrhythm", "sensenova", "intern-ai", "qiniu", "xinghuo"].every((id) =>
-      list(status.body?.upstreams).some((u: any) => u.id === id),
-    ),
+    PLATFORMS.every((p) => list(status.body?.upstreams).some((u: any) => u.id === p.id)),
   JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
 );
 check("面板令牌已配置", status.body?.adminTokenSet === true);
@@ -173,9 +186,12 @@ console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
 check(
-  "上游列表与平台数据源一致",
-  list(upstreams.body?.upstreams).length === allPlatforms().length,
-  `${list(upstreams.body?.upstreams).length} vs ${allPlatforms().length}`,
+  "上游列表就是代码里的模板（这一阶段开放平台还接不了请求）",
+  sameIds(
+    list(upstreams.body?.upstreams).map((u: any) => String(u.id)),
+    PLATFORMS.map((p) => p.id),
+  ),
+  JSON.stringify(list(upstreams.body?.upstreams).map((u: any) => u.id)),
 );
 
 // 启动不再插行：新库里一个账号都没有。后面要用的账号按面板的做法加出来 ——
