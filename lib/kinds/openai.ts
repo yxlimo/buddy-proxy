@@ -7,8 +7,10 @@
 //
 // 这一段声明只回答三件事：地址从哪来、key 从哪来、目录里有哪些模型。
 //
-// 它没有额度接口：额度是那个额度插件的事，还没接。所以这里不实现 quotas /
-// outOfCredits / recoverAt —— 面板上「额度未知」不是没钱，是没人问得到。
+// 额度是开放平台唯一自己给不出来的东西：它是数据，不是代码，所以额度插件由平台
+// 那一行来指（platform.quota_plugin），插件回答「怎么问」与「怎么读」。没有插件、
+// 插件没登记、快照里没有这个账号的那一份 —— 三种都是「不知道」，而「不知道」跟
+// 0 不是一回事。
 
 import { tokenFingerprint } from "../credential.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
@@ -18,6 +20,7 @@ import { openPlatformKeyOf } from "../open-platform-credentials.ts";
 // 常量，转出来等于把环用回来了，现在能跑只靠依赖求值顺序。
 import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { quotaPluginOf, type QuotaPlugin } from "../quota-plugins.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import type { CatalogModel } from "../catalog-models.ts";
 import type { ProviderRow } from "../providers.ts";
@@ -53,6 +56,18 @@ function openPlatformStatus(provider: ProviderRow): Record<string, unknown> {
   };
 }
 
+/**
+ * 这个平台选的额度插件。
+ *
+ * 插件 id 是用户填的：没填、或者填了一个没人登记的 id，就是没有额度插件。那是
+ * 「不知道」，不是错误 —— 用户可能还在输，而网关得照样服务。
+ */
+function quotaPluginOfPlatform(provider: ProviderRow): QuotaPlugin | null {
+  const id = openPlatformOf(provider.platform)?.quotaPlugin?.trim() ?? "";
+  if (!id) return null;
+  return quotaPluginOf(id);
+}
+
 export const openaiKind = registerCompatiblePlatform({
   kind: OPEN_PLATFORM_KIND_NAME,
   label: "开放平台（OpenAI 兼容）",
@@ -69,6 +84,25 @@ export const openaiKind = registerCompatiblePlatform({
   keyOf: (provider, accountId) => openPlatformKeyOf(accountId ?? provider.id)?.apiKey ?? "",
   credential: (provider) => fromUpstreamStatus(openPlatformStatus(provider), "api_key"),
   models: openPlatformCatalogModels,
+  quotas: (provider, snapshot) => {
+    const plugin = quotaPluginOfPlatform(provider);
+    // 没有插件、或者快照里没有这个账号的那一份：额度是「未知」。空数组不是 0 ——
+    // 0 说的是「一点不剩」，那是在替一个根本没问过的平台撒谎。
+    if (!plugin) return [];
+    return plugin.quotas(provider, snapshot.plugins?.[plugin.id]?.[provider.id]);
+  },
+  outOfCredits: (provider, snapshot) => {
+    const plugin = quotaPluginOfPlatform(provider);
+    // 不知道就不该断路：问不到的平台还是能接请求的平台。
+    if (!plugin) return false;
+    return plugin.outOfCredits?.(provider, snapshot.plugins?.[plugin.id]?.[provider.id]) ?? false;
+  },
+  recoverAt: (provider, snapshot) => {
+    const plugin = quotaPluginOfPlatform(provider);
+    // 没人知道它什么时候回来：null，不猜。
+    if (!plugin) return null;
+    return plugin.recoverAt?.(provider, snapshot.plugins?.[plugin.id]?.[provider.id]) ?? null;
+  },
 });
 
 // 只有一把 API Key：没有会话，也没有额度接口要登。

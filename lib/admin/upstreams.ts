@@ -367,6 +367,7 @@ function emptySnapshot(): HealthSnapshot {
     sensenova: {},
     internAi: {},
     qiniu: {},
+    plugins: {},
   };
 }
 
@@ -402,6 +403,11 @@ function copySnapshot(snapshot: HealthSnapshot): HealthSnapshot {
     sensenova: { ...snapshot.sensenova },
     internAi: { ...snapshot.internAi },
     qiniu: { ...snapshot.qiniu },
+    // 抄两层：里层那张表在合并一个平台的数字时会被写，共用一张表会把那次写漏到
+    // 副本外面去。
+    plugins: Object.fromEntries(
+      Object.entries(snapshot.plugins ?? {}).map(([id, table]) => [id, { ...table }]),
+    ),
   };
 }
 
