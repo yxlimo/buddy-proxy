@@ -19,15 +19,12 @@ import {
   withUpstreamStatus,
 } from "../../upstream-status.ts";
 import { clearCooldown, setCooldown } from "../../cooldown.ts";
-<<<<<<< HEAD
 import { listCooldowns } from "../../cooldown.ts";
 import { scrubForLog } from "../../log-scrub.ts";
-=======
->>>>>>> d04c0c6 (Out of credits and cooling are different answers)
 import { cooldownForFailure, cooldownStamp, errorTextOf } from "../account-cooldown.ts";
 import { type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
-import { platformWithoutAccount } from "../routes.ts";
+import { credentialFaultError, platformWithoutAccount } from "../routes.ts";
 import { platformAvailability, type PlatformAvailability } from "../availability.ts";
 import { withRetryAfter, ClientGoneError } from "../deliver.ts";
 
@@ -503,6 +500,10 @@ export async function underPolicy<T>(
   // 是「哪个账号在冷却、到什么时候」—— 判定把它带下来，别再读一遍表。
   const cooling = judged.cooling;
 
+  // 候选：判定说现在就能接的账号（开着、有凭据、额度没见底、不在冷却里）。
+  // 额度见底的账号不进候选：它发出去只会换一个 402，而判定已经知道它没钱了。
+  const usable = judged.usable;
+
   if (policy === "single") {
     // single 的语义是「就用这一个账号，接不了就说清楚」：面板上写着单一，流量
     // 悄悄落到别的账号上，那就不是面板说的那样了。所以接不了就说接不了。
@@ -523,20 +524,46 @@ export async function underPolicy<T>(
       );
       throw accountSpentError(platform, only.id, onlySpent);
     }
+    // 凭据读不出来：拒绝，不换账号。
+    //
+    // 「单一」说的是「就用这一个账号」：它的凭据读不出来时悄悄落到别的账号身上
+    // 去，面板上写着单一而流量走了别处，那就不是面板说的那样了。
+    //
+    // 到这里只剩「凭据读不出来」这一种可能：上面已经把冷却与额度见底答掉了，
+    // 而 serving 里只有凭据能用（ok）与凭据读不出来（unknown）这两种账号 ——
+    // 凭据能用却不在 usable 里的那两种，上面已经答过了。
+    if (!usable.some((row) => row.id === only.id)) {
+      console.log(
+        `[ROUTE] ${what} account=${only.id} credential cannot be read, not switching`,
+      );
+      throw credentialFaultError(platform, "credential_unknown", 503);
+    }
   }
 
-  // 候选：判定说现在就能接的账号（开着、有凭据、额度没见底、不在冷却里）。
-  // 额度见底的账号不进候选：它发出去只会换一个 402，而判定已经知道它没钱了。
-  const usable = judged.usable;
   if (!usable.length) {
-    // 有账号，但现在一个都接不了：额度用尽或者都在冷却。哪一种由判定说 ——
-    // 两者的恢复时间来源不同，提示里得说清是哪一种。
+    // 有账号，但现在一个都接不了：是额度用尽、凭据过期、凭据读不出来，还是
+    // 都在冷却 —— 哪一种由判定说。恢复时间只有额度用尽与冷却有（凭据那两档等
+    // 的是人，不是钟）。
     const until = judged.untilMs ?? now;
     if (judged.state === "out_of_credits") {
       console.log(
         `[ROUTE] ${what} every account is out of credits (until ${cooldownStamp(until)}), not switching`,
       );
       throw spentError(until);
+    }
+    // 网关自己的故障：不是「等一会儿就好」，所以没有 Retry-After —— 等一会儿
+    // 不会让凭据自己读出来，也不会让它自己过期。
+    if (judged.state === "credential_unknown") {
+      console.log(
+        `[ROUTE] ${what} the credential of platform ${platform} cannot be read, not switching`,
+      );
+      throw credentialFaultError(platform, "credential_unknown", 503);
+    }
+    if (judged.state === "credential_expired") {
+      console.log(
+        `[ROUTE] ${what} the credential of platform ${platform} is expired, not switching`,
+      );
+      throw credentialFaultError(platform, "credential_expired", 503);
     }
     console.log(
       `[ROUTE] ${what} every account is cooling down (until ${cooldownStamp(until)}), not switching`,

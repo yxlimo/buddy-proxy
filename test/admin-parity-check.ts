@@ -77,7 +77,8 @@ const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { writeXinghuoKey } = await import("../lib/xinghuo/account.ts");
 const { setSecret, store } = await import("../lib/store.ts");
 const { allKinds } = await import("../lib/provider-kinds.ts");
-const { canInfer, credentialsOf } = await import("../lib/admin/accounts.ts");
+const { isPlatform } = await import("../lib/platforms.ts");
+const { canInfer, credentialsOf, listAccounts } = await import("../lib/admin/accounts.ts");
 const { platformAvailability } = await import("../lib/router/availability.ts");
 const {
   healthRefreshing,
@@ -346,7 +347,17 @@ const KIND_PLATFORM: Record<string, string> = {
 for (const kind of kinds) {
   const platform = KIND_PLATFORM[kind.kind] ?? "";
   if (!platform) {
-    check(`${kind.kind}：还没有平台模板（这一类只能验注册表那一半）`, true);
+    // 这一类还没有平台模板：账号的 kind 是从平台派生的（lib/providers.ts 的
+    // toRow），没有平台就没有这一类的账号 —— credentialsOf 的这一支今天造不
+    // 出来（注册表那一半上面已经验过：canInfer 与 inferWith 一致）。
+    //
+    // 这一行不是恒真：哪天这一类有了平台模板，它就会失败，那时该把真正的
+    // credentialsOf 断言补上。
+    check(
+      `${kind.kind}：还没有平台模板（这一类只能验注册表那一半）`,
+      !isPlatform(kind.kind),
+      `${kind.kind} 现在是平台了：给它补上 credentialsOf 的断言`,
+    );
     continue;
   }
   const made = addAccount({ platform, alias: `测试 ${kind.kind}` });
@@ -397,6 +408,39 @@ const authLogText = fs.existsSync(path.join(DATA_DIR, "auth.log"))
   ? fs.readFileSync(path.join(DATA_DIR, "auth.log"), "utf8")
   : "";
 check("读凭据失败落了 auth.log", authLogText.includes("的凭据失败"), authLogText.slice(-160));
+
+// 账号那一层：一个账号的凭据读不出来，不能让整页挂掉。
+//
+// 面板的账号表是 listAccounts 算出来的：它一抛，ListUpstreams 与 ListAccounts
+// 一起挂，面板上连「凭据读不出来」那一格都看不到。
+const accounts = listAccounts();
+check("凭据读不出来时账号列表照样列得出来", accounts.length > 0, String(accounts.length));
+const brokenAccount = accounts.find((a) => a.id === accountId);
+check("读不出来的账号没有被丢掉", Boolean(brokenAccount), "账号不见了");
+check(
+  "读不出来的账号标成不可用（error，不是「没有凭据」）",
+  brokenAccount?.status === CredentialState.ERROR,
+  String(brokenAccount?.status),
+);
+check(
+  "读不出来的账号说得出「凭据读不出来」",
+  String(brokenAccount?.detail ?? "").includes("凭据读不出来"),
+  String(brokenAccount?.detail),
+);
+
+// 面板的平台行也要列得出来：它走的是同一条路。
+let brokenRow: any = null;
+let brokenRowError: any = null;
+try {
+  brokenRow = await platformRow("qiniu");
+} catch (e) {
+  brokenRowError = e;
+}
+check(
+  "凭据读不出来时面板的上游行照样列得出来",
+  brokenRow !== null,
+  String(brokenRowError?.message ?? ""),
+);
 
 /* ------------------------------------------------------------------ *
  * 收尾

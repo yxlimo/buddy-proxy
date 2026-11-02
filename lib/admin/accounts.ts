@@ -10,7 +10,8 @@ import crypto from "node:crypto";
 import { deleteProviderCredentials, deleteProviderRow, listProviders, provider } from "../providers.ts";
 import { getSecret, listSecrets } from "../store.ts";
 import { clearDeadSession, deadSession } from "../session.ts";
-import { tokenFingerprint } from "../credential.ts";
+import { authLog, tokenFingerprint } from "../credential.ts";
+import { dataDir } from "../paths.ts";
 import { kindOf } from "../provider-kinds.ts";
 // The kinds register themselves; importing the file is what makes them known.
 // 这一条 import 绕成 accounts → kinds → … → platform-state → accounts 的环，
@@ -440,11 +441,37 @@ function accountDetail(
  *
  * 以前中转站的账号是「上游:租户号」拼出来的，要在这里展开；现在一个账号就是
  * 一行，所以这里只读表。
+ *
+ * 逐个账号兜异常：凭据读不出来（secrets 表坏了）是网关自己的故障，不是「这个
+ * 账号没有凭据」。一个账号读不出来不能让整页挂掉 —— 面板上那一个账号标成
+ * 「读不出来」，别的账号照常列出来。判据与 lib/admin/platform-state.ts 一致
+ * （那里把这种账号算 credential_unknown），错的事要落进 auth.log：凭据的毛病
+ * 要留痕。
  */
 export function listAccounts(): AccountView[] {
   const out: AccountView[] = [];
   for (const row of listProviders()) {
-    const credentials = credentialsOf(row.id);
+    let credentials: CredentialRow[];
+    try {
+      credentials = credentialsOf(row.id);
+    } catch (e) {
+      authLog(dataDir(), `读 ${row.id} 的凭据失败`, (e as Error)?.message ?? String(e ?? ""));
+      out.push({
+        id: row.id,
+        platform: row.platform,
+        alias: row.alias,
+        // ERROR 是现有的枚举里说「这条凭据坏了」的那一档：读不出来不是「没有
+        // 凭据」（那是 MISSING，说的是运维没配好），也不是「过期」。
+        status: CredentialState.ERROR,
+        // 数不出来：不是「这个账号一条凭据都没有」。
+        credentialCount: 0,
+        detail: "凭据读不出来：看日志",
+        enabled: row.enabled,
+        weight: row.weight,
+        createdAt: row.createdAt,
+      });
+      continue;
+    }
     // 账号的状态看**推理凭据**：配了门户 cookie 或登录账号不算「有凭据」，
     // 那些东西一个请求也发不出去。开放平台的凭据是 key（不是会话），所以看
     // 推理凭据而不是看会话 —— 那个账号明明有 key 却一直说「没有凭据」。
