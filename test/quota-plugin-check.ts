@@ -605,5 +605,189 @@ check(
   updateWarnings.join(" / "),
 );
 
+/* ------------------------------------------------------------------ *
+ * 额度真的被拉一次
+ *
+ * 上面那几节是「快照里有一份，面板读得到」。这一节是另一头：网关真的去问，
+ * 问回来的那份真的进了快照。
+ * ------------------------------------------------------------------ */
+
+section("额度真的被拉一次");
+
+const { refreshHealthSnapshot, upstreamQuotas } = await import("../lib/admin/upstreams.ts");
+const { peekHealthSnapshot } = await import("../lib/health-cache.ts");
+
+/** 快照里的插件桶：插件 id → 账号 id → 那一份。 */
+function pluginBucket(): Record<string, Record<string, unknown>> {
+  const data = peekHealthSnapshot<any>()?.data;
+  return (data?.plugins ?? {}) as Record<string, Record<string, unknown>>;
+}
+
+/** 这个账号在插件桶里有没有份（哪个插件下都算）。 */
+function hasPluginEntry(accountId: string): boolean {
+  return Object.values(pluginBucket()).some((table) => accountId in table);
+}
+
+// 一个插件，问的时候故意炸：问失败不许把整轮带挂。
+registerQuotaPlugin({
+  id: "boom-plugin",
+  label: "会炸的插件",
+  fields: [],
+  fetch: async () => {
+    throw new Error("这个插件故意炸");
+  },
+  quotas: () => [],
+});
+
+// 一个插件，两个账号用：这一轮谁能问、谁问不到是测试说了算。
+const twoState = { failFor: "" };
+registerQuotaPlugin({
+  id: "two-accounts",
+  label: "两个账号的插件",
+  fields: [],
+  fetch: async (account) => {
+    if (account.id === twoState.failFor) throw new Error("这一轮这个账号问不到");
+    return { who: account.id };
+  },
+  quotas: () => [],
+});
+
+// 四种开放平台：选了插件的、没选插件的、插件没登记的、插件会炸的。
+createOpenPlatform({
+  id: "quota-live",
+  label: "额度真被拉的开放平台",
+  baseUrl: "https://example.invalid/v1",
+  quotaPlugin: "qiniu",
+});
+createOpenPlatform({
+  id: "quota-live-none",
+  label: "没选插件的开放平台",
+  baseUrl: "https://example.invalid/v1",
+});
+createOpenPlatform({
+  id: "quota-live-bad",
+  label: "插件没登记的开放平台",
+  baseUrl: "https://example.invalid/v1",
+  quotaPlugin: "no-such-plugin-live",
+});
+createOpenPlatform({
+  id: "quota-live-boom",
+  label: "插件会炸的开放平台",
+  baseUrl: "https://example.invalid/v1",
+  quotaPlugin: "boom-plugin",
+});
+createOpenPlatform({
+  id: "quota-live-two",
+  label: "两个账号的开放平台",
+  baseUrl: "https://example.invalid/v1",
+  quotaPlugin: "two-accounts",
+});
+
+const live = addAccount({ platform: "quota-live" });
+const liveId = live.id ?? "";
+check("开放平台的账号加得起来", live.ok === true && liveId !== "", live.message);
+const liveKeys = setProviderKeys(liveId, ["sk-demo-live", "fake-portal-cookie=1"]);
+check("两段凭据写进去了", liveKeys.count === 2, liveKeys.message);
+
+// 没选插件、插件没登记、插件会炸的三个账号：一个凭据都不给。
+const noneLive = addAccount({ platform: "quota-live-none" });
+const noneLiveId = noneLive.id ?? "";
+const badLive = addAccount({ platform: "quota-live-bad" });
+const badLiveId = badLive.id ?? "";
+const boomLive = addAccount({ platform: "quota-live-boom" });
+const boomLiveId = boomLive.id ?? "";
+const twoA = addAccount({ platform: "quota-live-two" });
+const twoAId = twoA.id ?? "";
+const twoB = addAccount({ platform: "quota-live-two" });
+const twoBId = twoB.id ?? "";
+check(
+  "三个账号加得起来",
+  noneLiveId !== "" && badLiveId !== "" && boomLiveId !== "" && twoAId !== "" && twoBId !== "",
+  `${noneLiveId} ${badLiveId} ${boomLiveId} ${twoAId} ${twoBId}`,
+);
+check("两个账号不是同一个", twoAId !== twoBId, `${twoAId} ${twoBId}`);
+
+// 刷一轮：问到的写进快照，问不到的就不写。
+const refreshWarnings: string[] = [];
+const realRefreshWarn = console.warn;
+console.warn = (...args: unknown[]) => {
+  refreshWarnings.push(args.map((a) => String(a)).join(" "));
+};
+let refreshThrew = false;
+try {
+  await refreshHealthSnapshot();
+} catch {
+  refreshThrew = true;
+} finally {
+  console.warn = realRefreshWarn;
+}
+check("刷新不抛", !refreshThrew);
+
+const livePayload = pluginBucket().qiniu?.[liveId];
+check("额度被写进插件桶", Boolean(livePayload), JSON.stringify(livePayload));
+check(
+  "写进去的是门户那份",
+  Array.isArray((livePayload as any)?.respacks) && (livePayload as any).respacks.length === 2,
+  JSON.stringify(livePayload),
+);
+check(
+  "凭据表里两段都在",
+  credentialsOf(liveId).length === 2,
+  JSON.stringify(credentialsOf(liveId).map((r) => [r.kind, r.label])),
+);
+
+const liveSnapshot = peekHealthSnapshot<any>()?.data;
+const liveViews = openKind?.quotas(provider(liveId) as any, liveSnapshot) ?? [];
+check("额度视图读得到", liveViews.length === 1, JSON.stringify(liveViews));
+check("剩下的是两个包之和", liveViews[0]?.credits?.remaining === 5000, JSON.stringify(liveViews[0]));
+
+check("没选插件的账号没有份", !hasPluginEntry(noneLiveId));
+check("插件没登记的账号没有份", !hasPluginEntry(badLiveId));
+check("插件问炸了的账号没有份", !hasPluginEntry(boomLiveId));
+check(
+  "插件问炸了 → warn 一行，说的是那个账号与那个插件",
+  refreshWarnings.some(
+    (line) => line.includes(boomLiveId) && line.includes("boom-plugin"),
+  ),
+  refreshWarnings.join(" / "),
+);
+check(
+  "问炸的账号没把别的平台带挂",
+  Boolean(pluginBucket().qiniu?.[liveId]),
+  JSON.stringify(pluginBucket().qiniu),
+);
+
+// 两个账号同一个插件：这一轮两个都问到了。
+check("两个账号都有份", hasPluginEntry(twoAId) && hasPluginEntry(twoBId));
+check(
+  "两个账号各是各的",
+  (pluginBucket()["two-accounts"]?.[twoAId] as any)?.who === twoAId &&
+    (pluginBucket()["two-accounts"]?.[twoBId] as any)?.who === twoBId,
+  JSON.stringify(pluginBucket()["two-accounts"]),
+);
+
+// 下一轮只问得到一个：另一个这一轮没问到，它的旧份要删掉（与具名桶同语义）。
+twoState.failFor = twoBId;
+let mergeThrew = false;
+try {
+  await upstreamQuotas("quota-live-two", true, true);
+} catch {
+  mergeThrew = true;
+}
+check("单平台刷新不抛", !mergeThrew);
+const merged = pluginBucket();
+check("问到的那个账号还在", Boolean(merged["two-accounts"]?.[twoAId]), JSON.stringify(merged["two-accounts"]));
+check(
+  "没问到的那个账号，旧份被删掉",
+  merged["two-accounts"]?.[twoBId] === undefined,
+  JSON.stringify(merged["two-accounts"]),
+);
+check("没问到的账号在插件桶里没有份", !hasPluginEntry(twoBId));
+check(
+  "别的平台的份没被动",
+  Boolean(merged.qiniu?.[liveId]) && Boolean(merged["two-accounts"]?.[twoAId]),
+  JSON.stringify(merged),
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
