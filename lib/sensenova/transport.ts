@@ -109,6 +109,7 @@ export async function senseNovaChat(
   body: Record<string, unknown>,
   providerId = "sensenova",
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Response> {
   return openAiPlatformChat(
     {
@@ -119,5 +120,6 @@ export async function senseNovaChat(
     },
     body,
     extraHeaders,
+    signal,
   );
 }

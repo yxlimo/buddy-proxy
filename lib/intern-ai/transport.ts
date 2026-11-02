@@ -132,6 +132,7 @@ export async function internAiChat(
   body: Record<string, unknown>,
   providerId = "intern-ai",
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Response> {
   return openAiPlatformChat(
     {
@@ -142,5 +143,6 @@ export async function internAiChat(
     },
     body,
     extraHeaders,
+    signal,
   );
 }

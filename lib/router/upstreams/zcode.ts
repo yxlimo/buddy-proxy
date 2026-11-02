@@ -43,7 +43,7 @@ export async function toZcode(
   const sessionId = upstreamSessionId(route.platform, ctx.clientSessionId ?? "");
 
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
-  const settle = settlement();
+  const settle = settlement(ctx.signal);
   const { response } = await underPolicy(
     route.platform,
     "zcode",
@@ -52,8 +52,10 @@ export async function toZcode(
         effort: effortOf(body),
         providerId: account.id,
         sessionId,
+        signal: ctx.signal,
       }),
     settle,
+    ctx,
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");

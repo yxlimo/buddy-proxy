@@ -14,6 +14,7 @@ import { LimitError } from "../qoder/transport.ts";
 import { anthropicStreamToOpenAI, openaiStreamToAnthropic } from "../dialect/stream.ts";
 import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect/response.ts";
 import { parseLooseJson, readOpenAIChunks, readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
+import { ClientClosedError, clientGone, markStreamFailed, writeFrame } from "./request-life.ts";
 
 export type Dialect = "anthropic" | "openai";
 
@@ -46,13 +47,56 @@ function sseHead(ctx: Koa.Context): void {
   ctx.res.flushHeaders?.();
 }
 
-/** Write a frame, and say whether the client is still there. */
-function writeSafe(ctx: Koa.Context, chunk: string | Uint8Array): boolean {
+/**
+ * Write a frame that nothing comes after (an error event, the last `[DONE]`).
+ *
+ * Whether the socket buffer is full does not matter here: the response ends
+ * right after, and `end()` flushes what is buffered. What matters is that a
+ * client that is gone is not written to.
+ */
+function writeLast(ctx: Koa.Context, chunk: string | Uint8Array): void {
+  if (ctx.res.writableEnded || clientGone(ctx)) return;
   try {
-    return ctx.res.write(chunk);
+    ctx.res.write(chunk);
   } catch {
-    return false;
+    /* the client went in the meantime */
   }
+}
+
+/**
+ * The client went away in the middle of the answer.
+ *
+ * That is not the upstream's failure: the account is not to blame, and no
+ * error event goes out (nobody would read it). The bookkeeping still has to
+ * know the answer was not delivered.
+ */
+function noteClientGone(ctx: Koa.Context): void {
+  console.warn("[DELIVER] 客户端在答复写完之前断开了，停止读上游");
+  markStreamFailed(ctx, new ClientClosedError());
+}
+
+/**
+ * The upstream stream broke after the headers went out.
+ *
+ * The headers are already out, so the failure goes back as an error event;
+ * the caller settles the account (onFailure) and the request is recorded as
+ * failed (markStreamFailed). A break that is only the client going away —
+ * the abort tears the upstream read down too — is neither.
+ */
+function streamBroke(
+  ctx: Koa.Context,
+  e: unknown,
+  onFailure: ((error: unknown) => void) | undefined,
+  frame: string,
+): void {
+  if (clientGone(ctx)) {
+    noteClientGone(ctx);
+    return;
+  }
+  console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
+  writeLast(ctx, frame);
+  markStreamFailed(ctx, e);
+  reportFailure(onFailure, e);
 }
 
 /**
@@ -180,7 +224,10 @@ export async function peekStream(body: ReadableStream<Uint8Array>): Promise<Read
       else controller.enqueue(value);
     },
     cancel(reason) {
-      reader.cancel(reason);
+      // The upstream body may already have failed with that same reason (the
+      // request's abort reaches the fetch too): cancelling it then rejects,
+      // and nobody else is there to catch it — it would take the process down.
+      return reader.cancel(reason).catch(() => {});
     },
   });
 }
@@ -279,13 +326,13 @@ export async function deliverOpenAIStream(
   }
   try {
     for await (const chunk of openaiStreamToAnthropic(watchFinish(readOpenAIChunks(upstream), onFinish, onUsage), model)) {
-      if (!writeSafe(ctx, chunk)) break;
+      if (!(await writeFrame(ctx, chunk))) {
+        noteClientGone(ctx);
+        break;
+      }
     }
   } catch (e) {
-    // The headers are already out, so the failure goes back as an error event.
-    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    writeSafe(ctx, errorEvent((e as Error)?.message));
-    reportFailure(onFailure, e);
+    streamBroke(ctx, e, onFailure, errorEvent((e as Error)?.message));
   }
   ctx.res.end();
 }
@@ -300,6 +347,11 @@ export async function deliverAnthropicStream(
   onUsage?: (usage: any) => void,
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
+  // The upstream can answer 200 and put `event: error` in the first frame.
+  // Once the headers are out that cannot become a status any more, and the
+  // next account or target never gets its turn — so the first frame is read
+  // before anything is written, the same as the OpenAI stream.
+  const upstream = await peekStream(body);
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
   sseHead(ctx);
@@ -308,32 +360,18 @@ export async function deliverAnthropicStream(
     // message_start frame names the model, and it has to name the one the
     // client asked for. The upstream may know it by another name — a tier
     // key, or the name behind a published model.
-    //
-    // A copy is parsed on the side for the usage: the upstream puts the input
-    // tokens in message_start and the output tokens in message_delta, and
-    // nobody reads those unless someone parses them.
-    const [toClient, toParser] = body.tee();
-    void (async () => {
-      try {
-        for await (const event of readSseEvents(toParser)) {
-          const json = parseLooseJson(event.data);
-          if (onUsage && json?.usage) onUsage(json.usage);
-        }
-      } catch {
-        // The usage is a nice-to-have; the answer itself is what matters.
-      }
-    })();
-    await writeAnthropicFrames(toClient, ctx, model, pingMs, onFailure);
+    await writeAnthropicFrames(upstream, ctx, model, pingMs, onFailure, onUsage);
     return;
   }
   try {
-    for await (const chunk of anthropicStreamToOpenAI(body, model, onUsage)) {
-      if (!writeSafe(ctx, chunk)) break;
+    for await (const chunk of anthropicStreamToOpenAI(upstream, model, onUsage)) {
+      if (!(await writeFrame(ctx, chunk))) {
+        noteClientGone(ctx);
+        break;
+      }
     }
   } catch (e) {
-    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    writeSafe(ctx, errorEvent((e as Error)?.message));
-    reportFailure(onFailure, e);
+    streamBroke(ctx, e, onFailure, errorEvent((e as Error)?.message));
   }
   ctx.res.end();
 }
@@ -367,28 +405,35 @@ export async function deliverOpenAIChunks(
   sseHead(ctx);
   if (dialect === "openai") {
     try {
+      let gone = false;
       for await (const chunk of chunks) {
         if (chunk?.usage && onUsage) onUsage(chunk.usage);
         if (model && chunk && typeof chunk === "object") chunk.model = model;
-        if (!writeSafe(ctx, sseData(chunk))) break;
+        if (!(await writeFrame(ctx, sseData(chunk)))) {
+          gone = true;
+          noteClientGone(ctx);
+          break;
+        }
       }
-      writeSafe(ctx, SSE_DONE);
+      // `[DONE]` says the answer is complete; one that was cut off is not.
+      if (!gone) writeLast(ctx, SSE_DONE);
     } catch (e) {
-      console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-      writeSafe(ctx, errorEvent((e as Error)?.message));
-      reportFailure(onFailure, e);
+      streamBroke(ctx, e, onFailure, errorEvent((e as Error)?.message));
     }
     ctx.res.end();
     return;
   }
   try {
-    for await (const chunk of openaiStreamToAnthropic(chunks, model)) {
-      if (!writeSafe(ctx, chunk)) break;
+    // The usage rides in the chunks; the conversion reports it at the end, and
+    // without the callback the Qoder legacy answers were recorded as zero.
+    for await (const chunk of openaiStreamToAnthropic(watchFinish(chunks, undefined, onUsage), model)) {
+      if (!(await writeFrame(ctx, chunk))) {
+        noteClientGone(ctx);
+        break;
+      }
     }
   } catch (e) {
-    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    writeSafe(ctx, errorEvent((e as Error)?.message));
-    reportFailure(onFailure, e);
+    streamBroke(ctx, e, onFailure, errorEvent((e as Error)?.message));
   }
   ctx.res.end();
 }
@@ -442,16 +487,26 @@ async function pipeOpenAIChunks(
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
   try {
+    let gone = false;
     for await (const chunk of watchFinish(readOpenAIChunks(body), onFinish, onUsage)) {
       if (model && chunk && typeof chunk === "object") chunk.model = model;
-      if (!writeSafe(ctx, sseData(chunk))) break;
+      // A client that reads slowly makes this wait; only a client that is
+      // gone stops it. A cut-off answer gets no `[DONE]`: that frame says the
+      // answer is complete.
+      if (!(await writeFrame(ctx, sseData(chunk)))) {
+        gone = true;
+        noteClientGone(ctx);
+        break;
+      }
     }
-    writeSafe(ctx, SSE_DONE);
+    if (!gone) writeLast(ctx, SSE_DONE);
   } catch (e) {
-    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    writeSafe(ctx, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
-    writeSafe(ctx, SSE_DONE);
-    reportFailure(onFailure, e);
+    streamBroke(
+      ctx,
+      e,
+      onFailure,
+      sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }) + SSE_DONE,
+    );
   } finally {
     // The response has to end, or the client waits for a connection that never
     // closes.
@@ -484,13 +539,17 @@ async function writeAnthropicFrames(
   model: string,
   pingMs = 0,
   onFailure?: (error: unknown) => void,
+  onUsage?: (usage: any) => void,
 ): Promise<void> {
   let lastActivity = Date.now();
   let warnedMissingMessage = false;
   const writePing = () => {
-    if (ctx.res.writableEnded || ctx.res.destroyed) return;
+    if (ctx.res.writableEnded || clientGone(ctx)) return;
+    // A client that has not read the last frames yet is not idle: the
+    // connection is busy, a ping would only pile up behind them.
+    if (ctx.res.writableNeedDrain) return;
     if (Date.now() - lastActivity < pingMs) return;
-    if (!writeSafe(ctx, 'event: ping\ndata: {"type":"ping"}\n\n')) return;
+    writeLast(ctx, 'event: ping\ndata: {"type":"ping"}\n\n');
     lastActivity = Date.now();
   };
   const pingTimer = pingMs > 0 ? setInterval(writePing, Math.min(pingMs, 5000)) : null;
@@ -506,20 +565,63 @@ async function writeAnthropicFrames(
             warnedMissingMessage = true;
             console.warn("[DELIVER] 上游的 message_start 没有 message，已补一个最小对象");
           }
+          if (onUsage) {
+            reportUsage(onUsage, fixed.json?.message?.usage);
+            reportUsage(onUsage, fixed.json?.usage);
+          }
           data = JSON.stringify(fixed.json);
         }
+      } else if (onUsage && data.includes('"usage"')) {
+        // The upstream puts the input tokens in message_start and the output
+        // tokens in message_delta; nobody reads those unless they are parsed
+        // here, on the frames that go to the client anyway.
+        reportUsage(onUsage, safeParse(data)?.usage);
       }
-      const frame = event.event ? `event: ${event.event}\ndata: ${data}\n\n` : `data: ${data}\n\n`;
-      if (!writeSafe(ctx, frame)) break;
+      if (!(await writeFrame(ctx, anthropicFrame(event.event, data)))) {
+        noteClientGone(ctx);
+        break;
+      }
       lastActivity = Date.now();
     }
   } catch (e) {
-    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    writeSafe(ctx, errorEvent((e as Error)?.message));
-    reportFailure(onFailure, e);
+    streamBroke(ctx, e, onFailure, errorEvent((e as Error)?.message));
   } finally {
     if (pingTimer) clearInterval(pingTimer);
     ctx.res.end();
+  }
+}
+
+/**
+ * One SSE frame, written again.
+ *
+ * The parser joins a multi-line `data` with newlines; each of those lines
+ * needs its own `data:` prefix again, or the client reads the second line as
+ * a field it does not know and drops it.
+ */
+export function anthropicFrame(event: string | undefined, data: string): string {
+  const lines = data
+    .split("\n")
+    .map((line) => `data: ${line}`)
+    .join("\n");
+  return event ? `event: ${event}\n${lines}\n\n` : `${lines}\n\n`;
+}
+
+/** Parse a frame for its usage; a frame that does not parse has none. */
+function safeParse(data: string): any {
+  try {
+    return parseLooseJson(data);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The usage is bookkeeping: a callback that throws must not end the answer. */
+function reportUsage(onUsage: (usage: any) => void, usage: unknown): void {
+  if (!usage || typeof usage !== "object") return;
+  try {
+    onUsage(usage);
+  } catch {
+    /* 记账失败不许影响答复 */
   }
 }
 

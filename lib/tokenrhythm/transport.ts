@@ -107,6 +107,7 @@ export async function tokenRhythmChat(
   accountId: string,
   body: Json,
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<{ response: Response; key: string }> {
   const { credential, key } = inferenceAccount(accountId);
   const payload = { ...body, model: body.model };
@@ -120,6 +121,8 @@ export async function tokenRhythmChat(
       ...extraHeaders,
     },
     body: JSON.stringify(payload),
+    // The client's: when it goes, the upstream connection goes too.
+    signal,
   });
   if (!response.ok && response.status === 401) {
     const error = new AuthError(

@@ -37,6 +37,7 @@ export async function toOpenAiPlatform(
       openaiBody: Record<string, unknown>,
       headers: Record<string, string>,
       accountId: string,
+      signal?: AbortSignal,
     ) => Promise<Response>;
   },
 ): Promise<void> {
@@ -49,12 +50,12 @@ export async function toOpenAiPlatform(
   }
 
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
-  const settle = settlement();
+  const settle = settlement(ctx.signal);
   const response = await underPolicy(
     route.platform,
     opts.log,
     async (account) => {
-      const res = await opts.chat(openaiBody, ctx.clientHeaders, account.id);
+      const res = await opts.chat(openaiBody, ctx.clientHeaders, account.id, ctx.signal);
       if (res.ok) return res;
       // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
       // 记（onAttempt），这里只负责把错误造出来。
@@ -67,6 +68,7 @@ export async function toOpenAiPlatform(
       throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
     },
     settle,
+    ctx,
   );
 
   if (!stream) {
@@ -113,7 +115,7 @@ export async function toSenseNova(
   await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
     log: "sensenova",
     what: "SenseNova ",
-    chat: (openaiBody, headers, accountId) => senseNovaChat(openaiBody, accountId, headers),
+    chat: (openaiBody, headers, accountId, signal) => senseNovaChat(openaiBody, accountId, headers, signal),
   });
 }
 
@@ -133,6 +135,6 @@ export async function toInternAi(
   await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
     log: "intern-ai",
     what: "书生·端砚",
-    chat: (openaiBody, headers, accountId) => internAiChat(openaiBody, accountId, headers),
+    chat: (openaiBody, headers, accountId, signal) => internAiChat(openaiBody, accountId, headers, signal),
   });
 }

@@ -47,7 +47,7 @@ run = "node --experimental-strip-types check-file-size.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config", "test:stream:lifecycle", "test:stream:budget", "test:stream:route"]
 
 
 [tasks."helper:sync"]
@@ -145,6 +145,18 @@ run = "node --experimental-strip-types test/deliver-frames-check.ts"
 [tasks."test:peek:stream"]
 description = "Check the first frame of an upstream answer (a locked stream is read once, and the error frame is parsed)"
 run = "node --experimental-strip-types test/peek-stream-check.ts"
+
+[tasks."test:stream:lifecycle"]
+description = "Check the stream lifecycle: a slow client, a hang-up, a first-frame error, a mid-stream break, a 400 stop, multi-line data"
+run = "node --experimental-strip-types test/stream-lifecycle-check.ts"
+
+[tasks."test:stream:budget"]
+description = "Check one wait budget per request, a settle after the client left, request faults and a broken gzip answer"
+run = "node --experimental-strip-types test/stream-budget-check.ts"
+
+[tasks."test:stream:route"]
+description = "Check a client that stops reading, and 413 / model-400 fallback across targets"
+run = "node --experimental-strip-types test/stream-route-check.ts"
 
 [tasks."test:empty-answer"]
 description = "Upstream answered 200 with no content: warn once"

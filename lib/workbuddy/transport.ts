@@ -42,6 +42,8 @@ export interface WorkBuddyChatOptions {
   conversationId?: string;
   /** The model, so the body can be built the way the simulated client builds it. */
   model?: WorkBuddyModel | null;
+  /** The client's: when it goes, the upstream connection goes too. */
+  signal?: AbortSignal;
 }
 
 export interface WorkBuddyChat {
@@ -201,9 +203,11 @@ export async function workbuddyChat(
         method: "POST",
         headers,
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: opts.signal ? AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), opts.signal]) : AbortSignal.timeout(TIMEOUT_MS),
       });
     } catch (e) {
+      // The client went away: there is nobody to try again for.
+      if (opts.signal?.aborted) throw e;
       if (attempt < MAX_ATTEMPTS) {
         await backoff(attempt);
         continue;

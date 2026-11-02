@@ -13,7 +13,7 @@
 
 import http from "node:http";
 import https from "node:https";
-import { Readable } from "node:stream";
+import { pipeline, Readable } from "node:stream";
 import { createGunzip, createInflate, createBrotliDecompress } from "node:zlib";
 
 export interface CliFetchOptions {
@@ -85,10 +85,23 @@ export function cliFetch(url: string, opts: CliFetchOptions = {}): Promise<Respo
         const encoding = (res.headers["content-encoding"] ?? "").toString().toLowerCase();
         if (encoding) delete res.headers["content-encoding"];
 
+        // `pipe()` does not forward errors: an upstream that drops the
+        // connection in the middle of a compressed answer would leave the
+        // decompressor waiting for bytes that never come, and the client's
+        // stream would hang instead of ending in an error. `pipeline` tears
+        // both down and the error reaches the web stream.
         let stream: Readable = res;
-        if (encoding === "gzip" || encoding === "x-gzip") stream = res.pipe(createGunzip());
-        else if (encoding === "deflate") stream = res.pipe(createInflate());
-        else if (encoding === "br") stream = res.pipe(createBrotliDecompress());
+        const decoder =
+          encoding === "gzip" || encoding === "x-gzip"
+            ? createGunzip()
+            : encoding === "deflate"
+              ? createInflate()
+              : encoding === "br"
+                ? createBrotliDecompress()
+                : null;
+        if (decoder) {
+          stream = pipeline(res, decoder, () => {});
+        }
 
         const body = bodyless(status) ? null : (Readable.toWeb(stream) as ReadableStream<Uint8Array>);
         resolve(
@@ -103,6 +116,9 @@ export function cliFetch(url: string, opts: CliFetchOptions = {}): Promise<Respo
 
     request.on("error", (e) => reject(e));
     if (opts.timeoutMs) {
+      // An idle timeout: it fires when the socket has been quiet that long,
+      // before or after the headers. Destroying the request after the headers
+      // destroys the response with it, so the body ends in that error.
       request.setTimeout(opts.timeoutMs, () => {
         request.destroy(new Error(`the request timed out after ${opts.timeoutMs}ms`));
       });

@@ -23,6 +23,8 @@ import { accountsOfPlatform, type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { platformWithoutAccount } from "../routes.ts";
 import { withRetryAfter } from "../deliver.ts";
+import { ClientClosedError } from "../request-life.ts";
+import { ledgerOf, RATE_WAIT_BUDGET_MS, waitOnBudget } from "../rate-budget.ts";
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
@@ -78,7 +80,24 @@ export interface UpstreamContext {
    * 把预算吃满了」，得看真正发出去的那个数，不是客户端想要的那个。
    */
   upstreamMaxTokens?: number;
+  /**
+   * Fires when the client goes away before the answer is finished.
+   *
+   * Every upstream call and every wait of this request takes it: an answer
+   * nobody reads is still generated — and charged — until the connection to
+   * the upstream is closed.
+   */
+  signal?: AbortSignal;
+  /**
+   * The rate-limit waits of this request so far, shared by every target and
+   * every account it is tried on: the client waits for all of them, so the
+   * budget is the request's, not each account's.
+   */
+  rateWait?: { spentMs: number };
 }
+
+/** What a call needs to know about the request it serves. */
+export type CallLife = Pick<UpstreamContext, "signal" | "rateWait">;
 
 /**
  * The error for an upstream that answered with a status of its own.
@@ -143,13 +162,6 @@ const DEFAULT_RATE_WAIT_MS = 30_000;
  */
 const MAX_RATE_WAIT_MS = 60_000;
 
-/**
- * 一个请求里总共最多等多久（毫秒）。
- *
- * 「等得起」说的是一分钟以内，不是「随便多久」。
- */
-const RATE_WAIT_BUDGET_MS = 60_000;
-
 /** 一个等过了的错误：冷却不写它（见 underPolicy 的 onAttempt）。 */
 export interface RateWaited {
   rateWaited?: boolean;
@@ -191,11 +203,6 @@ export function rateLimitWaitMs(error: unknown): number | null {
   return wait;
 }
 
-/** 等一会儿（毫秒）。 */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * 跑一次调用；遇到「等得起」的限流就等，然后重试**同一个**账号。
  *
@@ -209,8 +216,11 @@ async function runWithRateWait<T>(
   account: ProviderRow,
   what: string,
   run: (account: ProviderRow) => Promise<T>,
+  life: CallLife = {},
 ): Promise<T> {
-  const deadline = Date.now() + RATE_WAIT_BUDGET_MS;
+  // 没有调用方给的账本（单测直接调）就自己记一份：至少这一个账号不超预算。
+  // 有的话，Qoder 排队、TokenRhythm 繁忙的那些重试等待也记在同一本上。
+  const ledger = ledgerOf(life);
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await run(account);
@@ -221,12 +231,19 @@ async function runWithRateWait<T>(
       if (e && typeof e === "object") withRateWaited(e as Record<string, unknown>);
       // 等过两次还是不行：照旧报错（但不写冷却）。
       if (attempt >= 2) throw e;
+      // 客户端已经走了：不等，也不再打上游。
+      if (life.signal?.aborted) throw e;
       // 这个请求的等待预算用完了：照旧报错。
-      if (Date.now() + wait > deadline) throw e;
+      if (ledger.spentMs + wait > RATE_WAIT_BUDGET_MS) throw e;
       console.log(
         `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying`,
       );
-      await sleep(wait);
+      try {
+        // 客户端在等的时候走了：立刻停，原来那个限流错误照旧抛出去。
+        if (!(await waitOnBudget(wait, life, ledger))) throw e;
+      } catch {
+        throw e;
+      }
     }
   }
 }
@@ -409,7 +426,7 @@ export interface Settlement {
  * 结算只算一次：失败之后再来的 success() 不算（流断了就是断了，不能因为
  * 「答复写完了」就把冷却清掉）。
  */
-export function settlement(): Settlement {
+export function settlement(signal?: AbortSignal): Settlement {
   let accountId: string | null = null;
   let what = "";
   let settled = false;
@@ -422,6 +439,11 @@ export function settlement(): Settlement {
     success(): void {
       if (settled || !accountId) return;
       settled = true;
+      // 客户端中途走了：答复没送到，这算不上账号的成功 —— 它原来的冷却不能清掉。
+      if (signal?.aborted) {
+        console.log(`[ROUTE] ${what} account=${accountId} the client went away, keeping its cooldown as it was`);
+        return;
+      }
       // 记账失败不许影响请求：冷却写不下去，也不能让已经成功的答复变成 500。
       try {
         clearCooldown(accountId);
@@ -432,6 +454,11 @@ export function settlement(): Settlement {
     failure(error: unknown): void {
       if (settled || !accountId) return;
       settled = true;
+      // 客户端自己走了：上游的读被我们掐断，那不是账号的错，不记冷却。
+      if (signal?.aborted) {
+        console.log(`[ROUTE] ${what} account=${accountId} the client went away, not cooling down`);
+        return;
+      }
       // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
       const decision = cooldownForFailure(accountId, error);
       if (decision) {
@@ -470,6 +497,7 @@ export async function underPolicy<T>(
   what: string,
   run: (account: ProviderRow) => Promise<T>,
   settle?: Settlement,
+  life: CallLife = {},
 ): Promise<T> {
   const accounts = accountsOfPlatform(platform);
   const serving = servingAccounts(platform);
@@ -532,12 +560,27 @@ export async function underPolicy<T>(
     usable.map((account) => ({
       id: account.id,
       weight: account.weight,
-      run: () => runWithRateWait(account, what, run),
+      run: async () => {
+        // 客户端已经走了：不再打上游，也不换下一个账号。抛的是
+        // ClientClosedError：它不可降级，也不值冷却。
+        if (life.signal?.aborted) throw life.signal.reason;
+        try {
+          return await runWithRateWait(account, what, run, life);
+        } catch (e) {
+          // 我们自己掐断的请求（客户端走了）不是账号的失败：不记冷却，不换人。
+          if (life.signal?.aborted) throw life.signal.reason;
+          throw e;
+        }
+      },
     })),
   );
   return selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {
+      if (error instanceof ClientClosedError) {
+        console.log(`[ROUTE] ${what} account=${candidate.id} the client went away, stopping`);
+        return;
+      }
       if (!error) {
         // 答复已经成功：冷却没有理由留着 —— 除非调用方自己结算（流式答复
         // 在这里返回之后才消费，「响应头到了」不算成功）。

@@ -83,6 +83,8 @@ export interface QoderRequestOptions {
   /** Which provider (which account) to talk to. */
   providerId?: string;
   region?: QoderRegion;
+  /** The client's: when it goes, the upstream connection goes too. */
+  signal?: AbortSignal;
 }
 
 /** The session ids the gateway expects on every request. */
@@ -151,6 +153,7 @@ export async function qoderChatCompletion(
     method: "POST",
     headers,
     body: JSON.stringify(buildBody(body, opts.stream)),
+    signal: opts.signal,
   });
   if (r.status === 401) {
     // The client sees the gateway's status; the upstream's own status says

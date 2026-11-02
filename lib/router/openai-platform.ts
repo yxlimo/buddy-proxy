@@ -33,6 +33,7 @@ export async function openAiPlatformChat(
   platform: OpenAiPlatform,
   body: Record<string, unknown>,
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Response> {
   if (!platform.key) {
     throw new AuthError(
@@ -51,6 +52,8 @@ export async function openAiPlatformChat(
       ...extraHeaders,
     },
     body: JSON.stringify(body),
+    // The client's: when it goes, the upstream connection goes too.
+    signal,
   });
   if (!response.ok && response.status === 401) {
     throw new AuthError(

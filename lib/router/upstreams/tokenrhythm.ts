@@ -22,12 +22,13 @@ import {
 import { kindOf } from "../../provider-kinds.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../../tokenrhythm/transport.ts";
 import { deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
+import { waitOnBudget } from "../rate-budget.ts";
 import { byOrder, describeUpstreamError, isDegradableUpstreamError, isNoBalanceFailure, selectProvider, type ProviderPolicy } from "../provider-selection.ts";
 import { provider } from "../../providers.ts";
 import { platformOf, platformPolicy } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
-import { type UpstreamContext, upstreamStatusError, accountFailure } from "./policy.ts";
+import { type CallLife, type UpstreamContext, upstreamStatusError, accountFailure } from "./policy.ts";
 
 /**
  * The accounts of a TokenRhythm platform, in the order the policy wants them.
@@ -88,6 +89,8 @@ export async function toTokenRhythm(
     id: accountId,
     weight: 0,
     run: async () => {
+      // 客户端已经走了：不再打上游，也不换下一个账号。
+      if (ctx.signal?.aborted) throw ctx.signal.reason;
       if (ctx.logRoute) {
         console.log(
           `[ROUTE] tokenrhythm model=${route.model} policy=${policy} account=${accountId} stream=${stream}`,
@@ -100,9 +103,13 @@ export async function toTokenRhythm(
           openaiBody,
           ctx.tokenRhythmMaxAttempts,
           ctx.clientHeaders,
+          ctx,
         );
         response = call.response;
       } catch (e) {
+        // 我们自己掐断的请求（客户端走了）不是账号的失败：抛出去的是
+        // ClientClosedError，它不可降级，策略就不换人。
+        if (ctx.signal?.aborted) throw ctx.signal.reason;
         // The platform said this account has no money left: it is put aside
         // for a while, and the balances are scanned again so that another
         // account is pinned.
@@ -247,24 +254,27 @@ async function tokenRhythmChatWithRetry(
   body: Record<string, unknown>,
   maxAttempts: number,
   extraHeaders: Record<string, string> = {},
+  life: CallLife = {},
 ): Promise<{ response: Response; key: string }> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await tokenRhythmChat(accountId, body, extraHeaders);
+      return await tokenRhythmChat(accountId, body, extraHeaders, life.signal);
     } catch (e) {
       if (e instanceof TokenRhythmBusyError && attempt < maxAttempts) {
         console.log(
           `[ROUTE] tokenrhythm busy on ${accountId} (${e.traceId || e.message}), ` +
             `retry ${attempt}/${maxAttempts - 1} in ${e.retryAfterSec}s`,
         );
-        await new Promise((r) => setTimeout(r, e.retryAfterSec * 1000));
-        continue;
+        // The wait comes out of the request's budget, shared with the other
+        // targets and accounts. The client going away stops it.
+        if (await waitOnBudget(e.retryAfterSec * 1000, life)) continue;
+        console.log(`[ROUTE] tokenrhythm busy on ${accountId}, but the request's wait budget is spent: not retrying`);
       }
       if (e instanceof TokenRhythmBusyError) {
         throw new AuthError(
           "tokenrhythm is busy",
           `TokenRhythm 现在繁忙（${e.message}）。这是上游的临时状态，稍后重试即可；` +
-            `同一个账号上已经重试过 ${Math.max(maxAttempts - 1, 0)} 次，还是这个排队。` +
+            `同一个账号上已经重试过 ${attempt - 1} 次，还是这个排队。` +
             `${e.traceId ? `traceId=${e.traceId}` : ""}`.trim(),
           503,
           "api_error",

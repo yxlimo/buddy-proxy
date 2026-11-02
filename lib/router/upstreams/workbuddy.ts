@@ -45,7 +45,7 @@ export async function toWorkBuddy(
   // that the turns belong together.
   const conversationId = conversationIdFor(openaiBody.messages, openaiBody.conversation_id);
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
-  const settle = settlement();
+  const settle = settlement(ctx.signal);
   const { response } = await underPolicy(
     route.platform,
     "workbuddy",
@@ -55,8 +55,10 @@ export async function toWorkBuddy(
         stream,
         conversationId,
         model: ctx.workbuddyModel(model),
+        signal: ctx.signal,
       }),
     settle,
+    ctx,
   );
 
   if (!stream) {

@@ -88,7 +88,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
       toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
         log: platform.kind,
         what: platform.what ?? platform.label,
-        chat: (openaiBody, headers, accountId) => {
+        chat: (openaiBody, headers, accountId, signal) => {
           const row = rowOf(accountId, platform.kind, route.platform);
           return openAiPlatformChat(
             {
@@ -99,6 +99,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
             },
             openaiBody,
             headers,
+            signal,
           );
         },
       }),

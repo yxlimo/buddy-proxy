@@ -31,6 +31,7 @@ import type { Json } from "../json.ts";
 import { configString } from "../config.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
+import { withUpstreamStatus } from "../upstream-status.ts";
 import {
   ensureCredential,
   loadSession,
@@ -386,7 +387,8 @@ export async function legacyChatCompletion(
     // 正文只放在 hint 里，而日志与用量表都只记 message。上游为什么拒，
     // 只能靠这一行（容器一重建，hint 就没了）。
     console.warn(`[UPSTREAM] Qoder 老协议上游 ${r.status}：${text.slice(0, 500)}`);
-    throw new AuthError(`legacy upstream HTTP ${r.status}`, `Qoder 老协议返回 ${r.status}：${text.slice(0, 300)}`, 502);
+    // 带上上游自己的状态：主路由靠它分辨「请求本身的错」（400/422 不换 target）。
+    throw withUpstreamStatus(new AuthError(`legacy upstream HTTP ${r.status}`, `Qoder 老协议返回 ${r.status}：${text.slice(0, 300)}`, 502), r.status);
   }
   return r;
 }

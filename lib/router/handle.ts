@@ -46,6 +46,8 @@ import {
 } from "./routes.ts";
 import { findAggregate, modelsOfPlatform } from "./catalog-routes.ts";
 import { sendError } from "./deliver.ts";
+import { ClientClosedError, clientGone, requestLife, streamFailureOf } from "./request-life.ts";
+import { isRequestFault } from "./request-fault.ts";
 
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 // The legacy endpoint queues models and reports 429 while a request waits. The
@@ -63,8 +65,13 @@ type Dialect = "anthropic" | "openai";
  */
 
 /** What the adapters need to know about the router they run in. */
-function upstreamContext(platform?: string): UpstreamContext {
+function upstreamContext(ctx: Koa.Context, platform?: string): UpstreamContext {
+  // The client's connection: every call and every wait of this request stops
+  // when it goes, and every target shares one rate-wait budget.
+  const life = requestLife(ctx);
   const uctx: UpstreamContext = {
+    signal: life.signal,
+    rateWait: life.rateWait,
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
     qoderMaxAttempts: QODER_MAX_ATTEMPTS,
@@ -155,12 +162,18 @@ async function handleAggregate(
   // another upstream is not what the panel says. `fallback` tries the next
   // one when a target fails.
   //
-  // The root route does not judge the failures: every one of them moves on to
-  // the next target, the way it always has.
+  // The root route barely judges the failures: almost every one moves on to
+  // the next target. The exception is the upstream saying the request itself
+  // is wrong (400/422, not about the model): the next target gets the
+  // same request and says the same, so the selection stops there.
+  let stoppedOnRequest = false;
+
   const candidates = entry.targets.map((target) => ({
     id: `${target.group}/${target.upstreamModel}`,
     weight: target.weight,
     run: async () => {
+      // 客户端已经走了：不再打下一个 target。
+      if (clientGone(ctx)) throw new SelectionStop(new ClientClosedError());
       let route: Route;
       try {
         route = routeInGroup(target.group, target.upstreamModel, rctx);
@@ -180,7 +193,7 @@ async function handleAggregate(
       // though the upstream knows the model by another one.
       route.label = entry.id;
 
-      const uctx = upstreamContext(route.platform);
+      const uctx = upstreamContext(ctx, route.platform);
       try {
         await callUpstream(uctx, body, route, dialect, stream, ctx);
       } catch (e) {
@@ -190,16 +203,24 @@ async function handleAggregate(
           upstreamModel: target.upstreamModel,
           ok: false,
         });
-        // Once the answer has started there is nothing to fall back to.
-        if (ctx.res.headersSent) throw new SelectionStop(e);
+        // Once the answer has started there is nothing to fall back to, and a
+        // client that is gone has nobody to fall back for.
+        if (ctx.res.headersSent || clientGone(ctx)) throw new SelectionStop(e);
+        // The request itself is wrong: the next target would say the same.
+        if (isRequestFault(e)) {
+          stoppedOnRequest = true;
+          throw new SelectionStop(e);
+        }
         throw e;
       }
       const usage = uctx.lastUsage;
+      // 流在答复开始之后断了（或者客户端走了）：调用没抛，但答复没交到。
+      const broken = streamFailureOf(ctx);
       recordAggregateUsage({
         modelId: entry.id,
         group: target.group,
         upstreamModel: target.upstreamModel,
-        ok: true,
+        ok: !broken,
         promptTokens: usage?.promptTokens,
         completionTokens: usage?.completionTokens,
       });
@@ -225,47 +246,57 @@ async function handleAggregate(
         // The answer had already started: there is nothing to fall back to.
         const stopped = error instanceof SelectionStop;
         const reason = stopped ? error.reason : error;
-        // 答复已经开始的那个错不参与挑选：那时已经没有选择了。
-        if (!stopped) failures.push({ id: candidate.id, error: reason });
+        // 答复已经开始的那个错不参与挑选：那时已经没有选择了。请求本身的错
+        // 参与：它和前面那些失败一起决定给客户端看哪一个。
+        const onRequest = stopped && stoppedOnRequest;
+        if (!stopped || onRequest) failures.push({ id: candidate.id, error: reason });
         const at = ordered.findIndex((c) => c.id === candidate.id);
         const next = ordered[at + 1];
         console.log(
           `[ROUTE] ${candidate.id} failed (${describeTargetFailure(reason)}), ` +
-            (stopped
-              ? "the answer had already started"
-              : next
+            (onRequest
+              ? "the request itself is wrong, not trying the next target"
+              : stopped
+                ? clientGone(ctx)
+                  ? "the client went away"
+                  : "the answer had already started"
+                : next
                 ? `trying ${next.id}`
                 : "no target left"),
         );
       },
-      failure: (lastError) => {
-        // 最后一个失败说了算是不对的：前面那个可能是「这个账号没额度」，最后
-        // 那个是「这个上游没有这个模型」—— 客户端拿到后者就会去改模型名，而
-        // 真正该做的是等额度恢复。所以挑最有说明力的那个。
-        const best = pickMostInformativeFailure(failures);
-        if (!best) {
-          if (lastError instanceof Error) return lastError;
-          return new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502);
-        }
-        // 多个目标都失败：把每一个的原因都说出来。只给一个笼统的错（「所有
-        // 账号都在额度用尽或者冷却中」），客户端不知道该等哪一个 —— 限流等
-        // 一分钟，额度用尽等窗口。
-        if (failures.length > 1) {
-          const summary = summarizeFailures(failures);
-          // 复制一个新的：那个错可能被别人持有（上游的冷却就是这么记的）。
-          if (best instanceof AuthError) {
-            const hint = [best.hint, summary]
-              .filter((part) => part && part.trim())
-              .join("\n");
-            return new AuthError(best.message, hint, best.status, best.type);
-          }
-          return new AuthError(String(best.message), summary, clientStatusOf(best) ?? 502);
-        }
-        return best;
-      },
+      failure: (lastError) => explain(lastError),
     });
   } catch (e) {
-    sendError(ctx, e);
+    // 停在请求本身的错上：给客户端看的仍然是最有说明力的那个（前面的
+    // target 可能是额度用尽，那比「请求不对」更该让客户端知道）。
+    sendError(ctx, stoppedOnRequest ? explain(e) : e);
+  }
+
+  function explain(lastError: unknown): Error {
+    // 最后一个失败说了算是不对的：前面那个可能是「这个账号没额度」，最后
+    // 那个是「这个上游没有这个模型」—— 客户端拿到后者就会去改模型名，而
+    // 真正该做的是等额度恢复。所以挑最有说明力的那个。
+    const best = pickMostInformativeFailure(failures);
+    if (!best) {
+      if (lastError instanceof Error) return lastError;
+      return new AuthError("no upstream answered", "这个模型的所有上游都没有响应。", 502);
+    }
+    // 多个目标都失败：把每一个的原因都说出来。只给一个笼统的错（「所有
+    // 账号都在额度用尽或者冷却中」），客户端不知道该等哪一个 —— 限流等
+    // 一分钟，额度用尽等窗口。
+    if (failures.length > 1) {
+      const summary = summarizeFailures(failures);
+      // 复制一个新的：那个错可能被别人持有（上游的冷却就是这么记的）。
+      if (best instanceof AuthError) {
+        const hint = [best.hint, summary]
+          .filter((part) => part && part.trim())
+          .join("\n");
+        return new AuthError(best.message, hint, best.status, best.type);
+      }
+      return new AuthError(String(best.message), summary, clientStatusOf(best) ?? 502);
+    }
+    return best;
   }
 }
 
@@ -411,7 +442,7 @@ export async function handle(
 
   const stream = body.stream === true;
   try {
-    await callUpstream(upstreamContext(route.platform), body, route, dialect, stream, ctx);
+    await callUpstream(upstreamContext(ctx, route.platform), body, route, dialect, stream, ctx);
   } catch (e) {
     sendError(ctx, e);
   }
@@ -486,10 +517,30 @@ async function callUpstream(
           500,
         );
     }
+    // 流在头发出去之后断了：deliver 给客户端写了错误事件、没有抛，但这条
+    // 请求没成。客户端自己走了也一样：答复没交到。
+    const broken = streamFailureOf(ctx);
+    if (broken) {
+      const gone = broken.error instanceof ClientClosedError;
+      recordRequestUsage(
+        body,
+        route,
+        agent,
+        session,
+        uctx,
+        // 499：客户端先关了连接（nginx 的叫法）；502：上游的流断了。
+        gone ? 499 : 502,
+        started,
+        failureText(broken.error),
+        kind?.label ?? route.platform,
+      );
+      return;
+    }
     recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "", kind?.label ?? route.platform);
   } catch (e) {
     const err = e as AuthError;
-    const status = typeof err?.status === "number" ? err.status : 500;
+    // 客户端先走了：我们掐断了上游，记 499，不记上游的错。
+    const status = clientGone(ctx) ? 499 : typeof err?.status === "number" ? err.status : 500;
     recordRequestUsage(
       body,
       route,
@@ -503,6 +554,12 @@ async function callUpstream(
     );
     throw e;
   }
+}
+
+/** 一句话说这次失败（给用量表）。 */
+function failureText(error: unknown): string {
+  const message = (error as { message?: unknown })?.message;
+  return (typeof message === "string" && message ? message : String(error)).slice(0, 300);
 }
 /**
  * 上游把输出全放在了思考里。

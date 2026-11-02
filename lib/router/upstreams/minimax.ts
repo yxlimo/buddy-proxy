@@ -44,13 +44,13 @@ export async function toMinimax(
   let r: Response;
   // 流式答复是在这里返回之后才消费的：冷却由调用方在流结束时结算，
   // 「响应头到了」不算成功。
-  const settle = settlement();
+  const settle = settlement(ctx.signal);
   try {
     r = await underPolicy(
       route.platform,
       "minimax",
       async (account) => {
-        const res = await minimaxChat(anthropicBody, account.id);
+        const res = await minimaxChat(anthropicBody, account.id, ctx.signal);
         if (res.ok) return res;
         // 平台的拒绝必须在策略里抛出来：策略只看得见异常，看不见 Response。
         // 早先这里把 !ok 的判断放在 underPolicy 外面，429/402 就永远落不到
@@ -58,6 +58,7 @@ export async function toMinimax(
         throw await minimaxRejection(res);
       },
       settle,
+      ctx,
     );
   } catch (e) {
     // 换掉错误对象会把上游自己的状态与业务码丢掉，日志与分类器就看不出

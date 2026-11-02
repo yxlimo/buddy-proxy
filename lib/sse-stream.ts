@@ -34,10 +34,18 @@ export async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGen
     return name ? { event: name, data: payload } : { data: payload };
   };
 
+  // Whether the upstream said it was done. A reader that stops before that
+  // (the client went away, the consumer broke out of the loop) has to cancel
+  // the body: releasing the lock alone leaves the upstream connection open,
+  // and the upstream keeps generating an answer nobody reads.
+  let finished = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        finished = true;
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       let idx: number;
       while ((idx = buffer.indexOf("\n")) >= 0) {
@@ -74,6 +82,7 @@ export async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGen
     const ev = take();
     if (ev) yield ev;
   } finally {
+    if (!finished) reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }

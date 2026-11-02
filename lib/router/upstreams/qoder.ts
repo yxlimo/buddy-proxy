@@ -21,7 +21,8 @@ import { legacyChatCompletion, readLegacyFrames } from "../../qoder/legacy.ts";
 import { deliverJson, deliverOpenAIChunks, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { platformOf } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, settlement, underPolicy } from "./policy.ts";
+import { type CallLife, type UpstreamContext, settlement, underPolicy } from "./policy.ts";
+import { waitOnBudget } from "../rate-budget.ts";
 
 /**
  * The thinking level a request asks for.
@@ -77,16 +78,19 @@ export async function toQoder(
   // 记下真正发出去的上限：日志要拿它和 reasoning 一起看。
   ctx.upstreamMaxTokens = QODER_CLIENT_MAX_TOKENS;
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
-  const settle = settlement();
+  const settle = settlement(ctx.signal);
   const upstream = await underPolicy(
     route.platform,
     "qoder",
     (account) =>
       qoderWithRetry(
-        () => qoderChatCompletion(openaiBody, { stream, providerId: account.id, region }),
+        () => qoderChatCompletion(openaiBody, { stream, providerId: account.id, region, signal: ctx.signal }),
         ctx.qoderMaxAttempts,
+        false,
+        ctx,
       ),
     settle,
+    ctx,
   );
 
   if (!stream) {
@@ -133,7 +137,7 @@ export async function toQoderLegacy(
   label?: string,
   platform = "qoder",
 ): Promise<void> {
-  const settle = settlement();
+  const settle = settlement(ctx.signal);
   // 旧协议发的是同一个固定上限（下面 parameters 里的 max_tokens）。
   ctx.upstreamMaxTokens = QODER_CLIENT_MAX_TOKENS;
   const chunks = await underPolicy(
@@ -153,12 +157,14 @@ export async function toQoderLegacy(
               reasoning: model.reasoning,
               contextWindow: model.context,
             },
-            { providerId: account.id, region },
+            { providerId: account.id, region, signal: ctx.signal },
           ),
         ctx.legacyMaxAttempts,
         ctx.legacyRetryMs,
+        ctx,
       ),
     settle,
+    ctx,
   );
 
   if (!stream) {
@@ -214,25 +220,42 @@ async function* legacyWithRetry(
   send: () => Promise<Response>,
   maxAttempts: number,
   retryMs: number,
+  life: CallLife = {},
 ): AsyncGenerator<Json> {
   for (let attempt = 1; ; attempt++) {
     const upstream = await send();
     const frames = readLegacyFrames(upstream.body!)[Symbol.asyncIterator]();
     const first = await frames.next();
 
+    // The frames are not always read to the end (a queued answer, a client
+    // that went away): the body is cancelled then, or the upstream connection
+    // stays open and the upstream keeps generating.
+    const close = async () => {
+      await frames.return?.(undefined);
+      await upstream.body?.cancel().catch(() => {});
+    };
+
     if (!first.done && first.value.error && attempt < maxAttempts && isRetryableLegacy(first.value.error)) {
-      await new Promise((r) => setTimeout(r, retryMs));
-      continue;
+      await close();
+      // The wait comes out of the request's budget (see rate-budget.ts); when
+      // it does not fit, the queued answer is the error. The client going away
+      // while it is queued stops the wait.
+      if (await waitOnBudget(retryMs, life)) continue;
+      throw legacyError(first.value.error);
     }
-    if (!first.done) {
-      if (first.value.error) throw legacyError(first.value.error);
-      if (first.value.chunk) yield first.value.chunk;
-    }
-    while (true) {
-      const next = await frames.next();
-      if (next.done) break;
-      if (next.value.error) throw legacyError(next.value.error);
-      if (next.value.chunk) yield next.value.chunk;
+    try {
+      if (!first.done) {
+        if (first.value.error) throw legacyError(first.value.error);
+        if (first.value.chunk) yield first.value.chunk;
+      }
+      while (true) {
+        const next = await frames.next();
+        if (next.done) break;
+        if (next.value.error) throw legacyError(next.value.error);
+        if (next.value.chunk) yield next.value.chunk;
+      }
+    } finally {
+      await close();
     }
     return;
   }
@@ -251,6 +274,7 @@ export async function qoderWithRetry(
   send: () => Promise<Response>,
   maxAttempts: number,
   logRoute = false,
+  life: CallLife = {},
 ): Promise<Response> {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -258,8 +282,11 @@ export async function qoderWithRetry(
     } catch (e) {
       if (e instanceof LimitError && attempt < maxAttempts) {
         if (logRoute) console.log(`[ROUTE] upstream busy, retry ${attempt}/${maxAttempts - 1} in ${e.retryAfterSec}s`);
-        await new Promise((r) => setTimeout(r, e.retryAfterSec * 1000));
-        continue;
+        // The wait comes out of the request's budget, shared with the other
+        // targets and accounts; when it does not fit, the queue is the error.
+        // The client going away while it is queued stops the wait.
+        if (await waitOnBudget(e.retryAfterSec * 1000, life)) continue;
+        console.log(`[ROUTE] qoder is still queued, but the request's wait budget is spent: not retrying`);
       }
       throw e;
     }

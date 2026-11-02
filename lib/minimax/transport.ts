@@ -111,6 +111,7 @@ export function classify(status: number, code?: number): string {
 export async function minimaxChat(
   body: Json,
   providerId = "minimax",
+  signal?: AbortSignal,
 ): Promise<Response> {
   let cred;
   try {
@@ -121,7 +122,8 @@ export async function minimaxChat(
 
   const bodyText = JSON.stringify(body);
   const send = (token: string) =>
-    fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText });
+    // The signal is the client's: when it goes, the upstream connection goes too.
+    fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText, signal });
 
   const r = await send(cred.accessToken);
 
