@@ -12,8 +12,10 @@
 
 import { AuthError } from "../credential.ts";
 import { matchZcodeModel } from "../zcode/models.ts";
-import type { PlatformState } from "./availability.ts";
+import type { PlatformAvailability, PlatformState } from "./availability.ts";
+import { cooldownStamp } from "./account-cooldown.ts";
 import { coolingError } from "./upstreams/policy.ts";
+import { withRetryAfter } from "./deliver.ts";
 
 export interface Route {
   /**
@@ -161,4 +163,108 @@ export function platformWithoutAccount(platformId: string, state: PlatformState)
     `这个平台的账号都关着。在面板的「上游」页打开一个账号。`,
     400,
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * 发布出来的模型，现在接不了
+ * ------------------------------------------------------------------ */
+
+/** 一个目标上游现在接不了：它是什么状态、什么时候能接。 */
+export interface UnreachableUpstream {
+  /** 平台 id（请求路径里的那一段）。 */
+  platform: string;
+  /** 现在的状态。 */
+  state: PlatformState;
+  /** 最早能试的时刻。不知道就是 null。 */
+  untilMs: number | null;
+}
+
+/** 每个状态是什么问题：一句话。 */
+const STATE_TEXT: Record<PlatformState, string> = {
+  no_account: "没有账号",
+  accounts_off: "账号都关着",
+  no_credential: "没有可用凭据",
+  out_of_credits: "额度用尽",
+  cooling: "账号都在冷却里",
+  ready: "就绪",
+};
+
+/** 每个状态该怎么办：一句话，说给运维听。 */
+function remedyOf(state: PlatformState): string {
+  switch (state) {
+    case "no_account":
+      return "在面板的「上游」页加一个账号并登录";
+    case "accounts_off":
+      return "在面板的「上游」页打开一个账号";
+    case "no_credential":
+      return "在面板的「上游」页填 API Key 或者登录";
+    case "out_of_credits":
+      return "等额度恢复";
+    case "cooling":
+      return "等冷却结束";
+    case "ready":
+      return "";
+  }
+}
+
+/**
+ * 发布出来的模型，它的目标上游现在都接不了吗。
+ *
+ * 空数组表示「不是接不了」：要么没有启用的目标，要么有一个目标接得了（那就
+ * 是上游的目录里没有这个模型，404 unknown model 才对）。判定用的是可用性
+ * 里的 state —— 不另写一套，免得两处说的不是一件事。
+ */
+export function unreachableUpstreams(
+  targets: { group: string; enabled: boolean }[],
+  availabilities: Map<string, PlatformAvailability>,
+): UnreachableUpstream[] {
+  const out: UnreachableUpstream[] = [];
+  for (const target of targets) {
+    if (!target.enabled) continue;
+    const availability = availabilities.get(target.group);
+    // 目标的上游整个没了（平台被删了）：那是「没有这个模型」，不是「接不了」。
+    if (!availability) continue;
+    // 有一个接得了：这个模型能不能服务要看目录，不是看状态。
+    if (availability.state === "ready") return [];
+    out.push({
+      platform: target.group,
+      state: availability.state,
+      untilMs: availability.untilMs,
+    });
+  }
+  return out;
+}
+
+/**
+ * 发布出来的模型现在接不了：点名是哪个上游、什么状态、该做什么。
+ *
+ * 两种答法：缺凭据、没账号、账号都关着是 400 —— 那是运维没配好，客户端
+ * 处理不了，也不该去改模型名；额度用尽与冷却是 503 —— 等一会儿就好，答里
+ * 带上什么时候恢复（Retry-After 跟着走）。
+ */
+export function publishedModelUnavailable(
+  modelId: string,
+  upstreams: UnreachableUpstream[],
+): AuthError {
+  const lines = upstreams.map((u) => {
+    const when = u.untilMs === null ? "" : `，最早 ${cooldownStamp(u.untilMs)} 恢复`;
+    return `  ${u.platform}：${STATE_TEXT[u.state]}（${u.state}）${when} —— ${remedyOf(u.state)}`;
+  });
+  const hint = `这个模型（${modelId}）发布着，但它的上游现在都接不了：\n${lines.join("\n")}`;
+  const recoverable = upstreams.filter(
+    (u) => u.state === "out_of_credits" || u.state === "cooling",
+  );
+  if (!recoverable.length) {
+    return new AuthError(`model "${modelId}" has no usable upstream`, hint, 400);
+  }
+  const untils = recoverable
+    .map((u) => u.untilMs)
+    .filter((at): at is number => typeof at === "number" && at > Date.now());
+  const error = new AuthError(
+    `model "${modelId}" has no reachable upstream right now`,
+    hint,
+    503,
+    "api_error",
+  );
+  return untils.length ? withRetryAfter(error, Math.min(...untils)) : error;
 }

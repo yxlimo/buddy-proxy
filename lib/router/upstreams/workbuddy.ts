@@ -71,6 +71,7 @@ export async function toWorkBuddy(
           throw asClientGone(e, watch);
         }),
       settle,
+      ctx.availability,
     );
     response = upstream.response;
   } catch (e) {
@@ -80,7 +81,6 @@ export async function toWorkBuddy(
     watch.stop();
     throw failure;
   }
-
   if (!stream) {
     // The upstream always answers with a stream, so a non-streaming request is
     // folded back into one object here.

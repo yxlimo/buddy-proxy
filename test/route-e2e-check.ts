@@ -624,7 +624,16 @@ check(
   `publishedModelCount=${status.publishedModelCount}`,
 );
 const offChat = await chat("e2e-fallback");
-check("客户端问一个公布出来的模型，答不上来", offChat.status === 404, `HTTP ${offChat.status}`);
+// 模型确实发布过，只是它的上游（Qoder）现在整个关着。答「没有这个模型」会让
+// 客户端去改模型名，而模型名是对的 —— 该说的是哪个上游、什么状态。
+check("客户端问一个发布着的模型，不是 404", offChat.status !== 404, `HTTP ${offChat.status}`);
+check(
+  "答 400，并说清是哪个上游、什么状态",
+  offChat.status === 400 &&
+    String(offChat.json?.hint ?? "").includes("qoder") &&
+    String(offChat.json?.hint ?? "").includes("accounts_off"),
+  `HTTP ${offChat.status} ${String(offChat.json?.hint ?? offChat.text).slice(0, 300)}`,
+);
 
 // 回到上游开着的状态，后面的收尾还要用。
 await admin("SetAccountEnabled", { accountId: qoderAccount?.id ?? "qoder", enabled: true });

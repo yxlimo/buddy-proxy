@@ -102,6 +102,7 @@ export async function toQoder(
           ctx.qoderMaxAttempts,
         ),
       settle,
+      ctx.availability,
     );
   } catch (e) {
     // 客户端走了不是上游的错：不能因此给账号记冷却，也不能换账号再打一次。
@@ -110,7 +111,6 @@ export async function toQoder(
     watch.stop();
     throw failure;
   }
-
   if (!stream) {
     let json: any;
     try {
@@ -198,6 +198,7 @@ export async function toQoderLegacy(
         ctx.legacyRetryMs,
       ),
     settle,
+    ctx.availability,
   );
 
   if (!stream) {

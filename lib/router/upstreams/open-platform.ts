@@ -67,6 +67,7 @@ export async function toOpenAiPlatform(
       throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
     },
     settle,
+    ctx.availability,
   );
 
   if (!stream) {

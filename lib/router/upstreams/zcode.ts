@@ -54,6 +54,7 @@ export async function toZcode(
         sessionId,
       }),
     settle,
+    ctx.availability,
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");

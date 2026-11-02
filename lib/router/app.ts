@@ -112,6 +112,11 @@ router.get("/health", async (ctx) => {
       region: template.region,
       // 有开着的、凭据可用的账号才算开着。
       enabled: (availability?.serving.length ?? 0) > 0,
+      // 现在是什么状态、为什么：只看 enabled 看不出是「没账号」「账号都关着」
+      // 还是「没凭据」—— 三件要改的地方不一样（判定住在 admin 层，
+      // lib/admin/platform-state.ts，这里只是把它的话带出来）。
+      state: availability?.state ?? "no_account",
+      reason: availability?.reason ?? "",
       policy: platformPolicy(template.id),
       policies: platformPolicies(template.id),
       base: kind && accounts.length ? safe(() => kind.baseUrl(accounts[0])) : null,
@@ -133,11 +138,14 @@ router.get("/health", async (ctx) => {
     status: "ok",
     dialects: ["anthropic", "openai"],
     // 平台与开关：客户端脚本与面板用得上的是「这个平台现在服务不服务」。
+    // state 是为什么：没账号、账号都关着、没凭据、额度用尽、冷却 —— 运维要
+    // 看得见是哪一件。
     providers: templates.map((template) => ({
       id: template.id,
       name: template.label,
       kind: template.kind,
       enabled: (availabilities.get(template.id)?.serving.length ?? 0) > 0,
+      state: availabilities.get(template.id)?.state ?? "no_account",
       accounts: availabilities.get(template.id)?.accounts ?? 0,
     })),
     upstreams: platforms,
