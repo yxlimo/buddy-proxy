@@ -12,6 +12,7 @@
 
 import { AuthError } from "../credential.ts";
 import { matchZcodeModel } from "../zcode/models.ts";
+import type { PlatformState } from "./availability.ts";
 import { coolingError } from "./upstreams/policy.ts";
 
 export interface Route {
@@ -47,10 +48,21 @@ export interface RoutingContext {
    * `untilMs` says when the platform can serve again when none of its accounts
    * can right now (out of credits, or every one of them cooling down); `null`
    * means nothing is standing in the way.
+   *
+   * `state` is why the platform is in the state it is in (see
+   * lib/router/availability.ts): 开着但没有凭据、账号都关着、还没有账号 —— 三件
+   * 要改的地方不一样，提示里得说清是哪一件。
    */
   platforms: Map<
     string,
-    { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null }
+    {
+      kind: string;
+      enabled: boolean;
+      accounts: number;
+      ids: Set<string>;
+      untilMs: number | null;
+      state: PlatformState;
+    }
   >;
 }
 
@@ -80,7 +92,7 @@ export function routeInGroup(platform: string, model: string, ctx: RoutingContex
       400,
     );
   }
-  if (!info.enabled) throw platformWithoutAccount(platform, info.accounts);
+  if (!info.enabled) throw platformWithoutAccount(platform, info.state);
   const raw = String(model ?? "").trim();
   // 目录还没拿到（账号刚加、目录还没同步）：这不是「没有这个模型」，是「这个
   // 上游现在答不了」。400 会让客户端去改配置，503 才是它该做的事 —— 等一会儿
@@ -121,17 +133,32 @@ function canonicalModel(raw: string, kind: string, ids: Set<string>): string | n
 }
 
 /**
- * 这个平台接不了请求：没有账号，或者账号都关着。
+ * 这个平台接不了请求：没有账号、账号都关着，或者没有可用凭据。
  *
- * The two are different mistakes with different fixes, so the hint says which
- * one it is.
+ * 三件是要改的地方不一样的事：加一个账号、打开一个账号、在面板上填 key 或者
+ * 登录。提示里得说清是哪一件，不然人只能一个个试。
+ *
+ * 都是 400：这是运维没配好，不是「等一会儿再来」。
  */
-export function platformWithoutAccount(platformId: string, accounts: number): AuthError {
+export function platformWithoutAccount(platformId: string, state: PlatformState): AuthError {
+  if (state === "no_credential") {
+    return new AuthError(
+      `platform ${platformId} has no usable credential`,
+      `这个平台的账号都还没有可用凭据。在面板的「上游」页填 API Key 或者登录。`,
+      400,
+    );
+  }
+  if (state === "no_account") {
+    return new AuthError(
+      `platform ${platformId} has no account`,
+      `这个平台还没有账号。在面板的「上游」页给它加一个账号并登录。`,
+      400,
+    );
+  }
+  // 账号都关着。另外两个状态到不了这里：它们说明账号与凭据都在。
   return new AuthError(
-    accounts === 0 ? `platform ${platformId} has no account` : `platform ${platformId} has no account turned on`,
-    accounts === 0
-      ? `这个平台还没有账号。在面板的「上游」页给它加一个账号并登录。`
-      : `这个平台的账号都关着。在面板的「上游」页打开一个账号。`,
+    `platform ${platformId} has no account turned on`,
+    `这个平台的账号都关着。在面板的「上游」页打开一个账号。`,
     400,
   );
 }

@@ -10,8 +10,8 @@ import Koa from "koa";
 import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
 import { authenticate, loadKeys, requireApiKey } from "../api-keys.ts";
-import { PLATFORMS, platformPolicies, platformPolicy } from "../platforms.ts";
-import { accountsOfPlatform } from "../providers.ts";
+import { allPlatforms, platformPolicies, platformPolicy } from "../platforms.ts";
+import { listProviders } from "../providers.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { detectAgent } from "../agent.ts";
 // The panel: the Connect routes, the token, the static files.
@@ -27,7 +27,8 @@ import {
 import { sendError } from "./deliver.ts";
 import { handle } from "./handle.ts";
 import { listCooldowns, type CooldownRow } from "../cooldown.ts";
-import { modelsOfPlatform, platformServing, serveModels } from "./catalog-routes.ts";
+import { serveModels } from "./catalog-routes.ts";
+import { platformAvailabilities } from "./availability.ts";
 
 const keys = loadKeys();
 export const app = new Koa();
@@ -95,21 +96,26 @@ router.get("/health", async (ctx) => {
   // 排查的人只能猜。冷却是按账号记的，所以放在账号那一行上。
   const cooldowns = new Map(listCooldowns().map((row) => [row.providerId, row]));
   const platforms: Record<string, unknown> = {};
-  for (const template of PLATFORMS) {
+  // allPlatforms() 每次调用读一次 platform 表（开放平台在那张表里）。
+  const templates = allPlatforms();
+  // 同一批表在这个请求里只读一遍：可用性算一次，下面都用它。
+  const availabilities = platformAvailabilities(templates);
+  const rows = listProviders();
+  for (const template of templates) {
     const kind = kindOf(template.kind);
-    const accounts = accountsOfPlatform(template.id);
-    const on = accounts.filter((row) => row.enabled);
+    const accounts = rows.filter((row) => row.platform === template.id);
+    const availability = availabilities.get(template.id);
     platforms[template.id] = {
       id: template.id,
       label: template.label,
       kind: template.kind,
       region: template.region,
-      // 有开着的账号才算开着。
-      enabled: on.length > 0,
+      // 有开着的、凭据可用的账号才算开着。
+      enabled: (availability?.serving.length ?? 0) > 0,
       policy: platformPolicy(template.id),
       policies: platformPolicies(template.id),
       base: kind && accounts.length ? safe(() => kind.baseUrl(accounts[0])) : null,
-      models: modelsOfPlatform(template.id).length,
+      models: availability?.ids.length ?? 0,
       // 一个账号一行：凭据、额度、快照都在它自己身上。
       accounts: accounts.map((row) => ({
         id: row.id,
@@ -127,12 +133,12 @@ router.get("/health", async (ctx) => {
     status: "ok",
     dialects: ["anthropic", "openai"],
     // 平台与开关：客户端脚本与面板用得上的是「这个平台现在服务不服务」。
-    providers: PLATFORMS.map((template) => ({
+    providers: templates.map((template) => ({
       id: template.id,
       name: template.label,
       kind: template.kind,
-      enabled: platformServing(template.id),
-      accounts: accountsOfPlatform(template.id).length,
+      enabled: (availabilities.get(template.id)?.serving.length ?? 0) > 0,
+      accounts: availabilities.get(template.id)?.accounts ?? 0,
     })),
     upstreams: platforms,
     // The live part of the answer is cached; this says how old it is.

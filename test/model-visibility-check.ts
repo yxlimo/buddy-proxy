@@ -79,6 +79,7 @@ function fakeCtx(body: unknown = {}, params: Record<string, string> = {}): FakeC
 
 await import("../lib/kinds/index.ts");
 const { addAccount } = await import("../lib/providers.ts");
+const { setSecret } = await import("../lib/store.ts");
 const { putHealthSnapshot } = await import("../lib/health-cache.ts");
 const { serveModels } = await import("../lib/router/catalog-routes.ts");
 const { handle } = await import("../lib/router/handle.ts");
@@ -91,6 +92,24 @@ const accountId = String(added.id);
 
 const now = Date.now();
 const windowEndsAt = new Date(now + 3600_000).toISOString();
+
+// 这个账号得有一份凭据：这个测试问的是「额度用尽/冷却不让模型从目录里消失」，
+// 不是「没有凭据的平台」。没有凭据的话平台整个进不了目录（那是另一件事，
+// 另一个测试在管）。
+setSecret(`session:provider:${accountId}`, "session", {
+  schemaVersion: 1,
+  clientId: "minimax-code",
+  audience: "minimax",
+  scopes: ["agent.default"],
+  region: "cn",
+  accessToken: "test-token",
+  refreshToken: "test-refresh",
+  tokenType: "Bearer",
+  expiresAtMs: now + 3600_000,
+  generation: 1,
+  loginAtMs: now,
+  refreshedAtMs: now,
+});
 
 /** 套餐窗口见底的快照：这个账号没文本额度了。 */
 function exhaustedSnapshot(): unknown {
@@ -116,7 +135,9 @@ function exhaustedSnapshot(): unknown {
 section("对照组：有额度就能路由");
 
 const healthy = routeInGroup("minimax", MODEL, {
-  platforms: new Map([["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set([MODEL]), untilMs: null }]]),
+  platforms: new Map([
+    ["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set([MODEL]), untilMs: null, state: "ready" }],
+  ]),
 });
 check("有额度时路由拿到了目标", healthy.model === `minimax/${MODEL}`, healthy.model);
 
@@ -180,7 +201,9 @@ section("目录为空：503，不是 400");
 
 try {
   routeInGroup("minimax", MODEL, {
-    platforms: new Map([["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set<string>(), untilMs: null }]]),
+    platforms: new Map([
+      ["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set<string>(), untilMs: null, state: "ready" }],
+    ]),
   });
   check("目录为空时被拒了", false, "routeInGroup 没有抛错");
 } catch (e) {
