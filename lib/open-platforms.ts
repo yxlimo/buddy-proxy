@@ -12,6 +12,10 @@
 
 import { store } from "./store.ts";
 import { PLATFORMS } from "./platform-templates.ts";
+// 额度插件的登记表（lib/quota-plugins.ts）反过来要读这一层的平台表，所以这两
+// 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
+// 那里也不在求值期读这边的东西。
+import { warnUnknownQuotaPlugin } from "./quota-plugins.ts";
 
 /**
  * 开放平台的 kind 名字。
@@ -136,6 +140,7 @@ export function createOpenPlatform(input: {
   if (urlProblem) return { ok: false, message: urlProblem };
   const now = Date.now();
   const models: OpenPlatformModels = { items: [], auto: true, fetchedAt: 0, source: "auto" };
+  const quotaPlugin = String(input.quotaPlugin ?? "").trim();
   store()
     .prepare(
       "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at) " +
@@ -147,10 +152,13 @@ export function createOpenPlatform(input: {
       normalizeBaseUrl(baseUrl),
       modelsJson(models),
       models.auto ? 1 : 0,
-      String(input.quotaPlugin ?? "").trim(),
+      quotaPlugin,
       now,
       now,
     );
+  // 填了额度插件却没人登记：说一声，但照样写进去 —— 用户可能先填 id 再让我们
+  // 上线那个插件，拦下来反而让人没法保存。
+  warnUnknownQuotaPlugin(id, quotaPlugin);
   return { ok: true, message: `加好了：${label}` };
 }
 
@@ -222,6 +230,8 @@ export function updateOpenPlatform(
       Date.now(),
       id,
     );
+  // 填了额度插件却没人登记：说一声，但照样写进去（同 createOpenPlatform）。
+  warnUnknownQuotaPlugin(id, quotaPlugin);
   return { ok: true, message: "改好了" };
 }
 

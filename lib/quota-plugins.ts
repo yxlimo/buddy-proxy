@@ -102,6 +102,32 @@ export function noQuotaPluginReason(id: string): string | null {
 }
 
 /**
+ * 已经报过「这个平台的额度插件没登记」的那些。
+ *
+ * 一个平台的这个插件说一次：这句话是配置错误，不该跟着保存平台的次数刷屏，
+ * 也不能把真正的故障淹掉。
+ */
+const warnedUnknownPlugins = new Set<string>();
+
+/**
+ * 这个平台填的额度插件没登记就说一声。
+ *
+ * 说了照样写进去（写不写是调用方的事）：用户可能先填 id 再让我们上线那个插件，
+ * 拦下来反而让人没法保存。
+ *
+ * 一个 id 一个进程只说一次。
+ */
+export function warnUnknownQuotaPlugin(platformId: string, pluginId: string): void {
+  const id = String(pluginId ?? "").trim();
+  if (!id) return;
+  if (PLUGINS.has(id)) return;
+  const key = `${platformId}:${id}`;
+  if (warnedUnknownPlugins.has(key)) return;
+  warnedUnknownPlugins.add(key);
+  console.warn(`[QUOTA] 这个平台填的额度插件没登记：${id}（平台 ${platformId}）`);
+}
+
+/**
  * 启动校验：在用的额度插件 id 都得在登记表里。
  *
  * 它只 warn，从不抛。开放平台的插件 id 是用户填的，填错不该让谁的服务都起不来
@@ -122,10 +148,6 @@ export function assertQuotaPlugins(): void {
     console.warn(`[QUOTA] 平台表读不出来，额度插件没校验：${(e as Error)?.message}`);
   }
   for (const row of rows) {
-    const id = row.quotaPlugin.trim();
-    if (!id) continue;
-    if (!PLUGINS.has(id)) {
-      console.warn(`[QUOTA] 这个平台填的额度插件没登记：${id}（平台 ${row.id}）`);
-    }
+    warnUnknownQuotaPlugin(row.id, row.quotaPlugin.trim());
   }
 }

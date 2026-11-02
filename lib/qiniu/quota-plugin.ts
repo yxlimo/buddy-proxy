@@ -6,15 +6,18 @@
 import { registerQuotaPlugin } from "../quota-plugins.ts";
 import type { CreditLotView, QuotaView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
+import { QINIU_ACCOUNT_FIELD } from "./account.ts";
 import { qiniuQuotaOf, type QiniuQuota } from "./quota.ts";
 
 /**
  * 门户 cookie 那一段在凭据里的字段名。
  *
- * 就是凭据存进去时用的那个名字（lib/qiniu/account.ts）：插件按名字要一段凭据，
-// 而这一段得是真的在那儿。
+ * name 不是给人看的名字（那是 label），是这段凭据在库里的 id 后缀：它必须与
+ * lib/qiniu/account.ts 的 qiniuAccountId() 一致，否则插件读不到它。
+ * 开放平台的账号按同一个规则写同一个位置，qiniuQuotaOf 就读得到。
+ *
+ * 名字只有那一个来源：QINIU_ACCOUNT_FIELD。
  */
-export const QINIU_PORTAL_COOKIE_FIELD = "portalCookie";
 
 /**
  * 快照里那一份读成额度。
@@ -69,7 +72,7 @@ export function qiniuQuotas(account: ProviderRow, payload: unknown): QuotaView[]
 export const qiniuQuotaPlugin = registerQuotaPlugin({
   id: "qiniu",
   label: "七牛云资源包",
-  fields: [{ name: QINIU_PORTAL_COOKIE_FIELD, label: "门户 cookie", secret: true }],
+  fields: [{ name: QINIU_ACCOUNT_FIELD, label: "门户 cookie", secret: true }],
   fetch: (account) => qiniuQuotaOf(account.id),
   quotas: (account, payload) => qiniuQuotas(account, payload),
   outOfCredits: (account, payload) => {
