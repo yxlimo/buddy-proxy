@@ -4,7 +4,7 @@
 // 它们的元数据可以留空，留空就是「上游说多少就是多少」—— 两个上游 fronts
 // 同一个模型时，面板给的是两者里较小的那个上下文。
 
-import { isPlatform } from "../platforms.ts";
+import { isPlatform, allPlatforms } from "../platforms.ts";
 import {
   deleteAggregateModel,
   getAggregateModel,
@@ -16,19 +16,10 @@ import {
   type AggregateStrategy,
   type AggregateTarget,
 } from "../aggregate.ts";
-import {
-  catalogGroups,
-  healthSnapshot,
-  outOfCredits,
-  upstreamCredential,
-  upstreamEnabled,
-  type UpstreamId,
-} from "./upstreams.ts";
-import { hasUsableCredential } from "./credentials.ts";
+import { catalogGroups, healthSnapshot, type UpstreamId } from "./upstreams.ts";
 import { platformCooling } from "./upstream-state.ts";
-import { accountsOfPlatform } from "../providers.ts";
-import { isCoolingDown } from "../cooldown.ts";
-import { aggregateCatalog, type AggregateEntry, type CatalogGroup } from "../router/catalog.ts";
+import { platformAvailabilities, type PlatformAvailability } from "./platform-state.ts";
+import { aggregateCatalog, type AggregateEntry } from "../router/catalog.ts";
 import type { HealthSnapshot } from "../provider-kinds.ts";
 import { UnpublishedReason } from "../gen/buddy/admin/v1/admin_pb.ts";
 
@@ -114,8 +105,8 @@ const BLOCKER_REASON_LABELS: Partial<Record<UnpublishedReason, string>> = {
 };
 
 /** 平台那一层现在接不接得上。 */
-interface PlatformState {
-  /** 现在接得上吗（有一个账号开着、没在冷却、还有额度）。 */
+interface PlatformLayer {
+  /** 现在接得上吗（有一个账号开着、有能推理的凭据、没在冷却、还有额度）。 */
   usable: boolean;
   /** 最早什么时候能再接（unix 毫秒）。0 = 现在就能接，或者算不出来。 */
   recoversAtMs: number;
@@ -146,28 +137,52 @@ interface PlatformState {
  * 有一个目标能用，就是公布了（UNSPECIFIED）。多个目标有的能用有的不能时，
  * 能用的那些说了算 —— 理由留空。
  */
-function unpublishedReason(model: AggregateModel): UnpublishedReason {
+function unpublishedReason(
+  model: AggregateModel,
+  availabilityOf: (group: UpstreamId) => PlatformAvailability | null,
+): UnpublishedReason {
   if (!model.enabled) return UnpublishedReason.DISABLED;
   if (!model.targets.length) return UnpublishedReason.NO_TARGET;
   const enabled = model.targets.filter((target) => target.enabled);
   if (!enabled.length) return UnpublishedReason.TARGET_DISABLED;
   let firstBlocker: UnpublishedReason = UnpublishedReason.UNSPECIFIED;
   for (const target of enabled) {
-    const blocker = targetBlocker(target);
+    const blocker = targetBlocker(target, availabilityOf);
     if (!blocker) return UnpublishedReason.UNSPECIFIED; // 有能用的目标 → 公布了
     if (firstBlocker === UnpublishedReason.UNSPECIFIED) firstBlocker = blocker;
   }
   return firstBlocker;
 }
 
-/** 一个目标为什么不能用。空 = 能用。 */
-function targetBlocker(target: AggregateTarget): UnpublishedReason {
+/**
+ * 一个目标为什么不能用。空 = 能用。
+ *
+ * 判据是平台现在接不接得上 —— 判定住在 platform-state.ts，面板与路由看的
+ * 是同一个答案：
+ *
+ *   平台没有账号 / 账号都关着 → UPSTREAM_DISABLED（开关的事）
+ *   开着但没有能推理的凭据    → NO_CREDENTIAL（去面板上填 key 或者登录）
+ *
+ * 两件事要人做的东西不一样，说得也不一样。
+ */
+function targetBlocker(
+  target: AggregateTarget,
+  availabilityOf: (group: UpstreamId) => PlatformAvailability | null,
+): UnpublishedReason {
   const group = target.group as UpstreamId;
-  // 不认识的分组：不是九个平台之一，没有开关也没有目录 —— 当作关着。
+  // 不认识的分组：不是一个平台，没有开关也没有目录 —— 当作关着。
   if (!isPlatform(group)) return UnpublishedReason.UPSTREAM_DISABLED;
-  if (!upstreamEnabled(group)) return UnpublishedReason.UPSTREAM_DISABLED;
-  const credential = upstreamCredential(group);
-  if (!hasUsableCredential(credential.status)) return UnpublishedReason.NO_CREDENTIAL;
+  const availability = availabilityOf(group);
+  if (!availability) return UnpublishedReason.UPSTREAM_DISABLED;
+  if (availability.state === "no_account" || availability.state === "accounts_off") {
+    return UnpublishedReason.UPSTREAM_DISABLED;
+  }
+  if (availability.state === "no_credential") return UnpublishedReason.NO_CREDENTIAL;
+  // 额度用尽与冷却不摘模型：那是「现在接不了这个请求」，不是「没有这个模型」。
+  //
+  // 凭据过期与凭据读不出来同样不摘：前者等定时器刷就好，后者是网关自己的故障
+  // —— 都不是「这个模型没有了」。
+  //
   // 目录里有没有这个模型，**不算** blocker。上游的 /v3/config 不是它实际能服务
   // 什么的完整清单（实测 workbuddy.cn 的 deepseek-v4.1-flash、kimi-k3.1-pro
   // 后端都正常出话，目录里一个字都没提），拿它当"模型已下架"的判据会把能用的
@@ -176,39 +191,24 @@ function targetBlocker(target: AggregateTarget): UnpublishedReason {
 }
 
 /**
- * 一个平台的账号现在接得上吗：有一个账号开着、没在冷却、还有额度。
- *
- * 停用的账号不算：路由不会拿它接请求 —— 一个开着但在冷却的账号，配上一个
- * 停用但不在冷却的账号，这个平台还是接不上。
- * 额度读不出来时不算用尽：不知道不等于没有。
- */
-function platformUsable(group: UpstreamId): boolean {
-  if (!isPlatform(group)) return false;
-  return accountsOfPlatform(group).some(
-    (row) => row.enabled && !isCoolingDown(row.id) && !outOfCredits(row.id),
-  );
-}
-
-/**
  * 平台那一层现在接不接得上，以及接得上的时候是什么时候。
  *
- * 额度快照读不出来就当不知道额度：不知道不等于没有，所以不去猜恢复时间。
- * 恢复时间只有平台自己说得清时才给 —— 猜一个时间比空着更坏。
+ * 能不能接、什么时候能接，都是判定（platform-state.ts）说了算：面板与路由
+ * 必须是同一个答案。
+ *
+ * 冷却那一句更细（几点的窗口、为什么冷却），所以额度与冷却这两种情况用它；
+ * 别的（没有账号、账号都关着、没有凭据）只有判定说得清。
  */
-function platformStateOf(group: UpstreamId, snapshot: HealthSnapshot | null): PlatformState {
-  const cooling = platformCooling({ rows: accountsOfPlatform(group), snapshot });
-  let reason = cooling.stateReason;
-  if (!reason) {
-    if (cooling.cooldownUntilMs > 0) {
-      reason = cooling.cooldownReason ? `平台在冷却（${cooling.cooldownReason}）` : "平台在冷却";
-    } else {
-      reason = "平台没有可用账号";
-    }
-  }
+function platformStateOf(availability: PlatformAvailability, snapshot: HealthSnapshot | null): PlatformLayer {
+  const cooling = platformCooling({ rows: availability.rows, snapshot });
   return {
-    usable: platformUsable(group),
+    usable: availability.usable.length > 0,
+    // 恢复时间用面板自己的那个（0 = 算不出来，不猜）；判定那边的 untilMs 是
+    // 路由用的「最早能试的时刻」，算不出来时它给一个固定时长。
     recoversAtMs: cooling.recoversAtMs,
-    reason,
+    // 冷却与额度那一层的话更细（几点的窗口、为什么冷却、几个账号里的几个），
+    // 别的（没有账号、账号都关着、没有凭据）只有判定说得清。
+    reason: cooling.stateReason || availability.advice,
   };
 }
 
@@ -226,12 +226,16 @@ function targetKey(target: AggregateTarget): string {
  */
 function currentTargetKey(
   model: AggregateModel,
-  platformUsableOf: (group: UpstreamId) => boolean,
+  availabilityOf: (group: UpstreamId) => PlatformAvailability | null,
 ): string | null {
   const candidates = model.targets.filter(
-    (target) => target.enabled && targetBlocker(target) === UnpublishedReason.UNSPECIFIED,
+    (target) => target.enabled && targetBlocker(target, availabilityOf) === UnpublishedReason.UNSPECIFIED,
   );
-  const usable = candidates.filter((target) => platformUsableOf(target.group as UpstreamId));
+  // 平台接得上：有一个账号开着、有能推理的凭据、没在冷却、还有额度（判定说的）。
+  const usable = candidates.filter((target) => {
+    const availability = availabilityOf(target.group as UpstreamId);
+    return Boolean(availability && availability.usable.length > 0);
+  });
   if (!usable.length) return null;
   const sorted = [...usable].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
   return targetKey(sorted[0]);
@@ -263,21 +267,28 @@ export function publishedModels(): PublishedModelView[] {
   // 平台那一层算一次就够：同一个平台的几个目标问的是同一件事，账号与额度
   // 不该在循环里反复读。
   const snapshot = healthSnapshot().data;
-  const platformStates = new Map<string, PlatformState>();
-  const stateOf = (group: UpstreamId): PlatformState => {
+  // 判定只算一遍：面板与路由用的是同一个答案（lib/admin/platform-state.ts）。
+  const availabilities = platformAvailabilities(allPlatforms());
+  const availabilityOf = (group: UpstreamId): PlatformAvailability | null =>
+    availabilities.get(group) ?? null;
+  const platformStates = new Map<string, PlatformLayer>();
+  const stateOf = (group: UpstreamId): PlatformLayer => {
     let state = platformStates.get(group);
     if (!state) {
-      state = platformStateOf(group, snapshot);
+      const availability = availabilityOf(group);
+      state = availability
+        ? platformStateOf(availability, snapshot)
+        : { usable: false, recoversAtMs: 0, reason: "这个平台不在平台的名单里" };
       platformStates.set(group, state);
     }
     return state;
   };
   return listAggregateModels().map((model) => {
     // 一个判断，两处用：公布了就是没有理由，没公布就有理由。
-    const reason = unpublishedReason(model);
+    const reason = unpublishedReason(model, availabilityOf);
     const inherited = effective.get(model.id);
     // The target in force right now: null means nothing can serve this model.
-    const current = currentTargetKey(model, (group) => stateOf(group).usable);
+    const current = currentTargetKey(model, availabilityOf);
     return {
       id: model.id,
       displayName: model.displayName,
@@ -309,9 +320,9 @@ export function publishedModels(): PublishedModelView[] {
         const row = usage.find(
           (u) => u.modelId === model.id && u.group === target.group && u.upstreamModel === target.upstreamModel,
         );
-        // 目标自己接不了（模型没了、平台关了、没登录）是目标的事；目标没问题
+        // 目标自己接不了（模型没了、平台关了、没凭据）是目标的事；目标没问题
         // 但平台接不上（冷却、额度用尽）是平台的事 —— 两种都说清楚。
-        const blocker = targetBlocker(target);
+        const blocker = targetBlocker(target, availabilityOf);
         const state = stateOf(target.group as UpstreamId);
         const blocked = target.enabled && (blocker !== UnpublishedReason.UNSPECIFIED || !state.usable);
         const blockedReason = blocked

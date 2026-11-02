@@ -107,6 +107,8 @@ export const internAiKind = registerCompatiblePlatform({
   login: "code",
   policies: ["single", "fallback"],
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
+  // 推理用的是 Discovery 那把 key：子站 token 只用来补 key 与问额度。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => internAiInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),

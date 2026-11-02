@@ -114,6 +114,8 @@ registerKind({
   login: "device",
   policies: ["single", "fallback"],
   baseUrl: () => MINIMAX_UPSTREAM.replace(/\/messages$/, ""),
+  // 推理用的就是登录会话：access token 本身是推理凭据，没有第二把 key。
+  inferWith: "session",
   credential: (provider) => {
     const raw = minimaxCredentialStatus(provider.id);
     const view = fromUpstreamStatus(raw, "session");

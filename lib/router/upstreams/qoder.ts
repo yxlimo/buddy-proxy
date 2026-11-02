@@ -87,6 +87,7 @@ export async function toQoder(
         ctx.qoderMaxAttempts,
       ),
     settle,
+    ctx.availability,
   );
 
   if (!stream) {
@@ -159,6 +160,7 @@ export async function toQoderLegacy(
         ctx.legacyRetryMs,
       ),
     settle,
+    ctx.availability,
   );
 
   if (!stream) {

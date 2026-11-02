@@ -16,11 +16,8 @@ import Koa from "koa";
 import { configFlag, configNumber } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { LimitError } from "../qoder/transport.ts";
-import { PLATFORMS, platformOf } from "../platforms.ts";
-import { accountsOfPlatform, type ProviderRow } from "../providers.ts";
-import { cooldownUntil, isCoolingDown, unavailableCooldownMs } from "../cooldown.ts";
+import { allPlatforms, platformOfAny } from "../platforms.ts";
 import { upstreamStatusOf } from "../upstream-status.ts";
-import { planWindowEndsAt } from "./account-cooldown.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { recordAggregateUsage } from "../aggregate.ts";
 import type { AggregateEntry } from "./catalog.ts";
@@ -28,7 +25,7 @@ import { select, SelectionStop, byWeight } from "./selection.ts";
 import { describeUpstreamError } from "./provider-selection.ts";
 import { recordUsage, maxTotals, usageTotals } from "../usage.ts";
 import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } from "../agent.ts";
-import { outOfCredits, workbuddyCatalog } from "../admin/upstreams.ts";
+import { workbuddyCatalog } from "../admin/upstreams.ts";
 import {
   toMinimax,
   toZcode,
@@ -41,10 +38,15 @@ import {
 } from "./upstreams/index.ts";
 import {
   routeInGroup,
+  publishedModelUnavailable,
+  unreachableUpstreams,
+  emptyCatalogTargets,
+  catalogueNotReady,
   type Route,
   type RoutingContext,
 } from "./routes.ts";
-import { findAggregate, modelsOfPlatform } from "./catalog-routes.ts";
+import { findAggregate, publishedModel } from "./catalog-routes.ts";
+import { platformAvailabilities, type PlatformAvailability, type PlatformState } from "./availability.ts";
 import { sendError } from "./deliver.ts";
 
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
@@ -63,7 +65,10 @@ type Dialect = "anthropic" | "openai";
  */
 
 /** What the adapters need to know about the router they run in. */
-function upstreamContext(platform?: string): UpstreamContext {
+function upstreamContext(
+  platform?: string,
+  availabilities?: Map<string, PlatformAvailability>,
+): UpstreamContext {
   const uctx: UpstreamContext = {
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
@@ -77,6 +82,8 @@ function upstreamContext(platform?: string): UpstreamContext {
     workbuddyMaxOutput: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model)?.maxOutput ?? 64000,
     workbuddyModel: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model) ?? null,
   };
+  // 这一轮算好的可用性带下去：派发要的是同一份答案，别再读一遍那几张表。
+  if (platform) uctx.availability = availabilities?.get(platform);
   // Keep the usage the upstream reported, so the caller can write it down once
   // the call is over. The upstream may report it in pieces — the Anthropic
   // stream puts the input in message_start and the output in message_delta —
@@ -93,45 +100,30 @@ function upstreamContext(platform?: string): UpstreamContext {
  * One entry per platform, not per account: the path names the platform, and
  * which of its accounts pays is the platform policy's business at call time.
  */
-function routingContext(): RoutingContext {
-  const platforms = new Map<string, { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null }>();
-  const now = Date.now();
-  for (const template of PLATFORMS) {
-    const kind = kindOf(template.kind);
-    if (!kind) continue;
-    const accounts = accountsOfPlatform(template.id);
-    const on = accounts.filter((row) => row.enabled);
-    // 模型目录恒为平台全量：额度用尽或者账号在冷却，说的是「这个平台现在接不了
-    // 这个请求」，不是「这个平台没有这个模型」。前者答 503 并说什么时候恢复，
-    // 后者答 400。把模型从目录里摘掉，客户端看到的是一个不存在的模型名 ——
-    // 它会去改配置，而真正该做的是等一会儿再试
-    const ids = new Set(modelsOfPlatform(template.id));
-    // 开着的账号全都接不了：算一下最早什么时候能试
-    const noCredits = on.length > 0 && outOfCredits(template.id);
-    const usable = noCredits ? [] : on.filter((row) => !isCoolingDown(row.id, now));
-    const untilMs = on.length > 0 && usable.length === 0 ? recoveryTime(on, noCredits, now) : null;
-    platforms.set(template.id, {
-      kind: template.kind,
-      enabled: on.length > 0,
-      accounts: accounts.length,
-      ids,
-      untilMs,
+function routingContext(availabilities: Map<string, PlatformAvailability>): RoutingContext {
+  const platforms = new Map<
+    string,
+    { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null; state: PlatformState }
+  >();
+  for (const [id, availability] of availabilities) {
+    // kind 没登记的平台进不了路由：没有 kind 就没有「怎么跟它说话」。
+    if (!kindOf(availability.kind)) continue;
+    platforms.set(id, {
+      kind: availability.kind,
+      // 开着**而且**有可用凭据的账号才算数：账号建了但没填 key、没登录的，
+      // 进不了路由 —— 那是面板上要填的事，不是等一会儿就会好的事。
+      enabled: availability.serving.length > 0,
+      accounts: availability.accounts,
+      // 模型目录恒为平台全量：额度用尽或者账号在冷却，说的是「这个平台现在接不了
+      // 这个请求」，不是「这个平台没有这个模型」。前者答 503 并说什么时候恢复，
+      // 后者答 400。把模型从目录里摘掉，客户端看到的是一个不存在的模型名 ——
+      // 它会去改配置，而真正该做的是等一会儿再试
+      ids: new Set(availability.ids),
+      untilMs: availability.untilMs,
+      state: availability.state,
     });
   }
   return { platforms };
-}
-
-/**
- * 这个平台的账号最早什么时候能接请求。
- *
- * 额度用尽的看套餐窗口什么时候结束（窗口一换就是新的额度），冷却中的看冷却到
- * 什么时候。都算不出来就按固定冷却时长给一个 —— 客户端要的是一个能照着的数字
- */
-function recoveryTime(rows: ProviderRow[], noCredits: boolean, now: number): number {
-  const times = rows
-    .map((row) => (noCredits ? planWindowEndsAt(row.id, now) : null) ?? cooldownUntil(row.id))
-    .filter((at): at is number => typeof at === "number" && at > now);
-  return times.length ? Math.min(...times) : now + unavailableCooldownMs();
 }
 /**
  * Send the request to the upstream behind a published model.
@@ -145,9 +137,10 @@ async function handleAggregate(
   entry: AggregateEntry,
   body: Json,
   dialect: Dialect,
+  availabilities: Map<string, PlatformAvailability>,
 ): Promise<void> {
   const stream = body.stream === true;
-  const rctx = routingContext();
+  const rctx = routingContext(availabilities);
   const started = Date.now();
 
   // The targets are the candidates: the heaviest one first, and `single` only
@@ -180,7 +173,7 @@ async function handleAggregate(
       // though the upstream knows the model by another one.
       route.label = entry.id;
 
-      const uctx = upstreamContext(route.platform);
+      const uctx = upstreamContext(route.platform, availabilities);
       try {
         await callUpstream(uctx, body, route, dialect, stream, ctx);
       } catch (e) {
@@ -287,7 +280,9 @@ function recordUnroutedUsage(
   const agent = detectAgent(ctx.request.headers).name;
   const session = detectSession(ctx.request.headers);
   // 模拟客户端的名字（面板上显示的那个）：跟打上去的那条用同一个口径。
-  const template = platformOf(target.group);
+  // 模板还是表里的开放平台：两处都是平台，kind 都在那儿。开放平台的 kind 是
+  // 「openai」，登记过了（lib/kinds/openai.ts）。
+  const template = platformOfAny(target.group);
   const kind = template ? kindOf(template.kind) : null;
   recordUsage({
     upstreamId: target.group,
@@ -387,22 +382,47 @@ export async function handle(
   // decides which models exist and which upstream serves them.
   if (!platform) {
     const wanted = String(body.model ?? "").trim();
-    const entry = findAggregate(wanted);
-    if (!entry) {
-      ctx.status = 404;
-      ctx.body = {
-        error: { type: "invalid_request_error", message: `unknown model "${wanted}"` },
-        hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后生效。",
-      };
+    // 先查发布项：模型名写错的请求不该去读账号表、冷却表 —— 那些表只有真的要
+    // 判定「这个平台现在能不能接」时才要读。
+    const published = publishedModel(wanted);
+    if (!published || !published.enabled) {
+      unknownModel(ctx, wanted);
       return;
     }
-    await handleAggregate(ctx, entry, body, dialect);
+    // 需要判定：可用性算一次，下面都用它。
+    //
+    // 不做缓存：面板改了账号、凭据或者冷却之后，路由必须立刻按新值走 ——
+    // 缓存会让路由按旧值走，而面板说已经改好了。
+    const availabilities = platformAvailabilities(allPlatforms());
+    const entry = findAggregate(wanted, availabilities);
+    if (!entry) {
+      // 目标平台接得了，但它的目录是空的：目录还没拿到（账号刚加、目录还没
+      // 同步）。这不是「没有这个模型」—— 平台前缀那条路对同样情况答 503，根
+      // 路由也得一样：两处答的不一样，客户端就会去改模型名，而模型名是对的。
+      const emptyCatalog = emptyCatalogTargets(published.targets, availabilities);
+      if (emptyCatalog.length) {
+        sendError(ctx, catalogueNotReady(emptyCatalog));
+        return;
+      }
+      // 发布着，却没有能接的目标：说清是哪个上游、什么状态、该做什么。
+      // 答「没有这个模型」会让客户端去改模型名，而模型确实发布过。
+      const unreachable = unreachableUpstreams(published.targets, availabilities);
+      if (unreachable.length) {
+        sendError(ctx, publishedModelUnavailable(published.id, unreachable));
+        return;
+      }
+      unknownModel(ctx, wanted);
+      return;
+    }
+    await handleAggregate(ctx, entry, body, dialect, availabilities);
     return;
   }
 
+  // 平台前缀那条路：路由要知道这个平台现在接不接得住，所以可用性要算。
+  const availabilities = platformAvailabilities(allPlatforms());
   let route: Route;
   try {
-    const rctx = routingContext();
+    const rctx = routingContext(availabilities);
     route = routeInGroup(platform!, String(body.model ?? "").trim(), rctx);
   } catch (e) {
     sendError(ctx, e);
@@ -411,10 +431,32 @@ export async function handle(
 
   const stream = body.stream === true;
   try {
-    await callUpstream(upstreamContext(route.platform), body, route, dialect, stream, ctx);
+    await callUpstream(
+      upstreamContext(route.platform, availabilities),
+      body,
+      route,
+      dialect,
+      stream,
+      ctx,
+    );
   } catch (e) {
     sendError(ctx, e);
   }
+}
+
+/**
+ * 「没有这个模型」：根路由只服务面板里发布出来的模型。
+ *
+ * 只有模型真的没发布（或者没有启用的目标）才这样答。发布过、只是目标平台
+ * 现在接不了的那种，答的是「哪个上游、什么状态」—— 客户端拿到「没有这个
+ * 模型」会去改模型名，而模型名是对的。
+ */
+function unknownModel(ctx: Koa.Context, wanted: string): void {
+  ctx.status = 404;
+  ctx.body = {
+    error: { type: "invalid_request_error", message: `unknown model "${wanted}"` },
+    hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后生效。",
+  };
 }
 /** Hand the request to the upstream the route points at. */
 async function callUpstream(
@@ -433,7 +475,9 @@ async function callUpstream(
   uctx.clientSessionId = session.sessionId;
   // The platform says how to talk to it; its accounts are the ones the policy
   // picks from, inside the adapter.
-  const template = platformOf(route.platform);
+  // 平台说的是「怎么跟它说话」（kind）：模板还是表里的开放平台都要认出来，
+  // 认错了就找不到它的 kind，请求也就发不出去。
+  const template = platformOfAny(route.platform);
   const kind = template ? kindOf(template.kind) : null;
   // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
   // 是直接转发的，客户端的会话头跟着过去。模拟客户端的那些（Qoder、

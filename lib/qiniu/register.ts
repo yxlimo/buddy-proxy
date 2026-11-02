@@ -3,13 +3,11 @@
 // 转发是所有开放平台共用的（lib/router/openai-platform.ts）：请求是 OpenAI
 // 形状原样过去，答案原样回来，鉴权是一把 API key 作 Bearer。
 // 七牛云剩下的只有三件事：地址、key 从哪来、额度怎么问。
+//
+// 额度现在是插件（lib/qiniu/quota-plugin.ts）：问门户与读资源包都在那边。这个
+// 文件只把快照里的那一份交给插件 —— 数字只有一份实现，搬来搬去迟早会走样。
 
-import {
-  fromUpstreamStatus,
-  type CreditLotView,
-  type HealthSnapshot,
-  type QuotaView,
-} from "../provider-kinds.ts";
+import { fromUpstreamStatus, type HealthSnapshot } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
@@ -18,50 +16,17 @@ import { qiniuCatalogModels } from "./catalog.ts";
 import { QINIU_INFER_BASE } from "./config.ts";
 import { QINIU_MODELS } from "./models.ts";
 import type { QiniuQuota } from "./quota.ts";
+// import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
+import { qiniuQuotaOfPayload, qiniuQuotaPlugin } from "./quota-plugin.ts";
 
 /**
- * 快照里这个账号的额度。
+ * 快照里这个账号的那一份。
  *
- * 没有就是 null —— 那是「没问到」，不是「没有资源包」。
+ * 没有就是「没问到」—— 不是「没有资源包」。这两种由读的那一份分得清（读不出来
+ * 就是 null）。
  */
-function quotaOf(provider: ProviderRow, snapshot: HealthSnapshot): QiniuQuota | null {
-  const raw = snapshot.qiniu?.[provider.id]?.quota;
-  if (!raw || typeof raw !== "object") return null;
-  const quota = raw as QiniuQuota;
-  if (!Array.isArray(quota.respacks)) return null;
-  return quota;
-}
-
-/** 资源包报成积分：一个包一条，合计是各包的合计。 */
-function qiniuQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
-  const quota = quotaOf(provider, snapshot);
-  if (!quota || !quota.respacks.length) return [];
-  const lots: CreditLotView[] = quota.respacks.map((pack) => ({
-    id: `${pack.itemCode}@${pack.zoneName}`,
-    sourceLabel: `${pack.itemName} · ${pack.zoneName}（${pack.unit}）`,
-    remaining: pack.remaining,
-    // 资源包是预付的：没有到期这一说。
-    expiresAt: 0,
-    status: pack.remaining > 0 ? "可用" : "已用尽",
-  }));
-  const total = quota.respacks.reduce((sum, pack) => sum + pack.total, 0);
-  const used = quota.respacks.reduce((sum, pack) => sum + pack.used, 0);
-  const remaining = quota.respacks.reduce((sum, pack) => sum + pack.remaining, 0);
-  // 单位是 k tokens：不换算，也不跟别家的口径相加（那是另一个数）。
-  const unit = quota.respacks[0]?.unit ?? "";
-  return [
-    {
-      upstreamId: provider.id,
-      accountId: provider.id,
-      credits: {
-        total,
-        used,
-        remaining,
-        lots,
-        note: `资源包：${quota.respacks.length} 项，剩 ${remaining} ${unit}`,
-      },
-    },
-  ];
+function quotaPayload(provider: ProviderRow, snapshot: HealthSnapshot): QiniuQuota | null {
+  return qiniuQuotaOfPayload(snapshot.qiniu?.[provider.id]?.quota);
 }
 
 export const qiniuKind = registerCompatiblePlatform({
@@ -71,19 +36,20 @@ export const qiniuKind = registerCompatiblePlatform({
   login: "api_key",
   policies: ["single", "fallback"],
   baseUrl: () => QINIU_INFER_BASE,
+  // 推理用的是那把 API key：门户 cookie 只用来查额度。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => qiniuInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(qiniuStatus(provider.id), "api_key"),
   // 目录写死：平台报的 78 个比这把 key 的商品分组宽，报出去就会撞 403。
   models: () => qiniuCatalogModels(QINIU_MODELS),
-  quotas: (provider, snapshot) => qiniuQuotas(provider, snapshot),
-  outOfCredits: (provider, snapshot) => {
-    const quota = quotaOf(provider, snapshot);
-    // 读不到不等于没钱：那是「不知道」。
-    if (!quota || !quota.respacks.length) return false;
-    // 所有包都见底才算用尽 —— 还有一包剩着就还能走。
-    return quota.respacks.every((pack) => pack.remaining <= 0);
-  },
+  quotas: (provider, snapshot) => qiniuQuotaPlugin.quotas(provider, quotaPayload(provider, snapshot)),
+  outOfCredits: (provider, snapshot) =>
+    qiniuQuotaPlugin.outOfCredits?.(provider, quotaPayload(provider, snapshot)) ?? false,
+  // 资源包不会自己长回来，所以没有「什么时候回来」这个时刻：插件答 null（「不
+  // 知道」），没人知道的时候调用方要的也是 null。
+  recoverAt: (provider, snapshot) =>
+    qiniuQuotaPlugin.recoverAt?.(provider, quotaPayload(provider, snapshot)) ?? null,
 });
 
 // 推理用 API Key、额度用门户 cookie，两样都不是会话。

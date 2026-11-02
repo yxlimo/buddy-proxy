@@ -1,9 +1,13 @@
-// lib/platforms.ts — 平台：代码里写死的模板。
+// lib/platforms.ts — 平台：代码里的模板，加上表里的开放平台。
 //
 // 一个平台是一个服务，不是一份登录：Qoder 的全球区与中国区是两个平台。
 //
 // 平台的 id 就是请求路径里那一段（`/minimax/v1/messages`），所以它是契约的
-// 一部分，改名等于把调用方的 base_url 打断。新增一个平台只在代码里加一条。
+// 一部分，改名等于把调用方的 base_url 打断。
+//
+// 平台有两处数据源：模板（lib/platform-templates.ts 里的 PLATFORMS）与表里
+// 的开放平台（lib/open-platforms.ts）。模板优先：id 撞了算模板的 —— 把模板
+// 加回代码时不用先清库，回滚是安全的。
 //
 // 账号不在这里：账号是 provider 表里的行，同一个平台下可以有多行。平台说
 // 「怎么说话」（kind）、「在哪个区域」、「支持哪些选账号的策略」；账号说
@@ -12,43 +16,63 @@
 import { store } from "./store.ts";
 import { PROVIDER_POLICIES, type ProviderPolicy } from "./providers.ts";
 import { kindOf } from "./provider-kinds.ts";
+import { listOpenPlatforms, openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "./open-platforms.ts";
+import { PLATFORMS, type Platform } from "./platform-templates.ts";
 // 注册表要有内容，`kindOf` 才答得出「这个平台支持哪几个策略」。这条 import 会
 // 绕成 platforms → kinds → … 的环，所以环上任何模块都不能在模块求值期读别人的
 // 常量（lib/qoder/benefits.ts 就是为此改成函数内取值的）。
 import "./kinds/index.ts";
 
-/** 一个平台：代码里的模板。 */
-export interface Platform {
-  /** 路径里那一段。改它等于打断调用方。 */
-  id: string;
-  /** 怎么跟它说话 —— 也就是 kind 注册表里的那一类。 */
-  kind: string;
-  /** 面板上给人看的名字。 */
-  label: string;
-  /** 区域：cn / global / 空。 */
-  region: string;
-}
+// 模板住在叶子模块里（lib/platform-templates.ts）：表里的开放平台也要认得
+// 模板的 id 名单，而它不引这一层（会成环）。这里转出去，调用方的 import
+// 不用改。
+export { PLATFORMS };
+export type { Platform };
 
-/**
- * 十个平台。
- *
- * The region and the name live with the platform rather than with the account:
- * they are properties of the service, not of who is logged in.
- */
-export const PLATFORMS: Platform[] = [
-  { id: "minimax", kind: "minimax", label: "MiniMax Code", region: "cn" },
-  { id: "qoder", kind: "qoder", label: "Qoder（全球区）", region: "global" },
-  { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },
-  { id: "workbuddy-cn", kind: "workbuddy", label: "WorkBuddy（中国区）", region: "cn" },
-  { id: "workbuddy-global", kind: "workbuddy", label: "WorkBuddy（国际区）", region: "global" },
-  { id: "tokenrhythm", kind: "tokenrhythm", label: "TokenRhythm", region: "" },
-  { id: "sensenova", kind: "sensenova", label: "SenseNova", region: "" },
-  { id: "intern-ai", kind: "intern-ai", label: "书生·端砚", region: "" },
-  { id: "qiniu", kind: "qiniu", label: "七牛云", region: "" },
-  { id: "xinghuo", kind: "xinghuo", label: "讯飞星火", region: "" },
-];
+// 开放平台的 kind 名字住在 lib/open-platforms.ts（那一层不引这一层，环上读它
+// 的常量不会踩到求值顺序）。这里转出去：调用方的 import 不用改。
+export { OPEN_PLATFORM_KIND_NAME };
 
 const BY_ID = new Map(PLATFORMS.map((p) => [p.id, p]));
+
+/**
+ * 已经报过「跟代码里的模板重名」的那些 id。
+ *
+ * allPlatforms() 在每个 /v1/models 请求里都会被调一次：按请求频率报同一个配置
+ * 错误，会把真正的故障淹掉。这是配置错误，一个进程一个 id 说一次就够。
+ */
+const warnedDuplicateIds = new Set<string>();
+
+/**
+ * 全部平台：代码里的模板，加上表里的开放平台。
+ *
+ * 模板在前。id 撞了模板优先 —— 模板里有的 id，表里的那一行当没有。
+ */
+export function allPlatforms(): Platform[] {
+  const extra: Platform[] = [];
+  for (const row of listOpenPlatforms()) {
+    if (BY_ID.has(row.id)) {
+      // 模板优先：表里这一行当没有。说一声是哪一行不生效 —— 不然表里躺着
+      // 一行死平台，没人数得清它为什么不见了。一个 id 一个进程只说一次：
+      // 这行告警的频率不该跟着请求频率走。
+      if (!warnedDuplicateIds.has(row.id)) {
+        warnedDuplicateIds.add(row.id);
+        console.warn(`[PLATFORM] 表里的 ${row.id} 跟代码里的模板重名，这一行不生效`);
+      }
+      continue;
+    }
+    extra.push({ id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" });
+  }
+  return [...PLATFORMS, ...extra];
+}
+
+/** 这个 id 是哪个平台：模板优先，然后是表里的开放平台。不认识的 id 就是 null。 */
+export function platformOfAny(id: string): Platform | null {
+  const template = BY_ID.get(id);
+  if (template) return template;
+  const row = openPlatformOf(id);
+  return row ? { id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" } : null;
+}
 
 /** 这个 id 是哪个平台。不认识的 id 就是 null。 */
 export function platformOf(id: string): Platform | null {
@@ -60,18 +84,25 @@ export function platformsOfKind(kind: string): Platform[] {
   return PLATFORMS.filter((p) => p.kind === kind);
 }
 
-/** 这个 id 是不是一个平台。 */
+/**
+ * 这个 id 是不是一个平台。
+ *
+ * 模板或表里的开放平台都算：两处数据源都是平台。
+ */
 export function isPlatform(id: string): boolean {
-  return BY_ID.has(id);
+  return platformOfAny(id) !== null;
 }
 
 /**
  * 这个平台支持哪些选账号的策略。
  *
  * 注册表说一类上游支持什么，平台照搬；没登记的只给单一。
+ *
+ * 平台有两处数据源（模板与表里的开放平台），两处都认：开放平台的 kind 登记了
+ * 「单一 / 降级」，只认模板的话它会被说成只支持单一。
  */
 export function platformPolicies(platform: string): ProviderPolicy[] {
-  const p = platformOf(platform);
+  const p = platformOfAny(platform);
   if (!p) return ["single"];
   const policies = kindOf(p.kind)?.policies;
   return policies && policies.length ? policies : ["single"];
@@ -103,13 +134,16 @@ export function setPlatformPolicy(
   platform: string,
   policy: ProviderPolicy,
 ): { ok: boolean; message: string } {
-  if (!platformOf(platform)) return { ok: false, message: `没有这个平台：${platform}` };
+  // 平台有两处数据源：模板与表里的开放平台。只认模板的话，开放平台的策略
+  // 改不了（面板会说「没有这个平台」）。
+  const known = platformOfAny(platform);
+  if (!known) return { ok: false, message: `没有这个平台：${platform}` };
   const supported = platformPolicies(platform);
   if (!supported.includes(policy)) {
     const names = supported.map((p) => `${POLICY_TEXT[p] ?? p}（${p}）`).join("、");
     return {
       ok: false,
-      message: `${platformOf(platform)?.label} 不支持这个策略，它只支持：${names}。`,
+      message: `${known.label} 不支持这个策略，它只支持：${names}。`,
     };
   }
   store()
@@ -119,6 +153,16 @@ export function setPlatformPolicy(
     )
     .run(platform, policy, Date.now());
   return { ok: true, message: `策略改成了${POLICY_TEXT[policy] ?? policy}。` };
+}
+
+/**
+ * 忘掉这个平台的生效策略。
+ *
+ * 平台没了，那一行就是一根没人认的指针：下次用同一个 id 建回来，它会凭空
+ * 继承旧策略。没有行就是默认（单一），所以删掉是对的。
+ */
+export function forgetPlatformPolicy(platform: string): void {
+  store().prepare("DELETE FROM platform_policy WHERE platform = ?").run(platform);
 }
 
 /** 给人看的策略名。 */

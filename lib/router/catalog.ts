@@ -9,11 +9,11 @@
 // the prefixed form (`/qoder-cn/v1/models`) with one upstream, and the model
 // ids are the real ones there — the path already says where the model lives.
 
-import { listAggregateModels, type AggregateModel } from "../aggregate.ts";
+import type { AggregateModel } from "../aggregate.ts";
 import type { CatalogModel } from "../catalog-models.ts";
-import { accountsOfPlatform } from "../providers.ts";
-import { PLATFORMS } from "../platforms.ts";
+import { allPlatforms } from "../platforms.ts";
 import { kindOf } from "../provider-kinds.ts";
+import { platformAvailabilities, type PlatformAvailability } from "./availability.ts";
 import "../kinds/index.ts";
 
 export type { CatalogModel };
@@ -50,53 +50,26 @@ export interface CatalogGroup {
  * first account of the platform is asked for it — an account row is what the
  * kind's `models()` takes.
  *
- * A platform with no account, or with every account turned off, serves
- * nothing: a request for one of its models is refused, and listing them would
- * say otherwise.
- */
-/**
- * 已发布模型的目标里声明过的上游模型 id，按平台分。
+ * A platform with no usable account serves nothing: a request for one of its
+ * models is refused, and listing them would say otherwise. 「可用」是开着**而且**
+ * 有可用凭据的账号 —— 额度用尽与冷却不摘模型（那是「现在接不了这个请求」，
+ * 不是「没有这个模型」）。
  *
- * 面板上可以在目标里手填一个上游模型 id —— 那是一次**明确的声明**：填的人知道
- * 那个上游有这个名字，只是目录里没有。上游的 /v3/config 本来就不是它实际能服务
- * 什么的完整清单（实测 workbuddy.cn 的 deepseek-v4.1-flash、kimi-k3.1-pro 后端
- * 都能正常出话，目录里一个字都没提），所以必须能补。
- *
- * 只认已发布模型里**启用着**的目标：随手乱写的名字没在任何地方声明过，仍然会被
- * routeInGroup 拒掉，那才是它该有的待遇。
+ * availabilities 是这一轮算好的可用性：同一个请求里算过一次就传下来，别再读
+ * 一遍那几张表。不给就自己算。
  */
-export function declaredModels(): Map<string, string[]> {
-  const byPlatform = new Map<string, string[]>();
-  for (const model of listAggregateModels()) {
-    for (const target of model.targets) {
-      if (!target.enabled) continue;
-      const list = byPlatform.get(target.group) ?? [];
-      if (!list.includes(target.upstreamModel)) list.push(target.upstreamModel);
-      byPlatform.set(target.group, list);
-    }
-  }
-  return byPlatform;
-}
-
-export function platformGroups(): CatalogGroup[] {
-  const declared = declaredModels();
+export function platformGroups(availabilities?: Map<string, PlatformAvailability>): CatalogGroup[] {
+  // allPlatforms() 每次调用读一次 platform 表（开放平台在那张表里）。
+  const map = availabilities ?? platformAvailabilities(allPlatforms());
   const groups: CatalogGroup[] = [];
-  for (const template of PLATFORMS) {
-    const kind = kindOf(template.kind);
+  for (const [group, availability] of map) {
+    const kind = kindOf(availability.kind);
     if (!kind) continue;
-    const accounts = accountsOfPlatform(template.id);
-    const on = accounts.filter((row) => row.enabled);
-    if (!on.length) continue;
-    const models = [...kind.models(on[0])];
-    // 声明过、目录里却没有的：补进来。元数据不知道就不写 —— 目录没给，猜一个
-    // 上下文长度等于对客户端撒谎。
-    for (const id of declared.get(template.id) ?? []) {
-      if (!models.some((m) => m.id === id)) {
-        models.push({ id, displayName: id, reasoning: false, toolCall: false });
-      }
-    }
+    // 没有可用账号的平台不进 group。
+    if (!availability.serving.length) continue;
+    const models = [...availability.catalog];
     if (!models.length) continue;
-    groups.push({ group: template.id, models });
+    groups.push({ group, models });
   }
   return groups;
 }

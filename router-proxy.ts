@@ -31,6 +31,7 @@ import { app } from "./lib/router/app.ts";
 import { modelsOfPlatform } from "./lib/router/catalog-routes.ts";
 import { startUpstreams } from "./lib/router/bootstrap.ts";
 import { assertLoginFlows } from "./lib/login-flow.ts";
+import { assertQuotaPlugins } from "./lib/quota-plugins.ts";
 
 const PORT = configNumber("ROUTER_PORT", 6450);
 const HOST = configString("ROUTER_HOST", "0.0.0.0");
@@ -65,6 +66,11 @@ initWorkBuddyCatalog();
 // 「登录」才收到一句 400。放在 kinds/index.ts 里不行：那个文件被 import
 // 的时机比各模块登记 flow 早。
 assertLoginFlows();
+
+// 额度插件也是模块求值期的副作用：各平台在自己的模块里登记，所以这一句跟上面
+// 那句一样，得等所有模块都 import 完。它只 warn 不抛：开放平台的插件 id 是用户
+// 填的，填错不该让谁的服务都起不来。
+assertQuotaPlugins();
 
 const server = app.listen(PORT, HOST, () => {
   const base = `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`;

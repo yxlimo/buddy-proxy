@@ -37,11 +37,14 @@ import {
   networkCooldownMs,
   rateCooldownMs,
   unavailableCooldownMs,
-  isIgnoredPlanWindow,
 } from "../cooldown.ts";
-import { peekHealthSnapshot } from "../health-cache.ts";
 import { cooldownUntilOf } from "../upstream-status.ts";
+import { exhaustedPlanWindowEndsAt, planWindowEndsAt } from "../plan-window.ts";
 import { classifyUpstreamError, isDegradableUpstreamError } from "./provider-selection.ts";
+
+// 套餐窗口那一问住在 lib/plan-window.ts：admin 层也算同一个时间，它不引路由层。
+// 这里转出去，调用方的 import 不用改。
+export { planWindowEndsAt } from "../plan-window.ts";
 
 /** 恢复时间之后再多留一分钟：上游说的那一刻是开始恢复，不是那一刻就好。 */
 export const COOLDOWN_GRACE_MS = 60_000;
@@ -233,91 +236,6 @@ function normalizeZone(zone: string): string {
   const found = /^([+-])(\d{2}):?(\d{2})$/.exec(zone);
   if (!found) return "+08:00";
   return `${found[1]}${found[2]}:${found[3]}`;
-}
-
-/**
- * 账号当前的套餐窗口什么时候结束。
- *
- * 健康快照里的 tokenPlan.windows：每个窗口有 5 小时与 7 天两个到期时间。
- *
- * 先看「见底」的窗口：额度用完了的那个窗口，账号才能真的干活，要等它结束。
- * 见底的窗口有多个（5 小时与 7 天都见底）时取最晚的那个 —— 少一个都不行。
- *
- * 没有见底的窗口，就退回「还没到的最早那个到期点」：那时候额度还在，窗口
- * 什么时候换跟恢复时间没关系，只是没有更好的说法。
- */
-export function planWindowEndsAt(accountId: string, now = Date.now()): number | null {
-  const snapshot = peekHealthSnapshot<any>();
-  const mine = snapshot?.data?.minimax?.[accountId];
-  const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
-  // 见底的窗口：它们结束了账号才有额度。
-  let exhausted: number | null = null;
-  // 所有还没到的到期点：没有见底的窗口时的退路。
-  let soonest: number | null = null;
-  for (const window of windows) {
-    if (isIgnoredPlanWindow(window)) continue;
-    for (const key of ["intervalEndsAt", "weeklyEndsAt"]) {
-      const at = timeMs(window?.[key]);
-      if (!at || at <= now) continue;
-      if (soonest === null || at < soonest) soonest = at;
-    }
-    // 这一格见底了（百分比 0）：这一格的结束时间就是它的恢复时间。
-    const intervalAt = timeMs(window?.intervalEndsAt);
-    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
-      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
-    }
-    const weeklyAt = timeMs(window?.weeklyEndsAt);
-    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
-      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
-    }
-  }
-  return exhausted ?? soonest;
-}
-
-/**
- * 见底的窗口什么时候结束（没有见底的窗口就是 null）。
- *
- * 这才是「额度什么时候回来」：窗口还有额度的时候，它的到期点跟恢复时间无关
- * —— 那只是一个窗口边界，账号现在就能干活。
- */
-function exhaustedPlanWindowEndsAt(accountId: string, now = Date.now()): number | null {
-  const snapshot = peekHealthSnapshot<any>();
-  const mine = snapshot?.data?.minimax?.[accountId];
-  const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
-  let exhausted: number | null = null;
-  for (const window of windows) {
-    if (isIgnoredPlanWindow(window)) continue;
-    const intervalAt = timeMs(window?.intervalEndsAt);
-    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
-      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
-    }
-    const weeklyAt = timeMs(window?.weeklyEndsAt);
-    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
-      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
-    }
-  }
-  return exhausted;
-}
-
-/**
- * 这一格还剩多少额度（百分比）。
- *
- * 平台没报这个数字就当它还有额度（100）：没有数字不等于没有额度。
- */
-function percentLeft(value: unknown): number {
-  if (value === null || value === undefined || value === "") return 100;
-  const text = String(value).replace("%", "").trim();
-  const raw = Number(text);
-  return Number.isFinite(raw) ? raw : 100;
-}
-
-/** 平台给的时间：毫秒或者 ISO 字符串。 */
-function timeMs(value: unknown): number {
-  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : 0;
-  const text = String(value ?? "").trim();
-  if (!text) return 0;
-  const parsed = Date.parse(text);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 /**

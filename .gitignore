@@ -32,5 +32,6 @@ mise.local.toml
 # Python
 __pycache__/
 *.pyc
+# 冒烟测试的日志目录（smoke.sh 建的）
 test/.smoke-logs/
 test/.tmp/

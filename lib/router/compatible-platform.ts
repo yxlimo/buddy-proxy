@@ -38,6 +38,13 @@ export interface CompatiblePlatform {
   what?: string;
   /** 登录办法。key 类平台通常是 "api_key"。 */
   login: ProviderKind["login"];
+  /**
+   * 这一类上游发推理请求时拿哪一份凭据。
+   *
+   * 开放平台都是 key 鉴权，所以这一项基本是 "api_key"；写在这里是为了让
+   * 每一类都明说自己的推理凭据是哪一份，不靠默认值猜。
+   */
+  inferWith: ProviderKind["inferWith"];
   /** 要不要区域。 */
   needsRegion?: boolean;
   /** 支持的生效策略。默认 ["single", "fallback"]。 */
@@ -79,6 +86,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     openPlatform: true,
     policies: platform.policies ?? ["single", "fallback"],
     baseUrl: platform.baseUrl,
+    inferWith: platform.inferWith,
     credential: platform.credential ?? (() => missingCredential()),
     models: platform.models,
     quotas: platform.quotas ?? (() => []),

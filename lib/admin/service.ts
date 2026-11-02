@@ -18,6 +18,7 @@ import {
   AdminService,
   BalanceLotSchema,
   AddAccountResponseSchema,
+  AddPlatformResponseSchema,
   BalanceSummarySchema,
   BeginLoginResponseSchema,
   BenefitStatusSchema,
@@ -29,6 +30,7 @@ import {
   CreditLotSchema,
   CreditSummarySchema,
   DeleteAccountResponseSchema,
+  DeletePlatformResponseSchema,
   DeletePublishedModelResponseSchema,
   ExchangeLoginCodeResponseSchema,
   GetBalanceResponseSchema,
@@ -44,14 +46,19 @@ import {
   ListCredentialsResponseSchema,
   ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
+  ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
   ListUsageEventsResponseSchema,
   LoginSessionSchema,
   LoginWithPasswordResponseSchema,
   PublishedModelSchema,
   ModelMetadataSchema,
+  OpenPlatformSchema,
   PublishedTargetSchema,
+  QuotaPluginFieldSchema,
+  QuotaPluginSchema,
   RefreshCredentialResponseSchema,
+  RefreshPlatformModelsResponseSchema,
   SetProviderKeysResponseSchema,
   RestartSystemResponseSchema,
   RunBenefitNowResponseSchema,
@@ -62,6 +69,7 @@ import {
   TailLogResponseSchema,
   TestCredentialResponseSchema,
   LogoutAccountResponseSchema,
+  UpdatePlatformResponseSchema,
   UpdateProviderResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
@@ -83,14 +91,17 @@ import {
   upstreamAccountCount,
   upstreamBaseUrl,
   upstreamCredential,
+  upstreamCredentialOf,
   upstreamModelCount,
   upstreamPolicy,
   upstreamRegion,
   upstreamState,
+  upstreamStateOf,
   upstreamCooling,
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
+import { platformAvailabilities, type PlatformAvailability } from "./platform-state.ts";
 import { coolingOf } from "./upstream-state.ts";
 import {
   deleteAccount,
@@ -99,6 +110,7 @@ import {
   logoutAccount,
   refreshCredential,
   testCredential,
+  type AccountView,
 } from "./accounts.ts";
 import { credentialStateText, setProviderKeys } from "./credentials.ts";
 import {
@@ -118,7 +130,26 @@ import {
   provider,
   updateProvider,
 } from "../providers.ts";
-import { PLATFORMS, platformOf, platformPolicies, platformPolicy, setPlatformPolicy as writePlatformPolicy } from "../platforms.ts";
+import {
+  createOpenPlatform,
+  deleteOpenPlatform,
+  listOpenPlatforms,
+  openPlatformOf,
+  updateOpenPlatform,
+  type OpenPlatformRow,
+} from "../open-platforms.ts";
+import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
+import { allQuotaPlugins } from "../quota-plugins.ts";
+import { listAggregateModels } from "../aggregate.ts";
+import {
+  PLATFORMS,
+  allPlatforms,
+  forgetPlatformPolicy,
+  platformOfAny,
+  platformPolicies,
+  setPlatformPolicy as writePlatformPolicy,
+  type Platform,
+} from "../platforms.ts";
 import { kindOf, selectableKinds } from "../provider-kinds.ts";
 import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
@@ -245,34 +276,49 @@ export function quotaMessage(quota: QuotaView) {
 /**
  * 一个平台在面板上的样子。
  *
- * 平台是代码里的模板（九个服务），所以这一条永远在；它名下的账号是数据，
- * 有几个算几个 —— 一个没有就是空的账号列表。
+ * 平台有两处数据源：代码里的模板与表里的开放平台，所以这一条可能来自任意
+ * 一处；它名下的账号是数据，有几个算几个 —— 一个没有就是空的账号列表。
+ *
+ * 平台的样子（名字、kind）由调用方给：它一次问齐了所有平台的样子，免得每个
+ * 平台再查一遍库。判定也是一次算齐的：面板与路由看的必须是同一个答案
+ * （lib/admin/platform-state.ts）。
  */
-function platformMessage(id: string) {
-  const template = platformOf(id);
-  const credential = upstreamCredential(id);
+function platformMessage(
+  id: string,
+  platform: Platform | null,
+  availability: PlatformAvailability | null,
+  accounts: Map<string, AccountView>,
+  open: OpenPlatformRow | null,
+) {
+  const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
   const quota = upstreamQuota(id);
   // 冷却：路由绕开这个账号到什么时候，面板要看得见。
   const cooling = upstreamCooling(id);
+  // 面板上该做什么：冷却与额度那一层的话更细（几点的窗口、为什么冷却、几个
+  // 账号里的几个），别的（没有账号、账号都关着、没有凭据）只有判定说得清。
+  const stateReason = availability ? cooling.stateReason || availability.advice : cooling.stateReason;
+  const enabled = availability
+    ? availability.on > 0
+    : accountsOfPlatform(id).some((row) => row.enabled);
   return create(UpstreamSchema, {
     id,
     // 平台的名字是模板里的那个（“Qoder（全球区）”）—— 账号的别名不能顶在这里：
     // 一个平台下有几个账号时，用哪个的别名都是错的。
-    label: template?.label ?? id,
-    kind: template?.kind ?? "",
+    label: platform?.label ?? id,
+    kind: platform?.kind ?? "",
     // 现在在生效的值：名下有没有开着的账号。平台自己没有开关，开关在账号上。
-    enabled: accountsOfPlatform(id).some((row) => row.enabled),
+    enabled,
     // 名下的多个账号怎么选。策略在平台层。
     policy: upstreamPolicy(id),
     // 这个平台支持哪几个策略：面板只给它支持的那几个。
     policies: platformPolicies(id).map(policyEnum),
     // 名下有几个账号。面板用它判「策略有没有用」。
-    accountCount: upstreamAccountCount(id),
+    accountCount: availability ? availability.accounts : upstreamAccountCount(id),
     // 名下有没有开着的账号 —— 跟 enabled 同一个答案，两个名字一个是给机器判
     // 断用的、一个是给面板画开关用的，别让它们各说各话。
-    hasEnabledAccount: accountsOfPlatform(id).some((row) => row.enabled),
+    hasEnabledAccount: enabled,
     // 现在能不能接：额度用尽、正在登录这些面板自己拼不出来的事，后端知道。
-    state: upstreamState(id),
+    state: availability ? upstreamStateOf(availability) : upstreamState(id),
     modelCount: upstreamModelCount(id),
     // 凭据在账号上：这里报的是名下最好的那一份，要逐个看就在 accounts 里。
     credential: create(CredentialStatusSchema, {
@@ -288,14 +334,26 @@ function platformMessage(id: string) {
     quota: quota ? quotaMessage(quota) : undefined,
     baseUrl: upstreamBaseUrl(id),
     region: upstreamRegion(id),
+    // 额度插件与模型目录：只有开放平台有这两格（模板平台是空串与 false）。
+    quotaPlugin: open?.quotaPlugin ?? "",
+    modelsAuto: open?.models.auto ?? false,
+    // 这是不是一个开放平台：表里的那一行，不是代码里的模板。
+    isOpenPlatform: open !== null,
     // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
     cooldownUntilMs: BigInt(cooling.cooldownUntilMs),
     cooldownReason: cooling.cooldownReason,
+    // 最早能再接的时刻：面板自己的那个（0 = 算不出来，不猜）。
+    //
+    // 判定那边也有一个时刻（untilMs），但那是路由用的「最早能试的时刻」：算不
+    // 出来时它会给一个固定时长，而面板的契约说 0 是「算不出来」。两处的口径
+    // 不一样，记在交付记录里。
     recoversAtMs: BigInt(cooling.recoversAtMs),
-    stateReason: cooling.stateReason,
-    accounts: accountsOfPlatform(id).flatMap((row) => {
-      const account = accountRowMessage(row.id);
-      return account ? [account] : [];
+    stateReason,
+    accounts: (availability ? availability.rows : accountsOfPlatform(id)).flatMap((row) => {
+      // 账号视图是外面算好的那一份：这里再读一遍凭据的话，一个平台下的每个
+      // 账号都要把全部账号的凭据读一遍（面板打开一次就是 O(N²)）。
+      const account = accounts.get(row.id);
+      return account ? [accountRowMessage(account)] : [];
     }),
   });
 }
@@ -338,13 +396,18 @@ function credentialStatusMessage(credentialId: string) {
 /** 一个账号，面板看的形状。 */
 function accountMessage(accountId: string) {
   if (!accountId) return undefined;
-  return accountRowMessage(accountId);
+  const row = listAccounts().find((a) => a.id === accountId);
+  return row ? accountRowMessage(row) : undefined;
 }
 
-/** 一个账号行，面板看的形状。 */
-function accountRowMessage(accountId: string) {
-  const row = listAccounts().find((a) => a.id === accountId);
-  if (!row) return undefined;
+/**
+ * 一个账号行，面板看的形状。
+ *
+ * 账号视图（凭据、状态）由调用方算好传进来：账号行自己再去读一遍凭据的话，
+ * 一个平台下的每个账号都要把全部账号的凭据重读一遍 —— 面板打开一次就是
+ * O(N²) 次读库。
+ */
+function accountRowMessage(row: AccountView) {
   // 额度是**这个账号自己的**：平台行上那个是名下账号合起来的，账号行上要
   // 看得见自己那份（两个 MiniMax 账号各有各的套餐）。
   const quota = upstreamQuota(row.id);
@@ -399,11 +462,54 @@ function loginErrorText(e: unknown): string {
   return hint || code || "登录未成功。";
 }
 
-/** 九个平台，面板看的那一层。 */
+/**
+ * 平台：模板与表里的开放平台，面板看的那一层。
+ *
+ * 两处数据源都在列：代码里的模板与表里的开放平台（allPlatforms）。开放平台的
+ * kind 已经接进注册表（lib/kinds/openai.ts），列出来不是一行接不了请求的东西。
+ */
 function platformMessages() {
-  return PLATFORMS.flatMap((platform) => {
-    const message = platformMessage(platform.id);
+  // 平台的样子一次问齐（platformOfAny），别每个平台再查一遍库。
+  const platforms = allPlatforms();
+  const known = new Map(platforms.map((p) => [p.id, platformOfAny(p.id)]));
+  // 判定也一次算齐：面板与路由看的必须是同一个答案。
+  const availabilities = platformAvailabilities(platforms);
+  // 账号视图也一次算齐：每个账号行自己去读凭据的话，平台一多就是 O(N²)。
+  const accounts = new Map(listAccounts().map((a) => [a.id, a]));
+  // 开放平台那一行：表里的行减去跟代码模板重名的那些（模板优先，那一行不生效）。
+  const templateIds = new Set(PLATFORMS.map((p) => p.id));
+  const openRows = new Map(
+    listOpenPlatforms()
+      .filter((row) => !templateIds.has(row.id))
+      .map((row) => [row.id, row]),
+  );
+  return platforms.flatMap((platform) => {
+    const message = platformMessage(
+      platform.id,
+      known.get(platform.id) ?? null,
+      availabilities.get(platform.id) ?? null,
+      accounts,
+      openRows.get(platform.id) ?? null,
+    );
     return message ? [message] : [];
+  });
+}
+
+/**
+ * 一个开放平台，面板看的形状。
+ *
+ * 只报表里那一行：模板平台不是开放平台，它们没有这一行可报。
+ */
+function openPlatformMessage(row: OpenPlatformRow) {
+  return create(OpenPlatformSchema, {
+    id: row.id,
+    label: row.label,
+    baseUrl: row.baseUrl,
+    quotaPlugin: row.quotaPlugin,
+    models: row.models.items,
+    modelsAuto: row.models.auto,
+    modelsFetchedAtMs: BigInt(row.models.fetchedAt),
+    modelsSource: row.models.source,
   });
 }
 
@@ -440,7 +546,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   /* ---------------- 平台与账号 ---------------- */
 
   async listUpstreams() {
-    // 列表是代码里的那九个模板，不是数据库的：平台删不掉，账号才是数据 ——
+    // 列表是平台的数据源（代码里的模板 + 表里的开放平台），不是账号的：
     // 一个平台下没有账号也照样列出来，面板要在它下面「新增账号」。
     return create(ListUpstreamsResponseSchema, { upstreams: platformMessages() });
   },
@@ -522,6 +628,137 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       ok: result.ok,
       pendingRestart: pendingRestart(),
       message: result.message,
+    });
+  },
+
+  /* ---------------- 开放平台 ---------------- */
+
+  async addPlatform(request) {
+    const id = String(request.id ?? "");
+    // 校验与归一都在那一层（id 的规矩、地址的归一、模板与账号的重名）。
+    const result = createOpenPlatform({
+      id,
+      label: String(request.label ?? ""),
+      baseUrl: String(request.baseUrl ?? ""),
+    });
+    if (!result.ok) {
+      return create(AddPlatformResponseSchema, { ok: false, message: result.message });
+    }
+    console.log(`[ADMIN] 加了开放平台 ${id}`);
+    const row = openPlatformOf(id.trim());
+    return create(AddPlatformResponseSchema, {
+      ok: true,
+      message: result.message,
+      platform: row ? openPlatformMessage(row) : undefined,
+    });
+  },
+
+  async updatePlatform(request) {
+    const id = String(request.id ?? "").trim();
+    // 契约的约定：空串 = 清空那一格。名字与地址除外（平台得有名字与地址，
+    // 空串是错，不是清空）。
+    const models = (request.models ?? []).map((m) => String(m).trim()).filter(Boolean);
+    const patch: {
+      label?: string;
+      baseUrl?: string;
+      quotaPlugin?: string;
+      models?: string[];
+      modelsAuto?: boolean;
+      source?: "auto" | "manual";
+    } = {
+      label: String(request.label ?? ""),
+      baseUrl: String(request.baseUrl ?? ""),
+      // 空串 = 不选插件。
+      quotaPlugin: String(request.quotaPlugin ?? ""),
+    };
+    if (!request.modelsAuto && models.length) {
+      // 手工目录：写死的那一份，自动拉不许覆盖它。
+      patch.models = models;
+      patch.modelsAuto = false;
+      patch.source = "manual";
+    } else {
+      // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
+      // 只翻自动那一格。
+      patch.modelsAuto = request.modelsAuto === true;
+    }
+    const result = updateOpenPlatform(id, patch);
+    if (!result.ok) {
+      return create(UpdatePlatformResponseSchema, { ok: false, message: result.message });
+    }
+    console.log(`[ADMIN] 开放平台 ${id} 改了`);
+    const row = openPlatformOf(id.trim());
+    return create(UpdatePlatformResponseSchema, {
+      ok: true,
+      message: result.message,
+      platform: row ? openPlatformMessage(row) : undefined,
+    });
+  },
+
+  async deletePlatform(request) {
+    const id = String(request.id ?? "").trim();
+    // 模板平台删不掉：它是代码，不是数据。
+    if (PLATFORMS.some((p) => p.id === id)) {
+      return create(DeletePlatformResponseSchema, { ok: false, message: "这个 id 是代码里的平台，删不了" });
+    }
+    const row = openPlatformOf(id);
+    if (!row) {
+      return create(DeletePlatformResponseSchema, { ok: false, message: `没有这个平台：${id}` });
+    }
+    // 名下的账号：连凭据、冷却、健康快照里它的那一段一起删（走删账号那条路，
+    // 它知道每个平台的凭据放在哪）。
+    const accounts = accountsOfPlatform(id);
+    for (const account of accounts) deleteAccount(account.id);
+    // 指向这个平台的已发布模型：目标留着，面板上它显示「平台已停用」——
+    // 这与平台停用、账号被删时的做法一样（lib/admin/models.ts 的 targetBlocker：
+    // 不认识的分组当作关着）。删掉目标就是发明新规则了。
+    const affected = listAggregateModels().filter((model) =>
+      model.targets.some((target) => target.group === id),
+    );
+    const deleted = deleteOpenPlatform(id);
+    if (!deleted.ok) {
+      return create(DeletePlatformResponseSchema, { ok: false, message: deleted.message });
+    }
+    // 平台自己的策略也清掉：平台没了，那一行就是一根没人认的指针（下次用
+    // 同一个 id 建回来，它会凭空继承旧策略）。
+    forgetPlatformPolicy(id);
+    const notes = [`删掉了 ${row.label}`, `清了 ${accounts.length} 个账号`];
+    if (affected.length) {
+      notes.push(`${affected.length} 个已发布模型指向它，现在接不了（面板上写着平台已停用）`);
+    }
+    console.log(`[ADMIN] 删了开放平台 ${id}（连 ${accounts.length} 个账号一起）`);
+    return create(DeletePlatformResponseSchema, { ok: true, message: notes.join("，") });
+  },
+
+  async refreshPlatformModels(request) {
+    const id = String(request.platformId ?? "").trim();
+    // 拉不到不是错误：原来那份目录留着（答复里说的就是现在这份）。
+    const outcome = await refreshOpenPlatformCatalog(id).catch((e) => ({
+      ok: false,
+      message: `拉不到模型目录：${(e as Error)?.message ?? String(e)}`,
+    }));
+    const row = openPlatformOf(id);
+    return create(RefreshPlatformModelsResponseSchema, {
+      ok: outcome.ok,
+      message: outcome.message,
+      models: row?.models.items ?? [],
+    });
+  },
+
+  async listQuotaPlugins() {
+    return create(ListQuotaPluginsResponseSchema, {
+      plugins: allQuotaPlugins().map((plugin) =>
+        create(QuotaPluginSchema, {
+          id: plugin.id,
+          label: plugin.label,
+          fields: plugin.fields.map((field) =>
+            create(QuotaPluginFieldSchema, {
+              name: field.name,
+              label: field.label,
+              secret: field.secret,
+            }),
+          ),
+        }),
+      ),
     });
   },
 

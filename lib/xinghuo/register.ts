@@ -9,6 +9,7 @@
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
+import { declareNoQuotaPlugin } from "../quota-plugins.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { xinghuoInferenceKey, xinghuoStatus } from "./account.ts";
 import { XINGHUO_INFER_BASE } from "./config.ts";
@@ -20,6 +21,8 @@ export const xinghuoKind = registerCompatiblePlatform({
   // 面板上填一把 key 就行：没有登录这一说。
   login: "api_key",
   baseUrl: () => XINGHUO_INFER_BASE,
+  // 只有这一把 key：它既是推理凭据，也是这个账号唯一的凭据。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),
@@ -29,3 +32,7 @@ export const xinghuoKind = registerCompatiblePlatform({
 
 // 只有一把 API Key：没有会话，也没有额度接口要登。
 declareNoLoginFlow("xinghuo", "星火用 API Key，没有会话登录");
+
+// 星火没有额度接口：面板上那一格写的是「未知」，不是 0 —— 上游没有额度可问，
+// 说成 0 就是拿「没钱」去顶「没人问得到」。
+declareNoQuotaPlugin("xinghuo", "星火没有额度接口，面板上只能显示「未知」");

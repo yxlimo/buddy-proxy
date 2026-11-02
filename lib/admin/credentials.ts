@@ -9,17 +9,31 @@
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { writeQiniuAccount } from "../qiniu/account.ts";
 import { writeXinghuoKey } from "../xinghuo/account.ts";
-import { providerKindOf } from "../providers.ts";
+import { writeOpenPlatformKey } from "../open-platform-credentials.ts";
+import { quotaPluginOf } from "../quota-plugins.ts";
+import { writePluginField } from "../quota-plugin-credentials.ts";
+import { openPlatformOf, type OpenPlatformRow } from "../open-platforms.ts";
+import { platformOf } from "../platforms.ts";
+import { provider, providerKindOf } from "../providers.ts";
 
 /**
- * 上游报的状态 → 契约里的枚举。
+ * 这个账号是不是开放平台的账号。
  *
- * "usable" 是面板自己的说法：这条凭据能用。
- * "anonymous" 在**上游**那里是「没登录」的意思（qoder、workbuddy、minimax
- * 都这么报），所以上游的 anonymous 要算「没有凭据」—— 那是
- * `fromUpstreamStatus` 那里单独判的。这里的 anonymous 是「有凭据，但还没
- * 过期」—— 账号密码型上游（TokenRhythm）的常态。
+ * 开放平台是用户自己加的平台（表里的那一行）。它的 kind 登记了（"openai"），
+ * 但这里问的不是 kind：账号行说它属于哪个平台，那一行在平台表里、且不跟代码
+ * 里的模板重名，就是开放平台。
+ *
+ * 表里有、代码里也有的 id 算模板：模板优先（lib/platforms.ts），那个账号不是
+ * 开放平台的账号 —— 它按模板那一套算。
  */
+export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null {
+  const row = provider(accountId);
+  if (!row) return null;
+  const open = openPlatformOf(row.platform);
+  if (!open) return null;
+  return platformOf(row.platform) === null ? open : null;
+}
+
 /**
  * 写一个账号的 API Key 列表。
  *
@@ -27,6 +41,8 @@ import { providerKindOf } from "../providers.ts";
  * 各的。
  *
  * 七牛云：推理用的 API key 与门户 cookie 两段。讯飞星火：一把推理用的 key。
+ * 开放平台：一把推理用的 API key（位置就是第一个），后面几把按平台所选额度
+ * 插件的 fields 顺序，一段一段写进插件要的那个位置。
  *
  * MiniMax Code 网关不收 key：它用登录的会话，套餐额度也跟着会话走。
  *
@@ -37,6 +53,39 @@ export function setProviderKeys(
   upstreamId: string,
   keys: string[],
 ): { ok: boolean; message: string; count: number } {
+  // 开放平台的账号：第一把是推理用的 API key（空的那把表示清掉它），后面几把
+  // 是额度插件要的那几段。这条先判：它看的是账号属于哪个平台，比「哪一类
+  // 上游」更具体。
+  const openPlatform = openPlatformOfAccount(upstreamId);
+  if (openPlatform) {
+    // 位置就是顺序：第一把是推理用的 API key（它有自己的位置 :key），后面几把
+    // 按平台所选插件的 fields 顺序，一段一段写进插件要的那个位置。空的那段表示
+    // 清掉它（面板上重填一次就是替换的意思）。
+    const apiKey = String(keys[0] ?? "").trim();
+    let count = writeOpenPlatformKey(upstreamId, apiKey);
+    const parts: string[] = [];
+    if (apiKey) parts.push("API key");
+    const plugin = quotaPluginOf(openPlatform.quotaPlugin?.trim() ?? "");
+    const fields = plugin?.fields ?? [];
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      if (writePluginField(upstreamId, field.name, String(keys[i + 1] ?? "").trim())) {
+        count++;
+        parts.push(field.label);
+      }
+    }
+    // 平台没选插件（或插件没登记）却给了多于一把 key：多的那些没地方去，忽略
+    // 掉，不报错 —— 用户可能刚改完插件，拦下来反而让人存不下去。
+    let message = parts.length
+      ? `写了${openPlatform.label}的 ${parts.join(" 与 ")}`
+      : fields.length
+        ? `清掉了${openPlatform.label}的凭据`
+        : `清掉了${openPlatform.label}的 API key`;
+    if (keys.length > 1 + fields.length) {
+      message += plugin ? "（多余的 key 没写）" : "（这个平台没有额度插件，多余的 key 没写）";
+    }
+    return { ok: true, message, count };
+  }
   const kind = providerKindOf(upstreamId);
   if (kind?.kind === "minimax" || upstreamId === "minimax") {
     // Code 网关只用会话：额度也走会话，没有要贴的 key。
@@ -76,6 +125,15 @@ export function setProviderKeys(
   return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
 }
 
+/**
+ * 上游报的状态 → 契约里的枚举。
+ *
+ * "usable" 是面板自己的说法：这条凭据能用。
+ * "anonymous" 在**上游**那里是「没登录」的意思（qoder、workbuddy、minimax
+ * 都这么报），所以上游的 anonymous 要算「没有凭据」—— 那是
+ * `fromUpstreamStatus` 那里单独判的。这里的 anonymous 是「有凭据，但还没
+ * 过期」—— 账号密码型上游（TokenRhythm）的常态。
+ */
 export function credentialState(status: string): CredentialState {
   switch (status) {
     case "authenticated":

@@ -23,6 +23,14 @@ import type { UpstreamContext } from "./router/upstreams/index.ts";
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code" | "api_key";
 
+/**
+ * 这一类上游发推理请求时拿哪一份凭据。
+ *
+ * 有的平台配了两份凭据：会话（问额度用）与 key（推理用）。只有这一份是
+ * 推理凭据。
+ */
+export type InferenceCredential = "session" | "api_key";
+
 /** 一次签到的结果。 */
 export interface BenefitOutcome {
   /** 上游的 id。 */
@@ -175,6 +183,13 @@ export interface HealthSnapshot {
   internAi: Record<string, { balance: unknown; packs: unknown }>;
   /** 七牛云的资源包。 */
   qiniu: Record<string, { quota: unknown }>;
+  /**
+   * 额度插件问回来的东西：插件 id → 账号 id → 原始答复。
+   *
+   * 上面那几个桶是一个平台一个：平台是代码，可以有自己那一桶。开放平台是数据，
+   * 它没有桶 —— 它的额度只能由平台那一行指名的插件问回来。
+   */
+  plugins: Record<string, Record<string, unknown>>;
 }
 
 /* ------------------------------------------------------------------ *
@@ -210,6 +225,15 @@ export interface ProviderKind {
   policies?: ProviderPolicy[];
   /** 基础地址。 */
   baseUrl(provider: ProviderRow): string;
+  /**
+   * 这一类上游发推理请求时拿哪一份凭据。
+   *
+   * 有的平台配了两份凭据：会话（只用来问额度）与 key（推理用）。只有这里
+   * 指的那一份能拿去推理 —— 别的配了也不算数。所以「这个账号能不能推理」
+   * 按它判，不按「有没有配凭据」判：配了门户 cookie 的七牛云账号，一个
+   * 请求也发不出去。
+   */
+  inferWith: InferenceCredential;
   /** 凭据。 */
   credential(provider: ProviderRow): CredentialView;
   /** 模型目录。 */

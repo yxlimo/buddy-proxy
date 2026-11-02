@@ -23,10 +23,20 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { startGateway as startHarness } from "./harness.ts";
 
 const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL = "MiniMax-M3.1-Flash";
+
+/**
+ * 测试自己那条连接等锁多久（毫秒）。网关那边的库也是 5 秒（lib/store.ts）。
+ *
+ * 少了它，CI 上会撞「database is locked」：网关刚删完冷却那一行，它的写
+ * 事务可能还没完全结束（或者在做检查点），测试紧接着自己写一行就撞上排他
+ * 锁。node:sqlite 默认不等待，撞上立刻抛错 —— 本机快，撞不上。
+ */
+const BUSY_TIMEOUT_MS = 5000;
 
 // 本进程里直接跑几段算法，所以给本进程一个自己的数据目录 —— 跟网关那份、
 // 跟真的那份都无关。（网关的子进程各自用自己的目录，这里不传给他们。）
@@ -237,8 +247,7 @@ async function startGateway(dataDir?: string): Promise<Gateway> {
   };
 
   // 账号与凭据：只在这个测试自己的库里。
-  const seed = new DatabaseSync(path.join(dir, "buddy.db"));
-  seed.exec("PRAGMA busy_timeout = 5000");
+  const seed = new DatabaseSync(path.join(dir, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   const insertSecret = seed.prepare(
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
@@ -326,7 +335,8 @@ async function chatStream(gw: Gateway): Promise<{ status: number; text: string }
 
 /** 库里那一行冷却。 */
 function cooldownRow(dataDir: string, providerId: string): { untilMs: number; reason: string } | null {
-  const db = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  // 读同样会被写事务挡住，所以这条连接也要等锁。
+  const db = new DatabaseSync(path.join(dataDir, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   try {
     const row = db
       .prepare("SELECT until_ms, reason FROM cooldown WHERE provider_id = ?")
@@ -340,7 +350,7 @@ function cooldownRow(dataDir: string, providerId: string): { untilMs: number; re
 
 /** 往库里写一行冷却（测试自己写的，跟网关写的是同一张表）。 */
 function writeCooldown(dataDir: string, providerId: string, untilMs: number, reason = "test"): void {
-  const db = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  const db = new DatabaseSync(path.join(dataDir, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   try {
     db.prepare(
       "INSERT INTO cooldown (provider_id, until_ms, reason, updated_at) VALUES (?, ?, ?, ?) " +
@@ -621,7 +631,7 @@ console.log("算法：冷却的四条规矩");
   setCooldown("acct-long", long, "rate-limit");
   setCooldown("acct-long", Date.now() + 5 * 60_000, "server");
   const until = cooldownUntil("acct-long");
-  const db = new DatabaseSync(path.join(UNIT_DIR, "buddy.db"));
+  const db = new DatabaseSync(path.join(UNIT_DIR, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   const reason = String(
     (db.prepare("SELECT reason FROM cooldown WHERE provider_id = ?").get("acct-long") as any)?.reason ?? "",
   );
@@ -782,6 +792,84 @@ console.log("算法：限流是分钟级的 —— 冷却一分钟，不是一�
       quotaDecision.source === "fixed" &&
       Math.abs(quotaDecision.untilMs - (now + 5 * 60_000)) <= 1_000,
     JSON.stringify(quotaDecision),
+  );
+}
+
+console.log("");
+console.log("回归：测试自己的连接要等锁（CI 上撞过 database is locked）");
+{
+  // 让 store 把这个库建出来（cooldown 表在里面）。
+  const { store } = await import("../lib/store.ts");
+  store();
+  const dbFile = path.join(UNIT_DIR, "buddy.db");
+
+  // 持锁的是另一个线程：主线程写库时是同步阻塞的，锁只能由别处放开。
+  const holder = new Worker(
+    [
+      'const { DatabaseSync } = process.getBuiltinModule("node:sqlite");',
+      'const { parentPort } = process.getBuiltinModule("node:worker_threads");',
+      `const db = new DatabaseSync(process.env.LOCK_DB, { timeout: ${BUSY_TIMEOUT_MS} });`,
+      'db.exec("BEGIN IMMEDIATE");',
+      'db.prepare("INSERT INTO cooldown (provider_id, until_ms, reason, updated_at) VALUES (?, ?, ?, ?)")',
+      '  .run("lock-holder", Date.now() + 600000, "lock", Date.now());',
+      'parentPort.postMessage("locked");',
+      "setTimeout(() => {",
+      '  db.exec("COMMIT");',
+      "  db.close();",
+      '  parentPort.postMessage("released");',
+      "}, 250);",
+    ].join("\n"),
+    { eval: true, env: { ...process.env, LOCK_DB: dbFile } },
+  );
+
+  const seen: string[] = [];
+  let holderError = "";
+  holder.on("message", (m: unknown) => {
+    seen.push(String(m));
+  });
+  holder.on("error", (e: unknown) => {
+    holderError = String(e);
+  });
+  const waitFor = async (what: string, ms = 5000): Promise<boolean> => {
+    const deadline = Date.now() + ms;
+    while (!seen.includes(what)) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return true;
+  };
+
+  const locked = await waitFor("locked");
+  const until = Date.now() + 60_000;
+  const started = Date.now();
+  let failure: unknown = null;
+  try {
+    writeCooldown(UNIT_DIR, "waited-while-locked", until, "test");
+  } catch (e) {
+    failure = e;
+  }
+  const waited = Date.now() - started;
+  // 「没有抛错」不够：还得真的撞上锁等过（不然这条断言什么都没证明）。
+  check(
+    `锁着的时候写冷却没有抛错（等到了锁释放，${waited}ms）`,
+    failure === null && locked && waited >= 100,
+    [
+      failure instanceof Error ? `${failure.message} ${(failure as { code?: string }).code ?? ""}` : String(failure),
+      locked ? "" : "持锁的线程没拿到锁",
+      holderError,
+    ]
+      .filter(Boolean)
+      .join(" / "),
+  );
+
+  await waitFor("released");
+  await holder.terminate();
+
+  const row = cooldownRow(UNIT_DIR, "waited-while-locked");
+  check(
+    "锁释放之后写进去的那一行是对的",
+    row !== null && row.untilMs === until && row.reason === "test",
+    JSON.stringify(row),
   );
 }
 
