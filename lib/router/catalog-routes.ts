@@ -16,6 +16,7 @@ import { kindOf } from "../provider-kinds.ts";
 import { listProviders } from "../providers.ts";
 import { openPlatformOf } from "../open-platforms.ts";
 import {
+  openPlatformCatalogRefreshable,
   openPlatformCatalogStale,
   refreshOpenPlatformCatalog,
 } from "../open-platform-catalog.ts";
@@ -111,8 +112,10 @@ function refreshLiveCatalogs(): void {
   for (const platform of openPlatforms) {
     const row = openPlatformOf(platform);
     // 人写死的目录不动（那是明确的意思，不是默认值）；刚拉过的也不必再问上游
-    // —— 目录刷新在请求路径上，每个请求都问一次上游是白花钱。
-    if (!row?.models.auto || !openPlatformCatalogStale(row)) continue;
+    // —— 目录刷新在请求路径上，每个请求都问一次上游是白花钱。跟代码里的模板
+    // 重名的表行也不拉（模板优先，那一行不生效，写回去也会被拒）。
+    if (!row || !openPlatformCatalogRefreshable(row)) continue;
+    if (!openPlatformCatalogStale(row)) continue;
     // 拉目录是后台的事：不等它，答复不能被上游的慢拖住。
     //
     // 双保险：refreshOpenPlatformCatalog 自己不 reject（库开不了、SQLITE_BUSY

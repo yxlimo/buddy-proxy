@@ -36,11 +36,12 @@ import {
 import { loadSession as loadInternAiSession } from "../intern-ai/auth.ts";
 import { listOpenPlatforms } from "../open-platforms.ts";
 import {
+  openPlatformCatalogRefreshable,
   openPlatformCatalogStale,
   openPlatformHasKey,
   refreshOpenPlatformCatalog,
 } from "../open-platform-catalog.ts";
-import { PLATFORMS, platformOf } from "../platforms.ts";
+import { PLATFORMS } from "../platforms.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { benefits } from "../admin/benefits.ts";
 import { pruneUsage } from "../usage.ts";
@@ -103,9 +104,9 @@ export function startUpstreams(): void {
   // 问 /v1/models 才有目录可用。
   for (const row of listOpenPlatforms()) {
     // 模板优先：表里这一行跟代码里的模板重名时不生效（拉回来的目录写回去也
-    // 会被拒），别白拉一次。
-    if (platformOf(row.id)) continue;
-    if (!row.models.auto || !openPlatformCatalogStale(row)) continue;
+    // 会被拒），别白拉一次。人写死的目录也不动（那是明确的意思）。
+    if (!openPlatformCatalogRefreshable(row)) continue;
+    if (!openPlatformCatalogStale(row)) continue;
     // 没有 key 是正常状态（平台刚建、还没填 key）：不问上游，也不说话。
     if (!openPlatformHasKey(row.id)) continue;
     // 双保险：refreshOpenPlatformCatalog 自己不 reject（库开不了、SQLITE_BUSY
