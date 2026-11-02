@@ -593,9 +593,12 @@ async function abRetry(
 }
 
 const panelBuilt = fs.existsSync(path.join(ROOT, "web/dist/index.html"));
+// 这一段要点真界面，靠 `agent-browser` 这个命令。它不在每台机器上（CI 就没有），
+// 所以允许显式跳过：SKIP_BROWSER=1。REQUIRE_BROWSER=1 优先，跳过了就算失败。
+const browserSkipped = process.env.SKIP_BROWSER === "1";
 const browserSession = `policy-e2e-${process.pid}`;
 
-if (panelBuilt) {
+if (panelBuilt && !browserSkipped) {
   // 租户 1 的推理端点挂（500），租户 2 是好的：改成降级之后请求就该落到租户 2。
   const tenant1 = richTenant("2026-11-20T00:00:00.000Z");
   tenant1.inference = { status: 500, body: { code: "INTERNAL_ERROR", message: "假上游挂了" } };
@@ -644,7 +647,9 @@ if (panelBuilt) {
     await ab(browserSession, ["close"]);
   }
 } else {
-  const why = "面板没构建（web/dist/index.html 不在）。先 cd web && pnpm build。";
+  const why = browserSkipped
+    ? "SKIP_BROWSER=1，面板这一段跳过了（要跑它就别设这个变量，机子上还得有 agent-browser）。"
+    : "面板没构建（web/dist/index.html 不在）。先 cd web && pnpm build。";
   if (process.env.REQUIRE_BROWSER === "1") {
     check("面板这一段跑了", false, why);
   } else {

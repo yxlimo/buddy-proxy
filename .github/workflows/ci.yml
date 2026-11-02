@@ -95,4 +95,10 @@ jobs:
         run: mise run privacy --all
 
       - name: Run the gate (typecheck and every test)
+        # The panel-interaction section of the policy test needs the
+        # `agent-browser` command, which a runner does not have. Everything
+        # else runs; the panel itself is still checked here through the static
+        # hosting tests, and the interaction is verified on a developer machine.
+        env:
+          SKIP_BROWSER: "1"
         run: mise run check
