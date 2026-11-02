@@ -40,6 +40,9 @@ import {
   setProviderEnabled,
 } from "../providers.ts";
 import { isPlatform, platformOf } from "../platforms.ts";
+// 开放平台的额度是数据：平台那一行指名的插件去问。
+import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
+import { quotaPluginOf } from "../quota-plugins.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds/index.ts";
 // The judgment lives here: the panel and the route must read the same answer.
@@ -432,12 +435,44 @@ function groupByPlatform(rows: ProviderRow[]): Map<string, ProviderRow[]> {
  */
 function applyPartial(snapshot: HealthSnapshot, partial: HealthSnapshot, rows: ProviderRow[]): void {
   for (const row of rows) {
+    // 开放平台没有具名桶：它的那一份在插件桶里（两层），按账号逐条合并。
+    if (row.kind === OPEN_PLATFORM_KIND_NAME) {
+      applyPluginPartial(snapshot, partial, row);
+      continue;
+    }
     const bucket = bucketOf(row.kind);
     const target = bucketTable(snapshot, bucket);
     if (!target) continue;
     const value = bucketTable(partial, bucket)?.[row.id];
     if (value === undefined) delete target[row.id];
     else target[row.id] = value;
+  }
+}
+
+/**
+ * 把一个开放平台账号的那一份合进插件桶。
+ *
+ * 插件桶是两层：插件 id → 账号 id → 那一份。所以按**账号**逐条合，不是整张表
+ * 盖掉 —— 同一个平台下别的账号、别的插件的份都留在原处。
+ *
+ * 这一轮没有这个账号的那一份，就删掉它在每个插件表里的旧值：与具名桶「这一轮
+ * 没问到就不报」是同一个意思（旧值是上一轮的，拿它充数就是在撒谎）。
+ */
+function applyPluginPartial(
+  snapshot: HealthSnapshot,
+  partial: HealthSnapshot,
+  row: ProviderRow,
+): void {
+  const plugins = snapshot.plugins;
+  // 两边的插件表都要看：这一轮换了插件的账号，它在旧插件表里的份也得走。
+  const ids = new Set<string>(Object.keys(plugins));
+  for (const id of Object.keys(partial.plugins ?? {})) ids.add(id);
+  for (const pluginId of ids) {
+    const table = { ...plugins[pluginId] };
+    const value = partial.plugins?.[pluginId]?.[row.id];
+    if (value === undefined) delete table[row.id];
+    else table[row.id] = value;
+    plugins[pluginId] = table;
   }
 }
 
@@ -521,6 +556,27 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
       // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
       snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
       return;
+    case OPEN_PLATFORM_KIND_NAME: {
+      // 开放平台的额度是数据：平台那一行指名的插件去问，问回来的原样放着。
+      // 三种「不知道」都不写快照 —— 面板上显示「—」比写个 0 诚实：
+      //   没填插件     用户还没选
+      //   插件没登记   填的 id 没人认（用户可能先填 id 再让我们上线那个插件）
+      //   插件问失败   这一轮这个账号就是不知道
+      const pluginId = openPlatformOf(row.platform)?.quotaPlugin?.trim() ?? "";
+      if (!pluginId) return;
+      const plugin = quotaPluginOf(pluginId);
+      if (!plugin) return;
+      try {
+        const payload = await plugin.fetch(row);
+        const table = { ...snapshot.plugins[plugin.id] };
+        table[row.id] = payload;
+        snapshot.plugins[plugin.id] = table;
+      } catch (e) {
+        // 一个账号问不到，不该把整轮带挂：这一轮它就是「不知道」。
+        console.warn(`[QUOTA] 账号 ${row.id} 的额度没问到（插件 ${plugin.id}）：${(e as Error)?.message}`);
+      }
+      return;
+    }
   }
 }
 
