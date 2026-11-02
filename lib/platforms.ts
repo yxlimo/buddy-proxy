@@ -1,9 +1,13 @@
-// lib/platforms.ts — 平台：代码里写死的模板。
+// lib/platforms.ts — 平台：代码里的模板，加上表里的开放平台。
 //
 // 一个平台是一个服务，不是一份登录：Qoder 的全球区与中国区是两个平台。
 //
 // 平台的 id 就是请求路径里那一段（`/minimax/v1/messages`），所以它是契约的
-// 一部分，改名等于把调用方的 base_url 打断。新增一个平台只在代码里加一条。
+// 一部分，改名等于把调用方的 base_url 打断。
+//
+// 平台有两处数据源：这里的模板（PLATFORMS）与表里的开放平台
+// （lib/open-platforms.ts）。模板优先：id 撞了算模板的 —— 把模板加回代码时
+// 不用先清库，回滚是安全的。
 //
 // 账号不在这里：账号是 provider 表里的行，同一个平台下可以有多行。平台说
 // 「怎么说话」（kind）、「在哪个区域」、「支持哪些选账号的策略」；账号说
@@ -12,12 +16,13 @@
 import { store } from "./store.ts";
 import { PROVIDER_POLICIES, type ProviderPolicy } from "./providers.ts";
 import { kindOf } from "./provider-kinds.ts";
+import { listOpenPlatforms, openPlatformOf, registerTemplateIds } from "./open-platforms.ts";
 // 注册表要有内容，`kindOf` 才答得出「这个平台支持哪几个策略」。这条 import 会
 // 绕成 platforms → kinds → … 的环，所以环上任何模块都不能在模块求值期读别人的
 // 常量（lib/qoder/benefits.ts 就是为此改成函数内取值的）。
 import "./kinds/index.ts";
 
-/** 一个平台：代码里的模板。 */
+/** 一个平台：代码里的模板，或者表里的开放平台。 */
 export interface Platform {
   /** 路径里那一段。改它等于打断调用方。 */
   id: string;
@@ -30,7 +35,7 @@ export interface Platform {
 }
 
 /**
- * 十个平台。
+ * 代码里的模板。
  *
  * The region and the name live with the platform rather than with the account:
  * they are properties of the service, not of who is logged in.
@@ -49,6 +54,40 @@ export const PLATFORMS: Platform[] = [
 ];
 
 const BY_ID = new Map(PLATFORMS.map((p) => [p.id, p]));
+
+// 模板的 id 名单交给下面那层：它不引这一层（会成环），但要认得哪些 id 是
+// 模板的 —— 表里的开放平台不能跟模板重名。
+registerTemplateIds(PLATFORMS.map((p) => p.id));
+
+/**
+ * 开放平台的 kind。
+ *
+ * 还没注册到 kind 注册表里（那件事是后面的阶段）：现在它只是平台列表里的
+ * 一行，还接不了请求。
+ */
+const OPEN_PLATFORM_KIND = "openai";
+
+/**
+ * 全部平台：代码里的模板，加上表里的开放平台。
+ *
+ * 模板在前。id 撞了模板优先 —— 模板里有的 id，表里的那一行当没有。
+ */
+export function allPlatforms(): Platform[] {
+  const extra: Platform[] = [];
+  for (const row of listOpenPlatforms()) {
+    if (BY_ID.has(row.id)) continue;
+    extra.push({ id: row.id, kind: OPEN_PLATFORM_KIND, label: row.label, region: "" });
+  }
+  return [...PLATFORMS, ...extra];
+}
+
+/** 这个 id 是哪个平台：模板优先，然后是表里的开放平台。不认识的 id 就是 null。 */
+export function platformOfAny(id: string): Platform | null {
+  const template = BY_ID.get(id);
+  if (template) return template;
+  const row = openPlatformOf(id);
+  return row ? { id: row.id, kind: OPEN_PLATFORM_KIND, label: row.label, region: "" } : null;
+}
 
 /** 这个 id 是哪个平台。不认识的 id 就是 null。 */
 export function platformOf(id: string): Platform | null {

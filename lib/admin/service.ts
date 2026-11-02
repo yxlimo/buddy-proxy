@@ -118,7 +118,7 @@ import {
   provider,
   updateProvider,
 } from "../providers.ts";
-import { PLATFORMS, platformOf, platformPolicies, platformPolicy, setPlatformPolicy as writePlatformPolicy } from "../platforms.ts";
+import { allPlatforms, platformOfAny, platformPolicies, platformPolicy, setPlatformPolicy as writePlatformPolicy } from "../platforms.ts";
 import { kindOf, selectableKinds } from "../provider-kinds.ts";
 import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
@@ -245,11 +245,11 @@ export function quotaMessage(quota: QuotaView) {
 /**
  * 一个平台在面板上的样子。
  *
- * 平台是代码里的模板（九个服务），所以这一条永远在；它名下的账号是数据，
- * 有几个算几个 —— 一个没有就是空的账号列表。
+ * 平台有两处数据源：代码里的模板与表里的开放平台，所以这一条可能来自任意
+ * 一处；它名下的账号是数据，有几个算几个 —— 一个没有就是空的账号列表。
  */
 function platformMessage(id: string) {
-  const template = platformOf(id);
+  const template = platformOfAny(id);
   const credential = upstreamCredential(id);
   const quota = upstreamQuota(id);
   // 冷却：路由绕开这个账号到什么时候，面板要看得见。
@@ -399,9 +399,9 @@ function loginErrorText(e: unknown): string {
   return hint || code || "登录未成功。";
 }
 
-/** 九个平台，面板看的那一层。 */
+/** 平台：模板与表里的开放平台，面板看的那一层。 */
 function platformMessages() {
-  return PLATFORMS.flatMap((platform) => {
+  return allPlatforms().flatMap((platform) => {
     const message = platformMessage(platform.id);
     return message ? [message] : [];
   });
@@ -440,7 +440,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   /* ---------------- 平台与账号 ---------------- */
 
   async listUpstreams() {
-    // 列表是代码里的那九个模板，不是数据库的：平台删不掉，账号才是数据 ——
+    // 列表是平台的数据源（代码里的模板 + 表里的开放平台），不是账号的：
     // 一个平台下没有账号也照样列出来，面板要在它下面「新增账号」。
     return create(ListUpstreamsResponseSchema, { upstreams: platformMessages() });
   },

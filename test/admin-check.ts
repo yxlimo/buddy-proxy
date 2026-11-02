@@ -10,12 +10,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { startGateway as startHarness, type Gateway } from "./harness.ts";
-import { tokenPlanView } from "../lib/admin/upstreams.ts";
 
 // 临时目录走系统的 tmpdir：写死的 /tmp 在 Windows 上落到当前盘的根上，
 // 而且两次运行会撞在同一个目录上。
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-admin-check-"));
+// 这个进程也要读库（数平台）。库是第一次被用到的时候才打开的，而“第一次”
+// 可能早于这个文件里的第一行代码 —— 有些模块在求值期就读配置。所以数据目录
+// 必须在那些模块被加载之前定下来，而且要与网关那一份是同一个，否则数的是
+// 另一个库。
+process.env.BUDDY_DATA_DIR = DATA_DIR;
+
+const { startGateway: startHarness } = await import("./harness.ts");
+type Gateway = import("./harness.ts").Gateway;
+const { tokenPlanView } = await import("../lib/admin/upstreams.ts");
+const { allPlatforms } = await import("../lib/platforms.ts");
 const SERVICE = "/buddy.admin.v1.AdminService";
 
 let pass = 0;
@@ -104,9 +112,7 @@ async function startRouter(): Promise<Gateway> {
   return gw;
 }
 
-// 上一次跑留下的库会让「改完要重启才生效」这类断言失去意义：启动时读到的
-// 就是上次的值，没什么可改。所以每次都从空的目录开始。
-
+// 目录在文件开头就建好了（那里要先定下数据目录）：网关起在一个空目录上。
 router = await startRouter();
 
 const cleanup = () => {
@@ -141,9 +147,9 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "十个上游都在",
-  list(status.body?.upstreams).length === 10,
-  String(status.body?.upstreams?.length),
+  "上游列表与平台数据源一致",
+  list(status.body?.upstreams).length === allPlatforms().length,
+  `${list(status.body?.upstreams).length} vs ${allPlatforms().length}`,
 );
 check(
   "上游的名字与 id 都对",
@@ -166,7 +172,11 @@ console.log("");
 console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
-check("上游列表有十个", list(upstreams.body?.upstreams).length === 10, String(list(upstreams.body?.upstreams).length));
+check(
+  "上游列表与平台数据源一致",
+  list(upstreams.body?.upstreams).length === allPlatforms().length,
+  `${list(upstreams.body?.upstreams).length} vs ${allPlatforms().length}`,
+);
 
 // 启动不再插行：新库里一个账号都没有。后面要用的账号按面板的做法加出来 ——
 // 平台是模板，账号才是 provider 表里的行。

@@ -93,8 +93,8 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
-  // 账号：一行一个账号。`platform` 是代码里的模板（九个平台之一，也是请求
-  // 路径里那一段），同一平台下可以有多行。
+  // 账号：一行一个账号。`platform` 是平台 id（代码里的模板，或者表里的开放
+  // 平台，也是请求路径里那一段），同一平台下可以有多行。
   db.exec(
     `CREATE TABLE IF NOT EXISTS provider (
       id         TEXT PRIMARY KEY,
@@ -128,6 +128,26 @@ export function store(): DatabaseSync {
       platform   TEXT PRIMARY KEY,
       policy     TEXT NOT NULL DEFAULT 'single',
       updated_at INTEGER NOT NULL
+    )`,
+  );
+  // 开放平台：用户自己加的平台，一行一个。
+  //
+  // 代码里的模板（lib/platforms.ts）与这张表是两处数据源：模板优先 ——
+  // 模板里有的 id，表里的那一行当没有。这样把模板加回代码时不用先清库，
+  // 回滚是安全的。
+  //
+  // `models` 存的是整个目录（模型名、自动不自动、上次什么时候拉的、哪来的），
+  // `models_auto` 是同一件事里能查的那一格。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS platform (
+      id           TEXT PRIMARY KEY,
+      label        TEXT NOT NULL,
+      base_url     TEXT NOT NULL,
+      models       TEXT NOT NULL DEFAULT '[]',
+      models_auto  INTEGER NOT NULL DEFAULT 1,
+      quota_plugin TEXT NOT NULL DEFAULT '',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
     )`,
   );
   // 账号的冷却：失败之后一段时间不再路由到那个账号。

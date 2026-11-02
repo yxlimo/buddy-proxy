@@ -1,0 +1,277 @@
+// lib/open-platforms.ts — 开放平台：用户自己加的平台，一行一个。
+//
+// 平台有两处数据源：代码里的模板（lib/platforms.ts）与这张表。模板优先 ——
+// 模板里有的 id，表里的那一行当没有。这样把模板加回代码时不用先清库，
+// 回滚是安全的。
+//
+// 这一层只管数据：账号、路由与面板的接线是后面的阶段。
+//
+// 它不引 lib/platforms.ts —— 那一层要引它（平台列表要把两处数据源合起来），
+// 反过来引就成环。模板的 id 名单由那一层交下来（registerTemplateIds）：谁引
+// 了 lib/platforms.ts，谁就有了那份名单。
+
+import { store } from "./store.ts";
+
+/** 模型目录：有哪些模型、还自动不自动、上次什么时候拉的、哪来的。 */
+export interface OpenPlatformModels {
+  /** 模型名。 */
+  items: string[];
+  /** 还自动不自动拉。 */
+  auto: boolean;
+  /** 上次拉目录的时刻（毫秒）。 */
+  fetchedAt: number;
+  /** 目录哪来的：自动拉的，还是人写的。 */
+  source: "auto" | "manual";
+}
+
+/** 表里的一行。 */
+export interface OpenPlatformRow {
+  /** 路径里那一段。 */
+  id: string;
+  /** 面板上给人看的名字。 */
+  label: string;
+  /** 基础地址。 */
+  baseUrl: string;
+  /** 模型目录。 */
+  models: OpenPlatformModels;
+  /** 额度那一份的插件名（空串就是没有）。 */
+  quotaPlugin: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 平台 id 的形状：小写字母、数字与连字符。 */
+const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,30}$/;
+
+/**
+ * 网关自己占着的 id。
+ *
+ * 平台的 id 是请求路径里那一段（`/<platform>/v1/messages`），占着网关自己的
+ * 那几段就绕不过来了。
+ */
+const RESERVED_IDS = new Set(["v1", "admin", "health", "healthz", "metrics"]);
+
+/**
+ * 代码里那些模板的 id。
+ *
+ * 这一层不引 lib/platforms.ts（会成环），所以名单由模板层交下来。
+ */
+const templateIds = new Set<string>();
+
+/** 模板层把它的 id 名单交下来。 */
+export function registerTemplateIds(ids: readonly string[]): void {
+  for (const id of ids) templateIds.add(id);
+}
+
+/** 表里的全部开放平台，按 id 排。 */
+export function listOpenPlatforms(): OpenPlatformRow[] {
+  const rows = store()
+    .prepare(
+      "SELECT id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at " +
+        "FROM platform ORDER BY id",
+    )
+    .all() as any[];
+  return rows.map(toRow);
+}
+
+/** 某一个开放平台。没有就是 null。 */
+export function openPlatformOf(id: string): OpenPlatformRow | null {
+  const row = store()
+    .prepare(
+      "SELECT id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at " +
+        "FROM platform WHERE id = ?",
+    )
+    .get(id) as any;
+  return row ? toRow(row) : null;
+}
+
+/**
+ * 加一个开放平台。
+ *
+ * id 必须是能放进路径里的那一段，而且不能跟网关自己的路径或者代码里的模板
+ * 撞 —— 撞了的话这个平台就是死的：模板优先，表里那一行没人看。
+ */
+export function createOpenPlatform(input: {
+  id: string;
+  label: string;
+  baseUrl: string;
+  quotaPlugin?: string;
+}): { ok: boolean; message: string } {
+  const id = String(input.id ?? "").trim();
+  const problem = checkId(id);
+  if (problem) return { ok: false, message: problem };
+  if (openPlatformOf(id)) return { ok: false, message: "已经有这个平台了" };
+  const label = String(input.label ?? "").trim();
+  if (!label) return { ok: false, message: "得有个名字" };
+  const baseUrl = String(input.baseUrl ?? "").trim();
+  const urlProblem = checkBaseUrl(baseUrl);
+  if (urlProblem) return { ok: false, message: urlProblem };
+  const now = Date.now();
+  const models: OpenPlatformModels = { items: [], auto: true, fetchedAt: 0, source: "auto" };
+  store()
+    .prepare(
+      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      id,
+      label,
+      baseUrl,
+      modelsJson(models),
+      models.auto ? 1 : 0,
+      String(input.quotaPlugin ?? "").trim(),
+      now,
+      now,
+    );
+  return { ok: true, message: `加好了：${label}` };
+}
+
+/**
+ * 改一个开放平台。
+ *
+ * 没给的字段不动：面板上只改名字的时候不能把地址顺手抹掉。
+ */
+export function updateOpenPlatform(
+  id: string,
+  patch: { label?: string; baseUrl?: string; quotaPlugin?: string; models?: string[]; modelsAuto?: boolean },
+): { ok: boolean; message: string } {
+  const row = openPlatformOf(id);
+  if (!row) return { ok: false, message: `没有这个平台：${id}` };
+  const label = patch.label === undefined ? row.label : String(patch.label).trim();
+  if (!label) return { ok: false, message: "得有个名字" };
+  const baseUrl = patch.baseUrl === undefined ? row.baseUrl : String(patch.baseUrl).trim();
+  const urlProblem = checkBaseUrl(baseUrl);
+  if (urlProblem) return { ok: false, message: urlProblem };
+  const quotaPlugin = patch.quotaPlugin === undefined ? row.quotaPlugin : String(patch.quotaPlugin).trim();
+
+  let models = row.models;
+  if (patch.models !== undefined) {
+    models = {
+      items: normalizeModels(patch.models),
+      // 人写的目录就不是自动拉的：写死了就别再让它被覆盖。
+      auto: patch.modelsAuto === undefined ? false : patch.modelsAuto === true,
+      fetchedAt: Date.now(),
+      source: "manual",
+    };
+  } else if (patch.modelsAuto !== undefined) {
+    models = { ...models, auto: patch.modelsAuto === true };
+  }
+
+  store()
+    .prepare(
+      "UPDATE platform SET label = ?, base_url = ?, models = ?, models_auto = ?, quota_plugin = ?, updated_at = ? " +
+        "WHERE id = ?",
+    )
+    .run(label, baseUrl, modelsJson(models), models.auto ? 1 : 0, quotaPlugin, Date.now(), id);
+  return { ok: true, message: "改好了" };
+}
+
+/**
+ * 删一个开放平台。
+ *
+ * 只删平台那一行：名下的账号与它们的凭据不归这一层管，级联由调用方负责
+ * （那是账号层的事 —— 它才知道哪些凭据属于哪个账号）。
+ */
+export function deleteOpenPlatform(id: string): { ok: boolean; message: string } {
+  const row = openPlatformOf(id);
+  if (!row) return { ok: false, message: `没有这个平台：${id}` };
+  store().prepare("DELETE FROM platform WHERE id = ?").run(id);
+  return { ok: true, message: "删掉了" };
+}
+
+/* ------------------------------------------------------------------ *
+ * 校验
+ * ------------------------------------------------------------------ */
+
+/** 这个 id 能不能用。不能的话给一句人话。 */
+function checkId(id: string): string | null {
+  if (!id) return "得有个平台 id";
+  if (!ID_PATTERN.test(id)) return "平台 id 只能用小写字母、数字与连字符";
+  if (RESERVED_IDS.has(id)) return "这个 id 是网关自己用的，换一个";
+  if (templateIds.has(id)) return "这个 id 已经是代码里的平台了，换一个";
+  return null;
+}
+
+/** 地址能不能用。不能的话给一句人话。 */
+function checkBaseUrl(value: string): string | null {
+  if (!value) return "得有个地址";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "地址不对，得是完整的网址";
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return "地址只收 http 与 https";
+  if (!url.hostname) return "地址里得有个主机名";
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * 模型目录
+ * ------------------------------------------------------------------ */
+
+/**
+ * 目录存进库里的样子。
+ *
+ * 整个目录是一个 JSON：模型名、自动不自动、上次什么时候拉的、哪来的。
+ */
+function modelsJson(models: OpenPlatformModels): string {
+  return JSON.stringify({
+    items: models.items,
+    auto: models.auto,
+    fetchedAt: models.fetchedAt,
+    source: models.source,
+  });
+}
+
+/**
+ * 读目录。
+ *
+ * 坏掉的 JSON 读成空目录，不抛：一个写坏的行不该让整个平台列表读不出来。
+ * 自动不自动看那一列（能查的那一格），JSON 里那一份只是照抄。
+ */
+function parseModels(raw: unknown, auto: boolean): OpenPlatformModels {
+  const empty: OpenPlatformModels = { items: [], auto, fetchedAt: 0, source: "auto" };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(raw ?? ""));
+  } catch {
+    return empty;
+  }
+  if (Array.isArray(parsed)) {
+    // 早期存的是单纯的模型名数组。
+    return { items: normalizeModels(parsed), auto, fetchedAt: 0, source: "auto" };
+  }
+  if (!parsed || typeof parsed !== "object") return empty;
+  return {
+    items: normalizeModels(Array.isArray(parsed.items) ? parsed.items : []),
+    auto,
+    fetchedAt: Number(parsed.fetchedAt ?? 0) || 0,
+    source: parsed.source === "manual" ? "manual" : "auto",
+  };
+}
+
+/** 模型名：去掉空的，去掉重号的。 */
+function normalizeModels(items: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const raw of items) {
+    const name = String(raw ?? "").trim();
+    if (!name || out.includes(name)) continue;
+    out.push(name);
+  }
+  return out;
+}
+
+/** 一行变一个对象。 */
+function toRow(row: any): OpenPlatformRow {
+  const auto = Number(row.models_auto ?? 1) !== 0;
+  return {
+    id: String(row.id),
+    label: String(row.label ?? ""),
+    baseUrl: String(row.base_url ?? ""),
+    models: parseModels(row.models, auto),
+    quotaPlugin: String(row.quota_plugin ?? ""),
+    createdAt: Number(row.created_at ?? 0),
+    updatedAt: Number(row.updated_at ?? 0),
+  };
+}
