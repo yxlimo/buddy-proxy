@@ -85,6 +85,8 @@ registerKind({
   // The row carries the region, so a row that is not logged in yet still
   // answers with the right host.
   baseUrl: (provider) => WORKBUDDY_ENDPOINTS[regionFrom(provider.region)].base,
+  // 推理用的就是登录会话：access token 本身是推理凭据。
+  inferWith: "session",
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
   // 目录是区域的：cn 和 global 各自发布一份，不能共用。
   models: (provider) => workbuddyCatalogModels(workbuddyModelList(regionFrom(provider.region))),

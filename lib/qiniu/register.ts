@@ -71,6 +71,8 @@ export const qiniuKind = registerCompatiblePlatform({
   login: "api_key",
   policies: ["single", "fallback"],
   baseUrl: () => QINIU_INFER_BASE,
+  // 推理用的是那把 API key：门户 cookie 只用来查额度。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => qiniuInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(qiniuStatus(provider.id), "api_key"),

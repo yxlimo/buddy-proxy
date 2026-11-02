@@ -98,12 +98,15 @@ export function provider(id: string): ProviderRow | null {
 
 function toRow(row: any): ProviderRow {
   const platform = String(row.platform ?? "");
-  const template = platformOf(platform);
+  // 平台有两个数据源：代码里的模板与表里的开放平台。kind 与 region 从两处合起来
+  // 的那一份派生 —— 开放平台不在模板里，所以它拿到的是那个占位的 kind 名，
+  // 不是空串（空串会让人以为这个账号没有种类）。
+  const known = platformOfAny(platform);
   return {
     id: String(row.id),
     platform,
-    kind: template?.kind ?? "",
-    region: template?.region ?? "",
+    kind: known?.kind ?? "",
+    region: known?.region ?? "",
     alias: String(row.alias ?? ""),
     enabled: Number(row.enabled) !== 0,
     weight: Number(row.weight ?? 100),
@@ -186,9 +189,11 @@ export function addAccount(input: {
 /**
  * 这个平台下一个没人用的账号 id。
  *
- * 账号 id 与平台 id 共用一个命名空间：账号 id 不能跟平台表里的 id 撞 ——
- * 撞了面板分不清那个 id 说的是平台还是账号（账号 id 是 `<平台>-<序号>`，
- * 跟平台 id 长得一样）。
+ * 契约：模板平台的第一个账号 id 就等于平台 id（`minimax` 的第一个账号叫
+ * `minimax`），解析的时候平台优先 —— 同一个 id 既是平台又是第一个账号时，
+ * 说的是平台。账号 id 与平台 id 共用一个命名空间，所以开放平台的 id 不许与
+ * 账号 id 相撞：撞了面板分不清那个 id 说的是平台还是账号（账号 id 是
+ * `<平台>-<序号>`，跟平台 id 长得一样）。
  */
 function nextAccountId(platform: string): string {
   for (let n = 1; ; n++) {

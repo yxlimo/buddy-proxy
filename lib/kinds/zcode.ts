@@ -47,6 +47,8 @@ registerKind({
   login: "browser",
   policies: ["single", "fallback"],
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
+  // 推理用的就是凭据文件里那份 JWT：会话本身就是推理凭据。
+  inferWith: "session",
   credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session"),
   models: () => zcodeCatalogModels(zcodeModelsInUse()),
   quotas: (provider, snapshot) => zcodeQuotas(provider, snapshot),

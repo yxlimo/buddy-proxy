@@ -67,6 +67,8 @@ registerKind({
   // 一个账号一个钱包。赠金会过期，所以它还能按到期先后挑。
   policies: ["single", "fallback", "expiry_first"],
   baseUrl: () => TOKENRHYTHM_API_BASE,
+  // 推理用的是钱包里的那把 api key：会话只用来登录与查余额。
+  inferWith: "api_key",
   credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session"),
   models: () => tokenRhythmCatalogModels(),
   quotas: (provider, snapshot) => tokenrhythmQuotas(provider, snapshot),
