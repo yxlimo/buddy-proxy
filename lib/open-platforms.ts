@@ -14,6 +14,17 @@ import { store } from "./store.ts";
 import { PLATFORMS } from "./platform-templates.ts";
 
 /**
+ * 开放平台的 kind 名字。
+ *
+ * 表里那些平台（用户自己加的）都是这一类：转发、方言、鉴权对它们完全一样，
+ * 差别只在地址、key 与目录（lib/kinds/openai.ts）。
+ *
+ * 它住在这一层而不是 lib/platforms.ts：那一层引这一层，反过来引就成环，而环
+ * 上的模块不能在求值期读别人的常量（登记 kind 时正好要读它）。
+ */
+export const OPEN_PLATFORM_KIND_NAME = "openai";
+
+/**
  * 模型目录：有哪些模型、还自动不自动、上次什么时候拉的、哪来的。
  *
  * `auto` 与 `source` 是两件事：
@@ -150,7 +161,21 @@ export function createOpenPlatform(input: {
  */
 export function updateOpenPlatform(
   id: string,
-  patch: { label?: string; baseUrl?: string; quotaPlugin?: string; models?: string[]; modelsAuto?: boolean },
+  patch: {
+    label?: string;
+    baseUrl?: string;
+    quotaPlugin?: string;
+    models?: string[];
+    modelsAuto?: boolean;
+    /**
+     * 这份目录是哪来的：自动拉的（auto）还是人写的（manual）。
+     *
+     * 不给就是「manual」：写了目录而没说哪来的，那多半是人写的。
+     */
+    source?: "auto" | "manual";
+    /** 上次拉目录的时刻（毫秒）。0 = 没拉过。 */
+    fetchedAt?: number;
+  },
 ): { ok: boolean; message: string } {
   // 代码里的平台改不了：它们不在表里，改了也是改一份没人看的东西。
   if (isTemplateId(id)) return { ok: false, message: "这个 id 是代码里的平台，改不了" };
@@ -171,9 +196,10 @@ export function updateOpenPlatform(
       // 人写的目录就不是自动拉的：写死了就别再让它被覆盖（显式说了要自动的
       // 除外 —— 那是明确的意思，不是默认值）。
       auto: patch.modelsAuto === undefined ? false : patch.modelsAuto === true,
-      // 手写的目录没拉过：0 就是「没拉过」的意思。
-      fetchedAt: 0,
-      source: "manual",
+      // 手写的目录没拉过：0 就是「没拉过」的意思。自动拉的那份记着拉的时刻，
+      // 免得刚拉过又去问上游。
+      fetchedAt: Number(patch.fetchedAt ?? 0) || 0,
+      source: patch.source === "auto" ? "auto" : "manual",
     };
   } else if (patch.modelsAuto !== undefined) {
     // 只翻自动不自动，source 不动：source 说的是这份目录**现在**哪来的，

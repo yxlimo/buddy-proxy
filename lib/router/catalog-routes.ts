@@ -11,9 +11,14 @@
 // platform's own models under their real names.
 
 import type Koa from "koa";
-import { allPlatforms } from "../platforms.ts";
+import { allPlatforms, OPEN_PLATFORM_KIND_NAME } from "../platforms.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { listProviders } from "../providers.ts";
+import { openPlatformOf } from "../open-platforms.ts";
+import {
+  openPlatformCatalogStale,
+  refreshOpenPlatformCatalog,
+} from "../open-platform-catalog.ts";
 import { aggregateModels, type AggregateModel } from "../aggregate.ts";
 import {
   aggregateAnthropicCatalog,
@@ -88,17 +93,31 @@ export function modelsOfPlatform(platform: string): string[] {
 /**
  * Refresh the catalogues that come from the upstream itself.
  *
- * Three platforms publish their models live; the others ship a snapshot. The
+ * Three platforms publish their models live; the open platforms publish theirs
+ * too (the table row is what they answer); the others ship a snapshot. The
  * fetch needs an account (a session or a key), so it goes account by account.
  */
 function refreshLiveCatalogs(): void {
+  // 开放平台按平台记一次：名下有几个账号都一样，目录是平台的。
+  const openPlatforms = new Set<string>();
   for (const row of listProviders()) {
     if (!row.enabled) continue;
-    // 开放平台的 kind 还没登记：不发起目录拉取（没有 kind 就没有拉目录的那一套）。
     if (!kindOf(row.kind)) continue;
     if (row.kind === "workbuddy") void refreshWorkBuddyCatalog();
     if (row.kind === "sensenova") void refreshSenseNovaCatalog(false, row.id);
     if (row.kind === "intern-ai") void refreshInternAiCatalog(false, row.id);
+    if (row.kind === OPEN_PLATFORM_KIND_NAME) openPlatforms.add(row.platform);
+  }
+  for (const platform of openPlatforms) {
+    const row = openPlatformOf(platform);
+    // 人写死的目录不动（那是明确的意思，不是默认值）；刚拉过的也不必再问上游
+    // —— 目录刷新在请求路径上，每个请求都问一次上游是白花钱。
+    if (!row?.models.auto || !openPlatformCatalogStale(row)) continue;
+    // 拉目录是后台的事：不等它，答复不能被上游的慢拖住。拉不到只记一行，不
+    // 影响别的平台。
+    void refreshOpenPlatformCatalog(platform).then((outcome) => {
+      if (!outcome.ok) console.warn(`[OPEN-PLATFORM] ${platform} 的模型目录没拉到：${outcome.message}`);
+    });
   }
 }
 /**

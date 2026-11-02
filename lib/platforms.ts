@@ -16,7 +16,7 @@
 import { store } from "./store.ts";
 import { PROVIDER_POLICIES, type ProviderPolicy } from "./providers.ts";
 import { kindOf } from "./provider-kinds.ts";
-import { listOpenPlatforms, openPlatformOf } from "./open-platforms.ts";
+import { listOpenPlatforms, openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "./open-platforms.ts";
 import { PLATFORMS, type Platform } from "./platform-templates.ts";
 // 注册表要有内容，`kindOf` 才答得出「这个平台支持哪几个策略」。这条 import 会
 // 绕成 platforms → kinds → … 的环，所以环上任何模块都不能在模块求值期读别人的
@@ -27,18 +27,13 @@ import "./kinds/index.ts";
 // 模板的 id 名单，而它不引这一层（会成环）。这里转出去，调用方的 import
 // 不用改。
 export { PLATFORMS };
-export type { Platform };
+export type { Platform};
+
+// 开放平台的 kind 名字住在 lib/open-platforms.ts（那一层不引这一层，环上读它
+// 的常量不会踩到求值顺序）。这里转出去：调用方的 import 不用改。
+export { OPEN_PLATFORM_KIND_NAME };
 
 const BY_ID = new Map(PLATFORMS.map((p) => [p.id, p]));
-
-/**
- * 开放平台的 kind 名字。
- *
- * 它**还不是** kind 注册表里的 kind：`kindOf("openai")` 现在是 null，
- * 开放平台还接不了请求（接线是下一个阶段的事）。这里只是先给这些平台一个
- * 占位的 kind 名字，别把它跟方言名（OpenAI 方言）混成一回事。
- */
-const OPEN_PLATFORM_KIND_NAME = "openai";
 
 /**
  * 全部平台：代码里的模板，加上表里的开放平台。

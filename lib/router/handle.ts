@@ -16,7 +16,7 @@ import Koa from "koa";
 import { configFlag, configNumber } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { LimitError } from "../qoder/transport.ts";
-import { allPlatforms, platformOf } from "../platforms.ts";
+import { allPlatforms, platformOfAny } from "../platforms.ts";
 import { upstreamStatusOf } from "../upstream-status.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { recordAggregateUsage } from "../aggregate.ts";
@@ -106,7 +106,7 @@ function routingContext(availabilities: Map<string, PlatformAvailability>): Rout
     { kind: string; enabled: boolean; accounts: number; ids: Set<string>; untilMs: number | null; state: PlatformState }
   >();
   for (const [id, availability] of availabilities) {
-    // 开放平台的 kind 还没登记：它们这一阶段进不了路由（预期之中）。
+    // kind 没登记的平台进不了路由：没有 kind 就没有「怎么跟它说话」。
     if (!kindOf(availability.kind)) continue;
     platforms.set(id, {
       kind: availability.kind,
@@ -280,7 +280,9 @@ function recordUnroutedUsage(
   const agent = detectAgent(ctx.request.headers).name;
   const session = detectSession(ctx.request.headers);
   // 模拟客户端的名字（面板上显示的那个）：跟打上去的那条用同一个口径。
-  const template = platformOf(target.group);
+  // 模板还是表里的开放平台：两处都是平台，kind 都在那儿。开放平台的 kind 是
+  // 「openai」，登记过了（lib/kinds/openai.ts）。
+  const template = platformOfAny(target.group);
   const kind = template ? kindOf(template.kind) : null;
   recordUsage({
     upstreamId: target.group,
@@ -473,7 +475,9 @@ async function callUpstream(
   uctx.clientSessionId = session.sessionId;
   // The platform says how to talk to it; its accounts are the ones the policy
   // picks from, inside the adapter.
-  const template = platformOf(route.platform);
+  // 平台说的是「怎么跟它说话」（kind）：模板还是表里的开放平台都要认出来，
+  // 认错了就找不到它的 kind，请求也就发不出去。
+  const template = platformOfAny(route.platform);
   const kind = template ? kindOf(template.kind) : null;
   // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
   // 是直接转发的，客户端的会话头跟着过去。模拟客户端的那些（Qoder、
