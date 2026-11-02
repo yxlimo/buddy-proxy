@@ -36,6 +36,14 @@ export { OPEN_PLATFORM_KIND_NAME };
 const BY_ID = new Map(PLATFORMS.map((p) => [p.id, p]));
 
 /**
+ * 已经报过「跟代码里的模板重名」的那些 id。
+ *
+ * allPlatforms() 在每个 /v1/models 请求里都会被调一次：按请求频率报同一个配置
+ * 错误，会把真正的故障淹掉。这是配置错误，一个进程一个 id 说一次就够。
+ */
+const warnedDuplicateIds = new Set<string>();
+
+/**
  * 全部平台：代码里的模板，加上表里的开放平台。
  *
  * 模板在前。id 撞了模板优先 —— 模板里有的 id，表里的那一行当没有。
@@ -45,8 +53,12 @@ export function allPlatforms(): Platform[] {
   for (const row of listOpenPlatforms()) {
     if (BY_ID.has(row.id)) {
       // 模板优先：表里这一行当没有。说一声是哪一行不生效 —— 不然表里躺着
-      // 一行死平台，没人数得清它为什么不见了。
-      console.warn(`[PLATFORM] 表里的 ${row.id} 跟代码里的模板重名，这一行不生效`);
+      // 一行死平台，没人数得清它为什么不见了。一个 id 一个进程只说一次：
+      // 这行告警的频率不该跟着请求频率走。
+      if (!warnedDuplicateIds.has(row.id)) {
+        warnedDuplicateIds.add(row.id);
+        console.warn(`[PLATFORM] 表里的 ${row.id} 跟代码里的模板重名，这一行不生效`);
+      }
       continue;
     }
     extra.push({ id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" });

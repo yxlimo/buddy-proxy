@@ -12,7 +12,7 @@
 //   4. 没有 key：平台是 no_credential、不公布模型、请求被拒并说清是「没凭据」
 //   5. 自动拉目录：上游的 /models 答了，目录就被换成上游答的那一份（source=auto）
 //   6. 人写死的目录（auto=false）不会被自动拉覆盖
-//   7. 拉目录的退避与去重：拉不到之后不再问上游，并发只拉一轮
+//   7. 拉目录的退避与去重：拉不到之后不再问上游，成功之后失败也不再问，并发只拉一轮
 //
 // 假上游在本进程里（node:http）：它只答两种路 —— /v1/models 与
 // /v1/chat/completions —— 并把自己收到过的请求记下来。
@@ -422,6 +422,46 @@ check(
   failSecond.message,
 );
 
+// 成功 → 失败 → 再问一次。
+//
+// 这条路径以前没被覆盖：成功与失败挨着的时候，退避要分得出「失败在成功之后」
+// —— 分不出就多打一次上游。
+const backoffCreated = createOpenPlatform({
+  id: "cat-backoff",
+  label: "Cat Backoff",
+  baseUrl: upstreamBase,
+});
+check("平台建得起来", backoffCreated.ok === true, backoffCreated.message);
+const backoffAccount = addAccount({ platform: "cat-backoff" });
+setProviderKeys(backoffAccount.id ?? "", ["sk-backoff-1"]);
+
+modelsStatus = 200;
+modelsPayload = { data: [{ id: "b-1" }] };
+seen.length = 0;
+const backoffFirst = await refreshOpenPlatformCatalog("cat-backoff");
+check("先拉到一份", backoffFirst.ok === true, backoffFirst.message);
+check("问过一次上游", modelsHits() === 1, String(modelsHits()));
+
+modelsStatus = 500;
+const backoffFail = await refreshOpenPlatformCatalog("cat-backoff");
+check("上游答 500 时报失败", backoffFail.ok === false, backoffFail.message);
+check("失败问了一次上游", modelsHits() === 2, String(modelsHits()));
+
+const backoffAgain = await refreshOpenPlatformCatalog("cat-backoff");
+check("失败之后不再问上游", modelsHits() === 2, String(modelsHits()));
+check(
+  "说的是先不再问",
+  backoffAgain.ok === false && backoffAgain.message.includes("先不再问"),
+  backoffAgain.message,
+);
+check(
+  "原来那份目录留着",
+  openPlatformOf("cat-backoff")?.models.items.join(",") === "b-1",
+  JSON.stringify(openPlatformOf("cat-backoff")?.models.items),
+);
+
+modelsStatus = 200;
+
 // 并发：同一个平台只拉一轮。
 const raceCreated = createOpenPlatform({
   id: "cat-race",
@@ -463,6 +503,11 @@ modelsPayload = { data: [{ id: "m-1" }] };
 seen.length = 0;
 const noKeyPull = await refreshOpenPlatformCatalog("cat-nokey");
 check("没有 key 不报成功", noKeyPull.ok === false, noKeyPull.message);
+check(
+  "说的是没有 key",
+  noKeyPull.message.includes("key"),
+  noKeyPull.message,
+);
 check("没有 key 不问上游", modelsHits() === 0, String(modelsHits()));
 
 /**
@@ -498,7 +543,12 @@ await shapeCase("cat-shape-array", "裸数组", 200, [{ id: "x-1" }]);
 
 // 函数总是 resolve：没有这个平台也是一个答复，不是一个 reject。
 const missing = await refreshOpenPlatformCatalog("no-such-platform");
-check("没有这个平台也 resolve", typeof missing.ok === "boolean", JSON.stringify(missing));
+check("没有这个平台也 resolve", missing.ok === false, JSON.stringify(missing));
+check(
+  "说的是没有这个平台",
+  missing.message.includes("没有这个平台"),
+  missing.message,
+);
 
 /* ------------------------------------------------------------------ *
  * 收尾

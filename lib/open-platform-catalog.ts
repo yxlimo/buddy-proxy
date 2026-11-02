@@ -14,6 +14,9 @@
 
 import { openPlatformKeyOf } from "./open-platform-credentials.ts";
 import { openPlatformOf, updateOpenPlatform, type OpenPlatformRow } from "./open-platforms.ts";
+// 模板的 id 名单住在叶子模块里（lib/platform-templates.ts）：这一层要判「表里
+// 那一行跟代码里的模板重名」，引 lib/platforms.ts 会绕成环（那一层引这一层）。
+import { PLATFORMS } from "./platform-templates.ts";
 import { accountsOfPlatform } from "./providers.ts";
 
 /** 拉目录最多等多久（毫秒）：上游慢的时候不占着后台。 */
@@ -48,16 +51,53 @@ export interface CatalogOutcome {
 const inFlight = new Map<string, Promise<CatalogOutcome>>();
 
 /**
- * 最近一次尝试的时刻（成功失败都记）。
+ * 每个平台的目录状态：内存里的，退避要用。
  *
- * 退避看的是「上次尝试之后有没有成功过」：目录的 fetchedAt 是成功那一次写下
- * 的（比尝试的时刻晚），所以 lastAttempt > fetchedAt 就说明上次尝试没成。
+ * 记的是**序号**而不是时刻：时刻只有毫秒精度，成功与失败落在同一毫秒时用时
+ * 刻比较分不出先后（原来拿目录的 fetchedAt 当判据就有这个洞：fetchedAt 是写
+ * 回目录的时刻，比那次尝试开始的时刻晚，`last > fetchedAt` 为假，退避就失效
+ * 了，多打一次上游）。序号是单调递增的，同一毫秒里的两次尝试也有先后。
+ *
+ * 退避的判据是「上次成功之后有没有失败过」：lastAttempt > lastSuccess 就是
+ * 失败过（没成功过就是 0，成功过之后又失败了就更大）。
  */
-const lastAttempt = new Map<string, number>();
+interface PlatformCatalogState {
+  /** 最近一次尝试的序号（成功失败都记）。 */
+  lastAttempt: number;
+  /** 最近一次成功的序号。 */
+  lastSuccess: number;
+  /** 最近一次尝试的时刻（毫秒）：退避窗口按它算。 */
+  at: number;
+}
+
+/** 每一次尝试一个序号：整个进程一个计数器就够了。 */
+let attemptSeq = 0;
+
+/** 每个平台的目录状态。 */
+const catalogState = new Map<string, PlatformCatalogState>();
 
 /** 这个平台的目录现在要不要重拉。 */
 export function openPlatformCatalogStale(row: OpenPlatformRow, now = Date.now()): boolean {
   return now - row.models.fetchedAt >= OPEN_PLATFORM_CATALOG_TTL_MS;
+}
+
+/** 这个 id 是代码里的模板（模板优先：表里那一行不生效）。 */
+function isTemplatePlatformId(id: string): boolean {
+  return PLATFORMS.some((p) => p.id === id);
+}
+
+/**
+ * 这个平台的目录要不要去拉。
+ *
+ * 人写死的目录不动（那是明确的意思，不是默认值）。跟代码里的模板重名的表行也
+ * 不动：模板优先，那一行不生效，拉回来的目录写回去也会被拒
+ * （lib/open-platforms.ts）。
+ *
+ * 启动时与请求路径上的刷新用同一套口径：写成两份就会走样 —— 一边跳过了，另一
+ * 边还在每 5 分钟带真 key 打一次上游，而写回必然被拒。
+ */
+export function openPlatformCatalogRefreshable(row: OpenPlatformRow): boolean {
+  return row.models.auto && !isTemplatePlatformId(row.id);
 }
 
 /**
@@ -117,17 +157,22 @@ function parseModelList(payload: unknown): string[] | null {
  * 拉不到就是 null（网络、非 2xx、认不出来的形状都是）：调用方保留原来那份
  * 目录。空清单也当拉不到 —— 用一份空目录盖掉能用的那份，客户端就一个模型都
  * 看不见了。
+ *
+ * key 可以从外面带进来：查 key 要读 provider 表与凭据，读两遍是白读。
  */
-export async function fetchOpenPlatformModels(row: OpenPlatformRow): Promise<string[] | null> {
+export async function fetchOpenPlatformModels(
+  row: OpenPlatformRow,
+  key?: string,
+): Promise<string[] | null> {
   const base = String(row.baseUrl ?? "").trim();
   if (!base) return null;
-  const key = accountKeyOf(row.id);
+  const apiKey = key ?? accountKeyOf(row.id);
   // 没有 key 是正常状态，不是故障：不问，也不吵。
-  if (!key) return null;
+  if (!apiKey) return null;
   let payload: unknown;
   try {
     const res = await fetch(`${base}/models`, {
-      headers: { accept: "application/json", Authorization: `Bearer ${key}` },
+      headers: { accept: "application/json", Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
@@ -180,18 +225,37 @@ async function runRefresh(id: string): Promise<CatalogOutcome> {
     const row = openPlatformOf(id);
     if (!row) return { ok: false, message: `没有这个平台：${id}` };
     if (!row.models.auto) return { ok: false, message: "目录是人写的，不自动拉" };
-    // 没有 key 是正常状态（平台刚建、还没填 key）：不问上游，也不吵。
-    if (!openPlatformHasKey(id)) {
-      return { ok: false, message: "还没有能用的 API key，不去问上游要目录" };
+    // 模板重名：表里这一行不生效（模板优先），拉回来的目录写回去也会被拒。
+    // 这个判断与退避都只看 row 与内存里的状态，不读库 —— 放在查 key 前面，
+    // 请求路径上就不用为了判重去读 provider 表与凭据。
+    if (isTemplatePlatformId(id)) {
+      return { ok: false, message: "这个 id 是代码里的平台，表里这一行不生效" };
     }
-    // 退避：上次尝试没成就别再问。退避期内不告警 —— 同一个失败反复告警就是
-    // 刷屏（请求路径上每个 /v1/models 都会走到这里）。
-    const last = lastAttempt.get(id);
-    if (last !== undefined && last > row.models.fetchedAt && Date.now() - last < FAILURE_BACKOFF_MS) {
+    // 退避：上次成功之后失败过就先不再问。退避期内不告警 —— 同一个失败反复
+    // 告警就是刷屏（请求路径上每个 /v1/models 都会走到这里）。
+    const before = catalogState.get(id);
+    if (
+      before &&
+      before.lastAttempt > before.lastSuccess &&
+      Date.now() - before.at < FAILURE_BACKOFF_MS
+    ) {
       return { ok: false, message: "刚问过上游，先不再问" };
     }
-    lastAttempt.set(id, Date.now());
-    const models = await fetchOpenPlatformModels(row);
+    // 没有 key 是正常状态（平台刚建、还没填 key）：不问上游，也不吵。
+    const key = accountKeyOf(id);
+    if (!key) {
+      return { ok: false, message: "还没有能用的 API key，不去问上游要目录" };
+    }
+    // 这一次尝试先记上：序号分出先后，时刻留给退避窗口。
+    const seq = ++attemptSeq;
+    const at = Date.now();
+    const state: PlatformCatalogState = {
+      lastAttempt: seq,
+      lastSuccess: before?.lastSuccess ?? 0,
+      at,
+    };
+    catalogState.set(id, state);
+    const models = await fetchOpenPlatformModels(row, key);
     if (!models) return { ok: false, message: "拉不到模型目录，保留原来那份" };
     const written = updateOpenPlatform(id, {
       models,
@@ -199,7 +263,14 @@ async function runRefresh(id: string): Promise<CatalogOutcome> {
       source: "auto",
       fetchedAt: Date.now(),
     });
-    if (!written.ok) return { ok: false, message: written.message };
+    if (!written.ok) {
+      // 写不回去是配置或库的问题，不是一般的「拉不到」：把原因写进日志，事后
+      // 才查得到「目录为什么没更新」。
+      console.warn(`[OPEN-PLATFORM] ${id} 的模型目录没写回：${written.message}`);
+      return { ok: false, message: written.message };
+    }
+    // 成功：这一次的序号就是「上次成功」。
+    catalogState.set(id, { ...state, lastSuccess: seq });
     return { ok: true, message: `拉到 ${models.length} 个模型` };
   } catch (e) {
     // 库开不了、SQLITE_BUSY：这一轮拉不成，但不该把整个网关带走。
