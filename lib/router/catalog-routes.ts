@@ -14,7 +14,7 @@ import type Koa from "koa";
 import { allPlatforms } from "../platforms.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { listProviders } from "../providers.ts";
-import { aggregateModels } from "../aggregate.ts";
+import { aggregateModels, type AggregateModel } from "../aggregate.ts";
 import {
   aggregateAnthropicCatalog,
   aggregateCatalog,
@@ -119,6 +119,17 @@ export function findAggregate(
 ): AggregateEntry | undefined {
   if (!id) return undefined;
   return aggregateEntries(availabilities).find((e) => e.id === id);
+}
+
+/**
+ * The published model by id — the one the database says exists.
+ *
+ * 根路由先问这个：模型名写错的请求不该去读账号表与冷却表（那些表只有真的要
+ * 判定「这个平台能不能接」时才要读）。没发布过的模型到这里就是 null。
+ */
+export function publishedModel(id: string): AggregateModel | null {
+  if (!id) return null;
+  return aggregateModels().find((m) => m.id === id) ?? null;
 }
 
 /**

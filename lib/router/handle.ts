@@ -38,10 +38,12 @@ import {
 } from "./upstreams/index.ts";
 import {
   routeInGroup,
+  publishedModelUnavailable,
+  unreachableUpstreams,
   type Route,
   type RoutingContext,
 } from "./routes.ts";
-import { findAggregate } from "./catalog-routes.ts";
+import { findAggregate, publishedModel } from "./catalog-routes.ts";
 import { platformAvailabilities, type PlatformAvailability, type PlatformState } from "./availability.ts";
 import { sendError } from "./deliver.ts";
 
@@ -61,7 +63,10 @@ type Dialect = "anthropic" | "openai";
  */
 
 /** What the adapters need to know about the router they run in. */
-function upstreamContext(platform?: string): UpstreamContext {
+function upstreamContext(
+  platform?: string,
+  availabilities?: Map<string, PlatformAvailability>,
+): UpstreamContext {
   const uctx: UpstreamContext = {
     legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
@@ -75,6 +80,8 @@ function upstreamContext(platform?: string): UpstreamContext {
     workbuddyMaxOutput: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model)?.maxOutput ?? 64000,
     workbuddyModel: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model) ?? null,
   };
+  // 这一轮算好的可用性带下去：派发要的是同一份答案，别再读一遍那几张表。
+  if (platform) uctx.availability = availabilities?.get(platform);
   // Keep the usage the upstream reported, so the caller can write it down once
   // the call is over. The upstream may report it in pieces — the Anthropic
   // stream puts the input in message_start and the output in message_delta —
@@ -164,7 +171,7 @@ async function handleAggregate(
       // though the upstream knows the model by another one.
       route.label = entry.id;
 
-      const uctx = upstreamContext(route.platform);
+      const uctx = upstreamContext(route.platform, availabilities);
       try {
         await callUpstream(uctx, body, route, dialect, stream, ctx);
       } catch (e) {
@@ -367,28 +374,40 @@ export async function handle(
 ): Promise<void> {
   const body = (ctx.request.body ?? {}) as Json;
 
-  // allPlatforms() 每次调用读一次 platform 表（开放平台在那张表里）。
-  const templates = allPlatforms();
-  // 同一批表在这个请求里只读一遍：可用性算一次，下面都用它。
-  const availabilities = platformAvailabilities(templates);
-
   // The root route serves the published models and nothing else: the database
   // decides which models exist and which upstream serves them.
   if (!platform) {
     const wanted = String(body.model ?? "").trim();
+    // 先查发布项：模型名写错的请求不该去读账号表、冷却表 —— 那些表只有真的要
+    // 判定「这个平台现在能不能接」时才要读。
+    const published = publishedModel(wanted);
+    if (!published || !published.enabled) {
+      unknownModel(ctx, wanted);
+      return;
+    }
+    // 需要判定：可用性算一次，下面都用它。
+    //
+    // 不做缓存：面板改了账号、凭据或者冷却之后，路由必须立刻按新值走 ——
+    // 缓存会让路由按旧值走，而面板说已经改好了。
+    const availabilities = platformAvailabilities(allPlatforms());
     const entry = findAggregate(wanted, availabilities);
     if (!entry) {
-      ctx.status = 404;
-      ctx.body = {
-        error: { type: "invalid_request_error", message: `unknown model "${wanted}"` },
-        hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后生效。",
-      };
+      // 发布着，却没有能接的目标：说清是哪个上游、什么状态、该做什么。
+      // 答「没有这个模型」会让客户端去改模型名，而模型确实发布过。
+      const unreachable = unreachableUpstreams(published.targets, availabilities);
+      if (unreachable.length) {
+        sendError(ctx, publishedModelUnavailable(published.id, unreachable));
+        return;
+      }
+      unknownModel(ctx, wanted);
       return;
     }
     await handleAggregate(ctx, entry, body, dialect, availabilities);
     return;
   }
 
+  // 平台前缀那条路：路由要知道这个平台现在接不接得住，所以可用性要算。
+  const availabilities = platformAvailabilities(allPlatforms());
   let route: Route;
   try {
     const rctx = routingContext(availabilities);
@@ -400,10 +419,32 @@ export async function handle(
 
   const stream = body.stream === true;
   try {
-    await callUpstream(upstreamContext(route.platform), body, route, dialect, stream, ctx);
+    await callUpstream(
+      upstreamContext(route.platform, availabilities),
+      body,
+      route,
+      dialect,
+      stream,
+      ctx,
+    );
   } catch (e) {
     sendError(ctx, e);
   }
+}
+
+/**
+ * 「没有这个模型」：根路由只服务面板里发布出来的模型。
+ *
+ * 只有模型真的没发布（或者没有启用的目标）才这样答。发布过、只是目标平台
+ * 现在接不了的那种，答的是「哪个上游、什么状态」—— 客户端拿到「没有这个
+ * 模型」会去改模型名，而模型名是对的。
+ */
+function unknownModel(ctx: Koa.Context, wanted: string): void {
+  ctx.status = 404;
+  ctx.body = {
+    error: { type: "invalid_request_error", message: `unknown model "${wanted}"` },
+    hint: "根路由只服务面板里发布出来的模型。在面板里配置并保存后生效。",
+  };
 }
 /** Hand the request to the upstream the route points at. */
 async function callUpstream(

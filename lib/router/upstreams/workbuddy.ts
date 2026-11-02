@@ -57,6 +57,7 @@ export async function toWorkBuddy(
         model: ctx.workbuddyModel(model),
       }),
     settle,
+    ctx.availability,
   );
 
   if (!stream) {

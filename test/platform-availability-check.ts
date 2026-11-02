@@ -55,7 +55,7 @@ const UNIT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "availability-unit-"));
 // 数据目录要在导入库模块之前定下来：store 是进程里的单例。
 process.env.BUDDY_DATA_DIR = UNIT_DIR;
 
-const { addAccount, setProviderEnabled } = await import("../lib/providers.ts");
+const { addAccount, setProviderEnabled, updateProvider } = await import("../lib/providers.ts");
 const { platformAvailability } = await import("../lib/router/availability.ts");
 const { inferenceCredentialOf } = await import("../lib/admin/accounts.ts");
 const { hasUsableCredential } = await import("../lib/admin/credentials.ts");
@@ -150,6 +150,58 @@ const recovered = platformAvailability("qiniu");
 check("冷却结束 → 又就绪了", recovered.state === "ready", recovered.state);
 
 /* ------------------------------------------------------------------ *
+ * 一之二、派发：判定与派发是同一个答案
+ * ------------------------------------------------------------------ */
+
+section("派发：没有推理凭据的账号不进候选");
+
+// 两个账号：权重大的那个没有推理凭据，权重小的那个有。
+//
+// 派发自己判的时候只看得见开关，于是会挑中权重大的那个 —— 请求打上去才报
+// 「账号上没有推理用的 API key」。那时候答复已经要写给客户端了。
+const heavy = addAccount({ platform: "qoder", alias: "没有凭据的" });
+const light = addAccount({ platform: "qoder", alias: "有凭据的" });
+if (!heavy.ok || !heavy.id || !light.ok || !light.id) {
+  throw new Error(`qoder 的账号建不出来：${heavy.message} ${light.message}`);
+}
+updateProvider(heavy.id, { weight: 900 });
+updateProvider(light.id, { weight: 100 });
+
+const { setSecret } = await import("../lib/store.ts");
+// Qoder 的推理凭据就是登录会话本身。
+const sessionNow = Date.now();
+const year = sessionNow + 365 * 24 * 3600 * 1000;
+setSecret(`session:provider:${light.id}`, "session", {
+  schemaVersion: 1,
+  region: "global",
+  clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
+  accessToken: "dt-test-token",
+  refreshToken: "drt-test-token",
+  userId: "test-user",
+  expiresAtMs: year,
+  refreshExpiresAtMs: year,
+  machineId: "test-machine",
+  machineToken: "test-machine-token",
+  machineType: "test",
+  generation: 1,
+  loginAtMs: sessionNow,
+  refreshedAtMs: sessionNow,
+});
+
+const { underPolicy } = await import("../lib/router/upstreams/policy.ts");
+const tried: string[] = [];
+const chosen = await underPolicy("qoder", "test", async (account) => {
+  tried.push(account.id);
+  return account.id;
+});
+check(
+  "派发挑中的是有凭据的那个账号",
+  chosen === light.id,
+  `${chosen}（试过：${tried.join(",")}）`,
+);
+check("没有凭据的账号根本没被试", !tried.includes(heavy.id), tried.join(","));
+
+/* ------------------------------------------------------------------ *
  * 二、路由与健康检查
  * ------------------------------------------------------------------ */
 
@@ -205,6 +257,23 @@ async function publishedIds(): Promise<string[]> {
   const res = await fetch(`${gw.base}/v1/models`);
   const body = await res.json().catch(() => ({}));
   return (body?.data ?? []).map((m: any) => String(m.id));
+}
+
+/** 根路由：模型名是发布出来的那个。 */
+async function rootChat(model: string): Promise<{ status: number; json: any; text: string }> {
+  const res = await fetch(`${gw.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "say ok" }] }),
+  });
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* not JSON */
+  }
+  return { status: res.status, json, text };
 }
 
 /** 网关自己的库：直接读写（与网关写的是同一张表）。 */
@@ -362,6 +431,30 @@ check(
 );
 await admin("SetAccountEnabled", { accountId: "qiniu", enabled: true });
 
+section("根路由：发布过的模型，目标平台没凭据");
+
+// 模型确实发布过（avail-qiniu），只是它的目标平台现在接不了。
+// 答「没有这个模型」会让客户端去改模型名 —— 而模型名是对的。
+const rootNoCredential = await rootChat("avail-qiniu");
+check(
+  "不是 404（模型确实发布过）",
+  rootNoCredential.status !== 404,
+  `HTTP ${rootNoCredential.status} ${rootNoCredential.text.slice(0, 200)}`,
+);
+check(
+  "答 400（运维没配好，不是等一会儿就好）",
+  rootNoCredential.status === 400,
+  `HTTP ${rootNoCredential.status}`,
+);
+const rootHint = String(rootNoCredential.json?.hint ?? "");
+check("文案点名了是哪个上游", rootHint.includes("qiniu"), rootHint);
+check(
+  "文案说了是什么状态",
+  rootHint.includes("no_credential") || rootHint.includes("没有可用凭据"),
+  rootHint,
+);
+check("文案说了该怎么办", rootHint.includes("API Key"), rootHint);
+
 section("凭据填回去就回来了（反证：不填就回不去）");
 
 dropQoderSession();
@@ -404,6 +497,29 @@ check("开放平台没有地址（kind 还没登记）", zephyr?.base === null, 
 check("开放平台没有模型", zephyr?.models === 0, JSON.stringify(zephyr?.models));
 const zephyrProvider = (health?.providers ?? []).find((p: any) => p.id === "zephyr");
 check("开放平台在平台列表里也是关着的", zephyrProvider?.enabled === false, JSON.stringify(zephyrProvider));
+
+section("健康检查：每个平台都说得出状态");
+
+for (const [id, upstream] of Object.entries(health?.upstreams ?? {})) {
+  const entry = upstream as any;
+  check(`${id} 有状态`, typeof entry.state === "string" && entry.state.length > 0, JSON.stringify(entry.state));
+  check(`${id} 说得出为什么`, typeof entry.reason === "string" && entry.reason.length > 0, JSON.stringify(entry.reason));
+}
+check(
+  "没有凭据的平台状态是 no_credential",
+  health?.upstreams?.qiniu?.state === "no_credential",
+  JSON.stringify(health?.upstreams?.qiniu?.state),
+);
+check(
+  "有凭据的平台状态是 ready",
+  health?.upstreams?.qoder?.state === "ready",
+  JSON.stringify(health?.upstreams?.qoder?.state),
+);
+check(
+  "平台列表里也有状态",
+  (health?.providers ?? []).every((p: any) => typeof p.state === "string" && p.state.length > 0),
+  JSON.stringify((health?.providers ?? []).map((p: any) => [p.id, p.state])),
+);
 
 /* ------------------------------------------------------------------ *
  * 收尾

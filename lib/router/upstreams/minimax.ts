@@ -58,6 +58,7 @@ export async function toMinimax(
         throw await minimaxRejection(res);
       },
       settle,
+      ctx.availability,
     );
   } catch (e) {
     // 换掉错误对象会把上游自己的状态与业务码丢掉，日志与分类器就看不出
