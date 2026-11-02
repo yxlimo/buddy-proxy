@@ -4,19 +4,18 @@
 //
 // 离线：临时数据目录，不发请求，不碰真凭据。
 //
-// 开放平台（用户自己加的平台）还没有登记的 kind —— 登记是下一个阶段的事。所以
-// 这里查的是**凭据这一层**：
+// 开放平台（用户自己加的平台）的 kind 登记了（"openai"），所以这里查的不只是
+// 凭据这一层，还有它在面板上的样子：
 //
 //   1. 没填 key：面板上没有凭据行，平台是 no_credential
-//   2. 填了 key：读得回来，凭据表里有一条 api_key（掩码与指纹都有）
-//   3. 推理标记来自注册表（canInfer），不是写死的 true
+//   2. 填了 key：读得回来，凭据表里有一条 api_key（掩码与指纹都有），平台是 ready
+//   3. 推理标记来自注册表（canInfer）：开放平台的那把 API key 就是推理凭据
 //   4. key 前后的空格被去掉
 //   5. 清空 key：凭据没了，平台回到 no_credential
 //   6. 删账号：凭据一起没了，不留孤儿
 //
-// 平台的 ready 那一档与「推理凭据就是这一条」要等 kind 登记（S2b）：那时
-// canInfer 才说 true。所以这里断言的是「跟着注册表走」，而不是把现在这个
-// 临时的 false 写死。
+// 平台的 ready 那一档与「推理凭据就是这一条」现在都成立（S2b 登记了 kind），
+// 所以这里直接断言它们，不再绕开。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -91,6 +90,11 @@ section("填一把 key");
   check("写进去一把", result.count === 1, String(result.count));
   check("文案说的是这个平台", result.message.includes("Acme"), result.message);
   check("读得回来", openPlatformKeyOf(accountId)?.apiKey === "sk-acme-1", JSON.stringify(openPlatformKeyOf(accountId)));
+  check(
+    "平台是 ready",
+    platformAvailability("acme").state === "ready",
+    platformAvailability("acme").state,
+  );
 }
 
 {
@@ -116,14 +120,14 @@ section("填一把 key");
   check("指纹有值", Boolean(row?.fingerprint), String(row?.fingerprint));
   check("状态是能用的", row?.status === CredentialState.USABLE, String(row?.status));
 
-  // 推理标记来自注册表：开放平台的 kind 还没登记（S2b 登记），所以现在
-  // canInfer 说 false；登记之后它就是 true。写死 true 的话这条现在就挂 ——
-  // 这里要的就是「跟着注册表走」。
+  // 推理标记来自注册表：开放平台的 kind 登记了（"openai"，inferWith 是
+  // api_key），所以那把 API key 就是推理凭据。
   const inferable = canInfer(kind, "api_key");
-  check("推理标记跟着注册表走", row?.inference === inferable, `${String(row?.inference)} vs ${String(inferable)}`);
+  check("注册表说这一类上游的推理凭据是 key", inferable === true, String(inferable));
+  check("这一条是推理凭据", row?.inference === true, String(row?.inference));
   check(
-    "推理凭据与注册表一致",
-    (inferenceCredentialOf(accountId)?.id ?? null) === (inferable ? row?.id : null),
+    "推理凭据就是这一条",
+    inferenceCredentialOf(accountId)?.id === row?.id,
     JSON.stringify(inferenceCredentialOf(accountId)?.id ?? null),
   );
 }

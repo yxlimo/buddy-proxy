@@ -252,13 +252,31 @@ check(
 check("平台行说得出「过期」", String(expiredRow?.stateReason ?? "").includes("过期"), String(expiredRow?.stateReason));
 
 /* ------------------------------------------------------------------ *
- * 六、十个 kind 的推理凭据：注册表说了算
+ * 六、每个 kind 的推理凭据：注册表说了算
  * ------------------------------------------------------------------ */
 
-section("十个 kind 的推理凭据");
+section("每个 kind 的推理凭据");
 
 const kinds = allKinds();
-check("注册表里有十个 kind", kinds.length === 10, kinds.map((k) => k.kind).join(","));
+// 断言名单而不是个数：加一个 kind 就变红太脆，注册表里该有谁才是要守的。
+const kindNames = kinds.map((k) => k.kind);
+const wantedKinds = [
+  "sensenova",
+  "intern-ai",
+  "qiniu",
+  "xinghuo",
+  "openai",
+  "minimax",
+  "qoder",
+  "workbuddy",
+  "tokenrhythm",
+  "zcode",
+];
+check(
+  "注册表里有那几个 kind",
+  wantedKinds.every((name) => kindNames.includes(name)),
+  kindNames.join(","),
+);
 
 for (const kind of kinds) {
   // 注册表说这一类上游的推理凭据是哪一份（inferWith）；判定函数说的必须是同一件

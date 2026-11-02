@@ -15,19 +15,11 @@ import { platformOf } from "../platforms.ts";
 import { provider, providerKindOf } from "../providers.ts";
 
 /**
- * 上游报的状态 → 契约里的枚举。
- *
- * "usable" 是面板自己的说法：这条凭据能用。
- * "anonymous" 在**上游**那里是「没登录」的意思（qoder、workbuddy、minimax
- * 都这么报），所以上游的 anonymous 要算「没有凭据」—— 那是
- * `fromUpstreamStatus` 那里单独判的。这里的 anonymous 是「有凭据，但还没
- * 过期」—— 账号密码型上游（TokenRhythm）的常态。
- */
-/**
  * 这个账号是不是开放平台的账号。
  *
- * 开放平台是用户自己加的平台（表里的那一行），它还没有登记的 kind，所以判定
- * 只能看它属于哪个平台。
+ * 开放平台是用户自己加的平台（表里的那一行）。它的 kind 登记了（"openai"），
+ * 但这里问的不是 kind：账号行说它属于哪个平台，那一行在平台表里、且不跟代码
+ * 里的模板重名，就是开放平台。
  *
  * 表里有、代码里也有的 id 算模板：模板优先（lib/platforms.ts），那个账号不是
  * 开放平台的账号 —— 它按模板那一套算。
@@ -109,6 +101,15 @@ export function setProviderKeys(
   return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
 }
 
+/**
+ * 上游报的状态 → 契约里的枚举。
+ *
+ * "usable" 是面板自己的说法：这条凭据能用。
+ * "anonymous" 在**上游**那里是「没登录」的意思（qoder、workbuddy、minimax
+ * 都这么报），所以上游的 anonymous 要算「没有凭据」—— 那是
+ * `fromUpstreamStatus` 那里单独判的。这里的 anonymous 是「有凭据，但还没
+ * 过期」—— 账号密码型上游（TokenRhythm）的常态。
+ */
 export function credentialState(status: string): CredentialState {
   switch (status) {
     case "authenticated":

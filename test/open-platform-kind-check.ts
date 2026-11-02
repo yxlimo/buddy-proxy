@@ -4,7 +4,7 @@
 //
 // 离线：临时数据目录 + 本进程里的假上游，不发真请求，不碰真凭据。
 //
-// 查的是六件事：
+// 查的是七件事：
 //
 //   1. kind 登记了：kindOf("openai") 不是 null，平台的状态是 ready
 //   2. 目录公布：/v1/models（根路由）与 /<平台>/v1/models 都列得出目录里的模型
@@ -12,6 +12,7 @@
 //   4. 没有 key：平台是 no_credential、不公布模型、请求被拒并说清是「没凭据」
 //   5. 自动拉目录：上游的 /models 答了，目录就被换成上游答的那一份（source=auto）
 //   6. 人写死的目录（auto=false）不会被自动拉覆盖
+//   7. 拉目录的退避与去重：拉不到之后不再问上游，并发只拉一轮
 //
 // 假上游在本进程里（node:http）：它只答两种路 —— /v1/models 与
 // /v1/chat/completions —— 并把自己收到过的请求记下来。
@@ -54,6 +55,9 @@ const seen: { method: string; path: string; authorization: string }[] = [];
 /** 假上游的 /models 答什么（换形状就改它）。 */
 let modelsPayload: unknown = { data: [{ id: "m-1" }, { id: "m-2" }] };
 
+/** 假上游的 /models 答什么状态码（换形状就改它）。 */
+let modelsStatus = 200;
+
 const upstream = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const chunks: Buffer[] = [];
@@ -64,7 +68,7 @@ const upstream = http.createServer(async (req, res) => {
     authorization: String(req.headers.authorization ?? ""),
   });
   if (req.method === "GET" && url.pathname.endsWith("/models")) {
-    res.writeHead(200, { "content-type": "application/json" });
+    res.writeHead(modelsStatus, { "content-type": "application/json" });
     res.end(JSON.stringify(modelsPayload));
     return;
   }
@@ -271,7 +275,7 @@ const refused = await call("/acme/v1/chat/completions", {
   method: "POST",
   body: { model: "m-1", messages: [{ role: "user", content: "say ok" }] },
 });
-check("请求被拒", refused.status >= 400, `HTTP ${refused.status}`);
+check("请求被拒", refused.status === 400, `HTTP ${refused.status}`);
 check(
   "说的是没有凭据",
   /凭据/.test(String(refused.json?.hint ?? refused.json?.error?.message ?? refused.text)),
@@ -379,9 +383,126 @@ check("来源还是 manual", openPlatformOf("manual-cat")?.models.source === "ma
 check("没去问上游", seen.length === 0, JSON.stringify(seen.map((s) => `${s.method} ${s.path}`)));
 
 /* ------------------------------------------------------------------ *
- * 收尾
+ * 7. 拉目录的退避与去重
  * ------------------------------------------------------------------ */
 
+section("7. 拉目录的退避与去重");
+
+/** 假上游被问过几次目录（GET /models）。 */
+function modelsHits(): number {
+  return seen.filter((s) => s.method === "GET" && s.path.endsWith("/models")).length;
+}
+
+// 拉不到目录：上游答 500。
+const failCreated = createOpenPlatform({
+  id: "cat-fail",
+  label: "Cat Fail",
+  baseUrl: upstreamBase,
+});
+check("平台建得起来", failCreated.ok === true, failCreated.message);
+const failAccount = addAccount({ platform: "cat-fail" });
+setProviderKeys(failAccount.id ?? "", ["sk-fail-1"]);
+
+modelsStatus = 500;
+seen.length = 0;
+const failFirst = await refreshOpenPlatformCatalog("cat-fail");
+check("拉不到时报失败", failFirst.ok === false, failFirst.message);
+check("问过一次上游", modelsHits() === 1, String(modelsHits()));
+check(
+  "目录没变",
+  (openPlatformOf("cat-fail")?.models.items ?? []).length === 0,
+  JSON.stringify(openPlatformOf("cat-fail")?.models.items),
+);
+
+const failSecond = await refreshOpenPlatformCatalog("cat-fail");
+check("第二次不再问上游", modelsHits() === 1, String(modelsHits()));
+check(
+  "第二次说先不再问",
+  failSecond.ok === false && failSecond.message.includes("先不再问"),
+  failSecond.message,
+);
+
+// 并发：同一个平台只拉一轮。
+const raceCreated = createOpenPlatform({
+  id: "cat-race",
+  label: "Cat Race",
+  baseUrl: upstreamBase,
+});
+check("平台建得起来", raceCreated.ok === true, raceCreated.message);
+const raceAccount = addAccount({ platform: "cat-race" });
+setProviderKeys(raceAccount.id ?? "", ["sk-race-1"]);
+
+modelsStatus = 200;
+modelsPayload = { data: [{ id: "r-1" }] };
+seen.length = 0;
+const [raceFirst, raceSecond] = await Promise.all([
+  refreshOpenPlatformCatalog("cat-race"),
+  refreshOpenPlatformCatalog("cat-race"),
+]);
+check("并发两次只问上游一次", modelsHits() === 1, String(modelsHits()));
+check(
+  "两个都答了",
+  raceFirst.ok === true && raceSecond.ok === true,
+  `${raceFirst.message} / ${raceSecond.message}`,
+);
+check(
+  "目录是上游答的那一份",
+  openPlatformOf("cat-race")?.models.items.join(",") === "r-1",
+  JSON.stringify(openPlatformOf("cat-race")?.models.items),
+);
+
+// 没有 key：不去问上游（那是正常状态，不是故障）。
+const noKeyCreated = createOpenPlatform({
+  id: "cat-nokey",
+  label: "Cat No Key",
+  baseUrl: upstreamBase,
+});
+check("平台建得起来", noKeyCreated.ok === true, noKeyCreated.message);
+addAccount({ platform: "cat-nokey" });
+modelsPayload = { data: [{ id: "m-1" }] };
+seen.length = 0;
+const noKeyPull = await refreshOpenPlatformCatalog("cat-nokey");
+check("没有 key 不报成功", noKeyPull.ok === false, noKeyPull.message);
+check("没有 key 不问上游", modelsHits() === 0, String(modelsHits()));
+
+/**
+ * 三种拉不到的形状：目录留着原来那份。
+ *
+ * 每个形状一个平台：拉失败之后有退避，同一个平台问不出第二种形状。
+ */
+async function shapeCase(id: string, label: string, status: number, payload: unknown): Promise<void> {
+  const created = createOpenPlatform({ id, label, baseUrl: upstreamBase });
+  check(`${label}：平台建得起来`, created.ok === true, created.message);
+  const account = addAccount({ platform: id });
+  setProviderKeys(account.id ?? "", [`sk-${id}`]);
+  // 先成功一次：目录里有一份能用的。
+  modelsStatus = 200;
+  modelsPayload = { data: [{ id: "keep-1" }] };
+  const first = await refreshOpenPlatformCatalog(id);
+  check(`${label}：先拉到一份`, first.ok === true, first.message);
+  // 再换成拉不到的形状。
+  modelsStatus = status;
+  modelsPayload = payload;
+  const second = await refreshOpenPlatformCatalog(id);
+  check(`${label}：不报成功`, second.ok === false, second.message);
+  check(
+    `${label}：原来那份目录留着`,
+    openPlatformOf(id)?.models.items.join(",") === "keep-1",
+    JSON.stringify(openPlatformOf(id)?.models.items),
+  );
+}
+
+await shapeCase("cat-shape-500", "非 2xx", 500, { data: [{ id: "x-1" }] });
+await shapeCase("cat-shape-empty", "空清单", 200, { data: [] });
+await shapeCase("cat-shape-array", "裸数组", 200, [{ id: "x-1" }]);
+
+// 函数总是 resolve：没有这个平台也是一个答复，不是一个 reject。
+const missing = await refreshOpenPlatformCatalog("no-such-platform");
+check("没有这个平台也 resolve", typeof missing.ok === "boolean", JSON.stringify(missing));
+
+/* ------------------------------------------------------------------ *
+ * 收尾
+ * ------------------------------------------------------------------ */
 server.close();
 upstream.close();
 fs.rmSync(tmp, { recursive: true, force: true });

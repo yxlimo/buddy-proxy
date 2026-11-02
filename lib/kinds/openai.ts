@@ -13,8 +13,10 @@
 import { tokenFingerprint } from "../credential.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 import { openPlatformKeyOf } from "../open-platform-credentials.ts";
-import { openPlatformOf } from "../open-platforms.ts";
-import { OPEN_PLATFORM_KIND_NAME } from "../platforms.ts";
+// 开放平台的 kind 名字住在 lib/open-platforms.ts（那一层不引 lib/platforms.ts）。
+// 从那里取而不是从 lib/platforms.ts 转出来：环上的模块不能在求值期读别人的
+// 常量，转出来等于把环用回来了，现在能跑只靠依赖求值顺序。
+import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import type { CatalogModel } from "../catalog-models.ts";
@@ -59,7 +61,9 @@ export const openaiKind = registerCompatiblePlatform({
   // 那一把 key 既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
   // 地址是表里那一行的。拿不到时返回空串，不抛：抛出去会让「平台列表」这类
-  // 只读路径也炸，而转发层自己会报「地址不对」。
+  // 只读路径也炸。地址为空的话转发层只会看到一个笼统的上游错误（fetch 一个
+  // 空地址会 TypeError，转发层把它当成上游 5xx），所以空地址在写入侧就被
+  // checkBaseUrl 挡住了（lib/open-platforms.ts）。
   baseUrl: (provider) => openPlatformOf(provider.platform)?.baseUrl ?? "",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => openPlatformKeyOf(accountId ?? provider.id)?.apiKey ?? "",

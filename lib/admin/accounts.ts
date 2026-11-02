@@ -99,7 +99,7 @@ export interface CredentialRow {
  * —— 它们只是账号本身与查额度用的旁门。
  *
  * kind 没登记时一律 false：没有登记就没有这一类上游的规矩，猜不得（开放平台
- * 就是这样：它还没有登记的 kind，所以它的账号没有推理凭据）。
+ * 的 kind 登记了，所以它的账号有推理凭据：那一把 API key）。
  */
 export function canInfer(kindName: string, form: string): boolean {
   const kind = kindOf(kindName);
@@ -217,8 +217,8 @@ export function credentialsOf(accountId: string): CredentialRow[] {
   const out: CredentialRow[] = [];
   const account = provider(accountId);
   if (!account) return out;
-  // 开放平台还没有登记的 kind，所以下面那个 switch 里没有它的那一档：它按
-  // 属于哪个平台来判。
+  // 开放平台的 kind 登记了（"openai"），但下面那个 switch 里没有它的那一档：
+  // 它的凭据只有一把推理用的 API key，按属于哪个平台来判。
   if (openPlatformOfAccount(account.id)) {
     // 开放平台的凭据只有一把推理用的 API key。没有就什么都不列 —— 面板上不能
     // 出现「有凭据」却没有凭据的行（跟七牛云、讯飞星火一个规矩）。
