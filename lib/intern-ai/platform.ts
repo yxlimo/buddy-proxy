@@ -29,6 +29,17 @@
 
 import { INTERN_AI_TOKEN_COOKIE } from "./config.ts";
 import { InternAiError, classify, clearSession, type InternAiSession } from "./auth.ts";
+import { listSecrets } from "../store.ts";
+
+/** 401 之后清掉持有这把令牌的会话（可能一份也没有：已经被别处清过了）。 */
+function forgetRefusedSession(token: string): void {
+  const prefix = "session:provider:";
+  for (const row of listSecrets(prefix)) {
+    const sites = (row.data as { sites?: { token?: string }[] } | null)?.sites;
+    if (!sites?.some((s) => s?.token === token)) continue;
+    clearSession(row.id.slice(prefix.length));
+  }
+}
 
 /** 一次调用怎么发。 */
 export interface ConsoleRequest {
@@ -104,8 +115,9 @@ export async function consoleApi<T>(
   }
 
   if (r.status === 401) {
-    // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。
-    clearSession();
+    // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。只清持有
+    // 这把令牌的那份会话 —— 不能落到「默认账号」上，那可能是另一个人的登录态。
+    forgetRefusedSession(token);
     throw new InternAiError("auth", `控制台接口 ${new URL(url).pathname}：会话已过期（HTTP 401），重新登录`, 503);
   }
   if (!r.ok) {

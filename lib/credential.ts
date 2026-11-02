@@ -7,8 +7,13 @@
 //   lib/minimax/oauth.ts       owns its own session (logs in, refreshes)
 // lib/minimax/auth.ts picks between them.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { tighten } from "./store-migrate.ts";
+
+/** 这个进程里已经收紧过的 auth.log：每条日志都 chmod 一次没必要。 */
+const tightened = new Set<string>();
 
 export const DEFAULT_CLIENT_ID = "mcode-public";
 export const DEFAULT_AUDIENCE = "agent-backend";
@@ -26,17 +31,33 @@ export const DEFAULT_REGION = "cn";
 export function authLog(dir: string, event: string, detail = ""): void {
   const line = `${new Date().toISOString()} ${event}${detail ? " " + detail : ""}`;
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, "auth.log"), line + "\n");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // 0600：日志里只有指纹，但账号、时间线与平台的原话也不是谁都该读的。
+    // mode 只在新建时生效，所以旧版留下的（0644）每个进程收紧一次。
+    const file = path.join(dir, "auth.log");
+    fs.appendFileSync(file, line + "\n", { mode: 0o600 });
+    if (!tightened.has(file)) {
+      tightened.add(file);
+      tighten(file, 0o600);
+    }
   } catch {
     /* logging must never break a request */
   }
   console.log(`[AUTH] ${event}${detail ? " " + detail : ""}`);
 }
 
-/** A token is a secret; logs only ever carry its first few characters. */
+/**
+ * A token is a secret; logs only ever carry a fingerprint of it.
+ *
+ * The first four characters say which kind of token it is (`mmoat_`, `sk-`…),
+ * and a short hash tells two tokens apart without giving any more of either
+ * away. Ten characters of a short token were most of it; the length helped
+ * guess the rest.
+ */
 export function tokenFingerprint(token: string): string {
-  return token ? `${token.slice(0, 10)}…(${token.length})` : "(empty)";
+  if (!token) return "(empty)";
+  const hash = crypto.createHash("sha256").update(token, "utf8").digest("hex").slice(0, 8);
+  return `${token.slice(0, 4)}…#${hash}`;
 }
 
 export interface Credential {

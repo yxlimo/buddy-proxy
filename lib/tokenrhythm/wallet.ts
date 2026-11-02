@@ -188,12 +188,16 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
 /**
  * The accounts that can serve a request at all.
  *
- * They have a key, the platform says they have money, and they have not just
- * said they have none. The order is the order the accounts were added in —
- * the one that runs out first is `orderedAccounts`'s business, not this one's.
+ * They are switched on, they have a key, the platform says they have money,
+ * and they have not just said they have none. The order is the order the
+ * accounts were added in — the one that runs out first is `orderedAccounts`'s
+ * business, not this one's.
  */
 export function usableAccounts(statuses: TokenRhythmAccountStatus[]): TokenRhythmAccountStatus[] {
   return statuses.filter((s) => {
+    // 停用的账号不接请求。看的是账号行现在的开关，不是缓存里那一份：状态
+    // 缓存五分钟，面板上刚关掉的账号不能再接五分钟。
+    if (accountSwitchedOff(s.accountId)) return false;
     // 能发请求靠的是 API key；账号密码那份登录态只用来查余额。
     if (!s.hasKey) return false;
     if (outOfMoney.has(s.accountId)) return false;
@@ -243,6 +247,28 @@ function sortByExpiry(accounts: TokenRhythmAccountStatus[]): TokenRhythmAccountS
     return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
   };
   return accounts.sort((a, b) => expiry(a) - expiry(b));
+}
+
+/**
+ * 这个账号在面板上被关掉了吗。
+ *
+ * 只有账号行在、而且开关是关的才算：行不在的（删掉了）由删账号那一步把缓存
+ * 清掉（forgetTokenRhythmAccount）。
+ */
+export function accountSwitchedOff(accountId: string): boolean {
+  const row = provider(accountId);
+  return row !== null && !row.enabled;
+}
+
+/**
+ * 删掉的账号：进程里关于它的都忘掉。
+ *
+ * 它所在平台的状态缓存整份扔掉（下一次问平台，删掉的账号就不在里面了），
+ * 「没钱了」的记号也删。钉住的账户在 balance.ts，由那边一起清。
+ */
+export function forgetWalletState(accountId: string, platform: string): void {
+  outOfMoney.delete(accountId);
+  caches.delete(platformOfAccount(platform));
 }
 
 /**

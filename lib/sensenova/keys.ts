@@ -70,9 +70,14 @@ export function parseApiKeyRow(row: any): SenseNovaApiKey {
  *
  * 面板还没做 key 管理：这一族接口是前瞻代码，现在只有网关自己与探针在用。
  */
-export async function listApiKeys(session: SenseNovaSession, pageSize = 20): Promise<SenseNovaApiKey[]> {
+export async function listApiKeys(
+  session: SenseNovaSession,
+  pageSize = 20,
+  providerId?: string,
+): Promise<SenseNovaApiKey[]> {
   const data = await consoleApi<any>("/console/v1/metered/api-keys", session, {
     query: { page_size: pageSize },
+    providerId,
   });
   const rows = Array.isArray(data?.api_keys) ? data.api_keys : [];
   return rows.map(parseApiKeyRow);
@@ -88,10 +93,12 @@ export async function createApiKey(
   session: SenseNovaSession,
   name: string,
   keyType: SenseNovaKeyType = KEY_TYPE_TOKEN_PLAN,
+  providerId?: string,
 ): Promise<SenseNovaApiKey> {
   const data = await consoleApi<any>("/console/v1/metered/api-keys", session, {
     method: "POST",
     body: { displayname: name, key_type: keyType },
+    providerId,
   });
   const row = data?.api_key ?? data;
   const key = parseApiKeyRow({ ...row, api_key_plain: data?.api_key_plain });
@@ -99,9 +106,10 @@ export async function createApiKey(
 }
 
 /** 注销一个 key。 */
-export async function revokeApiKey(session: SenseNovaSession, id: string): Promise<void> {
+export async function revokeApiKey(session: SenseNovaSession, id: string, providerId?: string): Promise<void> {
   await consoleApi<any>(`/console/v1/metered/api-keys/${encodeURIComponent(id)}`, session, {
     method: "DELETE",
+    providerId,
   });
 }
 
@@ -141,14 +149,14 @@ export async function waitForKeyUsable(
 export async function ensureApiKey(
   session: SenseNovaSession,
   name: string,
-  current?: string | null,
-  keyType: SenseNovaKeyType = KEY_TYPE_TOKEN_PLAN,
-  providerId = "sensenova",
+  current: string | null | undefined,
+  keyType: SenseNovaKeyType,
+  providerId: string,
 ): Promise<string | null> {
   const stored = storedAccount(providerId);
   const existing = current ?? senseNovaApiKey(stored?.apiKey) ?? "";
   if (existing) return existing;
-  const created = await createApiKey(session, name, keyType);
+  const created = await createApiKey(session, name, keyType, providerId);
   if (!created.plainKey) {
     throw new Error("平台创建了 key，但没有把完整的 key 交回来");
   }
@@ -184,21 +192,25 @@ export const SENSE_NOVA_KEY_NAME = "buddy";
  */
 export const senseNovaKeys: PlatformKeys<SenseNovaSession> = {
   what: "SenseNova",
-  list: async ({ session }) => (await listApiKeys(session)).map(toPlatformKey),
-  create: async ({ session, keyType }, name) =>
+  list: async ({ session, providerId }) => (await listApiKeys(session, 20, providerId)).map(toPlatformKey),
+  create: async ({ session, keyType, providerId }, name) =>
     toPlatformKey(
-      await createApiKey(session, name, (keyType as SenseNovaKeyType) ?? KEY_TYPE_TOKEN_PLAN),
+      await createApiKey(session, name, (keyType as SenseNovaKeyType) ?? KEY_TYPE_TOKEN_PLAN, providerId),
     ),
-  delete: async ({ session }, id) => {
-    await revokeApiKey(session, id);
+  delete: async ({ session, providerId }, id) => {
+    await revokeApiKey(session, id, providerId);
   },
-  ensure: async ({ session, keyType, providerId }, current) =>
-    ensureApiKey(
+  ensure: async ({ session, keyType, providerId }, current) => {
+    // 建出来的 key 要存到某个账号名下：不知道是谁的，就不建（以前缺省落到
+    // "sensenova" 那一行，等于把 key 存给了别人）。
+    if (!providerId) throw new Error("SenseNova 的 key 要知道存到哪个账号（providerId）");
+    return ensureApiKey(
       session,
       SENSE_NOVA_KEY_NAME,
       current ?? null,
       (keyType as SenseNovaKeyType) ?? KEY_TYPE_TOKEN_PLAN,
-      providerId ?? "sensenova",
-    ),
+      providerId,
+    );
+  },
 };
 

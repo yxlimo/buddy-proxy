@@ -93,12 +93,12 @@ export function dataDir(): string {
  * The session belongs to the provider, not to the kind: two MiniMax Code
  * accounts are two providers, each with its own session.
  */
-export function sessionId(providerId = "minimax"): string {
+export function sessionId(providerId: string): string {
   return providerSecretId(providerId);
 }
 
 /** Where the session used to live, while the migration is under way. */
-function loginHint(providerId = "minimax"): string {
+function loginHint(providerId: string): string {
   return `还没有登录。服务启动时会自己跑 device flow（把授权链接点一下就行），` +
     `${clearHint(sessionId(providerId))}（会打印一个授权链接）。` +
     `凭据之后每小时自动刷新。`;
@@ -113,18 +113,18 @@ function loginHint(providerId = "minimax"): string {
  * provider the same account, and with it the same refresh token. One of them
  * refreshing would then break the other.
  */
-function loadSession(providerId = "minimax"): Session | null {
+function loadSession(providerId: string): Session | null {
   return readSession<Session>(sessionId(providerId), hasTokens);
 }
 
-export function hasSession(providerId = "minimax"): boolean {
+export function hasSession(providerId: string): boolean {
   return loadSession(providerId) !== null;
 }
 
 /** Atomic write, 0600 — this file is a credential, not configuration. */
 export function saveSession(
   session: Session,
-  providerId = "minimax",
+  providerId: string,
   options: { force?: boolean } = {},
 ): boolean {
   return writeSession(sessionId(providerId), session, options);
@@ -215,9 +215,9 @@ function sessionFromGrant(grant: Grant, previous?: Session | null): Session {
 
 let cache: CredentialCache | null = null;
 
-function toCredential(session: Session): Credential {
+function toCredential(session: Session, providerId: string): Credential {
   return credentialFromSession(session, {
-    source: sessionId(),
+    source: sessionId(providerId),
     owner: "oauth",
     warnMs: WARN_MS,
     status: "authenticated",
@@ -241,7 +241,7 @@ function toCredential(session: Session): Credential {
  * 平台会当成重放，把**整个会话**的令牌一起撤掉。所以这份会话同一时刻只有
  * 一个刷新者——定时器。请求那一条路不换令牌（它看到过期就报错）。
  */
-export async function refreshSession(providerId = "minimax"): Promise<Session> {
+export async function refreshSession(providerId: string): Promise<Session> {
   const id = sessionId(providerId);
   return refreshSessionFlow<Session>({
     id,
@@ -285,7 +285,7 @@ export async function refreshSession(providerId = "minimax"): Promise<Session> {
  * Credential for the proxy. Cached for CACHE_MS; `force` means "the token we just sent
  * was rejected, get a new one" and refreshes unconditionally.
  */
-export async function ensureCredential(providerId = "minimax"): Promise<Credential> {
+export async function ensureCredential(providerId: string): Promise<Credential> {
   return ensureCredentialShared({
     cache,
     setCache: (next) => {
@@ -298,7 +298,7 @@ export async function ensureCredential(providerId = "minimax"): Promise<Credenti
     lockId: sessionId(providerId),
     // 令牌是定时器换的，这里只取现在这一份。
     session: () => loadSession(providerId),
-    toCredential,
+    toCredential: (session) => toCredential(session, providerId),
     expired: (session) =>
       new AuthError(
         session ? `access token expired (generation ${session.generation})` : "no session",
@@ -413,7 +413,7 @@ export async function pollDeviceToken(auth: DeviceAuthorization): Promise<Sessio
   throw new AuthError("expired_token", "device code 已超时，请重新发起登录。", 503);
 }
 
-export async function login(providerId = "minimax"): Promise<Session> {
+export async function login(providerId: string): Promise<Session> {
   const auth = await startDeviceAuthorization();
   const url = auth.verificationUriComplete ?? `${auth.verificationUri}?code=${auth.userCode}`;
   console.log("");
@@ -437,8 +437,8 @@ export async function login(providerId = "minimax"): Promise<Session> {
   return session;
 }
 
-export async function revoke(): Promise<void> {
-  const session = loadSession();
+export async function revoke(providerId: string): Promise<void> {
+  const session = loadSession(providerId);
   if (!session) return;
   const r = await postForm(`${ORIGIN}/oauth2/revoke`, {
     token: session.refreshToken,
@@ -447,7 +447,7 @@ export async function revoke(): Promise<void> {
   });
   if (!r.ok) throw new AuthError(`revoke failed (${r.error ?? `HTTP ${r.status}`})`, "撤销失败。", 502);
   try {
-    deleteSecret(sessionId());
+    deleteSecret(sessionId(providerId));
   } catch {
     /* already gone */
   }
@@ -455,7 +455,7 @@ export async function revoke(): Promise<void> {
 }
 
 /** Shape for /health — never throws, reports what is wrong instead. */
-export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
+export function oauthStatus(providerId: string): Record<string, unknown> {
   const session = loadSession(providerId);
   if (!session) {
     return { source: sessionId(providerId), status: "anonymous", error: "no session", hint: loginHint(providerId) };

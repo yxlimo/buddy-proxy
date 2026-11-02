@@ -255,8 +255,8 @@ export async function ensureApiKey(
   site: InternAiSiteName,
   token: string,
   name: string,
-  current?: string | null,
-  providerId = "intern-ai",
+  current: string | null | undefined,
+  providerId: string,
 ): Promise<string | null> {
   const stored = storedAccount(providerId);
   const existing =
@@ -321,13 +321,17 @@ export const internAiKeys: PlatformKeys<InternAiSession> = {
   enable: async ({ session, token }, id) => {
     await enableDiscoveryKey(session, token ?? "", id);
   },
-  ensure: async ({ session, token, providerId }, current) =>
-    ensureApiKey(
+  ensure: async ({ session, token, providerId }, current) => {
+    // 建出来的 key 要存到某个账号名下：不知道是谁的就不建（缺省落到 "intern-ai"
+    // 那一行，等于把 key 存给了一个可能不存在、或者是别人的账号）。
+    if (!providerId) throw new Error("intern-ai 的 key 要知道存到哪个账号（providerId）");
+    return ensureApiKey(
       session,
       "discovery",
       token ?? "",
       INTERN_AI_KEY_NAME,
       current ?? null,
-      providerId ?? "intern-ai",
-    ),
+      providerId,
+    );
+  },
 };

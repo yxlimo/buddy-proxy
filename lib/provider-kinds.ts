@@ -258,6 +258,12 @@ export interface ProviderKind {
    */
   isRequestMissingBalance?(error: unknown): boolean;
   /**
+   * 这个账号删掉了：忘掉进程里关于它的状态（钉住的账户、余额缓存……）。
+   *
+   * 库里的行由 lib/admin/accounts.ts 删；这里只管各家自己在内存里记着的。
+   */
+  forget?(provider: ProviderRow): void;
+  /**
    * 这一类上游怎么转发。没有它就说明这个种类还没接。
    *
    * 请求怎么发出去、答案怎么写回客户端，是转发那一条路的事

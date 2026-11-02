@@ -18,10 +18,12 @@
 //
 // Node 24 ships SQLite, so there is no native module to compile.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
+import { migrate, tighten } from "./store-migrate.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -46,17 +48,17 @@ export { dbPath };
 export function store(): DatabaseSync {
   if (db) return db;
   const file = dbPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // 已有的数据目录也收紧：mkdir 的 mode 只管新建的那一次。Windows 上 chmod
+  // 没有意义，失败也不报错。
+  tighten(dir, 0o700);
   if (!fs.existsSync(file)) {
     // An empty file is a valid new database, and creating it ourselves is the
     // only way to get the mode right.
     fs.writeFileSync(file, "", { mode: 0o600 });
   } else {
-    try {
-      fs.chmodSync(file, 0o600);
-    } catch {
-      /* not ours to change */
-    }
+    tighten(file, 0o600);
   }
   db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL");
@@ -142,104 +144,24 @@ export function store(): DatabaseSync {
       updated_at  INTEGER NOT NULL
     )`,
   );
-  migrateProviderToAccounts(db);
-  migrateProviderWeight(db);
-  return db;
-}
-
-/**
- * 把旧的「一行一个上游」改成「一行一个账号」。
- *
- * 旧的行里 `kind` 的值基本上就是平台 id（`minimax`、`qoder`、`qoder-cn`……），
- * 但有两处要修：`workbuddy` 那一行的平台叫 `workbuddy-cn`，`qoder` 那一行要
- * 按 region 分成 `qoder`（全球区）与 `qoder-cn`（中国区）两个平台。
- *
- * 旧行的 `policy` 搬到平台层：一个平台下有多个账号时，取第一个不是默认值的
- * 那个——否则 TokenRhythm 的「余额到期优先」会默默丢掉。
- */
-function migrateProviderToAccounts(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(provider)").all() as { name?: string }[];
-  const has = (name: string) => columns.some((c) => c.name === name);
-  if (!has("kind")) return; // 已经是新的形状了。
-
-  const rows = db
-    .prepare("SELECT id, kind, alias, enabled, region, created_at, updated_at FROM provider")
-    .all() as any[];
-  const policies = has("policy")
-    ? (db.prepare("SELECT id, policy FROM provider").all() as any[])
-    : [];
-
-  db.exec("ALTER TABLE provider RENAME TO provider_old");
+  // 每个平台用过的最大账号序号：账号 id 不复用（见 lib/providers.ts 的 nextAccountId）。
   db.exec(
-    `CREATE TABLE provider (
-      id         TEXT PRIMARY KEY,
-      platform   TEXT NOT NULL,
-      alias      TEXT NOT NULL DEFAULT '',
-      enabled    INTEGER NOT NULL DEFAULT 1,
-      weight     INTEGER NOT NULL DEFAULT 100,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+    `CREATE TABLE IF NOT EXISTS account_seq (
+      platform TEXT PRIMARY KEY,
+      last     INTEGER NOT NULL
     )`,
   );
-  const insert = db.prepare(
-    "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  );
-  const setPolicy = db.prepare(
-    "INSERT INTO platform_policy (platform, policy, updated_at) VALUES (?, ?, ?) " +
-      "ON CONFLICT(platform) DO NOTHING",
-  );
-  const policyOf = new Map(policies.map((r) => [String(r.id), String(r.policy ?? "single")]));
-  const now = Date.now();
-  let order = 0;
-
-  for (const row of rows) {
-    const platform = platformOfLegacyRow(String(row.kind), String(row.region ?? ""));
-    insert.run(
-      String(row.id),
-      platform,
-      String(row.alias ?? ""),
-      Number(row.enabled ?? 1) ? 1 : 0,
-      // 旧行没有权重：按创建先后给一个递减的，顺序跟从前一样。
-      100 - order * 10,
-      Number(row.created_at ?? now),
-      Number(row.updated_at ?? now),
-    );
-    order++;
-    const policy = policyOf.get(String(row.id));
-    if (policy && policy !== "single") setPolicy.run(platform, policy, now);
+  // WAL 的两个旁文件里也是凭据：开库之后它们才在，在这里一起收紧。
+  tighten(`${file}-wal`, 0o600);
+  tighten(`${file}-shm`, 0o600);
+  try {
+    migrate(db, file);
+  } catch (e) {
+    // 迁移没成（事务已经回滚）：别留着一个半开的库让后面的调用接着用。
+    closeStore();
+    throw e;
   }
-  db.exec("DROP TABLE provider_old");
-}
-
-/**
- * 权重这一列是后来加的：旧的账号行没有它，先补上。
- *
- * 补的默认值按创建先后递减（第一个 100、第二个 90……），这样顺序跟从前一样，
- * 面板上再让人调。
- */
-function migrateProviderWeight(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(provider)").all() as { name?: string }[];
-  if (columns.some((c) => c.name === "weight")) return;
-  db.exec("ALTER TABLE provider ADD COLUMN weight INTEGER NOT NULL DEFAULT 100");
-  const rows = db
-    .prepare("SELECT id, platform FROM provider ORDER BY platform, created_at, id")
-    .all() as { id?: string; platform?: string }[];
-  const perPlatform = new Map<string, number>();
-  const set = db.prepare("UPDATE provider SET weight = ? WHERE id = ?");
-  for (const row of rows) {
-    const platform = String(row.platform ?? "");
-    const order = perPlatform.get(platform) ?? 0;
-    perPlatform.set(platform, order + 1);
-    set.run(100 - order * 10, String(row.id));
-  }
-}
-
-
-/** 旧行（kind + region）属于哪个平台。 */
-function platformOfLegacyRow(kind: string, region: string): string {
-  if (kind === "workbuddy") return "workbuddy-cn";
-  if (kind === "qoder") return region === "cn" ? "qoder-cn" : "qoder";
-  return kind;
+  return db;
 }
 
 /* ------------------------------------------------------------------ *
@@ -277,28 +199,12 @@ export function deleteSecret(id: string): void {
   store().prepare("DELETE FROM secrets WHERE id = ?").run(id);
 }
 
-/* ------------------------------------------------------------------ *
- * The deleted providers
- * ------------------------------------------------------------------ */
-
-/** A provider the operator deleted: it stays deleted. */
-export function markProviderDeleted(id: string): void {
-  store()
-    .prepare("INSERT INTO deleted_provider (id, deleted_at) VALUES (?, ?) ON CONFLICT(id) DO NOTHING")
-    .run(id, Date.now());
-}
-
-/** Was this provider deleted? */
-export function providerDeleted(id: string): boolean {
-  const row = store().prepare("SELECT id FROM deleted_provider WHERE id = ?").get(id);
-  return row !== undefined;
-}
-
 /** Every secret whose id starts with the prefix. */
 export function listSecrets(prefix = ""): SecretRow[] {
   const rows = store()
-    .prepare("SELECT id, kind, data, updated_at FROM secrets WHERE id LIKE ? ORDER BY id")
-    .all(`${prefix.replace(/[%_]/g, "")}%`) as any[];
+    // 前缀按字面比：LIKE 会把 id 里的 `_`、`%` 当通配符。
+    .prepare("SELECT id, kind, data, updated_at FROM secrets WHERE substr(id, 1, ?) = ? ORDER BY id")
+    .all(prefix.length, prefix) as any[];
   return rows.map((r) => {
     let data: any = null;
     try {
@@ -401,8 +307,8 @@ export function setCached(id: string, data: unknown): void {
 /** The cached rows whose id starts with the prefix. */
 export function listCached(prefix = ""): { id: string; at: number }[] {
   const rows = store()
-    .prepare("SELECT id, at FROM cache WHERE id LIKE ? ORDER BY at")
-    .all(`${prefix}%`) as { id?: string; at?: number }[];
+    .prepare("SELECT id, at FROM cache WHERE substr(id, 1, ?) = ? ORDER BY at")
+    .all(prefix.length, prefix) as { id?: string; at?: number }[];
   return rows.map((row) => ({ id: String(row.id ?? ""), at: Number(row.at ?? 0) }));
 }
 
@@ -415,8 +321,16 @@ export function deleteCached(id: string): void {
  * The lock
  * ------------------------------------------------------------------ */
 
-/** A lock older than this counts as abandoned. */
-const LOCK_STALE_MS = 30_000;
+/**
+ * A lock older than this counts as abandoned.
+ *
+ * It has to outlive the work it guards: a refresh may take its whole timeout
+ * (30 s by default), and a lock that expires while the holder is still asking
+ * the platform lets a second writer rotate the same refresh token. Callers
+ * that know how long their work can take pass their own (see
+ * lib/session.ts); this default is twice the default refresh timeout.
+ */
+export const LOCK_STALE_MS = 60_000;
 
 /** The lock could not be taken: somebody else is mid-refresh. */
 export class LockUnavailableError extends Error {}
@@ -427,30 +341,48 @@ export class LockUnavailableError extends Error {}
  * Two holders of the same refresh token would rotate it twice and one of them
  * would be logged out, so a refresh takes this lock first. The other writer
  * waits; when the lock is gone it reads the session and finds the fresh token.
+ *
+ * Each acquisition has its own holder token: the release deletes only the
+ * row this holder wrote, so a holder whose lock was declared stale and taken
+ * over cannot release the new holder's lock on its way out.
  */
-export async function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+export async function withLock<T>(
+  id: string,
+  fn: () => Promise<T>,
+  options: { staleMs?: number; attempts?: number } = {},
+): Promise<T> {
+  const staleMs = Math.max(1, options.staleMs ?? LOCK_STALE_MS);
+  const attempts = Math.max(1, options.attempts ?? 3);
+  const holder = `${process.pid}:${crypto.randomUUID()}`;
   let acquired = false;
-  for (let i = 0; i < 3 && !acquired; i++) {
+  for (let i = 0; i < attempts && !acquired; i++) {
     try {
       store()
         .prepare("INSERT INTO locks (id, holder, at) VALUES (?, ?, ?)")
-        .run(id, String(process.pid), Date.now());
+        .run(id, holder, Date.now());
       acquired = true;
     } catch (e) {
       const message = String((e as Error)?.message ?? "");
       if (!message.includes("UNIQUE") && !message.includes("constraint")) throw e;
-      const row = store().prepare("SELECT at FROM locks WHERE id = ?").get(id) as { at?: number } | undefined;
-      const age = row?.at ? Date.now() - Number(row.at) : LOCK_STALE_MS;
-      if (age > LOCK_STALE_MS) {
+      const row = store().prepare("SELECT holder, at FROM locks WHERE id = ?").get(id) as
+        | { holder?: string; at?: number }
+        | undefined;
+      if (!row) continue; // released between the insert and the read
+      const age = row.at ? Date.now() - Number(row.at) : staleMs + 1;
+      if (age > staleMs) {
+        // Only the abandoned row goes: if somebody took the lock in the
+        // meantime, its row has another holder and stays.
         try {
-          store().prepare("DELETE FROM locks WHERE id = ?").run(id);
+          store()
+            .prepare("DELETE FROM locks WHERE id = ? AND holder = ? AND at = ?")
+            .run(id, String(row.holder ?? ""), Number(row.at ?? 0));
         } catch {
           /* someone else won the race */
         }
         continue;
       }
       // Another writer is mid-refresh: wait for its result instead of racing it.
-      await new Promise((r) => setTimeout(r, Math.min(LOCK_STALE_MS - age, 2000)));
+      await new Promise((r) => setTimeout(r, Math.min(staleMs - age, 2000)));
     }
   }
   if (!acquired) {
@@ -460,7 +392,7 @@ export async function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> 
     return await fn();
   } finally {
     try {
-      store().prepare("DELETE FROM locks WHERE id = ?").run(id);
+      store().prepare("DELETE FROM locks WHERE id = ? AND holder = ?").run(id, holder);
     } catch {
       /* already gone */
     }

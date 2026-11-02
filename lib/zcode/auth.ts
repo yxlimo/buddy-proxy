@@ -192,7 +192,8 @@ export async function pollLogin(
       // zcode JWT 没有刷新通道，给一个保守的时长：到了就是过期了，重登。
       expiresAtMs: Date.now() + 7 * 24 * 3600 * 1000,
     };
-    saveSession(session, providerId);
+    // 不在这里存：落库是登录链 commit 那一步的事。在这里存，取消了的登录、
+    // 登录途中被删掉的账号也会把会话写进去。
     return { state: "approved", session };
   }
   if (status === "failed" || status === "error") {
@@ -310,7 +311,10 @@ registerLoginFlow<ZcodeSession>("zcode", {
     if (r.state === "expired") return { state: "expired", message: r.message ?? "登录窗口过期了。" };
     return { state: "pending" };
   },
-  // 会话已经在 pollLogin 批准时存过了，这里不再存一次：存两次会把刚写好的
-  // 会话当成「更旧的那份」再写一遍。
-  commit: (ctx: LoginContext) => providerSecretId(ctx.accountId),
+  // 会话在这里落库：这是登录完成的那一刻，也是唯一写它的地方（取消与删账号
+  // 在这之前已经问过了，见 lib/login-flow.ts 的 driveLogin）。
+  commit: (ctx: LoginContext, session: ZcodeSession) => {
+    saveSession(session, ctx.accountId);
+    return providerSecretId(ctx.accountId);
+  },
 });

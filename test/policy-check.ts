@@ -207,6 +207,8 @@ function tenant(
 ): any {
   return {
     index,
+    // 状态里带着账号 id：选账号时要回头看账号行的开关（停用的不接请求）。
+    accountId: `tokenrhythm-${index}`,
     account: `190***${index}`,
     name: `租户 ${index}`,
     hasKey: true,

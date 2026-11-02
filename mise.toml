@@ -47,7 +47,7 @@ run = "node --experimental-strip-types check-file-size.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config", "test:account:lifecycle", "test:store:migrate", "test:login:orphan", "test:session:race", "test:store:migrate:backup"]
 
 
 [tasks."helper:sync"]
@@ -61,6 +61,26 @@ run = "python3 helper/buddy_todo.py"
 [tasks."test:helper"]
 description = "Check the buddy-helper scripts offline (the quota parsing, the session lookup, the commands, the archive)"
 run = "python3 -m unittest discover -s helper -p 'test_*.py'"
+
+[tasks."test:account:lifecycle"]
+description = "Check cancel/delete/id reuse/refresh lock/sensenova 401 across an account's life"
+run = "node --experimental-strip-types test/account-lifecycle-check.ts"
+
+[tasks."test:store:migrate"]
+description = "Check the store migration: backup first, one transaction, resume or roll back"
+run = "node --experimental-strip-types test/store-migrate-check.ts"
+
+[tasks."test:login:orphan"]
+description = "Check that a password login whose account is deleted midway leaves no credentials"
+run = "node --experimental-strip-types test/login-orphan-check.ts"
+
+[tasks."test:session:race"]
+description = "Check refresh races: delete mid-refresh, lock takeover, refused while waiting, intern-ai 401"
+run = "node --experimental-strip-types test/session-race-check.ts"
+
+[tasks."test:store:migrate:backup"]
+description = "Check that a failing migration rolls back fully and reuses one backup"
+run = "node --experimental-strip-types test/store-migrate-backup-check.ts"
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"

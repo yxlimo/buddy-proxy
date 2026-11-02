@@ -9,8 +9,9 @@
 import crypto from "node:crypto";
 import { deleteProviderCredentials, deleteProviderRow, listProviders, provider } from "../providers.ts";
 import { getSecret, listSecrets } from "../store.ts";
-import { clearDeadSession, deadSession } from "../session.ts";
-import { tokenFingerprint } from "../credential.ts";
+import { clearDeadSession, deadSession, forgetSessionState } from "../session.ts";
+import { kindOf } from "../provider-kinds.ts";
+import { cancelPendingLogins } from "./login.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { loadSession as loadQoderSession } from "../qoder/auth.ts";
 import { checkAccountHealth } from "../qoder/credits.ts";
@@ -83,9 +84,9 @@ function fingerprintOf(value: string): string {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12);
 }
 
-/** 掩码：只留前几位。 */
+/** 掩码：只留前四位，不带长度（长度也是线索）。 */
 function maskOf(value: string): string {
-  return value ? tokenFingerprint(value) : "";
+  return value ? `${value.slice(0, 4)}…` : "";
 }
 
 /** 一条会话凭据的样子。会话里的东西各家不一样，所以值由外面给。 */
@@ -366,7 +367,11 @@ export function logoutAccount(accountId: string): { ok: boolean; message: string
   if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
+  // 还在等的登录也取消：不然注销之后平台批下来，凭据又写回来了。
+  cancelPendingLogins(id, "账号已注销，登录已取消。");
   const removed = forgetAccountRecords(id, row.kind);
+  // 各家自己在内存里记着的（TokenRhythm 钉住的账户、钱包缓存……），与删账号一样。
+  forgetKindState(row);
   if (!removed) return { ok: true, message: "这个账号本来就没有凭据", removed: 0 };
   console.log(`[ADMIN] ${id} 注销了，删掉 ${removed} 条凭据`);
   return { ok: true, message: `注销了，删掉 ${removed} 条凭据`, removed };
@@ -386,14 +391,26 @@ export function forgetAccountRecords(accountId: string, kind?: string): number {
   removed += forgetLegacyTenantRecords(accountId);
   forgetAccountSnapshot(accountId);
   if (kind === "tokenrhythm") removed += forgetTokenRhythmCredential(accountId);
-  // 冷却也一起删：账号 id 会被复用（下一个账号接着排队），留着这一行，新账号
-  // 开局就在冷却里 —— 面板说它可用，网关说它冷却中。
+  // 进程里记着的也忘掉：平台拒过的记号、缓存着的凭据。不然注销之后，缓存里
+  // 那份旧凭据还会被发出去几分钟。
+  forgetSessionState(`session:provider:${accountId}`);
+  // 冷却也一起删：留着这一行，重新登录的账号开局就在冷却里 —— 面板说它可用，
+  // 网关说它冷却中。
   try {
     clearCooldown(accountId);
   } catch (e) {
     console.warn(`[ADMIN] ${accountId} 的冷却删不掉：${(e as Error)?.message}`);
   }
   return removed;
+}
+
+/** 各家自己在内存里记着的那些，清掉；清不掉只记一笔。 */
+function forgetKindState(row: ProviderRow): void {
+  try {
+    kindOf(row.kind)?.forget?.(row);
+  } catch (e) {
+    console.warn(`[ADMIN] ${row.id} 的内存状态清不掉：${(e as Error)?.message}`);
+  }
 }
 
 /**
@@ -406,9 +423,18 @@ export function deleteAccount(accountId: string): { ok: boolean; message: string
   if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
-  const removed = forgetAccountRecords(id, row.kind);
+  // 先把还在等的登录取消：后台的轮询看到 cancelled 就停，批下来的会话也不
+  // 落库（落库前还会再看一次账号行在不在，见 lib/login-flow.ts）。
+  const cancelled = cancelPendingLogins(id);
+  // 先删行再删凭据：行没了，正在换令牌的那一个写回之前会发现（见
+  // lib/session-refresh.ts），不会把凭据写回来。
   deleteProviderRow(id);
-  console.log(`[ADMIN] ${id} 删了，连 ${removed} 条凭据一起`);
+  const removed = forgetAccountRecords(id, row.kind);
+  // 各家自己在内存里记着的（TokenRhythm 钉住的账户、钱包缓存……）。
+  forgetKindState(row);
+  console.log(
+    `[ADMIN] ${id} 删了，连 ${removed} 条凭据一起` + (cancelled ? `，取消了 ${cancelled} 次还在等的登录` : ""),
+  );
   return { ok: true, message: removed > 0 ? `删掉了，连 ${removed} 条凭据一起` : "删掉了", removed };
 }
 

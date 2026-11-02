@@ -222,8 +222,8 @@ export function modelIdsOf(pools: SenseNovaPool[]): string[] {
 }
 
 /** 查一次额度。 */
-export async function poolUsage(session: SenseNovaSession): Promise<SenseNovaPoolUsage> {
-  const body = await consoleApi<any>("/console/v1/tokenplan/pool-usage", session);
+export async function poolUsage(session: SenseNovaSession, providerId?: string): Promise<SenseNovaPoolUsage> {
+  const body = await consoleApi<any>("/console/v1/tokenplan/pool-usage", session, { providerId });
   return parsePoolUsage(body);
 }
 

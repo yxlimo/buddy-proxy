@@ -179,15 +179,50 @@ export function addAccount(input: {
   return { ok: true, message: `加好了：${alias}`, id };
 }
 
-/** 这个平台下一个没人用的账号 id。 */
+/**
+ * 这个平台下一个账号 id：序号只往上走，删掉的号不再发。
+ *
+ * 号要是复用，删掉的账号留下的任何东西（还在等的登录、进程里的缓存、别处
+ * 漏删的一条记录）都会落到新账号头上 —— 新账号开局就继承了别人的身份。所以
+ * 每个平台记一个「发过的最大序号」（account_seq 表），新号从它往后排。
+ *
+ * 为什么记序号而不是查历史 id：删账号要删干净（AGENTS.md），库里不该留着
+ * 删掉的 id 让人查；一个计数器什么身份都不带。没有计数器的旧库从现有的行
+ * 起算（那之前删掉的号无从知道，只能从现在开始不复用）。
+ *
+ * id 的形状不变（`minimax`、`minimax-2`……）：路径里不用它，但日志、凭据 id
+ * 与面板都认这个形状。
+ */
 function nextAccountId(platform: string): string {
-  for (let n = 1; ; n++) {
-    const id = n === 1 ? platform : `${platform}-${n}`;
-    if (!provider(id)) return id;
-  }
+  const db = store();
+  const row = db.prepare("SELECT last FROM account_seq WHERE platform = ?").get(platform) as
+    | { last?: number }
+    | undefined;
+  let n = Math.max(Number(row?.last ?? 0), highestAccountNumber(platform)) + 1;
+  // 兜底：手工插过的行、别的平台恰好占了这个 id，都往后让。
+  while (provider(accountIdOf(platform, n))) n++;
+  db.prepare(
+    "INSERT INTO account_seq (platform, last) VALUES (?, ?) ON CONFLICT(platform) DO UPDATE SET last = excluded.last",
+  ).run(platform, n);
+  return accountIdOf(platform, n);
 }
 
-/** 删一个 provider。它名下的凭据也一起删 —— 留着就没人认领了。 */
+/** 第 n 个账号的 id。第一个就是平台 id 本身。 */
+function accountIdOf(platform: string, n: number): string {
+  return n === 1 ? platform : `${platform}-${n}`;
+}
+
+/** 这个平台现有的账号里最大的序号（没有账号就是 0）。 */
+function highestAccountNumber(platform: string): number {
+  let highest = 0;
+  for (const row of accountsOfPlatform(platform)) {
+    if (row.id === platform) highest = Math.max(highest, 1);
+    const tail = row.id.startsWith(`${platform}-`) ? row.id.slice(platform.length + 1) : "";
+    if (/^\d+$/.test(tail)) highest = Math.max(highest, Number(tail));
+  }
+  return highest;
+}
+
 /**
  * Forget the credentials of a provider.
  *
@@ -196,17 +231,40 @@ function nextAccountId(platform: string): string {
  * provider named `minimax` owns `key:provider:minimax:plan`, but not
  * `session:provider:qiniu` nor `session:provider:minimax-code-m-plan`
  * — those belong to providers of their own.
+ *
+ * The prefix is compared literally (`substr`), not with LIKE: an account id
+ * may carry `_`, which LIKE would read as a wildcard.
+ *
+ * The legacy relay-station rows are numbered by tenant, and they sit under
+ * the first account's prefixes: `key:provider:tokenrhythm:tenant-2` and
+ * `account:tokenrhythm:2` belong to `tokenrhythm-2`, not to `tokenrhythm`.
+ * So the sweep leaves every tenant-numbered row alone; deleting an account
+ * removes only its own tenant's rows, by exact id
+ * (lib/tokenrhythm/accounts.ts, forgetLegacyTenantRecords).
  */
 export function deleteProviderCredentials(id: string): number {
   const db = store();
-  const prefixes = [`session:provider:${id}`, `key:provider:${id}`, `account:${id}`];
+  // Only the first relay-station account has tenant rows under its prefixes
+  // (its id is the platform id the old shape numbered the tenants under).
+  const relay = platformOf(id)?.kind === "tokenrhythm";
+  const never = /(?!)/;
+  const owned: { exact: string; tenantRow: RegExp }[] = [
+    { exact: `session:provider:${id}`, tenantRow: never },
+    { exact: `key:provider:${id}`, tenantRow: relay ? /^tenant-\d+$/ : never },
+    { exact: `account:${id}`, tenantRow: relay ? /^\d+$/ : never },
+  ];
   let dropped = 0;
-  for (const prefix of prefixes) {
+  for (const { exact, tenantRow } of owned) {
     // The exact id, and the ones below it (`<prefix>:<suffix>`).
-    const result = db
-      .prepare("DELETE FROM secrets WHERE id = ? OR id LIKE ?")
-      .run(prefix, `${prefix.replace(/[%_]/g, "")}:%`);
-    dropped += Number(result.changes ?? 0);
+    const below = `${exact}:`;
+    const rows = db
+      .prepare("SELECT id FROM secrets WHERE id = ? OR substr(id, 1, ?) = ?")
+      .all(exact, below.length, below) as { id?: string }[];
+    for (const row of rows) {
+      const secretId = String(row.id ?? "");
+      if (secretId !== exact && tenantRow.test(secretId.slice(below.length))) continue;
+      dropped += Number(db.prepare("DELETE FROM secrets WHERE id = ?").run(secretId).changes ?? 0);
+    }
   }
   return dropped;
 }

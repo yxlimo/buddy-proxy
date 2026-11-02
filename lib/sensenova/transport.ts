@@ -22,7 +22,7 @@ import { openAiPlatformChat } from "../router/openai-platform.ts";
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
 /** 账号上现在有的推理 key（就在这个账号名下）。 */
-export function senseNovaInferenceKey(providerId = "sensenova"): string {
+export function senseNovaInferenceKey(providerId: string): string {
   const stored = storedAccount(providerId);
   return senseNovaApiKey(stored?.apiKey);
 }
@@ -33,7 +33,7 @@ export function senseNovaInferenceKey(providerId = "sensenova"): string {
  * 平台只把完整的 key 给一次，所以建它的那个函数负责把它存下来。这里只是把
  * 那件事包一层：登录之后调它，账号上就一定有能用的 key。
  */
-export async function ensureSenseNovaKey(session: SenseNovaSession, providerId = "sensenova"): Promise<string> {
+export async function ensureSenseNovaKey(session: SenseNovaSession, providerId: string): Promise<string> {
   const stored = storedAccount(providerId);
   const current = stored?.apiKey ?? null;
   const key = await senseNovaKeys.ensure(
@@ -69,7 +69,7 @@ export function senseNovaModelIds(): Set<string> {
  * 账号上有会话却没有 key 的那种情况（老版本登录留下的），在这里补一把 ——
  * 免得面板上显示「已登录」但一个请求也发不出去。
  */
-async function keyForCatalog(providerId = "sensenova"): Promise<string> {
+async function keyForCatalog(providerId: string): Promise<string> {
   const key = senseNovaInferenceKey(providerId);
   if (key) return key;
   const session = loadSession(providerId);
@@ -83,7 +83,7 @@ async function keyForCatalog(providerId = "sensenova"): Promise<string> {
  * 问不到就留着上一次的那份：模型清单是给客户端看的，一个空的目录比一个过期
  * 的目录更没用。
  */
-export async function refreshSenseNovaCatalog(force = false, providerId = "sensenova"): Promise<void> {
+export async function refreshSenseNovaCatalog(force: boolean, providerId: string): Promise<void> {
   if (!catalog.stale(force)) return;
   const key = await keyForCatalog(providerId);
   if (!key) return;
@@ -107,7 +107,7 @@ export async function refreshSenseNovaCatalog(force = false, providerId = "sense
  */
 export async function senseNovaChat(
   body: Record<string, unknown>,
-  providerId = "sensenova",
+  providerId: string,
   extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
   return openAiPlatformChat(

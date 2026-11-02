@@ -21,6 +21,9 @@
 
 import { AuthError } from "./credential.ts";
 import { allKinds } from "./provider-kinds.ts";
+// 只用 store：providers.ts 会把各平台都拉进来，而各平台在加载时要调这里的
+// registerLoginFlow —— 从这里引 providers.ts 会在模块循环里撞上还没初始化的表。
+import { store } from "./store.ts";
 
 /** 面板按它决定画什么。 */
 export type LoginMethod = "device" | "browser" | "password" | "code" | "token" | "key";
@@ -167,7 +170,8 @@ export async function beginLoginFlow(kind: string, ctx: LoginContext): Promise<L
 /**
  * 阶段二'：一次性提交（密码 / 贴 token / 贴 key）。
  *
- * `submit` 只负责换凭据，落库仍在 `commit` 里 —— 那是唯一写会话的地方。
+ * 会话落库在 `commit` 里；但 submit 也会写库（账号密码、推理 key），所以账号
+ * 在途中被删时由 submitLoginResult 事后补删。
  */
 export async function submitLogin<T = unknown>(
   kind: string,
@@ -192,9 +196,71 @@ export async function submitLoginResult<T = unknown>(
   const flow = loginFlowOf(kind) as LoginFlow<T> | null;
   if (!flow) throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${kind}`, 400);
   if (!flow.submit) throw new AuthError("no login", `${flow.label} 不需要提交账号密码。`, 400);
-  const result = await flow.submit(ctx, input);
-  const credentialId = await flow.commit(ctx, result);
-  return { credentialId, result };
+  // 一次性提交的那几家（TokenRhythm / SenseNova / intern-ai）在 submit 里就
+  // 写了库：账号密码、会话、新建的推理 key —— key 只能在登录之后、拿着会话
+  // 去平台建，建它的那一下就得存（完整值只出现一次），挪不进 commit 里那个
+  // 没有 await 的位置。所以这里不靠「先查后写」，而是事后兜底：整件事做完
+  // （成也好、败也好），账号行不在了，就把这次登录写下的东西删干净。
+  try {
+    const result = await flow.submit(ctx, input);
+    assertAccountExists(ctx);
+    const credentialId = await flow.commit(ctx, result);
+    // commit 里也可能有 await（TokenRhythm 建 key）：账号可能在那时被删。
+    assertAccountExists(ctx);
+    return { credentialId, result };
+  } finally {
+    if (!accountExists(ctx)) await forgetOrphanedLogin(kind, ctx);
+  }
+}
+
+/**
+ * 账号在登录途中被删了：把这次登录写下的凭据删掉。
+ *
+ * 删账号时（lib/admin/accounts.ts 的 deleteAccount）已经删过一遍，但那时登录
+ * 还在等平台，平台答复之后写下的东西就成了孤儿。用同一个删法再删一次。
+ *
+ * 动态引入：admin/accounts.ts 会把各平台都拉进来，而各平台加载时要调这里的
+ * registerLoginFlow（见文件头那条 import 的注释）。
+ */
+async function forgetOrphanedLogin(kind: string, ctx: LoginContext): Promise<void> {
+  try {
+    const { forgetAccountRecords } = await import("./admin/accounts.ts");
+    const removed = forgetAccountRecords(ctx.accountId, kind);
+    if (removed) console.warn(`[LOGIN] ${ctx.accountId} 在登录途中被删了，补删了这次登录写下的 ${removed} 条凭据`);
+  } catch (e) {
+    console.warn(`[LOGIN] ${ctx.accountId} 在登录途中被删了，补删凭据失败：${(e as Error)?.message ?? e}`);
+  }
+}
+
+/**
+ * 这次登录还要不要接着做。
+ *
+ * 面板上点了「取消」、账号被删了，答案就是 false：轮询停下，批下来的会话也
+ * 不落库。
+ */
+export type LoginStillWanted = () => boolean;
+
+/** 登录被取消了：调用方看到它就知道不用再报「失败」。 */
+export class LoginCancelledError extends AuthError {
+  constructor(kind: string) {
+    super(`${kind} login cancelled`, "登录已取消。", 409);
+  }
+}
+
+/**
+ * 账号行还在吗。
+ *
+ * 落库之前问一次：账号在登录途中被删了，批下来的会话没有主人，写进去就是一
+ * 条孤儿凭据 —— 等同一个 id 再出现时它就成了别人的。
+ */
+function assertAccountExists(ctx: LoginContext): void {
+  if (!accountExists(ctx)) {
+    throw new AuthError("account gone", `账号在登录途中被删了：${ctx.accountId}，这次登录的结果不保存。`, 409);
+  }
+}
+
+function accountExists(ctx: LoginContext): boolean {
+  return store().prepare("SELECT id FROM provider WHERE id = ?").get(ctx.accountId) !== undefined;
 }
 
 /**
@@ -202,12 +268,16 @@ export async function submitLoginResult<T = unknown>(
  *
  * `poll` 抛出来的错原样往上抛：面板上那句话是平台自己的意思（「被拒了」与
  * 「窗口过了」不一样），在这一层改写只会把它变成一句笼统的失败。
+ *
+ * `stillWanted` 在每一轮轮询之前、以及落库之前各问一次：取消发生在轮询途中
+ * 时，平台可能照样批了，但会话不能写进去 —— 用户已经说了不要。
  */
 export async function driveLogin<T>(
   kind: string,
   ctx: LoginContext,
   ticket: LoginTicket,
   deadlineMs = ticket.expiresAtMs,
+  stillWanted: LoginStillWanted = () => true,
 ): Promise<{ credentialId: string; session: T }> {
   const flow = loginFlowOf(kind);
   if (!flow) {
@@ -218,8 +288,13 @@ export async function driveLogin<T>(
   }
   const interval = flow.pollIntervalMs ?? 2000;
   while (Date.now() < deadlineMs) {
+    if (!stillWanted()) throw new LoginCancelledError(kind);
     const result = await flow.poll(ctx, ticket);
     if (result.state === "approved") {
+      // 轮询那一下可能等了很久（WorkBuddy 在里头一直等到批准）：落库前再问。
+      // 这一问与 commit 之间没有 await，同一个进程里不会有人插进来。
+      if (!stillWanted()) throw new LoginCancelledError(kind);
+      assertAccountExists(ctx);
       const credentialId = await flow.commit(ctx, result.session);
       if (flow.derive) {
         // 派生资源失败不算登录失败：会话已经存下来了，下一次扫描会补。

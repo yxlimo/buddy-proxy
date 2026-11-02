@@ -18,8 +18,13 @@
 //   - 没有验证码，也没有二次验证。账号密码对了就给会话。
 //
 // 会话存在数据库里（lib/store.ts 的 secrets 表），跟别的上游一样。
-// 刷新走 lib/session.ts 的锁：refresh_token 是轮换的，两个进程同时刷新，
-// 后一个拿到的就是作废的那张票。
+//
+// 网关不刷新 SenseNova 的会话：它不进定时器（kind 没有 refresh），会话没了
+// （控制台答 401）就清掉，下一次用存着的账号密码重新登录。推理用的是 key，
+// 不是这份会话，所以会话过期不挡请求。
+//
+// 每个函数都要明说是哪个账号的：没有「默认账号」。以前缺省是 "sensenova"，
+// 结果第二个账号的 401 把第一个账号的会话清掉了。
 
 import crypto from "node:crypto";
 import {
@@ -41,7 +46,7 @@ import { ensureSenseNovaKey } from "./transport.ts";
  *
  * 会话归 provider 所有：两个 SenseNova 账号各有各的会话。
  */
-export function sessionId(providerId = "sensenova"): string {
+export function sessionId(providerId: string): string {
   return providerSecretId(providerId);
 }
 
@@ -50,15 +55,9 @@ export function sessionId(providerId = "sensenova"): string {
  *
  * 账号（账号密码与那把推理 key）也归 provider 所有。
  */
-export function accountId(providerId = "sensenova"): string {
+export function accountId(providerId: string): string {
   return providerSecretId(providerId, "account");
 }
-
-/** 内置的那个 provider 的会话在数据库里的名字。 */
-export const SESSION_ID = sessionId();
-
-/** 内置的那个 provider 的账号信息在数据库里的名字。 */
-export const ACCOUNT_ID = accountId();
 
 /** 数据库里那份账号信息的样子。 */
 export interface StoredAccount {
@@ -73,7 +72,7 @@ export interface StoredAccount {
  *
  * 旧的那份也认：账号信息是在 provider 这件事之前存的，搬一次，别让人重新登。
  */
-export function storedAccount(providerId = "sensenova"): StoredAccount | null {
+export function storedAccount(providerId: string): StoredAccount | null {
   const stored = getSecret<StoredAccount>(accountId(providerId));
   if (stored) return stored;
   // 旧的那份是全局的，所以只有内置的那个 provider 认它。
@@ -226,7 +225,7 @@ export function classify(status: number, body: any, what: string): SenseNovaErro
 }
 
 /** 登录。用账号密码换一份会话，并把会话存进数据库。 */
-export async function login(user?: string, password?: string, providerId = "sensenova"): Promise<SenseNovaSession> {
+export async function login(user: string | undefined, password: string | undefined, providerId: string): Promise<SenseNovaSession> {
   const session = await loginSession(user, password, providerId);
   saveSession(session, providerId);
   return session;
@@ -242,9 +241,9 @@ export async function login(user?: string, password?: string, providerId = "sens
  * 自动登录那条路留（不然 .env 不在了就登不上）。
  */
 async function loginSession(
-  user?: string,
-  password?: string,
-  providerId = "sensenova",
+  user: string | undefined,
+  password: string | undefined,
+  providerId: string,
   remember = true,
 ): Promise<SenseNovaSession> {
   const creds = senseNovaCredentials({ user, password }, storedAccount(providerId));
@@ -363,53 +362,35 @@ async function exchangeCode(code: string, codeVerifier: string, state: string): 
   return body;
 }
 
-/** 用 refresh_token 换一份新会话。 */
-export async function refreshSession(session: SenseNovaSession, providerId = "sensenova"): Promise<SenseNovaSession> {
-  const r = await fetch(`${SENSENOVA_PLATFORM_BASE}/oauth2/token`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      client_id: SENSENOVA_CLIENT_ID,
-      refresh_token: session.refreshToken,
-    }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  const body = await readJson(r);
-  if (!r.ok || !body?.access_token) {
-    throw classify(r.status, body, "刷新会话失败");
-  }
-  const next: SenseNovaSession = {
-    ...session,
-    accessToken: body.access_token,
-    refreshToken: body.refresh_token ?? session.refreshToken,
-    expiresAtMs: Date.now() + Math.max(60, Number(body.expires_in ?? 3600)) * 1000,
-    obtainedAtMs: Date.now(),
-  };
-  saveSession(next, providerId);
-  return next;
-}
+// 没有 refreshSession：网关不拿 refresh_token 换 SenseNova 的会话（见文件头）。
+// 会话没了就用存着的账号密码重新登录（lib/router/bootstrap.ts），那样也就没有
+// 「两个持有者轮换同一张票」的问题。
 
-/** 会话还在不在。 */
 /** 数据库里的会话。 */
-export function loadSession(providerId = "sensenova"): SenseNovaSession | null {
+export function loadSession(providerId: string): SenseNovaSession | null {
   const valid = (raw: any) => !!raw?.accessToken && !!raw?.refreshToken;
   return readSession<SenseNovaSession>(sessionId(providerId), valid);
 }
 
 /** 存会话。 */
-export function saveSession(session: SenseNovaSession, providerId = "sensenova"): void {
+export function saveSession(session: SenseNovaSession, providerId: string): void {
   writeSession(sessionId(providerId), session);
 }
 
-/** 忘掉会话：下一次调用会重新登录。 */
-export function clearSession(providerId = "sensenova"): void {
+/**
+ * 忘掉会话：下一次调用会重新登录。
+ *
+ * 给了 `accessToken` 就只在库里那份还是这一张令牌时才删：401 回来的路上，别的
+ * 地方可能已经重新登录过了，新会话不该跟着旧令牌一起被清掉。
+ */
+export function clearSession(providerId: string, accessToken?: string): void {
   try {
-    deleteSecret(sessionId(providerId));
+    const id = sessionId(providerId);
+    if (accessToken !== undefined) {
+      const stored = getSecret<{ accessToken?: string }>(id);
+      if (stored?.accessToken !== accessToken) return;
+    }
+    deleteSecret(id);
   } catch {
     /* 没什么可清的了 */
   }
@@ -421,7 +402,7 @@ export function clearSession(providerId = "sensenova"): void {
  * 干活的是那把推理 key：没有它，登录了也一个请求也发不出去。所以这里报的是
  * key，会话的情况另放在 sessionStatus 里。
  */
-export function senseNovaStatus(providerId = "sensenova"): Record<string, unknown> {
+export function senseNovaStatus(providerId: string): Record<string, unknown> {
   const stored = storedAccount(providerId);
   const key = senseNovaApiKey(stored?.apiKey);
   const session = loadSession(providerId);

@@ -13,7 +13,13 @@
 // 钉住的状态在进程里：它是「现在该用哪个账户」的答案，不是每次请求现算的
 // 次序——所以别处想知道该用谁，问这里。
 
-import { orderedAccounts, tokenRhythmStatuses, type TokenRhythmAccountStatus } from "./wallet.ts";
+import {
+  accountSwitchedOff,
+  forgetWalletState,
+  orderedAccounts,
+  tokenRhythmStatuses,
+  type TokenRhythmAccountStatus,
+} from "./wallet.ts";
 import { TokenRhythmNoBalanceError } from "./transport.ts";
 import { upstreamStatusOf } from "../upstream-status.ts";
 
@@ -94,9 +100,25 @@ export async function setBalanceAccount(
   return first;
 }
 
-/** 现在钉住的是哪个账户。 */
+/**
+ * 现在钉住的是哪个账户。
+ *
+ * 钉住的账户在面板上被关掉了，就不算钉住：调用方会重新扫描、钉一个别的
+ * （停用的账号不在 orderedAccounts 里）。
+ */
 export function pinnedBalanceAccount(platform = "tokenrhythm"): AccountBalance | null {
-  return pinned.get(platform) ?? null;
+  const current = pinned.get(platform) ?? null;
+  if (current && accountSwitchedOff(current.accountId)) {
+    pinned.delete(platform);
+    return null;
+  }
+  return current;
+}
+
+/** 删掉的账号：钉的是它就不钉了，钱包的缓存也扔掉。 */
+export function forgetTokenRhythmAccount(accountId: string, platform: string): void {
+  if (pinned.get(platform)?.accountId === accountId) pinned.delete(platform);
+  forgetWalletState(accountId, platform);
 }
 
 /** 忘掉钉住的账户（没有能用的账户时）。 */

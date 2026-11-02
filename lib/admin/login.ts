@@ -26,7 +26,7 @@ import { providerSecretId } from "../credential-ids.ts";
 // Side-effect import: this module registers zcode's login flow
 import "../zcode/auth.ts";
 import type { ZcodeLogin } from "../zcode/auth.ts";
-import { beginLoginFlow, driveLogin, submitLogin, submitLoginResult, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
+import { beginLoginFlow, driveLogin, LoginCancelledError, submitLogin, submitLoginResult, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
 export type { LoginMethod };
 import { regionOf as workBuddyRegionOf } from "../workbuddy/auth.ts";
 // Side-effect import: this module registers tokenrhythm's login flow
@@ -353,16 +353,27 @@ async function pollLoop(session: StoredLogin): Promise<void> {
   } catch (e) {
     const current = loadLogin(session.loginId);
     if (!current || current.status === "cancelled") return;
+    if (e instanceof LoginCancelledError) return;
     updateLogin(session.loginId, { status: "failed", message: errorText(e) });
     authLog(dataDir(), `${session.accountId} 登录失败`, errorText(e));
     console.warn(`[LOGIN] ${session.accountId} 登录失败：${errorText(e)}`);
   }
 }
 
+/**
+ * 这次登录还作数吗：那一行还在、还是 pending。
+ *
+ * cache 表多进程共享，所以每次都重新读：取消可能是另一个进程（面板）写的。
+ */
+function stillPending(loginId: string): () => boolean {
+  return () => loadLogin(loginId)?.status === "pending";
+}
+
 /** 跑上游自己的轮询，成功后把凭据存起来，返回凭据的 id。 */
 async function runPoll(session: StoredLogin): Promise<string> {
   const poll = session.poll ?? {};
   const providerId = session.accountId;
+  const wanted = stillPending(session.loginId);
   switch (poll.kind) {
     case "minimax": {
       // SAFETY: rows with poll.kind === "minimax" are written by startMinimax
@@ -381,7 +392,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { auth },
       };
-      const { credentialId } = await driveLogin("minimax", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("minimax", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     case "qoder": {
@@ -401,7 +412,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { auth },
       };
-      const { credentialId } = await driveLogin("qoder", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("qoder", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     case "workbuddy": {
@@ -419,7 +430,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { state },
       };
-      const { credentialId } = await driveLogin("workbuddy", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("workbuddy", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     case "zcode": {
@@ -439,7 +450,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { login },
       };
-      const { credentialId } = await driveLogin("zcode", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("zcode", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     default:
@@ -527,6 +538,22 @@ export function getLoginStatus(loginId: string): StoredLogin | null {
     return updateLogin(loginId, { status: "expired", message: "登录窗口已过期，请重新发起登录。" });
   }
   return current;
+}
+
+/**
+ * 把这个账号还在等的登录都取消掉。
+ *
+ * 删账号时调：后台的轮询看到 cancelled 就停，批下来的会话也不落库。返回取消
+ * 了几次。
+ */
+export function cancelPendingLogins(accountId: string, message = "账号已删除，登录已取消。"): number {
+  let cancelled = 0;
+  for (const session of loginsOf(accountId)) {
+    if (session.status !== "pending") continue;
+    updateLogin(session.loginId, { status: "cancelled", message });
+    cancelled++;
+  }
+  return cancelled;
 }
 
 /** 用户不等了。 */
@@ -712,10 +739,21 @@ function accountFor(upstreamId: string, accountId: string): ProviderRow | null {
  * 推理端点认的是 key，不是那个 uaa-token。所以贴回 token 之后还要建一把
  * Discovery 的 key —— 建完了上游才是 READY 的。
  */
-async function ensureImportedInternAiKey(): Promise<void> {
-  const session = loadInternAiSession();
+async function ensureImportedInternAiKey(accountId: string): Promise<void> {
+  const session = loadInternAiSession(accountId);
   if (!session) return;
-  await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session));
+  await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session, accountId));
+}
+
+/**
+ * 导入落在哪个账号上。
+ *
+ * 账号 id 不复用之后，平台 id（"intern-ai"）不一定还是一个账号：缺省落到它上
+ * 面，就是把 token 存给了一个可能不存在、或者是别人的账号。
+ */
+function internAiImportTarget(input: { upstreamId: string; accountId: string }): ProviderRow | null {
+  const row = accountFor(input.upstreamId, input.accountId);
+  return row && row.kind === "intern-ai" ? row : null;
 }
 
 /**
@@ -735,15 +773,17 @@ export async function exchangeLoginCode(input: {
   if (!input.code.trim()) {
     return { ok: false, message: "缺少授权码。", credentialId: "", accountId: "" };
   }
+  const row = internAiImportTarget(input);
+  if (!row) return { ok: false, message: noImportTarget(input.accountId), credentialId: "", accountId: "" };
   // 换 token 用 discovery 那个子站（端砚），换出来的 token 两个子站都能用。
   const token = await exchangeInternAiCode(input.code.trim(), internAiSite("discovery"));
-  importInternAiToken(token);
-  await ensureImportedInternAiKey();
+  importInternAiToken(token, row.id);
+  await ensureImportedInternAiKey(row.id);
   return {
     ok: true,
     message: "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: providerSecretId(input.accountId),
-    accountId: input.accountId,
+    credentialId: providerSecretId(row.id),
+    accountId: row.id,
   };
 }
 
@@ -764,12 +804,18 @@ export async function importLoginToken(input: {
   if (!input.token.trim()) {
     return { ok: false, message: "缺少 token。", credentialId: "", accountId: "" };
   }
-  importInternAiToken(input.token.trim());
-  await ensureImportedInternAiKey();
+  const row = internAiImportTarget(input);
+  if (!row) return { ok: false, message: noImportTarget(input.accountId), credentialId: "", accountId: "" };
+  importInternAiToken(input.token.trim(), row.id);
+  await ensureImportedInternAiKey(row.id);
   return {
     ok: true,
     message: "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: providerSecretId(input.accountId),
-    accountId: input.accountId,
+    credentialId: providerSecretId(row.id),
+    accountId: row.id,
   };
+}
+
+function noImportTarget(accountId: string): string {
+  return accountId ? `没有这个 intern-ai 账号：${accountId}` : "intern-ai 还没有账号，先在面板上新增一个。";
 }

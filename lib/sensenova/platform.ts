@@ -17,6 +17,7 @@
 
 import { SENSENOVA_IAM_BASE, SENSENOVA_PLATFORM_BASE } from "./config.ts";
 import { SenseNovaError, classify, clearSession, type SenseNovaSession } from "./auth.ts";
+import { listSecrets } from "../store.ts";
 
 /** 一次调用怎么发。 */
 export interface PlatformRequest {
@@ -24,6 +25,13 @@ export interface PlatformRequest {
   body?: unknown;
   /** 拼在路径后面的查询参数。 */
   query?: Record<string, string | number | undefined>;
+  /**
+   * 这份会话是哪个账号的。
+   *
+   * 401 时清的就是这个账号的会话。不给就按令牌去库里找那份会话 —— 绝不能
+   * 落到某个「默认账号」上：那是另一个人的登录态。
+   */
+  providerId?: string;
 }
 
 /** 把查询参数拼到地址上。空的不拼。 */
@@ -60,8 +68,9 @@ async function requestJson(url: string, session: SenseNovaSession, init: Platfor
     body = { message: text.slice(0, 200) };
   }
   if (!r.ok) {
-    // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。
-    if (r.status === 401) clearSession();
+    // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。只清这一
+    // 份：别的账号的会话与这次 401 无关。
+    if (r.status === 401) forgetRefusedSession(session, init.providerId);
     throw classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
   }
   // 有些接口用 code 表示业务错误。成功的结果里没有这个字段。
@@ -72,6 +81,19 @@ async function requestJson(url: string, session: SenseNovaSession, init: Platfor
     );
   }
   return body;
+}
+
+/** 401 之后清掉这份会话：给了账号就清那个账号的，没给就按令牌找主人。 */
+function forgetRefusedSession(session: SenseNovaSession, providerId?: string): void {
+  if (providerId) {
+    clearSession(providerId, session.accessToken);
+    return;
+  }
+  const prefix = "session:provider:";
+  for (const row of listSecrets(prefix)) {
+    if (row.data?.accessToken !== session.accessToken) continue;
+    clearSession(row.id.slice(prefix.length), session.accessToken);
+  }
 }
 
 /**

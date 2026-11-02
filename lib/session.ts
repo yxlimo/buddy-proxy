@@ -12,7 +12,6 @@
 // database.
 
 import { AuthError, authLog, tokenFingerprint, type Credential } from "./credential.ts";
-import { configNumber } from "./config.ts";
 import { dataDir } from "./paths.ts";
 import { LockUnavailableError, getSecret, setSecret, withLock } from "./store.ts";
 
@@ -100,14 +99,6 @@ const deadSessions = new Map<string, { until: number; reason: string }>();
 /** How long a refusal is remembered. */
 const DEAD_SESSION_MS = 30 * 60 * 1000;
 
-/**
- * 问平台换一次令牌，最多花多久。
- *
- * 一个账号的平台卡住，不该把后面账号的令牌一起拖住 —— 那些账号是各自独立的
- * 登录态，谁也碰不到谁。
- */
-const REFRESH_TIMEOUT_MS = configNumber("SESSION_REFRESH_TIMEOUT_MS", 30_000);
-
 /** Remember that this session cannot be refreshed. */
 export function markSessionDead(id: string, reason: string, ms = DEAD_SESSION_MS): void {
   deadSessions.set(id, { until: Date.now() + ms, reason });
@@ -130,160 +121,50 @@ export function clearDeadSession(id: string): void {
 }
 
 /**
- * 换令牌这件事的骨架。
+ * 每份会话的「代」：账号删了（或注销了），这份会话在进程里的一切都作废。
  *
- * 三个平台换令牌的样子是一样的：判死、取会话、看临期、问平台、成了存回去、
- * 败了记下为什么。差的是问平台的那一下（地址、头、身子）、错误码怎么读、
- * 给操作者看的提示、答复怎么变成新会话、日志里叫什么。
- *
- * 那几样由各家自己出，骨架在这里。骨架里的每一步都是有讲究的，动之前先想
- * 清楚：
- *
- * - 平台拒过的会话不再问：问一次是同样的答复，白白浪费往返。
- * - 没到临期不换：令牌是一次性的，多换一次就多一次被平台当成重放的机会。
- * - 只有一处换令牌：定时器（lib/periodic.ts）。请求那一条路不换。
+ * 各平台的凭据缓存是模块级的（lib/minimax/oauth.ts 那些 `let cache`），这里
+ * 够不着；缓存里记着填它时的代，代变了 ensureCredential 就不认它。
  */
-
-/** 平台对换令牌的回答。 */
-export interface RefreshAnswer {
-  /** 成没成。 */
-  ok: boolean;
-  /** HTTP 状态码。 */
-  status: number;
-  /** 平台给的错误码（平台没给就自己写一个）。 */
-  code: string;
-  /** 平台的答复。 */
-  body: any;
-}
-
-/** 一家平台换令牌要出的那几样。 */
-export interface RefreshFlow<T extends SessionTokens> {
-  /** 会话 id：记号与日志都用它。 */
-  id: string;
-  /** 现在这一份会话。 */
-  load: () => T | null;
-  /** 令牌离到期还有这么多毫秒以内就该换。 */
-  bufferMs: number;
-  /**
-   * 问平台要新令牌。
-   *
-   * signal 是超时的闸：平台那边卡住时它会响，调用方就知道该收手了。
-   */
-  request: (session: T, signal: AbortSignal) => Promise<RefreshAnswer>;
-  /** 平台的答复 → 新会话。 */
-  parse: (body: any, session: T) => T;
-  /** 平台拒了这份令牌吗（401/403/invalid_grant 那些）。 */
-  refused: (answer: RefreshAnswer) => boolean;
-  /** 拒了的时候给操作者看的话。 */
-  hint: (code: string) => string;
-  /** 写回新会话。 */
-  save: (session: T) => void;
-  /** 日志里的名字。 */
-  label: (session: T) => string;
-  /** 没有会话时说给操作者听的话。 */
-  noSession: string;
-  /** 换过令牌：缓存里那份旧凭据作废。 */
-  invalidate?: () => void;
-  /** 成功之后日志里多说的那句（各家自己那点东西）。 */
-  extra?: (session: T) => string;
-  /** 这次刷新最多花多久（毫秒）。默认用全局的那个。 */
-  timeoutMs?: number;
-}
+const sessionEpochs = new Map<string, number>();
 
 /**
- * 按骨架换一次令牌。
+ * 忘掉进程里关于这份会话的一切：平台拒过的记号、各处缓存着的凭据。
  *
- * 成了返回新会话；没到临期就原样返回现在这一份；平台拒了就把这份会话记成
- * 死的（记 30 分钟），并抛出 503。
+ * 删账号、注销时调（lib/admin/accounts.ts）。库里的那一行由调用方删。
  */
-export async function refreshSessionFlow<T extends SessionTokens>(flow: RefreshFlow<T>): Promise<T> {
-  // 1. 平台拒过这份会话：再问一次也是同样的答复，直接回答。
-  //    记的时限会续：定时器每轮都问一次，于是「坏的」这个判断一直是新的。
-  const dead = deadSession(flow.id);
-  if (dead) {
-    markSessionDead(flow.id, dead);
-    throw new AuthError("session refused by the platform", dead, 503);
-  }
-  // 2. 取会话。
-  const session = flow.load();
-  if (!session) {
-    flow.invalidate?.();
-    throw new AuthError("no session", flow.noSession, 503);
-  }
-  // 3. 没到临期就不换。
-  if (session.expiresAtMs - Date.now() > flow.bufferMs) return session;
-
-  // 4. 问平台。挂个超时：一个账号的平台卡住，不该把后面账号的令牌一起拖住。
-  //
-  // 超时之后不重试：令牌是一次性的，平台可能已经换了令牌，再问一次就是重放，
-  // 平台会把整份会话撤掉。定时器下一轮会再来一遍，那时候再说。
-  const timeoutMs = Math.max(1, flow.timeoutMs ?? REFRESH_TIMEOUT_MS);
-  // 自己拿一个闸，不用 AbortSignal.timeout：它那个定时器不占着事件循环，
-  // 空闲的时候它可能根本不会响 —— 收手就收不成。
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let answer: RefreshAnswer;
-  try {
-    answer = await flow.request(session, controller.signal);
-  } catch (e) {
-    if (controller.signal.aborted) {
-      throw new AuthError(
-        `refresh timed out after ${timeoutMs} ms`,
-        `刷新超时（${Math.round(timeoutMs / 1000)} 秒），这一轮没成；定时器下一轮会再试。`,
-        503,
-      );
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
-  // 5. 平台拒了？
-  if (!answer.ok) {
-    flow.invalidate?.();
-    authLog(
-      dataDir(),
-      `${flow.label(session)} refresh rejected`,
-      `${answer.code} (HTTP ${answer.status}), body ${JSON.stringify(answer.body).slice(0, 300)}`,
-    );
-    if (flow.refused(answer)) {
-      const hint = flow.hint(answer.code);
-      // 别再拿这份会话去问平台了：每一次都是同样的拒绝。
-      markSessionDead(flow.id, hint);
-      throw new AuthError(`refresh rejected (${answer.code})`, hint, 503);
-    }
-    throw new AuthError(`refresh failed (${answer.code})`, `刷新失败（${answer.code}），稍后重试。`, 502);
-  }
-
-  // 6. 存新的。
-  const next = flow.parse(answer.body, session);
-  flow.save(next);
-  flow.invalidate?.();
-  authLog(
-    dataDir(),
-    `${flow.label(next)} refresh ok`,
-    `generation ${next.generation ?? 1}, access ${tokenFingerprint(next.accessToken)}, ` +
-      `refresh ${tokenFingerprint(next.refreshToken)}, ` +
-      `${flow.extra ? `${flow.extra(next)}, ` : ""}` +
-      `${Math.round(next.expiresAtMs / 1000 - Date.now() / 1000)}s left`,
-  );
-  return next;
+export function forgetSessionState(id: string): void {
+  deadSessions.delete(id);
+  sessionEpochs.set(id, (sessionEpochs.get(id) ?? 0) + 1);
 }
+
+// 换令牌的骨架（refreshSessionFlow）在 lib/session-refresh.ts：这里转出去，
+// 调用方不用改。
+export { refreshSessionFlow, type RefreshAnswer, type RefreshFlow } from "./session-refresh.ts";
 
 /**
  * One writer at a time for a session.
  *
  * Two writers of the same session would each take a token from the platform
- * and the second one would be logged out. So a login takes this lock first.
+ * and the second one would be logged out. So a refresh takes this lock first
+ * (lib/session-refresh.ts). A writer that cannot get it gets the session the
+ * other writer is producing — what is stored under the id right now.
  */
-export async function withSessionLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+export async function withSessionLock<T>(
+  id: string,
+  fn: () => Promise<T>,
+  options: { staleMs?: number } = {},
+): Promise<T> {
   try {
-    return await withLock(id, fn);
+    return await withLock(id, fn, options);
   } catch (e) {
     if (!(e instanceof LockUnavailableError)) throw e;
     // Another writer is mid-way: its result is the session it wrote, so read
     // that and use it.
     const existing = getSecret<SessionTokens>(id);
     if (existing) {
+      // 留一笔：这一轮没换令牌，交出去的是库里那一份（可能是临期的）。
+      authLog(dataDir(), `${id} lock busy, using stored session`, `access ${tokenFingerprint(existing.accessToken)}`);
       // SAFETY: the lock is named after the session, so what is stored under
       // it is that session; T is the caller's view of it.
       return existing as unknown as T;
@@ -335,6 +216,8 @@ export interface CredentialCache {
   at: number;
   cred: Credential;
   key?: string;
+  /** 填缓存时这份会话的代（见 forgetSessionState）。 */
+  epoch?: number;
 }
 
 /** How `ensureCredential` gets the credential it hands out. */
@@ -377,12 +260,13 @@ export async function ensureCredential<T extends SessionTokens>(
   if (dead) throw new AuthError("session refused by the platform", dead, 503);
   const cached = opts.cache;
   const sameKey = opts.key === undefined || cached?.key === opts.key;
-  if (cached && sameKey && Date.now() - cached.at < opts.cacheMs) {
+  const epoch = sessionEpochs.get(opts.lockId) ?? 0;
+  if (cached && sameKey && (cached.epoch ?? 0) === epoch && Date.now() - cached.at < opts.cacheMs) {
     return cached.cred;
   }
   const session = opts.session();
   const cred = session ? opts.toCredential(session) : null;
   if (!cred || cred.remainingMs <= 0) throw opts.expired(session);
-  opts.setCache({ at: Date.now(), cred, key: opts.key });
+  opts.setCache({ at: Date.now(), cred, key: opts.key, epoch });
   return cred;
 }
