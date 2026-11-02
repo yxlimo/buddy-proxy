@@ -34,6 +34,11 @@ import {
   refreshInternAiCatalog,
 } from "../intern-ai/transport.ts";
 import { loadSession as loadInternAiSession } from "../intern-ai/auth.ts";
+import { listOpenPlatforms } from "../open-platforms.ts";
+import {
+  openPlatformCatalogStale,
+  refreshOpenPlatformCatalog,
+} from "../open-platform-catalog.ts";
 import { PLATFORMS } from "../platforms.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { benefits } from "../admin/benefits.ts";
@@ -91,6 +96,17 @@ export function startUpstreams(): void {
   // WorkBuddy 的目录：库里那份先顶着，后台按 TTL 再抓一次（全新库里没有，
   // 抓到的第一份就写进库，写死的那张引导表也就退场了）。
   void refreshWorkBuddyCatalog();
+
+  // 开放平台的目录：表里那些平台的模型清单要问上游要。人写死的不动（那是
+  // 明确的意思），刚拉过的也不必再问 —— 启动时拉一次，新加的平台不用等谁来
+  // 问 /v1/models 才有目录可用。
+  for (const row of listOpenPlatforms()) {
+    if (!row.models.auto || !openPlatformCatalogStale(row)) continue;
+    void refreshOpenPlatformCatalog(row.id).then((outcome) => {
+      if (outcome.ok) console.log(`  [OPEN-PLATFORM] ${row.id} 模型目录：${outcome.message}`);
+      else console.warn(`  [OPEN-PLATFORM] ${row.id} 的模型目录没拉到：${outcome.message}`);
+    });
+  }
 
   for (const provider of providersNeedingLogin("workbuddy")) {
     void ensureWorkBuddySession(provider)

@@ -18,7 +18,7 @@
 // 另外两种「凭据的事」也要分得清：会话过期了（定时器还没刷好，不是没配好）
 // 与凭据读不出来（网关自己的故障）。这两件都跟「没有凭据」不是一回事。
 //
-// 最后验一遍：九个 kind 的推理凭据由注册表说了算 —— 凭据表里每一段的
+// 最后验一遍：十个 kind 的推理凭据由注册表说了算 —— 凭据表里每一段的
 // inference 标记都得跟注册表一致。
 //
 // 另外三种「接不了」也要分得清：没有账号、账号都关着、没有可用凭据 ——
@@ -252,13 +252,13 @@ check(
 check("平台行说得出「过期」", String(expiredRow?.stateReason ?? "").includes("过期"), String(expiredRow?.stateReason));
 
 /* ------------------------------------------------------------------ *
- * 六、九个 kind 的推理凭据：注册表说了算
+ * 六、十个 kind 的推理凭据：注册表说了算
  * ------------------------------------------------------------------ */
 
-section("九个 kind 的推理凭据");
+section("十个 kind 的推理凭据");
 
 const kinds = allKinds();
-check("注册表里有九个 kind", kinds.length === 9, kinds.map((k) => k.kind).join(","));
+check("注册表里有十个 kind", kinds.length === 10, kinds.map((k) => k.kind).join(","));
 
 for (const kind of kinds) {
   // 注册表说这一类上游的推理凭据是哪一份（inferWith）；判定函数说的必须是同一件
@@ -277,11 +277,11 @@ for (const kind of kinds) {
   check(`${kind.kind}：门户 cookie 不是推理凭据`, canInfer(kind.kind, "cookie") === false);
 }
 
-// 没登记的 kind（开放平台那种）：一律不是推理凭据 —— 没有登记就没有这一类
-// 上游的规矩，猜不得。
+// 没登记的 kind：一律不是推理凭据 —— 没有登记就没有这一类上游的规矩，
+// 猜不得。（开放平台那一类现在登记了，所以它的推理凭据是那把 API key。）
 check(
   "没登记的 kind 不是推理凭据",
-  canInfer("openai", "api_key") === false && canInfer("", "session") === false,
+  canInfer("no-such-kind", "api_key") === false && canInfer("", "session") === false,
 );
 
 /**

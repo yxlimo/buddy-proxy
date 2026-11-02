@@ -515,7 +515,7 @@ function clearCooldownRow(providerId: string): void {
   });
 }
 
-/** 表里加一个开放平台（kind 还没登记：存在，但接不了）。 */
+/** 表里加一个开放平台（用户自己加的：它在，但名下没有账号，所以接不了）。 */
 function addOpenPlatform(id: string): void {
   const now = Date.now();
   withDb((db) => {
@@ -648,7 +648,7 @@ const health = await fetch(`${gw.base}/health`).then((r) => r.json());
 const zephyr = health?.upstreams?.zephyr;
 check("开放平台出现在健康检查里", Boolean(zephyr), JSON.stringify(Object.keys(health?.upstreams ?? {})));
 check("开放平台是关着的", zephyr?.enabled === false, JSON.stringify(zephyr));
-check("开放平台没有地址（kind 还没登记）", zephyr?.base === null, JSON.stringify(zephyr?.base));
+check("开放平台没有账号，地址不报", zephyr?.base === null, JSON.stringify(zephyr?.base));
 check("开放平台没有模型", zephyr?.models === 0, JSON.stringify(zephyr?.models));
 const zephyrProvider = (health?.providers ?? []).find((p: any) => p.id === "zephyr");
 check("开放平台在平台列表里也是关着的", zephyrProvider?.enabled === false, JSON.stringify(zephyrProvider));
