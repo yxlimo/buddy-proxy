@@ -266,7 +266,7 @@ check "password：有密码输入框" "$(echo "$PASSWORD" | jq_get 'd["pass"]')"
 check "password：有记住密码" "$(echo "$PASSWORD" | jq_get 'd["checkbox"]')" "True"
 check "password：有登录按钮" "$(echo "$PASSWORD" | jq_get 'd["submit"]')" "True"
 
-ab fill "#login-username" "tester@example.invalid" > /dev/null 2>&1
+ab fill "#login-username" "tester@example.invalid" > /dev/null 2>&1  # privacy:allow — 编造的样例 (fabricated sample)
 ab fill "#login-password" "not-a-real-password" > /dev/null 2>&1
 SUBMIT=$(js <<'EOF'
 (async () => {

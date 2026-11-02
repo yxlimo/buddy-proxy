@@ -213,7 +213,7 @@ const key = parseApiKeyRow({
   id: "01a16280-d806-7c96-93dc-aec9947ca5dd",
   displayname: "probe",
   key_type: "API_KEY_TYPE_TOKEN_PLAN",
-  api_key: "sk-abcdefghijklmnop",
+  api_key: "sk-abcdefghijklmnop", // privacy:allow — 编造的样例 (fabricated sample)
   create_time: "2026-01-01T00:00:00Z",
   status: "enabled",
   is_default: false,
@@ -222,8 +222,8 @@ check("key 的名字读到了", key.displayname === "probe");
 check("key 的计费类型读到了", key.keyType === "API_KEY_TYPE_TOKEN_PLAN");
 check("key 被掩码了", key.maskedKey.includes("••••") && !key.maskedKey.includes("defghijkl"), key.maskedKey);
 check("列表里没有完整的 key", key.plainKey === undefined);
-const created = parseApiKeyRow({ api_key: "sk-abcdefghijklmnop", api_key_plain: "sk-abcdefghijklmnop" });
-check("创建的回答里带着完整的 key", created.plainKey === "sk-abcdefghijklmnop");
+const created = parseApiKeyRow({ api_key: "sk-abcdefghijklmnop", api_key_plain: "sk-abcdefghijklmnop" }); // privacy:allow — 编造的样例 (fabricated sample)
+check("创建的回答里带着完整的 key", created.plainKey === "sk-abcdefghijklmnop"); // privacy:allow — 编造的样例 (fabricated sample)
 check("短的 key 不掩码", parseApiKeyRow({ api_key: "sk-1" }).maskedKey === "sk-1");
 check("默认 key 认得出来", parseApiKeyRow({ is_default: true }).isDefault === true);
 

@@ -419,7 +419,7 @@ class SendCommandTest(unittest.TestCase):
         session = {
             "client": "pi",
             "id": "01a17814-ad50-775e-8c08-6ff8df765b64",
-            "path": "/home/user/.pi/agent/sessions/--home-user--/x.jsonl",
+            "path": "/home/user/.pi/agent/sessions/--home-user--/x.jsonl",  # privacy:allow — 编造的样例 (fabricated sample)
         }
         self.assertEqual(
             buddy_todo.send_command("pi", session, "继续"),
@@ -427,7 +427,7 @@ class SendCommandTest(unittest.TestCase):
                 "pi",
                 "-p",
                 "--session",
-                "/home/user/.pi/agent/sessions/--home-user--/x.jsonl",
+                "/home/user/.pi/agent/sessions/--home-user--/x.jsonl",  # privacy:allow — 编造的样例 (fabricated sample)
                 "--",
                 "继续",
             ],

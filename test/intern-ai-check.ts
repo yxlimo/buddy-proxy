@@ -74,7 +74,7 @@ check("错误信息是中文", /[一-龥]/.test(classify(401, {}, "测试").mess
 console.log("");
 console.log("登录");
 
-check("邮箱的 type 是 1", loginBody("a@b.com", "enc").type === "1");
+check("邮箱的 type 是 1", loginBody("a@b.com", "enc").type === "1"); // privacy:allow — 编造的样例 (fabricated sample)
 check("手机号的 type 是 2", loginBody("13800000000", "enc").type === "2");
 check("登录体里有账号", loginBody("13800000000", "enc").account === "13800000000");
 check("登录体里是加密后的密码", loginBody("13800000000", "enc").password === "enc");
@@ -352,10 +352,10 @@ check("Chat token 的权限是数字", cToken.authStatus === 1);
 check("Chat token 的有效期是「-」", cToken.expiredAt === "-");
 check("Chat token 列表里没有完整的 token", cToken.plainToken === undefined);
 const cCreated = parseChatToken(
-  { id: "t2", token: "sk-TESTONLYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token_name: "test-token" },
+  { id: "t2", token: "sk-TESTONLYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token_name: "test-token" }, // privacy:allow — 编造的样例 (fabricated sample)
   true,
 );
-check("Chat 创建的完整 token 读到了", cCreated.plainToken === "sk-TESTONLYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+check("Chat 创建的完整 token 读到了", cCreated.plainToken === "sk-TESTONLYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // privacy:allow — 编造的样例 (fabricated sample)
 check("Chat 创建的 token 也掩了一份", cCreated.maskedToken.includes("••••"));
 check("字段名跟 Discovery 不一样", !("masked_key" in cToken));
 check("短的 token 不掩", maskToken("sk-123") === "sk-123");

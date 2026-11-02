@@ -1,0 +1,96 @@
+# The gate of this repository: mise run check
+# (typecheck + the router's tests + the panel's typecheck + the panel's tests).
+#
+# The toolchain is not installed by hand. mise.toml pins node and pnpm, and the
+# project runs every command through mise, so the CI has to use the same mise
+# and the same versions. The node version is not a detail here: the router
+# runs its .ts files straight through node's native type stripping, and what
+# that strips depends on the node version (node 26 keeps enums, so the
+# contract's generated code has to be erasable).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch makes the running gate pointless: cancel it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Gate (mise run check)
+    runs-on: ubuntu-latest
+    # The gate takes 2-3 minutes locally. A cold run also pays for the
+    # toolchain, the two installs and the panel build: 20 minutes is room.
+    timeout-minutes: 20
+
+    env:
+      # The developer machine and the NAS both run CST +0800, and the panel
+      # formats times in the local zone. Without this the runner's UTC would
+      # shift every timestamp the tests compare.
+      TZ: Asia/Shanghai
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install mise and the toolchain it pins (node 26, pnpm 12.16.1)
+        uses: jdx/mise-action@v2
+        with:
+          version: latest
+          install: true
+          # Cache the installed toolchain (the node and the pnpm build).
+          cache: true
+          github_token: ${{ github.token }}
+
+      - name: Locate the pnpm store
+        id: pnpm-store
+        shell: bash
+        run: |
+          store=$(mise exec -- pnpm store path --silent | tail -n 1)
+          echo "dir=$store" >> "$GITHUB_OUTPUT"
+
+      # Both installs share one content-addressable store, but each lockfile
+      # gets its own key: a change to one lockfile must not throw away the
+      # other one's cache.
+      - name: Cache the pnpm store (the router's lockfile)
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: pnpm-${{ runner.os }}-root-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Cache the pnpm store (the panel's lockfile)
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: pnpm-${{ runner.os }}-web-${{ hashFiles('web/pnpm-lock.yaml') }}
+
+      - name: Install the router's dependencies
+        run: mise exec -- pnpm install
+
+      - name: Install the panel's dependencies
+        run: mise run web:install
+
+      # The panel's build output is not committed (web/dist is in .gitignore),
+      # but the router's tests read it: the panel's static hosting check needs
+      # the files on disk. So the panel is built before the gate runs.
+      - name: Build the panel into web/dist
+        run: mise run web:build
+
+      # The repository is public, and it leaked before: a real mailbox, a real
+      # token, the NAS address. The gate below runs on a clean checkout, so a
+      # diff based scan would find nothing there: this one looks at the whole
+      # tree. A hit fails the job — there is no continue-on-error here.
+      - name: Scan the whole tree for real identities and credentials (privacy)
+        run: mise run privacy --all
+
+      - name: Run the gate (typecheck and every test)
+        run: mise run check

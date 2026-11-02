@@ -64,7 +64,7 @@ const console_ = http.createServer((req, res) => {
           id: "key-1",
           displayname: String(body?.displayname ?? ""),
           key_type: String(body?.key_type ?? ""),
-          api_key: "sk-1234567890abcdef",
+          api_key: "sk-1234567890abcdef", // privacy:allow — 编造的样例 (fabricated sample)
           status: "ACTIVE",
         },
       }),
