@@ -14,7 +14,6 @@ import { AuthError } from "../credential.ts";
 import { matchZcodeModel } from "../zcode/models.ts";
 import type { PlatformAvailability, PlatformState } from "./availability.ts";
 import { cooldownStamp } from "./account-cooldown.ts";
-import { coolingError } from "./upstreams/policy.ts";
 import { withRetryAfter } from "./deliver.ts";
 
 export interface Route {
@@ -99,11 +98,7 @@ export function routeInGroup(platform: string, model: string, ctx: RoutingContex
   // 目录还没拿到（账号刚加、目录还没同步）：这不是「没有这个模型」，是「这个
   // 上游现在答不了」。400 会让客户端去改配置，503 才是它该做的事 —— 等一会儿
   if (!info.ids.size) {
-    throw new AuthError(
-      `platform ${platform} has no model catalogue`,
-      `这个上游的模型目录还没拿到（账号刚加或者目录还没同步）。稍后再试。`,
-      503,
-    );
+    throw catalogueNotReady([platform]);
   }
   const canonical = canonicalModel(raw, info.kind, info.ids);
   if (!canonical) {
@@ -114,11 +109,89 @@ export function routeInGroup(platform: string, model: string, ctx: RoutingContex
     );
   }
   // 模型在目录里，但平台下没有一个账号能接：额度用尽或者都在冷却。这是网关
-  // 这边的状态，不是请求本身的问题 —— 503 加上什么时候恢复，客户端照着重试
+  // 这边的状态，不是请求本身的问题 —— 答复里说清是哪一种、什么时候恢复
   if (info.untilMs !== null) {
-    throw coolingError(platform, info.untilMs, true, "额度用尽或者冷却中");
+    throw platformUnavailable(platform, info.state, info.untilMs);
   }
   return { platform, model: `${platform}/${canonical}` };
+}
+
+/**
+ * 这个平台现在接不了请求：额度用尽、或者账号都在冷却。
+ *
+ * 两种的答法不一样，因为客户端能做的事不一样：
+ *
+ *   额度用尽 → 402 usage_limit_error：客户端能做的就是充值或者等额度。
+ *   冷却     → 503：等一会儿就好，说清到什么时候。
+ *
+ * 两种都点名平台：客户端要知道是哪个上游接不了，不是一个笼统的「都满了」。
+ */
+export function platformUnavailable(
+  platform: string,
+  state: PlatformState,
+  untilMs: number | null,
+): AuthError {
+  if (state === "out_of_credits") return platformOutOfCredits(platform, untilMs);
+  if (state === "cooling") return platformCooling(platform, untilMs);
+  // 别的状态到不了这里（它们的恢复时间是 null）。真到了就照 503 说：等一会儿
+  // 再试，答复里用同一套词说清是什么状态、该做什么 —— 不另造第四套说法。
+  const error = new AuthError(
+    `upstream ${platform} cannot serve the request`,
+    `上游 ${platform} 现在接不了这个请求：${STATE_TEXT[state]}（${state}）—— ${remedyOf(state)}`,
+    503,
+  );
+  return untilMs === null ? error : withRetryAfter(error, untilMs);
+}
+
+/**
+ * 上游的额度用尽了：402。
+ *
+ * 402 是「客户端自己能动手的事」：余额或额度用尽时，客户端能做的就是充值、
+ * 或者等额度回来。503 说的是「等一会儿就好」，但额度等的是窗口，不是几秒。
+ *
+ * Retry-After 跟着错误走（deliver.ts 把它写进头里）：什么时候恢复是平台自己
+ * 说的时刻，不是猜的。
+ */
+function platformOutOfCredits(platform: string, untilMs: number | null): AuthError {
+  const when = untilMs === null ? "" : `，${cooldownStamp(untilMs)} 恢复`;
+  const error = new AuthError(
+    `upstream ${platform} is out of credits`,
+    `上游 ${platform} 的额度用尽了${when}。额度回来之前接不了这个请求；能做的就是充值或者等额度。`,
+    402,
+    "usage_limit_error",
+  );
+  return untilMs === null ? error : withRetryAfter(error, untilMs);
+}
+
+/**
+ * 上游的账号都在冷却：503。
+ *
+ * 冷却是分钟级的：等一会儿就好，所以是 503，不是 402（那说的是额度用尽）。
+ * 文案点名平台，说清到什么时候再试。
+ */
+function platformCooling(platform: string, untilMs: number | null): AuthError {
+  const when = untilMs === null ? "" : `，${cooldownStamp(untilMs)} 再试`;
+  const error = new AuthError(
+    `upstream ${platform} is cooling down`,
+    `上游 ${platform} 的账号在冷却${when}。到点自动重试。`,
+    503,
+  );
+  return untilMs === null ? error : withRetryAfter(error, untilMs);
+}
+
+/**
+ * 上游的模型目录还没拿到：503。
+ *
+ * 不是「没有这个模型」：模型确实发布着，只是上游还没告诉我们它有什么模型。
+ * 400 会让客户端去改模型名，503 才是它该做的事 —— 等一会儿。
+ */
+export function catalogueNotReady(platforms: string[]): AuthError {
+  const names = platforms.join("、");
+  return new AuthError(
+    `upstream catalogue not ready (${names})`,
+    `上游 ${names} 的模型目录还没拿到，过一会儿再试。`,
+    503,
+  );
 }
 
 /** The name the upstream knows the model by. */
@@ -244,9 +317,13 @@ export function unreachableUpstreams(
 /**
  * 发布出来的模型现在接不了：点名是哪个上游、什么状态、该做什么。
  *
- * 两种答法：缺凭据、没账号、账号都关着是 400 —— 那是运维没配好，客户端
- * 处理不了，也不该去改模型名；额度用尽与冷却是 503 —— 等一会儿就好，答里
- * 带上什么时候恢复（Retry-After 跟着走）。
+ * 都是 400：这是运维没配好（没有账号、账号都关着、没有凭据），客户端处理不了，
+ * 也不该去改模型名。
+ *
+ * 额度用尽与冷却不归这里管：那两个状态的平台照样在目录里（目录恒为平台全量），
+ * 所以 findAggregate 有结果，答的是 routeInGroup 那边的 402 与 503 —— 那边点名
+ * 平台、说清什么时候恢复。目录空的那种由 emptyCatalogTargets 拦（503：目录
+ * 还没拿到）。走到这里的只有「平台接不了，但目录不在那儿」的那几种。
  */
 export function publishedModelUnavailable(
   modelId: string,
@@ -257,20 +334,40 @@ export function publishedModelUnavailable(
     return `  ${u.platform}：${STATE_TEXT[u.state]}（${u.state}）${when} —— ${remedyOf(u.state)}`;
   });
   const hint = `这个模型（${modelId}）发布着，但它的上游现在都接不了：\n${lines.join("\n")}`;
-  const recoverable = upstreams.filter(
-    (u) => u.state === "out_of_credits" || u.state === "cooling",
-  );
-  if (!recoverable.length) {
-    return new AuthError(`model "${modelId}" has no usable upstream`, hint, 400);
+  return new AuthError(`model "${modelId}" has no usable upstream`, hint, 400);
+}
+
+/**
+ * 目标上游的模型目录还没拿到。
+ *
+ * 目录是空的平台答不了「有没有这个模型」—— 它连自己有什么模型都还不知道。
+ * 平台前缀那条路对同样情况答 503（见 routeInGroup），根路由也得一样：两处答
+ * 的不一样，客户端就会去改模型名，而模型名是对的。
+ *
+ * 只算「平台本身没问题、只是目录空着」的那些：接不了但目录在的（没凭据、额度
+ * 用尽、冷却）是账号的事，答复该说那件事。
+ */
+export function emptyCatalogTargets(
+  targets: { group: string; enabled: boolean }[],
+  availabilities: Map<string, PlatformAvailability>,
+): string[] {
+  const out: string[] = [];
+  for (const target of targets) {
+    if (!target.enabled) continue;
+    const availability = availabilities.get(target.group);
+    // 目标的上游整个没了（平台被删了）：那是「没有这个模型」，不是「目录没拿到」。
+    if (!availability) continue;
+    // 接不了但目录在的：那是账号的事，不是目录的事。
+    if (
+      availability.state !== "ready" &&
+      availability.state !== "out_of_credits" &&
+      availability.state !== "cooling"
+    ) {
+      continue;
+    }
+    // 目录拿到了就没什么好等的。
+    if (availability.ids.length) continue;
+    out.push(target.group);
   }
-  const untils = recoverable
-    .map((u) => u.untilMs)
-    .filter((at): at is number => typeof at === "number" && at > Date.now());
-  const error = new AuthError(
-    `model "${modelId}" has no reachable upstream right now`,
-    hint,
-    503,
-    "api_error",
-  );
-  return untils.length ? withRetryAfter(error, Math.min(...untils)) : error;
+  return out;
 }
