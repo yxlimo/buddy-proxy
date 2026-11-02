@@ -348,6 +348,22 @@ function writeCooldown(dataDir: string, providerId: string, untilMs: number, rea
   }
 }
 
+/**
+ * 等冷却那一行消失。
+ *
+ * 清冷却发生在答复交付**之后**（结算只认「流真的结束了」），而客户端看到
+ * message_stop 的那一刻，网关可能还在收尾。所以这里给一小段窗口，不能立刻断言：
+ * 在慢一点的机器上（CI）那就是一条假红。真出问题（永远不清）照样会超时失败。
+ */
+async function waitForCooldownGone(dataDir: string, providerId: string, ms = 3000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (cooldownRow(dataDir, providerId) === null) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * 场景
  * ------------------------------------------------------------------ */
@@ -537,7 +553,7 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
     );
     check(
       "流正常结束：冷却那一行没了",
-      cooldownRow(gw.dataDir, gw.accounts[0]) === null,
+      await waitForCooldownGone(gw.dataDir, gw.accounts[0]),
       "还在",
     );
 
@@ -546,7 +562,7 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
     const plain = await chat(gw);
     check(
       "非流式：成功还是清掉冷却",
-      plain.status === 200 && cooldownRow(gw.dataDir, gw.accounts[0]) === null,
+      plain.status === 200 && (await waitForCooldownGone(gw.dataDir, gw.accounts[0])),
       `${plain.status} ${plain.text.slice(0, 200)}`,
     );
   } finally {
