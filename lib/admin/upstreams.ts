@@ -8,7 +8,6 @@
 // —— 不用重启，也不用重新读配置。
 
 import { configNumber, configString } from "../config.ts";
-import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
@@ -17,8 +16,6 @@ import {
   fetchMiniMaxCreditsAndPoints,
   type CreditLot,
 } from "../minimax/points.ts";
-import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
-import { type QoderRegion } from "../qoder/auth.ts";
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { fetchWorkBuddyResources, type WorkBuddySnapshotEntry } from "../workbuddy/resources.ts";
@@ -84,23 +81,6 @@ function accountsFor(id: string): ProviderRow[] {
   if (isPlatform(id)) return accountsOfPlatform(id);
   const row = provider(id);
   return row ? [row] : [];
-}
-
-/**
- * 这个平台现在能不能接：它名下有没有开着的账号。
- *
- * 平台自己没有开关 —— 开关在账号上，一个平台下有两个账号时可以只开一个。
- * 传账号 id 时问的就是那一个账号。
- *
- * 答案取自判定（platform-state.ts）：「开着没有」这件事只能有一个答案，面板
- * 与路由看的必须是同一份。
- */
-export function upstreamEnabled(id: string): boolean {
-  if (!isPlatform(id)) {
-    const row = provider(id);
-    return row ? row.enabled : false;
-  }
-  return platformAvailability(id).on > 0;
 }
 
 /** 一个上游的开关状态。 */
@@ -171,17 +151,6 @@ export function upstreamRegion(id: string): string {
  * 模型目录
  * ------------------------------------------------------------------ */
 
-/** MiniMax 公布的模型。上游关着就一个也不公布。 */
-export function minimaxVisible(): MiniMaxModel[] {
-  return upstreamEnabled("minimax") ? MINIMAX_MODELS : [];
-}
-
-/** Qoder 全球区与中国区各自能服务的模型。 */
-export function qoderVisible(region: QoderRegion): QoderModel[] {
-  const id: UpstreamId = region === "cn" ? "qoder-cn" : "qoder";
-  return upstreamEnabled(id) ? qoderModelsForRegion(region) : [];
-}
-
 /**
  * WorkBuddy 的模型目录。
  *
@@ -197,14 +166,6 @@ export function workbuddyCatalog(providerId = "workbuddy-cn"): WorkBuddyModel[] 
 /** 换掉某个区域的 WorkBuddy 模型目录（上游刷新之后）。 */
 export function setWorkbuddyCatalog(models: WorkBuddyModel[], providerId = "workbuddy-cn"): void {
   setWorkbuddyModelList(models, regionOf(providerId));
-}
-
-/** 现在开着的 Qoder 区域。 */
-export function qoderRegions(): QoderRegion[] {
-  return [
-    ...(upstreamEnabled("qoder") ? (["global"] as QoderRegion[]) : []),
-    ...(upstreamEnabled("qoder-cn") ? (["cn"] as QoderRegion[]) : []),
-  ];
 }
 
 /**
@@ -998,6 +959,14 @@ export function upstreamStateOf(availability: PlatformAvailability): UpstreamSta
       return UpstreamState.DISABLED;
     case "no_credential":
       return credentialTrouble(availability.rows) ?? UpstreamState.NO_CREDENTIAL;
+    case "credential_expired":
+      // 契约里有「登录过期了」这一档：会话型平台的会话过期就是它。
+      return UpstreamState.CREDENTIAL_EXPIRED;
+    case "credential_unknown":
+      // 契约里没有「凭据读不出来」这一档（这一档说的是网关自己读不出凭据，
+      // 不是「没登录」）。状态这一档只能说「没有可用凭据」，面板看得到的是
+      // 凭据那一行的详情与这一行的状态说明。
+      return UpstreamState.NO_CREDENTIAL;
     case "out_of_credits":
       return UpstreamState.OUT_OF_CREDITS;
     case "cooling":

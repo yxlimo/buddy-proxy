@@ -8,15 +8,24 @@
 //
 // 所以判定收在这里，四处都用它。判定的顺序就是状态的顺序，先命中先返回：
 //
-//   no_account      平台名下没有账号
-//   accounts_off    有账号，但一个都没开
-//   no_credential   有开着的账号，但一个能推理的凭据都没有
-//   out_of_credits  凭据有了，额度用尽了
-//   cooling         凭据有了，没有能接的账号（有账号在冷却里）
-//   ready           至少有一个账号现在就能接
+//   no_account         平台名下没有账号
+//   accounts_off       有账号，但一个都没开
+//   no_credential      有开着的账号，但一个能推理的凭据都没有
+//   credential_expired 有开着的账号，推理凭据在，但它过期了（或被拒了）
+//   credential_unknown 有开着的账号，但凭据一个都读不出来
+//   out_of_credits     凭据有了，额度用尽了
+//   cooling            凭据有了，没有能接的账号（有账号在冷却里）
+//   ready              至少有一个账号现在就能接
 //
 // 「有账号且都关着」与「有账号开着但都没凭据」是两件事：前者是开关的问题，
 // 后者是面板上要填 key 或者登录。报成同一句话，人就不知道该改哪一处。
+//
+// 会话型平台（MiniMax、Qoder、WorkBuddy、ZCode）压根没有「API Key」这一说：
+// 它们的推理凭据就是登录会话。会话过期只说明「定时器还没刷好」，说成「没有
+// 凭据」会把人引到填 key 上 —— 所以过期单独一档（credential_expired）。
+//
+// 凭据读不出来（网关自己的故障）也单独一档：那是「不知道凭据怎么样」，不是
+// 「运维没配好」。混进 no_credential 会把平台的账说成运维的错。
 //
 // 额度用尽与冷却不摘模型：目录恒为平台全量。说的是「这个平台现在接不了这个
 // 请求」，不是「这个平台没有这个模型」—— 后者会让客户端去改模型名，而真正
@@ -31,18 +40,23 @@ import type { CatalogModel } from "../catalog-models.ts";
 import { listCooldowns, unavailableCooldownMs } from "../cooldown.ts";
 import { authLog } from "../credential.ts";
 import { peekHealthSnapshot } from "../health-cache.ts";
-import { planWindowEndsAt } from "../plan-window.ts";
+import { exhaustedPlanWindowEndsAt } from "../plan-window.ts";
 import { dataDir } from "../paths.ts";
 import { kindOf, type HealthSnapshot } from "../provider-kinds.ts";
 import { listProviders, type ProviderRow } from "../providers.ts";
 import { platformOfAny, type Platform } from "../platforms.ts";
-import { inferenceCredentialOf } from "./accounts.ts";
+import { deadSession } from "../session.ts";
+import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
+import { hasUsableCredential } from "./credentials.ts";
+import { inferenceCredentialsOf, type CredentialRow } from "./accounts.ts";
 
 /** 这个平台现在的状态。 */
 export type PlatformState =
   | "no_account"
   | "accounts_off"
   | "no_credential"
+  | "credential_expired"
+  | "credential_unknown"
   | "out_of_credits"
   | "cooling"
   | "ready";
@@ -63,6 +77,9 @@ export interface PlatformAvailability {
   usable: ProviderRow[];
   /**
    * 开着的、有推理凭据的账号行。
+   *
+   * 凭据读不出来（网关自己的故障）的账号也算在里面：不能因为网关自己读不出
+   * 就说这个平台没配好。它们不在 usable 里 —— 不可验证的账号不该被派发挑中。
    *
    * 额度与冷却不管：额度用尽的平台照样公布模型、照样在目录里，只是现在接不了
    * 这个请求。
@@ -88,7 +105,8 @@ export interface PlatformAvailability {
   /**
    * 一个都接不了时最早能试的时刻；能接就是 null。
    *
-   * 没有凭据时也是 null：等一会儿不会让凭据长出来。
+   * 没有凭据时也是 null：等一会儿不会让凭据长出来。凭据过期与凭据读不出来
+   * 也是 null：前者等的是刷新或重新登录（人做的），后者是网关自己的故障。
    */
   untilMs: number | null;
   /** 一句给日志用的话。 */
@@ -96,19 +114,44 @@ export interface PlatformAvailability {
 }
 
 /**
- * 这个账号有没有能拿去推理的凭据。
+ * 一个账号的推理凭据现在怎么样。
+ *
+ * 四种：
+ *
+ *   ok        有能用的推理凭据
+ *   missing   压根没有推理凭据（要人去面板上填 key 或者登录）
+ *   expired   有，但过期了或被平台拒了（等人刷新或重新登录）
+ *   unknown   读不出来 —— 网关自己的故障，不是运维没配好
+ */
+interface CredentialVerdict {
+  state: "ok" | "missing" | "expired" | "unknown";
+  /** 平台拒过这份会话：重新授权才有新的，等刷新没有用。 */
+  refused: boolean;
+}
+
+/**
+ * 这个账号的推理凭据现在怎么样。
  *
  * 读凭据抛异常不是「没有凭据」：那是网关自己的故障，不是运维没配好。当成
- * 「不知道」，照旧算它能接 —— 宁可多路由一次，也不要把平台的账说成运维没配。
- * 读不出来这件事要落进 auth.log（数据卷里）：凭据的毛病要留痕。
+ * 「不知道」—— 不进 usable（不可验证的账号不该被派发挑中），但仍算这个平台
+ * 名下有账号（不能因为网关自己读不出就说平台没配好）。读不出来这件事要落进
+ * auth.log（数据卷里）：凭据的毛病要留痕。
  */
-function hasInferenceCredential(row: ProviderRow): boolean {
+function credentialVerdictOf(row: ProviderRow): CredentialVerdict {
+  let credentials: CredentialRow[];
   try {
-    return inferenceCredentialOf(row.id) !== null;
+    credentials = inferenceCredentialsOf(row.id);
   } catch (e) {
     authLog(dataDir(), `读 ${row.id} 的凭据失败`, (e as Error)?.message ?? String(e ?? ""));
-    return true;
+    return { state: "unknown", refused: false };
   }
+  if (!credentials.length) return { state: "missing", refused: false };
+  if (credentials.some((c) => hasUsableCredential(c.status))) return { state: "ok", refused: false };
+  // 有推理凭据但用不了：过期了。被平台拒过的会话也是过期（它已经作废了，
+  // 重新授权才有新的）—— 两者要人做的事不一样，所以把「被拒」单独记下来。
+  const dead = credentials.filter((c) => c.status === CredentialState.EXPIRED);
+  if (!dead.length) return { state: "missing", refused: false };
+  return { state: "expired", refused: dead.some((c) => Boolean(deadSession(c.id))) };
 }
 
 /**
@@ -187,7 +230,9 @@ function recoveryTime(
       if (allSpent) {
         const kind = kindOf(row.kind);
         const said = snapshot ? (kind?.recoverAt?.(row, snapshot) ?? null) : null;
-        const at = said ?? planWindowEndsAt(row.id, now);
+        // 见底的窗口什么时候结束才是恢复时刻：窗口还有额度的时候，它的到期点
+        // 只是一个边界（账号现在就能干活），拿它冒充恢复时间是在骗人。
+        const at = said ?? exhaustedPlanWindowEndsAt(row.id, now);
         if (typeof at === "number" && at > now) return at;
       }
       return cooldowns.get(row.id) ?? null;
@@ -203,21 +248,34 @@ function reasonOf(
   accounts: number,
   on: number,
   usable: number,
+  unreadable: number,
+  normal: number,
 ): string {
-  switch (state) {
-    case "no_account":
-      return `平台 ${platformId} 还没有账号`;
-    case "accounts_off":
-      return `平台 ${platformId} 的 ${accounts} 个账号都关着`;
-    case "no_credential":
-      return `平台 ${platformId} 的 ${on} 个开着的账号都没有可用凭据`;
-    case "out_of_credits":
-      return `平台 ${platformId} 的额度用尽了`;
-    case "cooling":
-      return `平台 ${platformId} 现在没有能接的账号（有账号在冷却）`;
-    case "ready":
-      return `平台 ${platformId} 有 ${usable} 个账号能接请求`;
-  }
+  const base = ((): string => {
+    switch (state) {
+      case "no_account":
+        return `平台 ${platformId} 还没有账号`;
+      case "accounts_off":
+        return `平台 ${platformId} 的 ${accounts} 个账号都关着`;
+      case "no_credential":
+        return `平台 ${platformId} 的 ${on} 个开着的账号都没有可用凭据`;
+      case "credential_expired":
+        return `平台 ${platformId} 的凭据过期了`;
+      case "credential_unknown":
+        return `平台 ${platformId} 的凭据读不出来`;
+      case "out_of_credits":
+        return `平台 ${platformId} 的额度用尽了`;
+      case "cooling":
+        return `平台 ${platformId} 现在没有能接的账号（有账号在冷却）`;
+      case "ready":
+        return `平台 ${platformId} 有 ${usable} 个账号能接请求`;
+    }
+  })();
+  // 有正常账号混着时，把读不出来的那几个说清楚：它们不派发，但它们在。
+  // 全都是读不出来的时候不用再说一遍 —— 上面那句已经说了。
+  return unreadable > 0 && normal > 0
+    ? `${base}（另有 ${unreadable} 个账号的凭据读不出来）`
+    : base;
 }
 
 /**
@@ -225,8 +283,11 @@ function reasonOf(
  *
  * 与 reason 的分工：reason 是给日志看的一句话（这个平台为什么接不了），
  * advice 是给面板看的一句人话（该去改哪一处）。
+ *
+ * `refused` 是「平台拒过这份会话」：被拒过的会话等刷新没有用，只能重新
+ * 登录 —— 这跟「过期了，等定时器刷」要人做的事不一样。
  */
-function adviceOf(state: PlatformState): string {
+function adviceOf(state: PlatformState, refused: boolean): string {
   switch (state) {
     case "no_account":
       return "这个平台还没有账号：在「上游」页加一个账号并登录";
@@ -234,6 +295,10 @@ function adviceOf(state: PlatformState): string {
       return "这个平台的账号都关着：在「上游」页打开一个";
     case "no_credential":
       return "没有可用凭据：在「上游」页填 API Key 或登录";
+    case "credential_expired":
+      return refused ? "凭据被拒了：重新登录" : "凭据过期了：等它自动刷新，或者重新登录";
+    case "credential_unknown":
+      return "凭据读不出来：看日志";
     case "out_of_credits":
       return "额度用尽了：等额度回来，或者换个账号";
     case "cooling":
@@ -253,9 +318,25 @@ function judge(
   now: number,
 ): PlatformAvailability {
   const on = accounts.filter((row) => row.enabled);
-  // 能服务 = 开着的 **而且** 有推理用的凭据：会话只用来问额度的那些平台
-  // （门户 cookie、登录账号）不算 —— 配了它们也发不出一个请求。
-  const serving = on.filter((row) => hasInferenceCredential(row));
+  // 凭据那一层：每个账号的推理凭据现在怎么样。
+  const verdicts = new Map<string, CredentialVerdict>();
+  for (const row of on) verdicts.set(row.id, credentialVerdictOf(row));
+  const verdictOf = (row: ProviderRow): CredentialVerdict =>
+    verdicts.get(row.id) ?? { state: "missing", refused: false };
+  // 有能用的推理凭据的账号：会话只用来问额度的那些平台（门户 cookie、登录
+  // 账号）不算 —— 配了它们也发不出一个请求。
+  const ready = on.filter((row) => verdictOf(row).state === "ok");
+  // 凭据读不出来的账号：仍算这个平台名下有账号（不能因为网关自己读不出就说平
+  // 台没配好），但它们不进 usable —— 不可验证的账号不该被派发挑中。
+  const unreadable = on.filter((row) => verdictOf(row).state === "unknown");
+  // 推理凭据在，但它过期了或被拒了。
+  const expired = on.filter((row) => verdictOf(row).state === "expired");
+  // serving = 名下有账号、开着、而且有推理凭据（或者凭据读不出来 —— 那是网关
+  // 自己的事，不是平台没配好）。
+  const serving = on.filter((row) => {
+    const state = verdictOf(row).state;
+    return state === "ok" || state === "unknown";
+  });
   // 额度用尽是按账号判的：平台上还有一个账号有额度，这个平台就还能接。
   const spent = (row: ProviderRow): boolean => {
     const kind = kindOf(row.kind);
@@ -263,19 +344,25 @@ function judge(
   };
   // 冷却表读进来的都是还没过期的（过期的行不等于是冷却中）。
   const cooling = (row: ProviderRow): boolean => cooldowns.has(row.id);
-  const usable = serving.filter((row) => !spent(row) && !cooling(row));
-  const allSpent = serving.length > 0 && serving.every(spent);
+  const usable = ready.filter((row) => !spent(row) && !cooling(row));
+  const allSpent = ready.length > 0 && ready.every(spent);
   // 「在冷却」是接不了的原因之一：没有账号能接，而有的账号在冷却。
   //
   // 一个账号在冷却、另一个还热着时，平台接得了 —— 那是那个账号的事，不是平台
   // 的事，报「冷却」会让人以为整个平台都停用了。
-  const blockedByCooling = usable.length === 0 && serving.some(cooling);
+  const blockedByCooling = usable.length === 0 && ready.some(cooling);
 
   let state: PlatformState;
   if (accounts.length === 0) state = "no_account";
   else if (on.length === 0) state = "accounts_off";
-  else if (serving.length === 0) state = "no_credential";
-  else if (allSpent) state = "out_of_credits";
+  else if (serving.length === 0) {
+    // 有开着的账号，但一个能推理的凭据都没有。有凭据但过期了是一件事（等人
+    // 刷新或重新登录），压根没有是另一件（要人去面板上填）。
+    state = expired.length ? "credential_expired" : "no_credential";
+  } else if (ready.length === 0) {
+    // 名下有账号，但它们的凭据一个都读不出来：那是网关自己的故障。
+    state = "credential_unknown";
+  } else if (allSpent) state = "out_of_credits";
   else if (blockedByCooling) state = "cooling";
   else state = "ready";
 
@@ -289,15 +376,26 @@ function judge(
     accounts: accounts.length,
     rows: accounts,
     on: on.length,
-    advice: adviceOf(state),
+    advice: adviceOf(state, expired.some((row) => verdictOf(row).refused)),
     catalog,
     ids: catalog.map((m) => m.id),
-    // 没有凭据的时候也是 null：等一会儿不会让凭据长出来，那种情况要人去面板上填。
+    // 恢复时间只算「额度用尽」与「冷却」这两种：它们有时刻表。
+    //
+    // 凭据过期不是定时器能算的事（等的是刷新或重新登录，人做的），凭据读不
+    // 出来更不是（那是网关自己的故障）—— 两种都给 null。
     untilMs:
-      serving.length > 0 && usable.length === 0
-        ? recoveryTime(serving, allSpent, cooldowns, snapshot, now)
+      state === "out_of_credits" || state === "cooling"
+        ? recoveryTime(ready, allSpent, cooldowns, snapshot, now)
         : null,
-    reason: reasonOf(state, platform.id, accounts.length, on.length, usable.length),
+    reason: reasonOf(
+      state,
+      platform.id,
+      accounts.length,
+      on.length,
+      usable.length,
+      unreadable.length,
+      ready.length,
+    ),
   };
 }
 

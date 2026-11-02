@@ -180,6 +180,9 @@ function targetBlocker(
   if (availability.state === "no_credential") return UnpublishedReason.NO_CREDENTIAL;
   // 额度用尽与冷却不摘模型：那是「现在接不了这个请求」，不是「没有这个模型」。
   //
+  // 凭据过期与凭据读不出来同样不摘：前者等定时器刷就好，后者是网关自己的故障
+  // —— 都不是「这个模型没有了」。
+  //
   // 目录里有没有这个模型，**不算** blocker。上游的 /v3/config 不是它实际能服务
   // 什么的完整清单（实测 workbuddy.cn 的 deepseek-v4.1-flash、kimi-k3.1-pro
   // 后端都正常出话，目录里一个字都没提），拿它当"模型已下架"的判据会把能用的
