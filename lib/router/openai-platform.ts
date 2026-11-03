@@ -37,7 +37,7 @@ export async function openAiPlatformChat(
   if (!platform.key) {
     throw new AuthError(
       `${platform.id} has no inference key`,
-      `${platform.label} 账号上没有推理用的 API key。在面板里重新登录一次，网关会建一把。`,
+      `${platform.label} 账号上没有推理用的 API key。请在面板上填一把。`,
       500,
     );
   }
@@ -55,7 +55,7 @@ export async function openAiPlatformChat(
   if (!response.ok && response.status === 401) {
     throw new AuthError(
       `${platform.id} rejected the key`,
-      `${platform.label} 拒绝了推理用的 API key（HTTP 401）。重新登录一次，网关会换一把。`,
+      `${platform.label} 拒绝了推理用的 API key（HTTP 401）。在面板上换一把。`,
       502,
     );
   }

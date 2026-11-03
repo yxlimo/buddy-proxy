@@ -20,17 +20,17 @@ import {
   providersNeedingLogin,
 } from "../login.ts";
 import {
-  ensureSenseNovaKey,
   refreshSenseNovaCatalog,
   senseNovaCatalog,
+  senseNovaInferenceKey,
 } from "../sensenova/transport.ts";
 import {
   loadSession as loadSenseNovaSession,
   login as loginSenseNova,
 } from "../sensenova/auth.ts";
 import {
-  ensureInternAiKey,
   internAiCatalog,
+  internAiInferenceKey,
   refreshInternAiCatalog,
 } from "../intern-ai/transport.ts";
 import { loadSession as loadInternAiSession } from "../intern-ai/auth.ts";
@@ -161,8 +161,8 @@ export function startUpstreams(): void {
   // 这里要的是「开着的账号」，不是「能服务的账号」：没有凭据的那个正是要
   // 登录的那一个（enabledAccounts 只给已经拿着凭据的那些）。
   for (const row of accountsOfPlatform("sensenova").filter((account) => account.enabled)) {
-    // 推理端点要的是一把 key，不是 cookie。账号上有会话却没有 key 的（老版本
-    // 登录留下的），在这里补一把 —— 登录完了上游才是 READY 的。
+    // 推理端点要的是一把 key，不是 cookie。key 由用户自己在面板上填：没有就
+    // 没有，网关不替人建一把（平台只把完整值给一次）。
     void (async () => {
       // SenseNova 的登录是账号密码加 PKCE，不用开浏览器，所以没有会话时
       // 网关自己登 —— 凭据在环境里，够用。
@@ -171,7 +171,10 @@ export function startUpstreams(): void {
         console.log(`  [SENSENOVA] ${row.id} 还没有登录态，用环境里的账号密码登录`);
         session = await loginSenseNova(undefined, undefined, row.id);
       }
-      await ensureSenseNovaKey(session, row.id);
+      if (!senseNovaInferenceKey(row.id)) {
+        console.log(`  [SENSENOVA] ${row.id} 没有推理用的 API key，请在面板上填一把`);
+        return;
+      }
       await refreshSenseNovaCatalog(true, row.id);
       console.log(`  [SENSENOVA] ${row.id} 模型清单：${senseNovaCatalog().length} 个`);
     })().catch((e) => console.warn(`  [SENSENOVA] ${row.id}: ${(e as Error).message}`));
@@ -186,7 +189,10 @@ export function startUpstreams(): void {
         console.log(`  [INTERN-AI] ${row.id} 还没有登录态，在面板上登录一次即可`);
         return;
       }
-      await ensureInternAiKey(session, row.id);
+      if (!internAiInferenceKey(row.id)) {
+        console.log(`  [INTERN-AI] ${row.id} 没有推理用的 API key，请在面板上填一把`);
+        return;
+      }
       await refreshInternAiCatalog(true, row.id);
       console.log(`  [INTERN-AI] ${row.id} 模型目录：${internAiCatalog().length} 个`);
     })().catch((e) => console.warn(`  [INTERN-AI] ${row.id}: ${(e as Error).message}`));

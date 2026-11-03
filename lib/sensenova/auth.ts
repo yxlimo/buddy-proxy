@@ -34,7 +34,6 @@ import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { tokenFingerprint } from "../credential.ts";
 import { providerSecretId } from "../providers.ts";
 import { registerLoginFlow, type LoginContext, type LoginTicket, type SubmitInput } from "../login-flow.ts";
-import { ensureSenseNovaKey } from "./transport.ts";
 
 /**
  * 会话在数据库里的名字。
@@ -430,7 +429,7 @@ export function senseNovaStatus(providerId = "sensenova"): Record<string, unknow
     source: sessionId(providerId),
     status: key ? "authenticated" : "missing",
     fingerprint: key ? tokenFingerprint(key) : "",
-    detail: key ? "推理用的 API key" : "账号上没有推理用的 API key，登录后网关会建一把",
+    detail: key ? "推理用的 API key" : "账号上没有推理用的 API key，请在面板上填一把",
     sessionStatus: !session ? "anonymous" : remainingMs > 0 ? "authenticated" : "expired",
     username: session?.username ?? stored?.user ?? "",
     expiresAt: session ? new Date(session.expiresAtMs).toISOString() : "",
@@ -504,11 +503,16 @@ async function readJson(res: Response): Promise<any> {
  * 登录链
  * ------------------------------------------------------------------ */
 
-/** 一次密码登录换回来的东西：会话，加上推理用的 key 建出来没有。 */
+/** 一次密码登录换回来的东西：会话，加上账号上有没有推理用的 key。 */
 export interface SenseNovaLogin {
   session: SenseNovaSession;
-  /** 推理用的 key 建出来没有。没建出来不算登录失败（见 lib/admin/login.ts）。 */
-  keyReady: boolean;
+  /**
+   * 账号上已经有推理用的 key 吗。
+   *
+   * key 由用户自己在面板上填：登录不再替人建一把（平台只把完整值给一次，
+   * 建出来的那把用户既看不到也换不掉）。
+   */
+  hasKey: boolean;
 }
 
 /**
@@ -532,17 +536,9 @@ registerLoginFlow<SenseNovaLogin>("sensenova", {
     // 密码不留：会话留着（它就是登录态，没有它就没有会话），下次要密码的时候
     // 再问一次。
     const session = await loginSession(input.username ?? "", input.password ?? "", ctx.accountId, false);
-    // 推理用的 key 才是干活的东西：账号上没有就建一把（平台只给一次完整值，
-    // 建它的那个函数负责存下来）。建不出来不算登录失败：上游暂时接不了请求，
-    // 但登录不是白做。
-    let keyReady = false;
-    try {
-      await ensureSenseNovaKey(session, ctx.accountId);
-      keyReady = true;
-    } catch (e) {
-      console.warn(`[SENSENOVA] 推理 key 没建出来：${(e as Error)?.message}`);
-    }
-    return { session, keyReady };
+    // 推理用的 key 是用户自己填的：登录不碰它，只说清账号上有没有。
+    const hasKey = Boolean(senseNovaApiKey(storedAccount(ctx.accountId)?.apiKey));
+    return { session, hasKey };
   },
   // 会话在这里落库：面板那条路只写这一次。
   commit: (ctx: LoginContext, result: SenseNovaLogin): string => {

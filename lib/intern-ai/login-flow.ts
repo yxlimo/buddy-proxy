@@ -14,14 +14,19 @@
 
 import { providerSecretId } from "../credential-ids.ts";
 import { registerLoginFlow, type LoginTicket, type SubmitInput } from "../login-flow.ts";
-import { login, type InternAiCaptcha, type InternAiSession } from "./auth.ts";
-import { INTERN_AI_SSO_BASE } from "./config.ts";
-import { ensureInternAiKey } from "./transport.ts";
+import { login, storedAccount, type InternAiCaptcha, type InternAiSession } from "./auth.ts";
+import { INTERN_AI_SSO_BASE, internAiDiscoveryKey } from "./config.ts";
 
-/** 提交的结果：会话，以及推理用的 key 建出来没有。 */
+/** 提交的结果：会话，以及账号上有没有推理用的 key。 */
 export interface InternAiLogin {
   session: InternAiSession;
-  keyReady: boolean;
+  /**
+   * 账号上已经有推理用的 key 吗。
+   *
+   * key 由用户自己在面板上填：登录不再替人建一把（平台只把完整值给一次，
+   * 建出来的那把用户既看不到也换不掉）。
+   */
+  hasKey: boolean;
 }
 
 /** 面板上那句话。人机校验要人点，所以这里说的是「你去点，再把 token 给我」。 */
@@ -58,16 +63,10 @@ registerLoginFlow<InternAiLogin>("intern-ai", {
       { user: input.username, password: input.password, captcha: captchaOf(input) },
       ctx.accountId,
     );
-    // 推理端点认的是 Discovery 子站那把 key：账号上没有就建一把。
-    let keyReady = true;
-    try {
-      await ensureInternAiKey(session, ctx.accountId);
-    } catch (e) {
-      // 登录本身是成功的（会话已经存下来了），只是 key 没建出来。
-      keyReady = false;
-      console.warn(`[INTERN-AI] 推理 key 没建出来：${(e as Error)?.message}`);
-    }
-    return { session, keyReady };
+    // 推理端点认的是 Discovery 子站那把 key：key 由用户自己在面板上填，登录
+    // 不碰它，只说清账号上有没有。
+    const hasKey = Boolean(internAiDiscoveryKey(storedAccount(ctx.accountId)?.discoveryKey));
+    return { session, hasKey };
   },
 
   // 会话由 login() 落库（见文件头）。这里只交凭据 id。

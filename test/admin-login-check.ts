@@ -54,6 +54,13 @@ let minimaxTokenRequests = 0;
 /** 发了第几次 qoder 的 deviceToken poll。 */
 let qoderPollRequests = 0;
 /**
+ * 建推理 key 的接口被问了几次。
+ *
+ * 开放平台侧的 key 一律由用户自己填：以前登录成功之后网关会顺手建一把
+ * （ensure），现在不建了 —— 这个计数器就是判据。
+ */
+let trKeyCreates = 0;
+/**
  * 自测放行的那一次登录的 nonce。
  *
  * 上游的 poll 端点用 404 说「用户还没点」：那是等待，不是失败。只有 nonce
@@ -161,6 +168,30 @@ const mock = http.createServer(async (req, res) => {
     );
     return;
   }
+  if (req.url?.startsWith("/api/auth/login")) {
+    // TokenRhythm 的登录：会话在 cookie 里（tr_session），写操作还要 csrf。
+    res.setHeader("Set-Cookie", ["tr_session=fake-session", "tr_csrf=fake-csrf"]);
+    res.end(JSON.stringify({ data: { user: { id: "u-1", name: "fake" } } }));
+    return;
+  }
+  if (req.url?.startsWith("/api/api-keys")) {
+    // 建推理 key：以前登录成功之后网关会调它（ensure）。
+    trKeyCreates++;
+    res.end(
+      JSON.stringify({
+        code: 0,
+        data: {
+          id: "key-made-by-gateway",
+          name: "buddy",
+          maskedKey: "sk-••••made",
+          keyPrefix: "sk-",
+          status: "active",
+          key: "sk-made-by-the-gateway", // privacy:allow — 编造的样例 (fabricated sample)
+        },
+      }),
+    );
+    return;
+  }
   res.statusCode = 404;
   res.end("{}");
 });
@@ -189,6 +220,8 @@ const gw = await startHarness({
     MINIMAX_OAUTH_ORIGIN: mockBase,
     WORKBUDDY_CN_BASE: mockBase,
     ZCODE_BASE_URL: mockBase,
+    // TokenRhythm 也指到假上游：自测不碰真平台。
+    TOKENRHYTHM_API_BASE: mockBase,
     // Qoder 的 poll 也指到假上游：自测不碰真平台。
     QODER_GLOBAL_OPENAPI_BASE: mockBase,
     QODER_CN_OPENAPI_BASE: mockBase,
@@ -552,6 +585,36 @@ check("空授权码不换", noCode.body?.ok !== true, JSON.stringify(noCode.body
     .filter((kind) => !loginFlowOf(kind) && !noLoginFlowReason(kind));
   check("每个平台都有登录链或显式声明", naked.length === 0, naked.join("、"));
 }
+
+console.log("");
+console.log("登录不再替用户建 key");
+
+// 开放平台侧的 key 一律由用户自己填（面板上的 setProviderKeys）：以前登录成功
+// 之后网关会顺手建一把（ensure），建出来的那把用户既看不到也换不掉。
+//
+// 这里是判据：把 ensure 加回去，下面这几条立刻变红。
+const trLogin = await call("LoginWithPassword", {
+  upstreamId: "tokenrhythm",
+  accountId: "tokenrhythm",
+  username: "someone",
+  password: "secret",
+});
+check("TokenRhythm 登录成功", trLogin.body?.ok === true, JSON.stringify(trLogin.body));
+await new Promise((r) => setTimeout(r, 300));
+check("TokenRhythm：网关没有替用户建 key", trKeyCreates === 0, String(trKeyCreates));
+const trCredential = db
+  .prepare("SELECT data FROM secrets WHERE id = ?")
+  .get("key:provider:tokenrhythm:account") as any;
+check(
+  "TokenRhythm：账号上没有多出 key",
+  !String(trCredential?.data ?? "").includes("sk-"),
+  String(trCredential?.data ?? ""),
+);
+check(
+  "TokenRhythm：登录态还在（账号与密码存下了）",
+  String(trCredential?.data ?? "").includes("someone"),
+  String(trCredential?.data ?? ""),
+);
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);

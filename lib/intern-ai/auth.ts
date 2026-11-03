@@ -589,7 +589,7 @@ export function internAiStatus(providerId = "intern-ai"): Record<string, unknown
     source: sessionId(providerId),
     status: key ? "authenticated" : "missing",
     fingerprint: key ? tokenFingerprint(key) : "",
-    detail: key ? "Discovery 的推理 key" : "账号上没有 Discovery 推理 key，登录后网关会建一把",
+    detail: key ? "Discovery 的推理 key" : "账号上没有 Discovery 推理 key，请在面板上填一把",
     sessionStatus: !session ? "anonymous" : remainingMs > 0 ? "authenticated" : "expired",
     username: session?.username ?? stored?.user ?? "",
     sites: session?.sites.map((s) => s.name).join(", ") ?? "",

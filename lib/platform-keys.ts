@@ -4,9 +4,12 @@
 // 建一把、注销，有的还能停用与启用。路径与字段三家不一样（控制台那套接口
 // 各有各的形状），所以实现还是各家的；这里只定下它们共同回答的那些问题。
 //
-// 面板还没做 key 管理：下面这些接口现在是网关自己用（登录之后保证账号有一把
-// 能用的 key）与探针用（tools/probe-tr-keys.ts）。留着是因为面板接上的时候
-// 不用重写。
+// 这里没有「账号没有 key 就建一把」：开放平台侧的 key 一律由用户自己填
+// （面板上的 setProviderKeys）。平台只把完整的 key 给一次，自动建的那把
+// 用户既不知道也换不掉，反而成了负担。
+//
+// 面板还没做 key 管理：下面这些接口现在是探针用（tools/probe-tr-keys.ts）。
+// 留着是因为面板接上的时候不用重写。
 
 /** 一把 key，跨平台的同一个形状。 */
 export interface PlatformKey {
@@ -55,11 +58,4 @@ export interface PlatformKeys<S = unknown> {
   disable?(ctx: PlatformKeyContext<S>, id: string): Promise<void>;
   /** 重新启用一把。 */
   enable?(ctx: PlatformKeyContext<S>, id: string): Promise<void>;
-  /**
-   * 账号要用的那把 key：没有就建一把并存下来。
-   *
-   * key 叫什么由平台自己定（网关这边叫「buddy」，TokenRhythm 叫
-   * 「buddy-<租户号>」），所以这里不收名字。
-   */
-  ensure(ctx: PlatformKeyContext<S>, current?: string | null): Promise<string | null>;
 }

@@ -82,7 +82,6 @@ import {
 import { adminTokenSet } from "./token.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
-  forgetAccountSnapshot,
   freshHealthSnapshot,
   healthSnapshot,
   setAccountEnabled,
@@ -127,7 +126,6 @@ import {
   accountsOfPlatform,
   addAccount,
   listProviders,
-  provider,
   updateProvider,
 } from "../providers.ts";
 import {
@@ -150,8 +148,8 @@ import {
   setPlatformPolicy as writePlatformPolicy,
   type Platform,
 } from "../platforms.ts";
-import { kindOf, selectableKinds } from "../provider-kinds.ts";
-import { policyEnum, policyErrorText, policyFromEnum, POLICY_LABELS } from "./policy.ts";
+import { selectableKinds } from "../provider-kinds.ts";
+import { policyEnum, policyErrorText, policyFromEnum } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
 import { tailLog } from "./log.ts";
 import { benefitUpstreams, benefits } from "./benefits.ts";

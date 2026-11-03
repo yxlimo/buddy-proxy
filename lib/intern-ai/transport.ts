@@ -6,21 +6,15 @@
 //
 // 网关这一层做两件事：
 //
-//   1. 拿推理用的 key。账号上可能已经有了，没有就建一把 —— 完整的 key 只在
-//      创建的那一次回答里出现（data.key），所以建它的那个函数必须负责把它
-//      存起来（见 lib/intern-ai/keys.ts）。
+//   1. 拿推理用的 key。账号上那把是用户自己填的（面板上的 setProviderKeys），
+//      没有就是没有 —— 网关不替人建一把（平台只在创建的那一次回答里给完整
+//      值，建出来的那把用户既看不到也换不掉）。
 //   2. 记着模型清单。清单跟着 key 走：不同的 key 能调的模型不一定一样。
 //
 // 额度不在这里：墨点是控制台的接口，见 lib/intern-ai/quota.ts。
 
 import { INTERN_AI_DISCOVERY_API_BASE, internAiDiscoveryKey } from "./config.ts";
-import {
-  loadSession,
-  storedAccount,
-  tokenFor,
-  type InternAiSession,
-} from "./auth.ts";
-import { internAiKeys } from "./keys.ts";
+import { loadSession, storedAccount, tokenFor } from "./auth.ts";
 import {
   listDiscoveryConsoleModels,
   listDiscoveryModels,
@@ -33,27 +27,13 @@ import { openAiPlatformChat } from "../router/openai-platform.ts";
 /** 清单最多放多久。模型清单变得不快，半小时问一次够了。 */
 const CATALOG_TTL_MS = 30 * 60 * 1000;
 
-/** 新建的 key 要等多久才能用。平台上放行要一点时间。 */
+/** 新填上去的 key 要等多久才能用。平台上放行要一点时间。 */
 const KEY_SETTLE_MS = 8_000;
 
 /** 账号上现在有的 Discovery 推理 key（就在这个账号名下）。 */
 export function internAiInferenceKey(providerId = "intern-ai"): string {
   const stored = storedAccount(providerId);
   return internAiDiscoveryKey(stored?.discoveryKey);
-}
-
-/**
- * 账号要用的推理 key，没有就建一把。
- *
- * 平台只把完整的 key 给一次，所以建它的那个函数负责把它存下来。登录之后调
- * 它，账号上就一定有能用的 key。
- */
-export async function ensureInternAiKey(session: InternAiSession, providerId = "intern-ai"): Promise<string> {
-  const token = tokenFor(session, "discovery");
-  const stored = storedAccount(providerId);
-  const current = stored?.discoveryKey ?? null;
-  const key = await internAiKeys.ensure({ session, token, providerId }, current);
-  return key ?? "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -89,8 +69,8 @@ export async function refreshInternAiCatalog(force = false, providerId = "intern
   if (!catalog.stale(force)) return;
   const key = internAiInferenceKey(providerId);
   if (!key) return;
-  // 刚建出来的 key 不是马上就能用的：平台那边要把它放行，刚建完去问会被
-  // 说「invalid API key」（HTTP 401）。等一会儿再问。
+  // 用户填的那把 key 刚换上去时平台可能还没放行：问一次被说「invalid API
+  // key」（HTTP 401）就等一会儿再问。
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       const list = await listDiscoveryModels(key);

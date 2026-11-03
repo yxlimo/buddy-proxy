@@ -4,9 +4,9 @@
 // and the key, which calls the models. A key is only shown in full once, in
 // the answer that creates it, so the list is all masked.
 //
-// That is why the gateway makes its own key: a new account has none, and the
-// full value only ever exists in the answer to the call that created it. So
-// the one that creates it has to be the one that keeps it.
+// The key an account uses is the user's to fill in (see
+// writeTokenRhythmKey): the gateway does not build one. A key it built would
+// be one the user never sees and can never replace.
 //
 // Creating a key is a write, and a write is checked: the session cookie, the
 // CSRF token sent twice, and the browser's fetch metadata. The headers for
@@ -93,31 +93,23 @@ export async function enableApiKey(session: TokenRhythmSession, id: string): Pro
 }
 
 /**
- * The key of an account, and make one when the account has none.
+ * The key of an account.
  *
- * A new account has no key, and the only place the full value ever appears is
- * the answer to the call that creates it. So the gateway creates it and keeps
- * it, and the account works without anybody putting a key in the environment.
- *
- * The key that is already stored wins: a key that was rotated there has to
+ * The one that is already stored wins: a key that was rotated there has to
  * take effect.
  */
-export async function ensureApiKey(
-  session: TokenRhythmSession,
-  accountId = session.accountId,
-  current: string | null = null,
-): Promise<string | null> {
-  if (current) return current;
-  const created = await createApiKey(session, `buddy-${accountId}`);
-  if (!created.key) {
-    throw new Error("平台没有返回完整的 key");
+export function writeTokenRhythmKey(providerId: string, apiKey: string): number {
+  const key = String(apiKey ?? "").trim();
+  const stored = tokenRhythmCredentialOf(providerId);
+  if (!key) {
+    // 没有记录就没什么可清的：别凭空造一条只有空 key 的凭据。
+    if (!stored) return 0;
+    saveTokenRhythmCredential(providerId, { apiKey: null });
+    return 0;
   }
-  const stored = tokenRhythmCredentialOf(accountId);
-  if (stored) {
-    saveTokenRhythmCredential(accountId, { ...stored, apiKey: created.key });
-  }
-  console.log(`[TOKENRHYTHM] ${accountId}: 新建的 key ${created.maskedKey || created.keyPrefix}`);
-  return created.key;
+  // 只改 key 那一格：账号与密码原样留着（把它们清掉等于把登录态清了）。
+  saveTokenRhythmCredential(providerId, { apiKey: key });
+  return 1;
 }
 
 /** 一把 key，换成三家平台共同的形状。 */
@@ -135,7 +127,7 @@ function toPlatformKey(key: TokenRhythmApiKey): PlatformKey {
  * TokenRhythm 的 key 管理，三家平台统一的形状。
  *
  * 平台的接口在实现里（那套 api-keys）；这里只是把它包的形状换成三家一样的
- * 那种。面板还没做这个操作：现在只有网关自己在用 ensure。
+ * 那种。面板还没做这个操作：现在只有探针在用。
  */
 export const tokenRhythmKeys: PlatformKeys<TokenRhythmSession> = {
   what: "TokenRhythm",
@@ -150,7 +142,4 @@ export const tokenRhythmKeys: PlatformKeys<TokenRhythmSession> = {
   enable: async ({ session }, id) => {
     await enableApiKey(session, id);
   },
-  // 账号在网关里的 id 就是账号行的 id：key 存到那一行的凭据里。
-  ensure: async ({ session, providerId }, current) =>
-    ensureApiKey(session, providerId ?? session.accountId, current ?? null),
 };

@@ -27,13 +27,11 @@
 // account model gives them: 1 → `tokenrhythm`, 2 → `tokenrhythm-2`, …
 
 import { configString } from "../config.ts";
-import fs from "node:fs";
 import { writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
-import { addAccount, provider, providerSecretId } from "../providers.ts";
+import { providerSecretId } from "../providers.ts";
 import { registerLoginFlow, type LoginContext, type LoginTicket, type SubmitInput } from "../login-flow.ts";
-import { ensureApiKey } from "./keys.ts";
 
 export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
 export const TOKENRHYTHM_INFER_BASE = configString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
@@ -52,11 +50,6 @@ export interface TokenRhythmCredential {
 /** Where the credentials of an account live. */
 export function tokenRhythmCredentialSecretId(accountId: string): string {
   return providerSecretId(accountId, "account");
-}
-
-/** The account id that a tenant number of the old shape became. */
-function accountIdOfIndex(index: number): string {
-  return index === 1 ? PLATFORM : `${PLATFORM}-${index}`;
 }
 
 /**
@@ -121,12 +114,6 @@ function normalize(raw: Partial<TokenRhythmCredential>): TokenRhythmCredential {
     password: String(raw.password ?? ""),
     apiKey: raw.apiKey ? String(raw.apiKey) : null,
   };
-}
-
-/** 这行在不在。 */
-function accountRowExists(id: string): boolean {
-  // 只看 secrets 之外的真相：provider 表。用 providers.ts 的读取函数，别自己查表。
-  return provider(id) !== null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -409,13 +396,11 @@ registerLoginFlow<TokenRhythmSession>("tokenrhythm", {
   },
   // 会话在这里落库：面板那条路只写这一次。
   //
-  // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。账号上没有
-  // 就建一把（平台只给一次完整值）。建不出来就是登录失败 —— 这个上游没有 key
-  // 就一个请求也发不出去；会话已经落库了（既有语义：失败的那次登录也把会话
-  // 存下来）。
+  // 推理用的 key 是另一回事：cookie 只读得到钱包，key 才是推理用的。key 由
+  // 用户自己在面板上填（见 writeTokenRhythmKey），网关不替人建一把 —— 平台
+  // 只把完整值给一次，用户看不到也换不掉。
   commit: async (ctx: LoginContext, session: TokenRhythmSession): Promise<string> => {
     saveSession(session, { force: true });
-    await ensureApiKey(session, ctx.accountId, tokenRhythmCredentialOf(ctx.accountId)?.apiKey ?? null);
     return providerSecretId(ctx.accountId);
   },
 });

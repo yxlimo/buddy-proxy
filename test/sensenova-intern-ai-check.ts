@@ -342,6 +342,15 @@ const INTERN_CONSOLE_MODELS = {
 /** 假上游收到过的推理请求。 */
 const seen: { path: string; model: string; stream: boolean }[] = [];
 
+/**
+ * 「建推理 key」的接口被问了几次。
+ *
+ * 开放平台侧的 key 一律由用户自己填：以前登录与读目录会顺手建一把（ensure），
+ * 现在不建了 —— 这两个计数器就是判据。建出来的那把用户既看不到也换不掉。
+ */
+let senseKeyCreates = 0;
+let internKeyCreates = 0;
+
 const fake = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const route = url.pathname;
@@ -391,6 +400,21 @@ const fake = http.createServer(async (req, res) => {
     json(sensePoolsRaw);
     return;
   }
+  // SenseNova 的控制台：建推理 key。以前网关会在登录后与读目录时调它（ensure）。
+  if (route === "/sensenova/lite/console/v1/metered/api-keys" && req.method === "POST") {
+    senseKeyCreates++;
+    json({
+      api_key: {
+        id: "key-made-by-gateway",
+        displayname: "buddy",
+        key_type: "API_KEY_TYPE_TOKEN_PLAN",
+        api_key: "sk-made-****",
+        status: "active",
+      },
+      api_key_plain: "sk-made-by-the-gateway", // privacy:allow — 编造的样例 (fabricated sample)
+    });
+    return;
+  }
 
   // 书生·端砚的推理端点。
   if (route === "/intern-ai/v1/models" && req.method === "GET") {
@@ -421,6 +445,22 @@ const fake = http.createServer(async (req, res) => {
   // 书生·端砚的控制台：墨点与在售的模型。
   if (route === "/intern-ai/api/tokenplan/v1/credits/balance") {
     json({ code: 0, msg: "ok", data: internBalanceRaw });
+    return;
+  }
+  // 书生·端砚的控制台：建推理 key。以前网关会在登录后与回填 token 时调它。
+  if (route === "/intern-ai/api/tokenplan/v1/keys" && req.method === "POST") {
+    internKeyCreates++;
+    json({
+      code: 0,
+      msg: "ok",
+      data: {
+        id: "key-made-by-gateway",
+        name: "buddy",
+        key: "sk-made-by-the-gateway", // privacy:allow — 编造的样例 (fabricated sample)
+        masked_key: "sk-••••made",
+        status: "active",
+      },
+    });
     return;
   }
   if (route === "/intern-ai/api/tokenplan/v1/credits/packages") {
@@ -579,6 +619,17 @@ function writeCached(id: string, data: unknown): void {
   }
 }
 
+/** 读一条凭据（网关写的那一份）：拿不到就是 null。 */
+function readSecret(id: string): string | null {
+  const conn = db();
+  try {
+    const row = conn.prepare("SELECT data FROM secrets WHERE id = ?").get(id) as any;
+    return row?.data ? String(row.data) : null;
+  } finally {
+    conn.close();
+  }
+}
+
 /** 一个上游现在的状态。 */
 async function upstreamStateOf(id: string): Promise<string> {
   const res = await admin("ListUpstreams");
@@ -614,9 +665,8 @@ check(
   JSON.stringify(await upstreamCredentialOf("intern-ai")),
 );
 
-// 登录态与推理 key 一起写进去 —— 这就是面板登录完之后的样子。
+// 登录态先写进去：推理用的 key 是用户自己贴的（面板上贴一把），网关不替人建。
 //
-
 writeSecret("session:provider:sensenova", "session", {
   cookie: "oauth2_authentication_session=abc",
   accessToken: "sense-token",
@@ -625,6 +675,45 @@ writeSecret("session:provider:sensenova", "session", {
   obtainedAtMs: now,
   username: "someone",
 });
+
+/* ------------------------------------------------------------------ *
+ * 四之二、网关不替用户建 key
+ * ------------------------------------------------------------------ */
+
+section("不再替用户建 key");
+
+// 开放平台侧的 key 一律由用户自己填：网关不替人建一把（平台只把完整值给
+// 一次，建出来的那把用户既看不到也换不掉）。
+//
+// 这里是判据：读目录（SenseNova）与回填 token（书生·端砚）这两条路以前都会
+// 顺手建一把 key。把 ensure 加回去，下面这几条立刻变红。
+
+// 读目录：账号上有会话却没有 key 时，网关不许凭空建一把。
+await fetch(`${base}/sensenova/v1/models`);
+await new Promise((r) => setTimeout(r, 1000));
+check("SenseNova：网关没有替用户建 key", senseKeyCreates === 0, String(senseKeyCreates));
+check(
+  "SenseNova：账号上还是那把没有 key 的账号",
+  !String(readSecret("key:provider:sensenova:account") ?? "").includes("sk-"),
+  String(readSecret("key:provider:sensenova:account") ?? ""),
+);
+
+// 回填 token：以前贴回 token 之后会建一把 Discovery 的 key。
+const imported = await admin("ImportLoginToken", {
+  upstreamId: "intern-ai",
+  accountId: "intern-ai",
+  token: "fake-uaa-token",
+});
+check("intern-ai：token 导入成功", imported?.ok === true, JSON.stringify(imported));
+await new Promise((r) => setTimeout(r, 500));
+check("intern-ai：网关没有替用户建 key", internKeyCreates === 0, String(internKeyCreates));
+check(
+  "intern-ai：账号上还是那把没有 key 的账号",
+  !String(readSecret("key:provider:intern-ai:account") ?? "").includes("sk-"),
+  String(readSecret("key:provider:intern-ai:account") ?? ""),
+);
+
+// key 还是用户自己填进去的（面板上的 setProviderKeys）。
 writeSecret("key:provider:sensenova:account", "account", {
   user: "someone",
   password: "",

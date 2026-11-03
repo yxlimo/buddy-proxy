@@ -3,17 +3,16 @@
 // SenseNova 的推理端点讲 OpenAI 方言：请求发过去，答案原样回来。网关这一层
 // 只做两件事：
 //
-//   1. 拿推理用的 key。账号上可能已经有（数据库里那个账号自己的），没有就
-//      在这里建一把 —— 平台只在创建的那一次回答里给完整值，所以建它的那个
-//      函数必须负责把它存起来（见 lib/sensenova/keys.ts）。
+//   1. 拿推理用的 key。账号上那把是用户自己填的（面板上的 setProviderKeys），
+//      没有就是没有 —— 网关不替人建一把（平台只在创建的那一次回答里给完整
+//      值，建出来的那把用户既看不到也换不掉）。
 //   2. 记着模型清单。清单是跟着 key 走的：不同的 key 能调的模型不一样。所以
 //      它不是代码里的一张静态表，而是问上游要来的，缓存在这里。
 //
 // 额度不在这里：那是控制台的接口，见 lib/sensenova/quota.ts。
 
 import { SENSENOVA_INFER_BASE, senseNovaApiKey } from "./config.ts";
-import { loadSession, storedAccount, type SenseNovaSession } from "./auth.ts";
-import { KEY_TYPE_TOKEN_PLAN, senseNovaKeys } from "./keys.ts";
+import { storedAccount } from "./auth.ts";
 import { listModels, type SenseNovaModel } from "./models.ts";
 import { CatalogCache } from "../router/catalog-cache.ts";
 import { openAiPlatformChat } from "../router/openai-platform.ts";
@@ -25,22 +24,6 @@ const CATALOG_TTL_MS = 30 * 60 * 1000;
 export function senseNovaInferenceKey(providerId = "sensenova"): string {
   const stored = storedAccount(providerId);
   return senseNovaApiKey(stored?.apiKey);
-}
-
-/**
- * 账号要用的推理 key，没有就建一把。
- *
- * 平台只把完整的 key 给一次，所以建它的那个函数负责把它存下来。这里只是把
- * 那件事包一层：登录之后调它，账号上就一定有能用的 key。
- */
-export async function ensureSenseNovaKey(session: SenseNovaSession, providerId = "sensenova"): Promise<string> {
-  const stored = storedAccount(providerId);
-  const current = stored?.apiKey ?? null;
-  const key = await senseNovaKeys.ensure(
-    { session, keyType: KEY_TYPE_TOKEN_PLAN, providerId },
-    current,
-  );
-  return key ?? "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -64,28 +47,18 @@ export function senseNovaModelIds(): Set<string> {
 }
 
 /**
- * 清单要 key：没有 key 就问不了（这个接口是给拿着 key 的调用方用的）。
- *
- * 账号上有会话却没有 key 的那种情况（老版本登录留下的），在这里补一把 ——
- * 免得面板上显示「已登录」但一个请求也发不出去。
- */
-async function keyForCatalog(providerId = "sensenova"): Promise<string> {
-  const key = senseNovaInferenceKey(providerId);
-  if (key) return key;
-  const session = loadSession(providerId);
-  if (!session) return "";
-  return ensureSenseNovaKey(session, providerId);
-}
-
-/**
  * 问上游要模型清单，缓存在这里。
+ *
+ * 清单要 key：没有 key 就问不了（这个接口是给拿着 key 的调用方用的）。key 是
+ * 用户自己填的：账号上没有 key 的那种账号（老版本登录留下的），网关不替它
+ * 建一把 —— 面板上填一把就行了。
  *
  * 问不到就留着上一次的那份：模型清单是给客户端看的，一个空的目录比一个过期
  * 的目录更没用。
  */
 export async function refreshSenseNovaCatalog(force = false, providerId = "sensenova"): Promise<void> {
   if (!catalog.stale(force)) return;
-  const key = await keyForCatalog(providerId);
+  const key = senseNovaInferenceKey(providerId);
   if (!key) return;
   try {
     const models = await listModels(key);

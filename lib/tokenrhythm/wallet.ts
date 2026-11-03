@@ -10,7 +10,6 @@
 // models. Two rows of the same platform are two accounts with two wallets.
 
 import { platformApi } from "./platform.ts";
-import { tokenRhythmKeys } from "./keys.ts";
 import { loadSession, sessionFor, sessionId, tokenRhythmCredentialOf, type TokenRhythmSession } from "./accounts.ts";
 import { accountsOfPlatform, provider } from "../providers.ts";
 import { platformOf } from "../platforms.ts";
@@ -168,14 +167,9 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
         remainingSec: Math.round(remainingMs / 1000),
         warning: remainingMs > 0 && remainingMs < WARN_MS,
       };
-      // An account with no key cannot serve a request, and the key is only
-      // ever shown in full in the answer to the call that makes it. So the
-      // gateway makes one and keeps it — a new account works without anybody
-      // putting a key in the environment.
-      if (!stored.apiKey) {
-        const made = await tokenRhythmKeys.ensure({ session, providerId: row.id }, null);
-        status.hasKey = Boolean(made);
-      }
+      // An account with no key cannot serve a request. The key is the user's
+      // to fill in (the panel writes it): the gateway does not build one for
+      // them, so an account without one simply stays out.
       status.wallet = await wallet(session, row.id);
       status.credits = await credits(session);
     } catch (e) {

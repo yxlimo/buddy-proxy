@@ -181,6 +181,184 @@ section("再填一次，然后删账号");
   check("secrets 表里没有孤儿", row === undefined, String(row?.id));
 }
 
+section("三家的推理 key 由用户自己填");
+
+// SenseNova、书生·端砚、TokenRhythm 的 key 都是用户自己贴进来的：网关不替人
+// 建一把（平台只把完整值给一次，建出来的那把用户既看不到也换不掉）。
+//
+// 这里验两件事：
+//
+//   1. 写了 key 之后，账号上原来那份记录（账号、密码）原样还在 —— 整份覆盖成
+//      只有 key 的壳就等于把登录态清了；
+//   2. 空串表示清掉那一格（与七牛云、讯飞星火一个意思），清的时候登录态照样
+//      在。
+
+const { storedAccount: storedSenseNova } = await import("../lib/sensenova/auth.ts");
+const { storedAccount: storedInternAi } = await import("../lib/intern-ai/auth.ts");
+const { tokenRhythmCredentialOf, saveTokenRhythmCredential } = await import(
+  "../lib/tokenrhythm/accounts.ts"
+);
+const { setSecret } = await import("../lib/store.ts");
+const { providerSecretId } = await import("../lib/credential-ids.ts");
+
+const senseNovaId = addAccount({ platform: "sensenova" }).id ?? "";
+const internAiId = addAccount({ platform: "intern-ai" }).id ?? "";
+const tokenRhythmId = addAccount({ platform: "tokenrhythm" }).id ?? "";
+check(
+  "三个账号都加得起来",
+  Boolean(senseNovaId) && Boolean(internAiId) && Boolean(tokenRhythmId),
+  `${senseNovaId} ${internAiId} ${tokenRhythmId}`,
+);
+
+// 先给它们一份「登录过」的记录：除了 key 之外的那些东西。
+setSecret(providerSecretId(senseNovaId, "account"), "account", {
+  user: "someone",
+  password: "pw-sense",
+});
+setSecret(providerSecretId(internAiId, "account"), "account", {
+  user: "someone",
+  password: "pw-intern",
+});
+saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr" });
+
+{
+  const result = setProviderKeys(senseNovaId, ["sk-sense-1"]);
+  check("SenseNova：写成功了", result.ok === true, result.message);
+  check("SenseNova：写进去一把", result.count === 1, String(result.count));
+  check(
+    "SenseNova：文案说写了什么",
+    result.message.includes("SenseNova") && result.message.includes("API key"),
+    result.message,
+  );
+  check(
+    "SenseNova：key 是刚写的那个",
+    storedSenseNova(senseNovaId)?.apiKey === "sk-sense-1",
+    JSON.stringify(storedSenseNova(senseNovaId)),
+  );
+  check(
+    "SenseNova：账号还在（没把登录态清了）",
+    storedSenseNova(senseNovaId)?.user === "someone",
+    JSON.stringify(storedSenseNova(senseNovaId)),
+  );
+  check(
+    "SenseNova：密码还在（没把登录态清了）",
+    storedSenseNova(senseNovaId)?.password === "pw-sense",
+    JSON.stringify(storedSenseNova(senseNovaId)),
+  );
+
+  const cleared = setProviderKeys(senseNovaId, [""]);
+  check("SenseNova：空串清掉了", cleared.count === 0, String(cleared.count));
+  check(
+    "SenseNova：key 没了",
+    !storedSenseNova(senseNovaId)?.apiKey,
+    JSON.stringify(storedSenseNova(senseNovaId)),
+  );
+  check(
+    "SenseNova：清 key 的时候账号还在",
+    storedSenseNova(senseNovaId)?.user === "someone",
+    JSON.stringify(storedSenseNova(senseNovaId)),
+  );
+  check(
+    "SenseNova：清 key 的时候密码还在",
+    storedSenseNova(senseNovaId)?.password === "pw-sense",
+    JSON.stringify(storedSenseNova(senseNovaId)),
+  );
+}
+
+{
+  const result = setProviderKeys(internAiId, ["sk-disc-1", "sk-chat-1"]);
+  check("书生·端砚：写成功了", result.ok === true, result.message);
+  check("书生·端砚：写进去两把", result.count === 2, String(result.count));
+  check(
+    "书生·端砚：位置 0 是 Discovery 的",
+    storedInternAi(internAiId)?.discoveryKey === "sk-disc-1",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+  check(
+    "书生·端砚：位置 1 是 Chat 的",
+    storedInternAi(internAiId)?.chatKey === "sk-chat-1",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+  check(
+    "书生·端砚：账号还在（没把登录态清了）",
+    storedInternAi(internAiId)?.user === "someone",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+  check(
+    "书生·端砚：密码还在（没把登录态清了）",
+    storedInternAi(internAiId)?.password === "pw-intern",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+
+  // Chat 的那把可以留空：空串表示清掉它，不算错。
+  const one = setProviderKeys(internAiId, ["sk-disc-2", ""]);
+  check("书生·端砚：只写一把也算写进去了", one.count === 1, String(one.count));
+  check(
+    "书生·端砚：Discovery 换了",
+    storedInternAi(internAiId)?.discoveryKey === "sk-disc-2",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+  check(
+    "书生·端砚：Chat 的那把清掉了",
+    !storedInternAi(internAiId)?.chatKey,
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+  check(
+    "书生·端砚：清 key 的时候账号还在",
+    storedInternAi(internAiId)?.user === "someone",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+  check(
+    "书生·端砚：清 key 的时候密码还在",
+    storedInternAi(internAiId)?.password === "pw-intern",
+    JSON.stringify(storedInternAi(internAiId)),
+  );
+}
+
+{
+  const result = setProviderKeys(tokenRhythmId, ["sk-tr-1"]);
+  check("TokenRhythm：写成功了", result.ok === true, result.message);
+  check("TokenRhythm：写进去一把", result.count === 1, String(result.count));
+  check(
+    "TokenRhythm：文案说写了什么",
+    result.message.includes("TokenRhythm") && result.message.includes("API key"),
+    result.message,
+  );
+  check(
+    "TokenRhythm：key 是刚写的那个",
+    tokenRhythmCredentialOf(tokenRhythmId)?.apiKey === "sk-tr-1",
+    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+  check(
+    "TokenRhythm：账号还在（没把登录态清了）",
+    tokenRhythmCredentialOf(tokenRhythmId)?.account === "someone",
+    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+  check(
+    "TokenRhythm：密码还在（没把登录态清了）",
+    tokenRhythmCredentialOf(tokenRhythmId)?.password === "pw-tr",
+    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+
+  const cleared = setProviderKeys(tokenRhythmId, [""]);
+  check("TokenRhythm：空串清掉了", cleared.count === 0, String(cleared.count));
+  check(
+    "TokenRhythm：key 没了",
+    !tokenRhythmCredentialOf(tokenRhythmId)?.apiKey,
+    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+  check(
+    "TokenRhythm：清 key 的时候账号还在",
+    tokenRhythmCredentialOf(tokenRhythmId)?.account === "someone",
+    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+  check(
+    "TokenRhythm：清 key 的时候密码还在",
+    tokenRhythmCredentialOf(tokenRhythmId)?.password === "pw-tr",
+    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+}
+
 section("控制组：别的平台不收");
 
 {

@@ -10,6 +10,9 @@ import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { writeQiniuAccount } from "../qiniu/account.ts";
 import { writeXinghuoKey } from "../xinghuo/account.ts";
 import { writeOpenPlatformKey } from "../open-platform-credentials.ts";
+import { writeSenseNovaKey } from "../sensenova/keys.ts";
+import { writeInternAiKeys } from "../intern-ai/keys.ts";
+import { writeTokenRhythmKey } from "../tokenrhythm/keys.ts";
 import { quotaPluginOf } from "../quota-plugins.ts";
 import { writePluginField } from "../quota-plugin-credentials.ts";
 import { openPlatformOf, type OpenPlatformRow } from "../open-platforms.ts";
@@ -43,6 +46,12 @@ export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null
  * 七牛云：推理用的 API key 与门户 cookie 两段。讯飞星火：一把推理用的 key。
  * 开放平台：一把推理用的 API key（位置就是第一个），后面几把按平台所选额度
  * 插件的 fields 顺序，一段一段写进插件要的那个位置。
+ *
+ * SenseNova：一把推理用的 key。书生·端砚：两把（Discovery 与 Chat）。TokenRhythm：
+ * 一把推理用的 key。它们的位置都是顺序：第一把是推理用的 key，空的那把表示
+ * 清掉它（与七牛云、讯飞星火一个意思）。
+ *
+ * 只改 key 那一格：账号、密码、会话原样留着（把它们清掉等于把登录态清了）。
  *
  * MiniMax Code 网关不收 key：它用登录的会话，套餐额度也跟着会话走。
  *
@@ -118,6 +127,40 @@ export function setProviderKeys(
     return {
       ok: true,
       message: count ? "写了讯飞星火的 API key" : "清掉了讯飞星火的 API key",
+      count,
+    };
+  }
+  if (kind?.kind === "sensenova" || upstreamId === "sensenova") {
+    // SenseNova 只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const count = writeSenseNovaKey(upstreamId, apiKey);
+    return {
+      ok: true,
+      message: count ? "写了 SenseNova 的 API key" : "清掉了 SenseNova 的 API key",
+      count,
+    };
+  }
+  if (kind?.kind === "intern-ai" || upstreamId === "intern-ai") {
+    // 书生·端砚两把：位置 0 是 Discovery 的，位置 1 是 Chat 的。空的那把表示
+    // 清掉它 —— Chat 的那把留着空不算错（网关推理走的是 Discovery）。
+    const discoveryKey = String(keys[0] ?? "").trim();
+    const chatKey = String(keys[1] ?? "").trim();
+    const count = writeInternAiKeys(upstreamId, { discoveryKey, chatKey });
+    const parts: string[] = [];
+    if (discoveryKey) parts.push("Discovery key");
+    if (chatKey) parts.push("Chat key");
+    const message = parts.length
+      ? `写了书生·端砚的 ${parts.join(" 与 ")}`
+      : "清掉了书生·端砚的推理 key";
+    return { ok: true, message, count };
+  }
+  if (kind?.kind === "tokenrhythm" || upstreamId === "tokenrhythm") {
+    // TokenRhythm 只有一把推理用的 key：位置就是第一个。空的那把表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const count = writeTokenRhythmKey(upstreamId, apiKey);
+    return {
+      ok: true,
+      message: count ? "写了 TokenRhythm 的 API key" : "清掉了 TokenRhythm 的 API key",
       count,
     };
   }

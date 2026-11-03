@@ -37,7 +37,7 @@ export function inferenceAccount(accountId: string): { credential: TokenRhythmCr
   if (!credential.apiKey) {
     throw new AuthError(
       `tokenrhythm account ${accountId} has no inference key`,
-      `TokenRhythm 账号 ${accountId} 没有推理用的 key。在面板上给它配一把，或等网关自己建一把。`,
+      `TokenRhythm 账号 ${accountId} 没有推理用的 key。在面板上给它配一把。`,
       500,
     );
   }
