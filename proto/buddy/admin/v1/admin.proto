@@ -94,6 +94,12 @@ message Upstream {
   bool models_auto = 23;
   // 这是不是一个开放平台（表里的那一行，不是代码里的模板）。
   bool is_open_platform = 24;
+  // 模型目录（模型名）。模板平台没有这一格，空。
+  repeated string models = 25;
+  // 这份目录哪来的：auto（自动拉的）/ manual（人写的）。模板平台没有这一格，空串。
+  string models_source = 26;
+  // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。模板平台没有这一格，0。
+  int64 models_fetched_at_ms = 27;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
