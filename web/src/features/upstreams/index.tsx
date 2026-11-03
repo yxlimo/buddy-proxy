@@ -39,6 +39,18 @@ import {
   useUpdateProvider,
 } from '@/features/upstreams/api'
 import { AddAccountDialog } from '@/features/upstreams/add-account-dialog'
+import {
+  useAddPlatform,
+  useDeletePlatform,
+  useQuotaPlugins,
+  useRefreshPlatformModels,
+  useUpdatePlatform,
+} from '@/features/open-platforms/api'
+import {
+  OpenPlatformFacts,
+  type RefreshOutcome,
+} from '@/features/open-platforms/platform-facts'
+import { PlatformDialog } from '@/features/open-platforms/platform-dialog'
 import { useBenefitStatus, useRunBenefitNow } from '@/features/upstreams/benefits'
 import { BenefitsPanel } from '@/features/upstreams/benefits-panel'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
@@ -77,6 +89,12 @@ export function UpstreamsPage() {
   const deleteAccount = useDeleteAccount()
   const setKeys = useSetProviderKeys()
   const login = useAccountLogin()
+  // 开放平台：面板上加的那些平台（表里的行），跟代码里的模板不是一回事。
+  const plugins = useQuotaPlugins()
+  const addPlatform = useAddPlatform()
+  const updatePlatform = useUpdatePlatform()
+  const deletePlatform = useDeletePlatform()
+  const refreshModels = useRefreshPlatformModels()
   /** 展开着的那个平台：点一行看它名下的账号与凭据。 */
   const [expanded, setExpanded] = useState<string | null>(null)
   /** 正在给哪个平台新增账号。 */
@@ -85,6 +103,26 @@ export function UpstreamsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   /** 正在填 key 的账号 id。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
+  /** 正在新增平台（表里的那一行）。 */
+  const [addingPlatform, setAddingPlatform] = useState(false)
+  /** 正在改的平台。 */
+  const [editingPlatform, setEditingPlatform] = useState<Upstream | null>(null)
+  /** 待删的平台：删它连它名下的账号、凭据一起删。 */
+  const [deletePlatformTarget, setDeletePlatformTarget] = useState<Upstream | null>(null)
+  /** 上一次刷新模型目录的结果：按平台记着，照服务端的话显示。 */
+  const [refreshOutcomes, setRefreshOutcomes] = useState<Record<string, RefreshOutcome>>({})
+
+  /** 打开弹窗：把上一次提交留下的错误清掉，别让新的表单接着显示旧话。 */
+  const openAddPlatform = () => {
+    addPlatform.reset()
+    updatePlatform.reset()
+    setAddingPlatform(true)
+  }
+  const openEditPlatform = (upstream: Upstream) => {
+    addPlatform.reset()
+    updatePlatform.reset()
+    setEditingPlatform(upstream)
+  }
   /** 刚才那次签到的结果：签到是全局的，结果留在页面上，换个平台也还在。 */
   const [runResult, setRunResult] = useState<RunBenefitNowResponse | null>(null)
   // 签到状态是所有账号一份的：展开了才去取，没展开不费那个请求。
@@ -127,7 +165,13 @@ export function UpstreamsPage() {
   return (
     <PageShell
       title='上游'
-      description='平台是代码里的模板，固定的九个，删不掉也关不掉。账号才是数据：一个平台下可以有一个或多个账号，凭据挂在账号上'
+      description='平台分两种：代码里的模板（固定的九个，删不掉）与你面板上加的开放平台（可改可删）。账号是数据：一个平台下可以有一个或多个账号，凭据挂在账号上'
+      actions={
+        <Button onClick={openAddPlatform}>
+          <Plus />
+          新增平台
+        </Button>
+      }
     >
 
       <Card>
@@ -190,6 +234,15 @@ export function UpstreamsPage() {
                               <span className='font-mono text-xs text-muted-foreground'>
                                 {upstream.id}
                               </span>
+                              {/* 开放平台（表里的那一行）的配置：地址、模型目录、
+                                  额度插件与额度。模板平台没有这些格。 */}
+                              {upstream.isOpenPlatform ? (
+                                <OpenPlatformFacts
+                                  upstream={upstream}
+                                  plugins={plugins.data?.plugins ?? []}
+                                  refresh={refreshOutcomes[upstream.id]}
+                                />
+                              ) : null}
                             </div>
                           </div>
                         </TableCell>
@@ -231,9 +284,55 @@ export function UpstreamsPage() {
                         </TableCell>
                         <TableCell className='text-right'>
                           <div
-                            className='flex justify-end'
+                            className='flex items-center justify-end gap-2'
                             onClick={(event) => event.stopPropagation()}
                           >
+                            {/* 开放平台能改能删；模板平台只能开关（在账号上），
+                                那套不动。 */}
+                            {upstream.isOpenPlatform ? (
+                              <>
+                                <Button
+                                  size='sm'
+                                  variant='outline'
+                                  onClick={() => openEditPlatform(upstream)}
+                                >
+                                  编辑
+                                </Button>
+                                <Button
+                                  size='sm'
+                                  variant='outline'
+                                  onClick={() =>
+                                    refreshModels.mutate(
+                                      { platformId: upstream.id },
+                                      {
+                                        onSuccess: (result) => {
+                                          setRefreshOutcomes((prev) => ({
+                                            ...prev,
+                                            [upstream.id]: {
+                                              ok: result.ok,
+                                              message: result.message,
+                                              models: [...result.models],
+                                            },
+                                          }))
+                                        },
+                                      }
+                                    )
+                                  }
+                                >
+                                  刷新模型目录
+                                </Button>
+                                <Button
+                                  size='sm'
+                                  variant='outline'
+                                  className='text-destructive'
+                                  onClick={() =>
+                                    setDeletePlatformTarget(upstream)
+                                  }
+                                >
+                                  删掉
+                                </Button>
+                              </>
+                            ) : null}
                             <Button
                               size='sm'
                               onClick={() => setAdding(upstream)}
@@ -380,6 +479,70 @@ export function UpstreamsPage() {
           )
         }}
       />
+
+      {/* 新增与修改开放平台：同一个弹窗。改的时候是整单提交。 */}
+      <PlatformDialog
+        open={addingPlatform || editingPlatform !== null}
+        platform={editingPlatform ?? undefined}
+        plugins={plugins.data?.plugins ?? []}
+        pending={addPlatform.isPending || updatePlatform.isPending}
+        error={addPlatform.error ?? updatePlatform.error}
+        onOpenChange={(open) => {
+          if (open) return
+          setAddingPlatform(false)
+          setEditingPlatform(null)
+        }}
+        onSubmit={(input) => {
+          if (editingPlatform) {
+            updatePlatform.mutate(input, {
+              onSuccess: () => setEditingPlatform(null),
+            })
+            return
+          }
+          addPlatform.mutate(
+            { id: input.id, label: input.label, baseUrl: input.baseUrl },
+            {
+              onSuccess: () => setAddingPlatform(false),
+            }
+          )
+        }}
+      />
+
+      {/* 删平台要确认：它名下的账号、凭据、额度、冷却一起没了。 */}
+      <AlertDialog
+        open={deletePlatformTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeletePlatformTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              删掉{' '}
+              {deletePlatformTarget
+                ? deletePlatformTarget.label || deletePlatformTarget.id
+                : ''}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              这个平台会删掉，名下的账号、凭据、额度、冷却一起清掉，删完回不来。客户端走这个平台的地址也就不通了
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              onClick={() => {
+                const target = deletePlatformTarget
+                setDeletePlatformTarget(null)
+                if (!target) return
+                deletePlatform.mutate({ id: target.id })
+              }}
+            >
+              删掉
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 注销要确认：这一行删掉就没了，凭据也跟着删。 */}
       <AlertDialog

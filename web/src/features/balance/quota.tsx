@@ -11,6 +11,7 @@ import {
   windowLabel,
 } from '@/features/balance/token-plan'
 import { formatDate, formatMoney, formatPoints } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 /**
  * 三样额度，各是各的。
@@ -32,6 +33,18 @@ const QUOTA_LABELS = {
 type QuotaLine = {
   label: string
   value: string
+}
+
+/**
+ * 这个额度里有没有东西可说。
+ *
+ * 没有就是「不知道」，不是 0：额度插件没选、插件没登记、快照里没这一份，
+ * 三种都到这里来。面板拿它判「显示未知」还是「显示它算出来的值」。
+ */
+export function hasQuota(quota?: UpstreamQuota): boolean {
+  if (!quota) return false
+  if ((quota.tokenPlan?.windows?.length ?? 0) > 0) return true
+  return Boolean(quota.credits) || Boolean(quota.balance)
 }
 
 /**
@@ -92,7 +105,14 @@ function tokenPlanLine(window: TokenPlanWindow): string {
  * 这里只给一个主额度：有套餐额度就显示套餐额度，没有才显示积分；余额有就
  * 另外一行。三样不叠加、不换算、不求和。
  */
-export function QuotaSummary({ quota }: { quota?: UpstreamQuota }) {
+export function QuotaSummary({
+  quota,
+  align = 'end',
+}: {
+  quota?: UpstreamQuota
+  /** 靠右（表格里那一列）还是靠左（平台名下面那一段）。 */
+  align?: 'start' | 'end'
+}) {
   const lines = quotaLines(quota)
   if (lines.length === 0) {
     return <span className='text-xs text-muted-foreground'>—</span>
@@ -102,7 +122,10 @@ export function QuotaSummary({ quota }: { quota?: UpstreamQuota }) {
       {lines.map((line) => (
         <div
           key={line.label}
-          className='flex flex-wrap items-baseline justify-end gap-x-1 text-xs'
+          className={cn(
+            'flex flex-wrap items-baseline gap-x-1 text-xs',
+            align === 'start' ? 'justify-start' : 'justify-end'
+          )}
         >
           <span className='text-muted-foreground'>{line.label}</span>
           {/* 套餐额度那一行最长，窄列里要能折行，不能溢出到隔壁列去。 */}
