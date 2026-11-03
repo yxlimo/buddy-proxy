@@ -17,6 +17,10 @@
 //   6. ListQuotaPlugins：七牛那个插件与它要的那一段凭据
 //   7. SetPlatformPolicy 对开放平台生效
 //   8. ListUpstreams 的三个新字段在模板平台上的取值
+//   9. ListUpstreams 的模型目录三格（models / models_source /
+//      models_fetched_at_ms）：开放平台报的是平台行里的那份，模板平台是空
+//  10. ListUpstreams 的地址：开放平台还没加账号时报的是建的时候填的地址，
+//      模板平台照旧（从名下账号的 kind 算）
 //
 // 断言里不写死平台的个数：一律跟表里的行数比。
 
@@ -34,6 +38,7 @@ const { openPlatformOf } = await import("../lib/open-platforms.ts");
 const { PLATFORMS } = await import("../lib/platforms.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
+const { upstreamBaseUrl } = await import("../lib/admin/upstreams.ts");
 const { saveAggregateModel, reloadAggregate } = await import("../lib/aggregate.ts");
 const {
   ProviderPolicy,
@@ -181,6 +186,15 @@ check("它是一个开放平台", acme?.isOpenPlatform === true, show(acme?.isOp
 check("没有账号时状态是没有凭据", acme?.state === UpstreamState.NO_CREDENTIAL, String(acme?.state));
 check("额度插件那一格是空的", acme?.quotaPlugin === "", show(acme?.quotaPlugin));
 check("新加的平台默认自动拉目录", acme?.modelsAuto === true, show(acme?.modelsAuto));
+// 模型目录三格：报的是平台行里的那份（刚建的平台还没有目录）。
+const acmeRow = openPlatformOf("acme");
+check("新加的平台目录是空的", (acme?.models ?? []).length === 0, show(acme?.models));
+check("新加的平台没拉过目录", acme?.modelsFetchedAtMs === 0n, show(acme?.modelsFetchedAtMs));
+check(
+  "目录来源跟库里那一行一样",
+  acme?.modelsSource === acmeRow?.models.source,
+  show([acme?.modelsSource, acmeRow?.models.source]),
+);
 
 /* ------------------------------------------------------------------ *
  * 2. 加平台：四种拒绝
@@ -291,6 +305,21 @@ check("自动拉关掉了", manualRow?.models.auto === false, show(manualRow?.mo
 check("来源是人写的", manualRow?.models.source === "manual", show(manualRow?.models));
 const manualListed = (await listUpstreams()).find((u) => u.id === "acme");
 check("ListUpstreams 里自动那一格是 false", manualListed?.modelsAuto === false, show(manualListed?.modelsAuto));
+check(
+  "ListUpstreams 报的是那两份清单",
+  (manualListed?.models ?? []).join(",") === "m-1,m-2",
+  show(manualListed?.models),
+);
+check(
+  "ListUpstreams 报的是来源是人写的",
+  manualListed?.modelsSource === "manual",
+  show(manualListed?.modelsSource),
+);
+check(
+  "ListUpstreams 报的是没拉过目录",
+  manualListed?.modelsFetchedAtMs === 0n,
+  show(manualListed?.modelsFetchedAtMs),
+);
 
 /* ------------------------------------------------------------------ *
  * 4. 删平台
@@ -387,6 +416,23 @@ check(
   openPlatformOf("refresh-demo")?.models.items.join(",") === "fake-1",
   show(openPlatformOf("refresh-demo")?.models.items),
 );
+// 拉过的那一份：三格都跟着走（拉取时刻不是 0，来源是自动拉的）。
+const refreshedListed = (await listUpstreams()).find((u) => u.id === "refresh-demo");
+check(
+  "ListUpstreams 报的是拉到的清单",
+  (refreshedListed?.models ?? []).join(",") === "fake-1",
+  show(refreshedListed?.models),
+);
+check(
+  "ListUpstreams 报的是自动拉的",
+  refreshedListed?.modelsSource === "auto",
+  show(refreshedListed?.modelsSource),
+);
+check(
+  "ListUpstreams 报的是拉目录的时刻",
+  Number(refreshedListed?.modelsFetchedAtMs ?? 0n) > 0,
+  show(refreshedListed?.modelsFetchedAtMs),
+);
 
 // 上游答 500：拉不到不是错误，原来那份留着。
 modelsStatus = 500;
@@ -446,6 +492,70 @@ const templateUpstream = (await listUpstreams()).find((u) => u.id === PLATFORMS[
 check("模板平台的额度插件是空串", templateUpstream?.quotaPlugin === "", show(templateUpstream?.quotaPlugin));
 check("模板平台的自动拉是 false", templateUpstream?.modelsAuto === false, show(templateUpstream?.modelsAuto));
 check("模板平台不是开放平台", templateUpstream?.isOpenPlatform === false, show(templateUpstream?.isOpenPlatform));
+
+/* ------------------------------------------------------------------ *
+ * 9. 模型目录三格：开放平台报的是平台行里的那份，模板平台是空
+ * ------------------------------------------------------------------ */
+
+section("模型目录三格");
+
+check(
+  "模板平台的目录是空的",
+  (templateUpstream?.models ?? []).length === 0,
+  show(templateUpstream?.models),
+);
+check(
+  "模板平台的目录来源是空串",
+  templateUpstream?.modelsSource === "",
+  show(templateUpstream?.modelsSource),
+);
+check(
+  "模板平台的拉取时刻是 0",
+  templateUpstream?.modelsFetchedAtMs === 0n,
+  show(templateUpstream?.modelsFetchedAtMs),
+);
+
+/* ------------------------------------------------------------------ *
+ * 10. 地址：开放平台没账号时也报地址；模板平台照旧
+ * ------------------------------------------------------------------ */
+
+section("地址");
+
+// 开放平台：建好，但一个账号都不加。
+const addressDemo = await addPlatform({
+  id: "address-demo",
+  label: "Address Demo",
+  baseUrl: "https://api.address.test/v1",
+});
+check("平台建得起来", addressDemo.ok === true, addressDemo.message);
+check("它名下没有账号", providersOf("address-demo") === 0, String(providersOf("address-demo")));
+
+const addressListed = (await listUpstreams()).find((u) => u.id === "address-demo");
+check(
+  "没有账号时地址也是建的时候填的那个",
+  addressListed?.baseUrl === "https://api.address.test/v1",
+  show(addressListed?.baseUrl),
+);
+check(
+  "它报的是开放平台",
+  addressListed?.isOpenPlatform === true,
+  show(addressListed?.isOpenPlatform),
+);
+check(
+  "地址跟库里那一行一样",
+  addressListed?.baseUrl === openPlatformOf("address-demo")?.baseUrl,
+  show([addressListed?.baseUrl, openPlatformOf("address-demo")?.baseUrl]),
+);
+
+// 对照：模板平台的地址还是从名下账号的 kind 算的，一个字没变。
+// qoder 名下有账号（上面加过），所以它有地址。
+const qoderListed = (await listUpstreams()).find((u) => u.id === "qoder");
+check(
+  "模板平台的地址还是 upstreamBaseUrl 给的那一份",
+  qoderListed?.baseUrl === upstreamBaseUrl("qoder"),
+  show([qoderListed?.baseUrl, upstreamBaseUrl("qoder")]),
+);
+check("模板平台的地址不是空串", Boolean(qoderListed?.baseUrl), show(qoderListed?.baseUrl));
 
 /* ------------------------------------------------------------------ *
  * 收尾

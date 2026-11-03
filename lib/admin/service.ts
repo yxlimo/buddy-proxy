@@ -332,11 +332,22 @@ function platformMessage(
       generation: credential.generation,
     }),
     quota: quota ? quotaMessage(quota) : undefined,
-    baseUrl: upstreamBaseUrl(id),
+    // 地址：开放平台的在平台行里，模板平台的从名下一个账号的 kind 算。
+    //
+    // 开放平台必须报平台行里那份：平台刚建好还没加账号时，名下没有账号，
+    // 从账号那一头算地址只能算出一个空串 —— 面板上编辑这样一个平台时地址框
+    // 是空的，整单提交带空串，写入侧就以「得有个地址」把这一单挡掉，于是
+    // 加账号之前什么都存不进去。
+    baseUrl: open ? open.baseUrl : upstreamBaseUrl(id),
     region: upstreamRegion(id),
-    // 额度插件与模型目录：只有开放平台有这两格（模板平台是空串与 false）。
+    // 额度插件与模型目录：只有开放平台有这几格（模板平台是空串、false 与空目录）。
     quotaPlugin: open?.quotaPlugin ?? "",
     modelsAuto: open?.models.auto ?? false,
+    // 模型目录三格：目录本身、哪来的、上次拉的时刻。模板平台没有这一份
+    // 目录，所以是空 / 空串 / 0（0 的意思是「没拉过」，不是「没有模型」）。
+    models: open?.models.items ?? [],
+    modelsSource: open?.models.source ?? "",
+    modelsFetchedAtMs: BigInt(open?.models.fetchedAt ?? 0),
     // 这是不是一个开放平台：表里的那一行，不是代码里的模板。
     isOpenPlatform: open !== null,
     // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
