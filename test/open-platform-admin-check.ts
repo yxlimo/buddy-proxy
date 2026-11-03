@@ -331,7 +331,9 @@ section("删平台");
 const account = addAccount({ platform: "acme" });
 const accountId = account.id ?? "";
 check("账号加得起来", account.ok === true && accountId !== "", account.message);
-const keyed = setProviderKeys(accountId, ["sk-acme-secret"]);
+// 这个平台选了额度插件（上面那一节写的），所以凭据是两段：数组短了服务端整单
+// 不改（那是「调用方不知道这个插件要几段」）。第二段留空：门户 cookie 本来就没有。
+const keyed = setProviderKeys(accountId, ["sk-acme-secret", ""]);
 check("凭据写进去了", keyed.ok === true && keyed.count === 1, keyed.message);
 check("secrets 表里有那一行", secretsOf(accountId) === 1, String(secretsOf(accountId)));
 

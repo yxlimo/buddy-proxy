@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ChevronRight, Plus } from 'lucide-react'
@@ -33,7 +33,6 @@ import {
   upstreamKeys,
   useAddAccount,
   useDeleteAccount,
-  useProviderKinds,
   useSetAccountEnabled,
   useUpstreams,
   useUpdateProvider,
@@ -56,6 +55,10 @@ import { BenefitsPanel } from '@/features/upstreams/benefits-panel'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
 import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
+import {
+  providerKeyAccess,
+  quotaRegistryFrom,
+} from '@/features/accounts/provider-key-fields'
 import { useSetProviderKeys } from '@/features/accounts/api'
 import { formatLocalMoment } from '@/lib/format'
 import { useAccountLogin } from '@/features/login/use-account-login'
@@ -80,9 +83,6 @@ const REGION_LABELS: Record<string, string> = {
  */
 export function UpstreamsPage() {
   const upstreams = useUpstreams()
-  // 每一类平台怎么登录：由后端说。面板照它决定给不给「填 key」的入口，不按平
-  // 台名写死（写死就漏，新平台上线的第一次必漏）。
-  const kinds = useProviderKinds()
   const setEnabled = useSetAccountEnabled()
   const addAccount = useAddAccount()
   const updateProvider = useUpdateProvider()
@@ -134,15 +134,6 @@ export function UpstreamsPage() {
   const busyAccountId = setEnabled.isPending
     ? (setEnabled.variables?.accountId ?? null)
     : null
-  // kind ⇒ login。取不到就是取不到：那一类的入口由组件里的历史特例兜着。
-  const loginByKind = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const kind of kinds.data?.kinds ?? []) {
-      map.set(kind.kind, kind.login)
-    }
-    return map
-  }, [kinds.data])
-
   // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它变，
   // 免得先弹回旧值再跳到新值。
   const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
@@ -158,9 +149,30 @@ export function UpstreamsPage() {
 
   const list = upstreams.data.upstreams
   const loginTarget = login.target
-  // 正在填 key 的那个账号。找不到就是没有：key 不能写到别的账号上去，所以找
-  // 不到的时候不开弹窗，也不发请求。
+  // 额度插件登记表的状态：三档（加载中 / 取不到 / 到手）。开放平台的凭据格子
+  // 数由它说了算，判据在 providerKeyAccess 那一层。
+  const registry = quotaRegistryFrom({
+    isPending: plugins.isPending,
+    isError: plugins.isError,
+    error: plugins.error,
+    plugins: plugins.data?.plugins,
+  })
+  // 那一类平台的凭据入口：能不能填凭据、填哪几格（位置就是顺序，
+  // SetProviderKeys 按位置读）。
+  const accessOf = (upstream: Upstream) =>
+    providerKeyAccess({
+      kind: upstream.kind,
+      isOpenPlatform: upstream.isOpenPlatform,
+      platformLabel: upstream.label || upstream.id,
+      quotaPlugin: upstream.quotaPlugin,
+      registry,
+    })
   const keysTarget = keysFor ? findAccount(list, keysFor) : undefined
+  const keysAccess = keysTarget ? accessOf(keysTarget.upstream) : undefined
+  // 弹窗只在格子数说得准的时候开：说不准就发上去一个短一截的 keys 数组，
+  // 服务端按位置写，短掉的那几段就被清成空串了。
+  const keysLayout =
+    keysAccess?.status === 'ready' ? keysAccess.layout : null
 
   return (
     <PageShell
@@ -366,8 +378,7 @@ export function UpstreamsPage() {
                               />
                               <ProviderAccounts
                                 platform={upstream.id}
-                                kind={upstream.kind}
-                                loginOf={(kind) => loginByKind.get(kind)}
+                                access={accessOf(upstream)}
                                 accounts={upstream.accounts}
                                 loggingIn={login.pending}
                                 busyAccountId={busyAccountId}
@@ -461,13 +472,13 @@ export function UpstreamsPage() {
         }
       />
 
+      {/* 凭据弹窗：这一类不用填 key（或者账号找不到了）时没有弹窗。 */}
       <ProviderKeysDialog
-        open={keysTarget !== undefined}
-        kind={keysTarget?.kind}
+        open={keysTarget !== undefined && keysLayout !== null}
+        layout={keysLayout}
         onOpenChange={(open) => {
           if (!open) setKeysFor(null)
         }}
-        existing={[]}
         pending={setKeys.isPending}
         onSubmit={(keys) => {
           if (!keysTarget) return
@@ -584,15 +595,15 @@ export function UpstreamsPage() {
 /**
  * 在所有平台的账号里找一个账号。
  *
- * 找到时把它所在的平台 kind 一起带出来：key 的种类看平台，不看账号。
+ * 找到时把它所在的平台一起带出来：key 的种类与格子看平台，不看账号。
  */
 function findAccount(
   list: Upstream[],
   accountId: string
-): { account: Account; kind: string } | undefined {
+): { account: Account; upstream: Upstream } | undefined {
   for (const upstream of list) {
     const account = upstream.accounts.find((row) => row.id === accountId)
-    if (account) return { account, kind: upstream.kind }
+    if (account) return { account, upstream }
   }
   return undefined
 }

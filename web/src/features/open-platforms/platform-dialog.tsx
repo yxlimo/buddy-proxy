@@ -215,7 +215,7 @@ export function PlatformDialog({
                     </p>
                   )}
                   <p className='text-xs text-muted-foreground'>
-                    填这几段凭据的入口还没有：这一轮只看这个插件要什么
+                    这几段凭据在账号那一行的「凭据」里填：推理用的 API key 在前，这几段按上面的顺序在后
                   </p>
                 </div>
               ) : null}

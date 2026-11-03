@@ -19,6 +19,7 @@ import {
   useTestCredential,
 } from '@/features/accounts/api'
 import { ProviderAliasCell } from '@/features/upstreams/provider-alias'
+import type { ProviderKeyAccess } from '@/features/accounts/provider-key-fields'
 import { QuotaSummary } from '@/features/balance/quota'
 import { formatDateTime, formatLocalMoment } from '@/lib/format'
 import type { Account, Credential } from '@/gen/buddy/admin/v1/admin_pb'
@@ -47,6 +48,33 @@ function needsRelogin(credential: Credential): boolean {
 }
 
 /**
+ * 凭据入口那个按钮写什么。
+ *
+ * 一格就是一把（标题带「API Key」），几格就是几段（写「凭据」）。格子数还
+ * 说不准的时候（开放平台的登记表没到手）一律写「凭据」：此时是几格都不知道。
+ */
+function accessLabel(access: ProviderKeyAccess): string {
+  return access.status === 'ready' && access.layout.fields.length > 1
+    ? '凭据'
+    : access.status === 'ready'
+      ? 'API Key'
+      : '凭据'
+}
+
+/**
+ * 鼠标停在入口上时说的话：为什么现在点不了。
+ */
+function accessHint(access: ProviderKeyAccess): string | undefined {
+  if (access.status === 'loading') {
+    return '额度插件登记表还在加载，凭据格子数还说不准'
+  }
+  if (access.status === 'failed') {
+    return access.message
+  }
+  return undefined
+}
+
+/**
  * 一个平台名下的账号与凭据。
  *
  * 账号是 provider 表里的一行：同一个平台下可以有好几个（MiniMax Code 的主账号
@@ -55,8 +83,7 @@ function needsRelogin(credential: Credential): boolean {
  */
 export function ProviderAccounts({
   platform,
-  kind,
-  loginOf,
+  access,
   accounts,
   loggingIn,
   busyAccountId,
@@ -70,10 +97,8 @@ export function ProviderAccounts({
 }: {
   /** 这个平台的 id（路径里那一段）。 */
   platform: string
-  /** 这个平台是哪一类：不同种类的 key 不一样。 */
-  kind: string
-  /** 这一类怎么登录（api_key / device / browser / password / code），由后端给。 */
-  loginOf?: (kind: string) => string | undefined
+  /** 这一类平台的凭据入口：能不能填、不能填的时候为什么（判据在 provider-key-fields 那一层）。 */
+  access: ProviderKeyAccess
   /** 这个平台名下的账号，按创建先后排（也就是权重次序）。 */
   accounts: Account[]
   /** 正在发起登录。 */
@@ -106,9 +131,12 @@ export function ProviderAccounts({
   const credentials = useCredentials(activeId)
   const testCredential = useTestCredential()
 
-  // 给不给「填 key」的入口：看这一类怎么登录，由后端说（loginOf）。不按平台名
-  // 一个个写死 —— 写死就漏，新平台上线的第一次必漏。
-  const canSetKeys = loginOf?.(kind) === 'api_key'
+  // 给不给「填 key」的入口：这一类平台的凭据有已知的格子（access.status 为
+  // ready）。会话型的平台（MiniMax、Qoder、WorkBuddy、ZCode）没有格子，也不给
+  // 入口 —— 它们的凭据是登录会话，贴 key 服务端会拒。
+  // 格子数还说不准的时候（开放平台的额度插件登记表没到手）入口给出来但是禁用
+  // 的：开着它去保存，短掉的那几段会被服务端当成空串清掉。
+  const canSetKeys = access.status !== 'none'
 
   // 正在动的是哪条凭据：看 mutation 的 variables，不用自己存一份状态。
   const testingId = testCredential.isPending
@@ -247,14 +275,32 @@ export function ProviderAccounts({
                     onSave={(alias) => onRename(account, alias)}
                   />
                   {canSetKeys ? (
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={() => onManageKeys(account)}
+                    // 禁用的时候按钮自己收不到鼠标事件（pointer-events: none），
+                    // 所以提示挂在外面那个 span 上：鼠标停上去能看出为什么点不了。
+                    <span
+                      className='inline-flex flex-col items-end gap-0.5'
+                      title={accessHint(access)}
                     >
-                      <KeyRound />
-                      {kind === 'qiniu' ? '凭据' : 'API Key'}
-                    </Button>
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        disabled={access.status !== 'ready'}
+                        onClick={() => onManageKeys(account)}
+                      >
+                        <KeyRound />
+                        {accessLabel(access)}
+                      </Button>
+                      {access.status === 'loading' ? (
+                        <span className='text-xs text-muted-foreground'>
+                          还在加载额度插件登记表
+                        </span>
+                      ) : null}
+                      {access.status === 'failed' ? (
+                        <span className='max-w-64 text-xs text-destructive'>
+                          {access.message}
+                        </span>
+                      ) : null}
+                    </span>
                   ) : null}
                   {/* 登录一直在：登录会覆盖这个账号的旧会话，不需要先注销。 */}
                   <Button

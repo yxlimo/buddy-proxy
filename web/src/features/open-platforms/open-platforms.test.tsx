@@ -8,7 +8,6 @@ import {
   DeletePlatformResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
-  ListProviderKindsResponseSchema,
   ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
   OpenPlatformSchema,
@@ -98,8 +97,6 @@ function clientWith(
   return mockAdminClient({
     ListUpstreams: () =>
       create(ListUpstreamsResponseSchema, { upstreams }),
-    ListProviderKinds: () =>
-      create(ListProviderKindsResponseSchema, { kinds: [] }),
     ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
     ListCredentials: () =>
       create(ListCredentialsResponseSchema, { credentials: [] }),

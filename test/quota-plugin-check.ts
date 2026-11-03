@@ -557,10 +557,13 @@ check("额度读得到", e2eViews.length === 1, JSON.stringify(e2eViews));
 check("剩下的还是那些", e2eViews[0]?.credits?.remaining === 5000, JSON.stringify(e2eViews[0]?.credits));
 
 // 只给推理 key：额度是「不知道」，不是「没有」。
+// 这个平台选了七牛那个插件（它要一段门户 cookie），所以数组得两段：短的数组
+// 服务端整单不改（那是「调用方不知道这个插件要几段」）。第二段留空 = 门户
+// cookie 不填。
 const bare = addAccount({ platform: "quota-demo-qiniu" });
 const bareId = bare.id ?? "";
 check("账号加得起来", bare.ok === true && bareId !== "", bare.message);
-const setBare = setProviderKeys(bareId, ["sk-demo-bare"]);
+const setBare = setProviderKeys(bareId, ["sk-demo-bare", ""]);
 check("只写进去一段", setBare.count === 1, String(setBare.count));
 check("门户 cookie 那段是空的", pluginFieldOf(bareId, "account") === "", pluginFieldOf(bareId, "account"));
 const bareAccount = provider(bareId) as any;

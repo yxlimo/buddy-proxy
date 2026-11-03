@@ -67,6 +67,20 @@ export function setProviderKeys(
   // 上游」更具体。
   const openPlatform = openPlatformOfAccount(upstreamId);
   if (openPlatform) {
+    const plugin = quotaPluginOf(openPlatform.quotaPlugin?.trim() ?? "");
+    const fields = plugin?.fields ?? [];
+    // 数组比「推理 key + 插件要的那几段」短，说明调用方不知道这个插件要几段
+    // （面板的插件登记表没到手时就会这样）。按位置写下去，缺的那几段会被当成
+    // 空串清掉 —— 那是静默丢凭据。所以先判长度：不够就整单不改，不留半截。
+    if (keys.length < 1 + fields.length) {
+      return {
+        ok: false,
+        message: fields.length
+          ? `${openPlatform.label}：额度插件要 ${fields.length} 段凭据（连推理 API key 一共要 ${1 + fields.length} 段），这次只发来 ${keys.length} 段：什么都没改。刷新页面再试。`
+          : `${openPlatform.label}：要 1 段凭据（推理 API key），这次只发来 ${keys.length} 段：什么都没改。刷新页面再试。`,
+        count: 0,
+      };
+    }
     // 位置就是顺序：第一把是推理用的 API key（它有自己的位置 :key），后面几把
     // 按平台所选插件的 fields 顺序，一段一段写进插件要的那个位置。空的那段表示
     // 清掉它（面板上重填一次就是替换的意思）。
@@ -74,8 +88,6 @@ export function setProviderKeys(
     let count = writeOpenPlatformKey(upstreamId, apiKey);
     const parts: string[] = [];
     if (apiKey) parts.push("API key");
-    const plugin = quotaPluginOf(openPlatform.quotaPlugin?.trim() ?? "");
-    const fields = plugin?.fields ?? [];
     for (let i = 0; i < fields.length; i++) {
       const field = fields[i];
       if (writePluginField(upstreamId, field.name, String(keys[i + 1] ?? "").trim())) {

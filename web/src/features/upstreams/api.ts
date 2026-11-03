@@ -4,7 +4,6 @@ import { toast } from 'sonner'
 import {
   AddAccountRequestSchema,
   DeleteAccountRequestSchema,
-  ListProviderKindsRequestSchema,
   ListUpstreamsRequestSchema,
   SetAccountEnabledRequestSchema,
   SetPlatformPolicyRequestSchema,
@@ -18,10 +17,6 @@ import { assertOk, describeError } from '@/lib/errors'
 
 export const upstreamKeys = {
   all: ['upstreams'] as const,
-}
-
-export const providerKindKeys = {
-  all: ['provider-kinds'] as const,
 }
 
 /**
@@ -39,22 +34,6 @@ export function useUpstreams(options?: { refetchOnMount?: boolean }) {
     queryKey: upstreamKeys.all,
     queryFn: () => client.listUpstreams(create(ListUpstreamsRequestSchema)),
     ...options,
-  })
-}
-
-/**
- * 平台有哪几类，每一类怎么登录。
- *
- * login 由后端给（api_key / device / browser / password / code）。面板照它
- * 决定给不给「填 key」的入口 —— 不按平台名一个个写死，写死就会漏（新平台
- * 第一次上就漏过一次）。
- */
-export function useProviderKinds() {
-  const client = useAdminClient()
-  return useQuery({
-    queryKey: providerKindKeys.all,
-    queryFn: () =>
-      client.listProviderKinds(create(ListProviderKindsRequestSchema)),
   })
 }
 

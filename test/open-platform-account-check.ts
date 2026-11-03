@@ -13,6 +13,8 @@
 //   4. key 前后的空格被去掉
 //   5. 清空 key：凭据没了，平台回到 no_credential
 //   6. 删账号：凭据一起没了，不留孤儿
+//   7. 开放平台走了额度插件时，发来的数组短了：整单不改（推理 key 与插件的那
+//      几段都留着）
 //
 // 平台的 ready 那一档与「推理凭据就是这一条」现在都成立（S2b 登记了 kind），
 // 所以这里直接断言它们，不再绕开。
@@ -52,6 +54,8 @@ const { canInfer, credentialsOf, deleteAccount, inferenceCredentialOf } = await 
 );
 const { platformAvailability } = await import("../lib/admin/platform-state.ts");
 const { openPlatformKeyId, openPlatformKeyOf } = await import("../lib/open-platform-credentials.ts");
+const { registerQuotaPlugin } = await import("../lib/quota-plugins.ts");
+const { pluginFieldOf } = await import("../lib/quota-plugin-credentials.ts");
 const { CredentialState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts");
 const { store } = await import("../lib/store.ts");
 
@@ -356,6 +360,113 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
     "TokenRhythm：清 key 的时候密码还在",
     tokenRhythmCredentialOf(tokenRhythmId)?.password === "pw-tr",
     JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+  );
+}
+
+section("额度插件：发来的数组短了，整单不改");
+
+// 开放平台的凭据是按位置写的：第一把是推理 API key，后面几把按平台所选额度
+// 插件的 fields 顺序。所以调用方发来的数组必须够长 —— 短了说明它不知道这个
+// 插件要几段（面板的插件登记表没到手时就是这样）。按位置写下去，缺的那几段
+// 会被当成空串清掉：那是静默丢凭据。
+//
+// 这里用一个两段字段的额度插件（测试自己登记的，代码里没有这个插件）。
+
+registerQuotaPlugin({
+  id: "qiniu-portal",
+  label: "门户额度",
+  fields: [
+    { name: "portal_account", label: "门户账号", secret: true },
+    { name: "portal_cookie", label: "门户 cookie", secret: true },
+  ],
+  fetch: async () => null,
+  quotas: () => [],
+});
+
+const portalPlatform = createOpenPlatform({
+  id: "portal-demo",
+  label: "Portal Demo",
+  baseUrl: "https://api.portal-demo.test/v1",
+  quotaPlugin: "qiniu-portal",
+});
+check("带插件的开放平台建得起来", portalPlatform.ok === true, portalPlatform.message);
+
+const portalAccountId = addAccount({ platform: "portal-demo" }).id ?? "";
+check("账号加得起来", portalAccountId !== "", portalAccountId);
+
+{
+  const result = setProviderKeys(portalAccountId, [
+    "sk-portal-1",
+    "portal-user",
+    "portal-cookie-1",
+  ]);
+  check("三段都写成功了", result.ok === true, result.message);
+  check("写进去三段", result.count === 3, String(result.count));
+  check(
+    "推理 key 读得回来",
+    openPlatformKeyOf(portalAccountId)?.apiKey === "sk-portal-1",
+    JSON.stringify(openPlatformKeyOf(portalAccountId)),
+  );
+  check(
+    "插件的第一段读得回来",
+    pluginFieldOf(portalAccountId, "portal_account") === "portal-user",
+    pluginFieldOf(portalAccountId, "portal_account"),
+  );
+  check(
+    "插件的第二段读得回来",
+    pluginFieldOf(portalAccountId, "portal_cookie") === "portal-cookie-1",
+    pluginFieldOf(portalAccountId, "portal_cookie"),
+  );
+}
+
+{
+  // 只发一段：调用方不知道这个插件要两段。整单不改 —— 推理 key 与插件那两段
+  // 都留着原来那些（不是「插件那两段没动」，是「什么都没动」）。
+  const result = setProviderKeys(portalAccountId, ["sk-new"]);
+  check("短的数组被拒了", result.ok === false, result.message);
+  check("一段都没写", result.count === 0, String(result.count));
+  check(
+    "说的是这个插件要几段",
+    result.message.includes("2 段凭据") && result.message.includes("只发来 1 段"),
+    result.message,
+  );
+  check("说了什么都没改", result.message.includes("什么都没改"), result.message);
+  check(
+    "推理 key 还是原来那把",
+    openPlatformKeyOf(portalAccountId)?.apiKey === "sk-portal-1",
+    JSON.stringify(openPlatformKeyOf(portalAccountId)),
+  );
+  check(
+    "插件的第一段还在",
+    pluginFieldOf(portalAccountId, "portal_account") === "portal-user",
+    pluginFieldOf(portalAccountId, "portal_account"),
+  );
+  check(
+    "插件的第二段还在",
+    pluginFieldOf(portalAccountId, "portal_cookie") === "portal-cookie-1",
+    pluginFieldOf(portalAccountId, "portal_cookie"),
+  );
+}
+
+{
+  // 对照组：三段（后两段空）—— 空的那段表示清掉它，这是现有的语义。
+  const result = setProviderKeys(portalAccountId, ["sk-new", "", ""]);
+  check("三段就写成功了", result.ok === true, result.message);
+  check("只写进去一把（两段是清掉的）", result.count === 1, String(result.count));
+  check(
+    "推理 key 换了",
+    openPlatformKeyOf(portalAccountId)?.apiKey === "sk-new",
+    JSON.stringify(openPlatformKeyOf(portalAccountId)),
+  );
+  check(
+    "插件的第一段清掉了",
+    pluginFieldOf(portalAccountId, "portal_account") === "",
+    pluginFieldOf(portalAccountId, "portal_account"),
+  );
+  check(
+    "插件的第二段清掉了",
+    pluginFieldOf(portalAccountId, "portal_cookie") === "",
+    pluginFieldOf(portalAccountId, "portal_cookie"),
   );
 }
 

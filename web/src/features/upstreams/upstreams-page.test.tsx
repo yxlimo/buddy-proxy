@@ -7,7 +7,6 @@ import {
   AddAccountResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
-  ListProviderKindsResponseSchema,
   ListUpstreamsResponseSchema,
   ProviderPolicy,
   UpstreamSchema,
@@ -67,8 +66,6 @@ function clientWith(
   return mockAdminClient({
     ListUpstreams: () =>
       create(ListUpstreamsResponseSchema, { upstreams }),
-    ListProviderKinds: () =>
-      create(ListProviderKindsResponseSchema, { kinds: [] }),
     ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
     ListCredentials: () =>
       create(ListCredentialsResponseSchema, { credentials: [] }),
