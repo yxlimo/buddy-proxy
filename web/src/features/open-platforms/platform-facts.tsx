@@ -2,7 +2,8 @@ import type {
   QuotaPlugin,
   Upstream,
 } from '@/gen/buddy/admin/v1/admin_pb'
-import { hasQuota, QuotaSummary } from '@/features/balance/quota'
+import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
+import { hasQuota, quotaStateText, QuotaSummary } from '@/features/balance/quota'
 import { formatLocalMoment } from '@/lib/format'
 
 /** 一次「刷新模型目录」的结果：服务端给的，面板照它显示。 */
@@ -19,28 +20,29 @@ export type RefreshOutcome = {
  *
  *   地址、插件 id、模型目录、目录来源、上次拉取的时刻   Upstream（ListUpstreams）
  *   额度插件叫什么                                      额度插件登记表（ListQuotaPlugins）
+ *   额度现在的结论                                       Upstream.quota.quotaState
  *
- * 额度的三种「不知道」都是未知，不是 0：没选插件、插件没登记、快照里没这一份。
- * 0 说的是「一点不剩」，那是替上游说它没说过的话。
+ * 额度按服务端给的结论说：`ok` 给数字，其余各说一句（额度用尽、平台说这个账号
+ * 不能用、凭据被拒、被限流、还没填凭据、未知），没有结论就不说这一栏。
+ * 这些结论都不是 0：0 说的是「一点不剩」，那是替上游说它没说过的话。
  */
 export function OpenPlatformFacts({
   upstream,
-  plugins,
+  registry,
   refresh,
 }: {
   upstream: Upstream
-  plugins: QuotaPlugin[]
+  /** 额度插件登记表：三档（加载中 / 取不到 / 到手）。 */
+  registry: QuotaRegistry
   /** 上一次刷新模型目录的结果。 */
   refresh?: RefreshOutcome
 }) {
-  const plugin = plugins.find((item) => item.id === upstream.quotaPlugin)
-
   return (
     <div className='grid gap-0.5 text-xs whitespace-normal text-muted-foreground'>
       <span className='font-mono break-all'>{upstream.baseUrl}</span>
       <span>{modelLine(upstream)}</span>
-      <span>{pluginLine(upstream, plugin)}</span>
-      <span>{quotaLine(upstream, plugin)}</span>
+      <span>{pluginLine(upstream, registry)}</span>
+      {quotaLine(upstream, registeredPlugin(upstream, registry))}
       {refresh ? (
         <span className={refresh.ok ? undefined : 'text-destructive'}>
           刷新：{refresh.message}
@@ -74,32 +76,78 @@ function modelLine(upstream: Upstream): string {
   return `模型目录：自动拉 · 上次拉取：${at}`
 }
 
-/** 额度插件：登记了的说它的名字，没登记的说它的 id。 */
-function pluginLine(upstream: Upstream, plugin?: QuotaPlugin): string {
-  if (!upstream.quotaPlugin) return '额度插件：未选插件'
-  if (!plugin) return `额度插件：${upstream.quotaPlugin}（没登记）`
-  return `额度插件：${plugin.label}`
+/**
+ * 登记表里这个平台选的那个插件。
+ *
+ * 只有登记表到手了才说得准「有没有这一条」：加载中、取不到的时候一律 undefined，
+ * 那种时候说「没登记」是错的。
+ */
+function registeredPlugin(
+  upstream: Upstream,
+  registry: QuotaRegistry
+): QuotaPlugin | undefined {
+  if (registry.status !== 'ready') return undefined
+  return registry.plugins.find((item) => item.id === upstream.quotaPlugin)
 }
 
 /**
- * 额度：插件算出来的值，或者「未知」。
+ * 额度插件那一行：三档各说一句。
  *
- * 三种「不知道」都不是 0：没选插件、插件没登记、快照里没这一份。
+ *   登记表到手且里面有这个 id   插件自己的名字
+ *   登记表到手但没有这个 id     未知插件 <id>
+ *   加载中 / 取不到             说登记表还没到手 / 取不到 —— 不说成「没登记」
+ */
+function pluginLine(upstream: Upstream, registry: QuotaRegistry): string {
+  const id = upstream.quotaPlugin
+  if (!id) return '额度插件：未选插件'
+  const plugin = registeredPlugin(upstream, registry)
+  if (plugin) return `额度插件：${plugin.label}`
+  if (registry.status === 'pending') return `额度插件：${id}（登记表还没到手）`
+  if (registry.status === 'error') return `额度插件：${id}（登记表取不到）`
+  return `额度插件：未知插件 ${id}`
+}
+
+/**
+ * 额度那一栏。
+ *
+ * 先说结论，再说数字 —— 两样不会同时有（契约里只有 `ok` 带数字）：
+ *
+ *   `ok`                数字那几行
+ *   `no_quota`          额度用尽（有恢复时刻就说什么时候恢复）
+ *   `blocked`           平台说这个账号不能用 + 恢复时刻
+ *   `unauthorized`      凭据被拒
+ *   `rate_limited`      被限流 + 恢复时刻
+ *   `missing`           还没填凭据
+ *   `unknown`           未知
+ *   其余值（服务端新加的） 原样显示
+ *   空串（没有结论）     整栏不显示
+ *
+ * 结论只看 `quotaState`：插件登记表到没到手，跟服务端说的结论无关 —— 登记表没
+ * 到手就藏掉「额度用尽」，等于把服务端的话丢了。只有数字那几行需要插件名，
+ * 名字说不准的时候摆 id。
  */
 function quotaLine(upstream: Upstream, plugin?: QuotaPlugin) {
-  if (!upstream.quotaPlugin) {
-    return '额度：未知（没选插件）'
+  const quota = upstream.quota
+  if (!quota) return null
+
+  const state = quotaStateText(quota)
+  if (state) {
+    return (
+      <div className='grid gap-0.5'>
+        <span>{state}</span>
+        {/* 插件那句话放第二行：状态名在上面，不会因为这句话为空就变成猜。 */}
+        {quota.message ? <span>{quota.message}</span> : null}
+      </div>
+    )
   }
-  if (!plugin) {
-    return '额度：未知（插件没登记）'
-  }
-  if (!hasQuota(upstream.quota)) {
-    return '额度：未知（还没问到）'
-  }
+  // 没有结论也没有数字：这一份答复对额度什么都没说。
+  if (!hasQuota(quota)) return null
   return (
     <div className='grid gap-0.5'>
-      <span>额度：{plugin.label}</span>
-      <QuotaSummary quota={upstream.quota} align='start' />
+      {/* 插件名说不准（登记表没到手 / 没有这一条）的时候摆 id：不猜名字，也不
+          因为这就不显示数字。 */}
+      <span>额度：{plugin?.label ?? upstream.quotaPlugin}</span>
+      <QuotaSummary quota={quota} align='start' />
     </div>
   )
 }

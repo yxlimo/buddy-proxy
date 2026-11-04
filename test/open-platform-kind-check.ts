@@ -624,6 +624,165 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
+ * 9. 面板上的额度结论（ListUpstreams 的三格）
+ * ------------------------------------------------------------------ */
+
+section("9. 面板上的额度结论");
+
+// 额度这一格有两半：数字（余额/积分/套餐）与结论（状态/恢复时刻/一句话）。
+// 问不到数字的账号以前被塞一条数字全 0 的额度 —— 那是在说「额度是 0」。
+// 现在只说结论：面板看得见原因，看不见一行零。
+const { adminService } = await import("../lib/admin/service.ts");
+const { putHealthSnapshot } = await import("../lib/health-cache.ts");
+
+const quotaCreated = createOpenPlatform({
+  id: "quota-demo",
+  label: "Quota Demo",
+  baseUrl: upstreamBase,
+  // 插件在这一进程里登记过（kind 注册时一起进来的）：面板读的是平台行这一格。
+  quotaPlugin: "sensenova-pools",
+});
+check("带额度插件的平台建得起来", quotaCreated.ok === true, quotaCreated.message);
+const quotaAccount = addAccount({ platform: "quota-demo" });
+const quotaAccountId = quotaAccount.id ?? "";
+setProviderKeys(quotaAccountId, ["sk-quota-demo"]);
+check("账号加得起来", quotaAccount.ok === true && quotaAccountId !== "", quotaAccount.message);
+
+/** 能打印的形状：proto 里有 int64，JSON.stringify 碰到 BigInt 会抛。 */
+function show(value: unknown): string {
+  return JSON.stringify(value, (_key, v) => (typeof v === "bigint" ? Number(v) : v));
+}
+
+/** 面板上这个平台的那一行（走 ListUpstreams，不自己拼）。 */
+async function upstreamOf(id: string): Promise<any> {
+  const listed = await adminService.listUpstreams!();
+  return (listed.upstreams ?? []).find((u: any) => u.id === id);
+}
+
+const RECOVER_AT = Date.now() + 2 * 60 * 60_000;
+putHealthSnapshot({
+  plugins: {
+    "sensenova-pools": {
+      [quotaAccountId]: {
+        state: "no_quota",
+        views: [],
+        recoverAt: RECOVER_AT,
+        message: "积分池用完了，等下一周期",
+      },
+    },
+  },
+});
+
+const spentUpstream = await upstreamOf("quota-demo");
+const spentQuota = spentUpstream?.quota;
+check("额度这一格报得出来", Boolean(spentQuota), show(spentUpstream));
+check(
+  "quota_state 是 no_quota",
+  spentQuota?.quotaState === "no_quota",
+  show(spentQuota?.quotaState),
+);
+check(
+  "recover_at_ms 是快照里那个时刻",
+  Number(spentQuota?.recoverAtMs) === RECOVER_AT,
+  `${spentQuota?.recoverAtMs} / ${RECOVER_AT}`,
+);
+check(
+  "message 有那句话",
+  typeof spentQuota?.message === "string" && spentQuota.message.includes("用完了"),
+  show(spentQuota?.message),
+);
+check(
+  "没有数字：余额、积分、套餐额度都没给（不是 0，是没给）",
+  spentQuota?.balance === undefined && spentQuota?.credits === undefined && spentQuota?.tokenPlan === undefined,
+  show(spentQuota),
+);
+
+// 控制组：同样的路，数字在的时候状态照快照走 —— 上面那条不是写死的。
+putHealthSnapshot({
+  plugins: {
+    "sensenova-pools": {
+      [quotaAccountId]: {
+        state: "ok",
+        views: [
+          {
+            upstreamId: quotaAccountId,
+            accountId: quotaAccountId,
+            credits: { total: 100, used: 40, remaining: 60, lots: [], note: "池子剩 60" },
+          },
+        ],
+        recoverAt: null,
+        message: "池子剩 60",
+      },
+    },
+  },
+});
+const okUpstream = await upstreamOf("quota-demo");
+const okQuota = okUpstream?.quota;
+check("有数字的时候 quota_state 是 ok", okQuota?.quotaState === "ok", show(okQuota?.quotaState));
+check(
+  "数字照快照里那一份",
+  Number(okQuota?.credits?.remaining) === 60,
+  show(okQuota?.credits),
+);
+check(
+  "ok 的恢复时刻是 0（不知道）",
+  Number(okQuota?.recoverAtMs) === 0,
+  String(okQuota?.recoverAtMs),
+);
+
+// 没有数字的结论也要到面板。以前只放行 no_quota / blocked，其余几种在面板上
+// 一律是一个「—」—— 前端按七种状态写的那一半是死代码。状态与一句话本身就是
+// 面板要看的东西，与有没有数字是两件事。
+const quietStates = [
+  { state: "blocked", recoverAt: RECOVER_AT, message: "账号被停用（access_status 0）" },
+  { state: "unauthorized", recoverAt: null, message: "门户拒了这份 cookie（HTTP 401）" },
+  { state: "rate_limited", recoverAt: RECOVER_AT, message: "门户限流了（HTTP 429）" },
+  { state: "missing", recoverAt: null, message: "账号上没有门户 cookie" },
+  { state: "unknown", recoverAt: null, message: "门户没问到：超时" },
+] as const;
+for (const c of quietStates) {
+  putHealthSnapshot({
+    plugins: {
+      "sensenova-pools": {
+        [quotaAccountId]: { state: c.state, views: [], recoverAt: c.recoverAt, message: c.message },
+      },
+    },
+  });
+  const quiet = (await upstreamOf("quota-demo"))?.quota;
+  check(`${c.state}：额度这一格报了`, Boolean(quiet), show(quiet));
+  check(`${c.state}：quota_state 是那个状态`, quiet?.quotaState === c.state, show(quiet?.quotaState));
+  check(`${c.state}：message 是插件那句话`, quiet?.message === c.message, show(quiet?.message));
+  check(
+    `${c.state}：三格数字都没给（不是 0，是没给）`,
+    quiet?.balance === undefined && quiet?.credits === undefined && quiet?.tokenPlan === undefined,
+    show(quiet),
+  );
+  check(
+    `${c.state}：恢复时刻照快照（没有就是 0）`,
+    Number(quiet?.recoverAtMs ?? -1) === (c.recoverAt ?? 0),
+    `${quiet?.recoverAtMs} / ${c.recoverAt ?? 0}`,
+  );
+  // 三处口径一致：账号那一行也是同一个结论。
+  const listedAccounts = await adminService.listAccounts!({} as any, {} as any);
+  const accountQuota = (listedAccounts.accounts ?? []).find((a: any) => a.id === quotaAccountId)?.quota;
+  check(
+    `${c.state}：ListAccounts 上也是这个状态与那句话`,
+    accountQuota?.quotaState === c.state && accountQuota?.message === c.message,
+    show(accountQuota),
+  );
+  check(
+    `${c.state}：ListAccounts 上也没给数字`,
+    accountQuota?.balance === undefined && accountQuota?.credits === undefined && accountQuota?.tokenPlan === undefined,
+    show(accountQuota),
+  );
+}
+
+// 控制组：没有结论时就不报这一格 ——「没有结论」不是一种结论。
+putHealthSnapshot({ plugins: { "sensenova-pools": {} } });
+const noConclusion = await upstreamOf("quota-demo");
+check("没有结论就不报这一格", noConclusion?.quota === undefined, show(noConclusion?.quota));
+
+/* ------------------------------------------------------------------ *
  * 收尾
  * ------------------------------------------------------------------ */
 server.close();

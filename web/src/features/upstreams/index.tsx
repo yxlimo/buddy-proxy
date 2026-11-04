@@ -248,7 +248,7 @@ export function UpstreamsPage() {
                               {upstream.isOpenPlatform ? (
                                 <OpenPlatformFacts
                                   upstream={upstream}
-                                  plugins={plugins.data?.plugins ?? []}
+                                  registry={registry}
                                   refresh={refreshOutcomes[upstream.id]}
                                 />
                               ) : null}
@@ -485,7 +485,7 @@ export function UpstreamsPage() {
       <PlatformDialog
         open={addingPlatform || editingPlatform !== null}
         platform={editingPlatform ?? undefined}
-        plugins={plugins.data?.plugins ?? []}
+        registry={registry}
         pending={addPlatform.isPending || updatePlatform.isPending}
         error={addPlatform.error ?? updatePlatform.error}
         onOpenChange={(open) => {

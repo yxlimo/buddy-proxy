@@ -1,4 +1,5 @@
 import { create, type MessageInitShape } from '@bufbuild/protobuf'
+import { Code, ConnectError } from '@connectrpc/connect'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -116,6 +117,73 @@ function rowOf(name: string): HTMLElement {
   const cell = screen.getByText(name).closest('tr')
   if (!cell) throw new Error(`找不到 ${name} 那一行`)
   return cell
+}
+
+/**
+ * 服务端登记的四个额度插件。
+ *
+ * 名字用插件自己的 label：面板不自己给插件起名字。四家的 fields 都是空的
+ * （额度走登录会话，不另填凭据）。
+ */
+function fourPlugins() {
+  return [
+    create(QuotaPluginSchema, {
+      id: 'qiniu-portal',
+      label: '七牛门户',
+      fields: [],
+    }),
+    create(QuotaPluginSchema, {
+      id: 'sensenova-pools',
+      label: 'SenseNova 积分池',
+      fields: [],
+    }),
+    create(QuotaPluginSchema, {
+      id: 'tokenrhythm-wallet',
+      label: 'TokenRhythm 钱包',
+      fields: [],
+    }),
+    create(QuotaPluginSchema, {
+      id: 'intern-ai-credits',
+      label: '书生·端砚 墨点',
+      fields: [],
+    }),
+  ]
+}
+
+/** 一个假客户端：ListQuotaPlugins 给四个插件，UpdatePlatform 记下插件 id。 */
+function editingClient(
+  platform: Upstream,
+  sent: string[],
+  plugins = fourPlugins()
+) {
+  return clientWith([platform], {
+    ListQuotaPlugins: () =>
+      create(ListQuotaPluginsResponseSchema, { plugins }),
+    UpdatePlatform: (input) => {
+      sent.push(input.quotaPlugin ?? '')
+      return create(UpdatePlatformResponseSchema, {
+        ok: true,
+        message: '改好了',
+        platform: create(OpenPlatformSchema, {
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+          quotaPlugin: input.quotaPlugin ?? '',
+          modelsAuto: input.modelsAuto,
+        }),
+      })
+    },
+  })
+}
+
+/** 打开某个平台的「编辑」弹窗。 */
+async function openEdit(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string
+): Promise<HTMLElement> {
+  await screen.findByText(name)
+  await user.click(within(rowOf(name)).getByRole('button', { name: '编辑' }))
+  return await screen.findByRole('dialog')
 }
 
 describe('面板上的开放平台', () => {
@@ -578,6 +646,173 @@ describe('面板上的开放平台', () => {
     })
   })
 
+  it('额度插件下拉：登记表里的四个都列得出来，加一项「不用插件」', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = editingClient(
+      openPlatform({ quotaPlugin: 'tokenrhythm-wallet' }),
+      sent
+    )
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    // 当前选中的那个：显示的是插件自己的 label，不是 id。
+    const trigger = within(dialog).getByRole('combobox')
+    await waitFor(() => {
+      expect(trigger).toHaveTextContent('TokenRhythm 钱包')
+    })
+
+    await user.click(trigger)
+    for (const label of [
+      '七牛门户',
+      'SenseNova 积分池',
+      'TokenRhythm 钱包',
+      '书生·端砚 墨点',
+      '不用插件',
+    ]) {
+      expect(await screen.findByRole('option', { name: label })).toBeInTheDocument()
+    }
+    // 四个插件加「不用插件」：不多不少。
+    expect(screen.getAllByRole('option')).toHaveLength(5)
+  })
+
+  it('选「不用插件」：提交的是空串', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = editingClient(openPlatform(), sent)
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+    await user.click(within(dialog).getByRole('combobox'))
+    await user.click(await screen.findByRole('option', { name: '不用插件' }))
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([''])
+    })
+  })
+
+  it('存着的插件不在登记表里：显示「未知插件 <id>」并提示，提交原样带上', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = editingClient(
+      openPlatform({ quotaPlugin: 'gone-plugin' }),
+      sent
+    )
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    // 不能被静默改写成第一项：下拉框里显示的是存着的那个 id。
+    await waitFor(() => {
+      expect(within(dialog).getByRole('combobox')).toHaveTextContent(
+        '未知插件 gone-plugin'
+      )
+    })
+    expect(
+      within(dialog).getByText(/不在额度插件登记表里/)
+    ).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual(['gone-plugin'])
+    })
+  })
+
+  it('登记表还在加载：说还没到手，不说这个 id 不在登记表里', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      // 一直不回来：登记表就是「加载中」那一档。
+      ListQuotaPlugins: () => new Promise(() => {}),
+      UpdatePlatform: (input) => {
+        sent.push(input.quotaPlugin ?? '')
+        return create(UpdatePlatformResponseSchema, {
+          ok: true,
+          message: '改好了',
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+            quotaPlugin: input.quotaPlugin ?? '',
+            modelsAuto: input.modelsAuto,
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole('combobox')).toHaveTextContent(
+        'qiniu-portal（登记表还没到手）'
+      )
+    })
+    expect(
+      within(dialog).getByText(/^额度插件登记表还没到手/)
+    ).toBeInTheDocument()
+    // 没到手的时候「不在登记表里」这个判断不成立：不能把登记过的说成填错了。
+    expect(
+      within(dialog).queryByText(/不在额度插件登记表里/)
+    ).not.toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual(['qiniu-portal'])
+    })
+  })
+
+  it('登记表取不到：已登记的 id 不说成「未知插件」', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      ListQuotaPlugins: () => {
+        throw new ConnectError('问不到', Code.Unavailable)
+      },
+      UpdatePlatform: (input) => {
+        sent.push(input.quotaPlugin ?? '')
+        return create(UpdatePlatformResponseSchema, {
+          ok: true,
+          message: '改好了',
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+            quotaPlugin: input.quotaPlugin ?? '',
+            modelsAuto: input.modelsAuto,
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole('combobox')).toHaveTextContent(
+        'qiniu-portal（登记表取不到）'
+      )
+    })
+    expect(
+      within(dialog).getByText(/额度插件登记表取不到/)
+    ).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual(['qiniu-portal'])
+    })
+  })
+
   it('刷新模型目录：发的是 RefreshPlatformModels，结果照服务端显示', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
@@ -689,7 +924,7 @@ describe('面板上的开放平台', () => {
     expect(String(toastError.mock.calls[0][0])).toContain('正被主路由引用')
   })
 
-  it('额度：三种不知道都是未知，不是 0', async () => {
+  it('额度：没有结论的三种都不显示额度那一栏，也不显示 0', async () => {
     const client = clientWith(
       [
         openPlatform({
@@ -726,9 +961,9 @@ describe('面板上的开放平台', () => {
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('没选插件的')
-    expect(screen.getByText('额度：未知（没选插件）')).toBeInTheDocument()
-    expect(screen.getByText('额度：未知（插件没登记）')).toBeInTheDocument()
-    expect(screen.getByText('额度：未知（还没问到）')).toBeInTheDocument()
+    // 没有结论就不说额度这一栏：原因在上面那行（额度插件）里已经说了。
+    expect(screen.queryByText(/^额度：/)).not.toBeInTheDocument()
+    expect(screen.queryByText('未知')).not.toBeInTheDocument()
 
     // 「不知道」不是一个 0：任何地方都不显示 0 点、0 元。
     expect(screen.queryByText(/0 点/)).not.toBeInTheDocument()
@@ -736,7 +971,8 @@ describe('面板上的开放平台', () => {
     expect(screen.queryByText(/剩 0/)).not.toBeInTheDocument()
   })
 
-  it('额度问到了：显示插件名与它算出来的值', async () => {    const client = clientWith(
+  it('额度问到了：显示插件名与它算出来的值', async () => {
+    const client = clientWith(
       [
         openPlatform({
           quotaPlugin: 'qiniu',

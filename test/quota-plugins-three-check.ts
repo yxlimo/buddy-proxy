@@ -412,7 +412,18 @@ check("没有到期时刻也算 ok", senseOK.recoverAt === null, String(senseOK.
 // 口径没变：插件桶里那一份经 kind 出来还是这些数。
 const senseSnapshot = snapshotWithProbe(senseNovaPoolsPlugin.id, senseRow.id, senseOK);
 const senseKindViews = kindOf("sensenova")!.quotas(senseRow, senseSnapshot);
-check("插件那一份经 kind 出来与 probe 逐字段相同", same(senseKindViews, senseOK.views), JSON.stringify(senseKindViews));
+// 两个 id 不比：插件那一份的 upstreamId 是它当时挂的那个 id，kind 读的时候一律
+// 按当前账号行写（upstreamId = 平台、accountId = 账号），面板靠它们分组。
+check(
+  "插件那一份经 kind 出来与 probe 逐字段相同（两个 id 除外）",
+  same(stripIds(senseKindViews), stripIds(senseOK.views)),
+  JSON.stringify(senseKindViews),
+);
+check(
+  "kind 把 upstreamId 写成平台、accountId 写成账号",
+  senseKindViews[0]?.upstreamId === senseRow.platform && senseKindViews[0]?.accountId === senseRow.id,
+  `${senseKindViews[0]?.upstreamId} / ${senseKindViews[0]?.accountId}`,
+);
 check(
   "活动积分还是 5000、两个窗口",
   senseKindViews[0]?.credits?.remaining === 5000 && senseKindViews[0]?.tokenPlan?.windows?.length === 2,
@@ -567,7 +578,11 @@ check("两个窗口都报了", internOK.views[0]?.tokenPlan?.windows?.length ===
 
 const internSnapshot = snapshotWithProbe(internAiCreditsPlugin.id, internRow.id, internOK);
 const internKindViews = kindOf("intern-ai")!.quotas(internRow, internSnapshot);
-check("插件那一份经 kind 出来与 probe 逐字段相同", same(internKindViews, internOK.views), JSON.stringify(internKindViews));
+check(
+  "插件那一份经 kind 出来与 probe 逐字段相同（两个 id 除外）",
+  same(stripIds(internKindViews), stripIds(internOK.views)),
+  JSON.stringify(internKindViews),
+);
 check(
   "墨点还是 1.698、一个批次、一个窗口",
   internKindViews[0]?.credits?.remaining === 1.698 &&
@@ -636,8 +651,12 @@ function pluginOf(id: string): string {
   return openPlatformOf(id)?.quotaPlugin ?? "<没有这一行>";
 }
 
-/** 三家的插件与写入时刻，用来验「再跑一次什么都不变」。 */
-function pluginRows(): string {
+/** 改平台行指哪个插件（面板上改的是同一格）。 */
+function setPlatformPlugin(id: string, pluginId: string): void {
+  db.prepare("UPDATE platform SET quota_plugin = ?, updated_at = ? WHERE id = ?").run(pluginId, Date.now(), id);
+}
+
+/** 三家的插件与写入时刻，用来验「再跑一次什么都不变」。 */function pluginRows(): string {
   const rows = db
     .prepare("SELECT id, quota_plugin, updated_at FROM platform WHERE id IN ('sensenova','intern-ai','tokenrhythm') ORDER BY id")
     .all() as any[];
@@ -674,6 +693,15 @@ check("再跑一次不变（连写入时刻都不动）", pluginRows() === befor
 blank.run();
 migratePlatformQuotaPlugins(db);
 check("恢复成默认值", pluginOf("sensenova") === "sensenova-pools" && pluginOf("intern-ai") === "intern-ai-credits");
+
+// 插件 id 只有一个来源：平台行。快照里那一份还在，但平台行没指名插件时 kind
+// 必须说「没有结论」—— 两边用两个来源时，面板会拿着 A 插件的数字、从 B 插件
+// 读结论。
+setPlatformPlugin("tokenrhythm", "");
+check("平台行没指名插件 → kind 说没有额度", kindOf("tokenrhythm")!.quotas(twRow, twSnapshot).length === 0, JSON.stringify(kindOf("tokenrhythm")!.quotas(twRow, twSnapshot)));
+check("平台行没指名插件 → 也不算见底", kindOf("tokenrhythm")!.outOfCredits(twRow, twSnapshot) === false);
+setPlatformPlugin("tokenrhythm", "tokenrhythm-wallet");
+check("填回去又读得到（快照里那一份没动）", kindOf("tokenrhythm")!.quotas(twRow, twSnapshot).length === 1, JSON.stringify(kindOf("tokenrhythm")!.quotas(twRow, twSnapshot)));
 
 /* ------------------------------------------------------------------ *
  * refreshOne 走插件

@@ -35,9 +35,9 @@ import {
 } from "../providers.ts";
 import { isPlatform, platformOfAny } from "../platforms.ts";
 // 开放平台的额度是数据：平台那一行指名的插件去问。
-import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
+import { OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
 import { quotaPluginOf, type QuotaProbe } from "../quota-plugins.ts";
-import { applyProbeEffect, quotaProbe } from "../quota-state.ts";
+import { applyProbeEffect, quotaPluginIdOf, quotaProbe } from "../quota-state.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds/index.ts";
 // The judgment lives here: the panel and the route must read the same answer.
@@ -408,7 +408,10 @@ function applyPluginPartial(
     const value = partial.plugins?.[pluginId]?.[row.id];
     if (value === undefined) delete table[row.id];
     else table[row.id] = value;
-    plugins[pluginId] = table;
+    // 一张问过的表变空就不写了：「这个插件问过，谁也没有」与「没有这个插件的
+    // 表」是同一件事，留一堆空表只会让人以为那些插件问过了。
+    if (Object.keys(table).length) plugins[pluginId] = table;
+    else delete plugins[pluginId];
   }
 }
 
@@ -481,7 +484,7 @@ function quotaFromPlugin(kind: string): boolean {
  * 没指名插件、或者指名的插件没登记：不写。那不是「问过了」，是没人去问。
  */
 async function refreshPluginQuota(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
-  const pluginId = openPlatformOf(row.platform)?.quotaPlugin?.trim() ?? "";
+  const pluginId = quotaPluginIdOf(row);
   if (!pluginId) return;
   const plugin = quotaPluginOf(pluginId);
   if (!plugin) return;
@@ -497,7 +500,7 @@ async function refreshPluginQuota(snapshot: HealthSnapshot, row: ProviderRow): P
   const table = { ...snapshot.plugins[plugin.id] };
   table[row.id] = probe;
   snapshot.plugins[plugin.id] = table;
-  applyProbeEffect(row, probe, (line) => console.warn(line));
+  applyProbeEffect(row, probe, plugin.id, (line) => console.warn(line));
 }
 
 /** 问一家上游，把它那段填进快照。 */

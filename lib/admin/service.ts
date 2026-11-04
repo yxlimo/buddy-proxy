@@ -75,6 +75,7 @@ import {
   TokenPlanWindowSchema,
   UpstreamQuotaSchema,
   UpstreamSchema,
+  type UpstreamQuota,
   UsageBucketSchema,
   UsageEventSchema,
   UsageSummarySchema,
@@ -97,6 +98,7 @@ import {
   upstreamState,
   upstreamStateOf,
   upstreamCooling,
+  type HealthSnapshot,
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
@@ -126,7 +128,9 @@ import {
   accountsOfPlatform,
   addAccount,
   listProviders,
+  provider,
   updateProvider,
+  type ProviderRow,
 } from "../providers.ts";
 import {
   createOpenPlatform,
@@ -138,11 +142,14 @@ import {
 } from "../open-platforms.ts";
 import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
 import { allQuotaPlugins } from "../quota-plugins.ts";
+import { quotaConclusionOf, quotaPluginIdOf, type QuotaConclusion } from "../quota-state.ts";
+import { peekHealthSnapshot } from "../health-cache.ts";
 import { listAggregateModels } from "../aggregate.ts";
 import {
   PLATFORMS,
   allPlatforms,
   forgetPlatformPolicy,
+  isPlatform,
   platformOfAny,
   platformPolicies,
   setPlatformPolicy as writePlatformPolicy,
@@ -210,8 +217,13 @@ function wholeMs(value: unknown): number {
   return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
-/** 一个额度摘要。 */
-export function quotaMessage(quota: QuotaView) {
+/**
+ * 一个额度摘要。
+ *
+ * 三格结论（状态、恢复时刻、一句话）与数字一起走：面板靠它们回答「为什么这里
+ * 没有数字」。没有结论就是空串 / 0 / 空串。
+ */
+export function quotaMessage(quota: QuotaView, conclusion?: QuotaConclusion | null) {
   return create(UpstreamQuotaSchema, {
     upstreamId: quota.upstreamId,
     accountId: quota.accountId,
@@ -268,7 +280,71 @@ export function quotaMessage(quota: QuotaView) {
           ),
         })
       : undefined,
+    // 这一次问额度的结论：状态原样透出，恢复时刻不知道就是 0，一句话没有就是
+    // 空串。认不出的状态与「没有结论」都落到空串 —— 契约说空串是「没有结论」。
+    quotaState: conclusion?.state ?? "",
+    recoverAtMs: BigInt(wholeMs(conclusion?.recoverAtMs ?? 0)),
+    message: conclusion?.message ?? "",
   });
+}
+
+/**
+ * 现在的额度快照。
+ *
+ * 只读：面板这一次拿快照里那一份，问问上游是后台扫描的事（lib/admin/upstreams.ts）。
+ */
+function quotaSnapshot(): HealthSnapshot | null {
+  return peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
+}
+
+/** 一个账号这一次的额度结论；账号行不在就是没有结论。 */
+function conclusionOfRow(row: ProviderRow | null | undefined): QuotaConclusion | null {
+  if (!row) return null;
+  const conclusion = quotaConclusionOf(row, quotaSnapshot(), quotaPluginIdOf(row));
+  return conclusion.state ? conclusion : null;
+}
+
+/**
+ * 额度那一格报什么。
+ *
+ * 只要有结论就报：状态、恢复时刻、一句话三格回答「为什么这里没有数字」。见底、
+ * 账号不能用、凭据被拒、被限流、没填凭据、问不到 —— 六种都是结论，面板按状态
+ * 说话。只放行前两种的话，后四种在面板上一律是一个「—」，前端按七种状态写的那
+ * 一半是死代码。
+ *
+ * 没有结论（没指名插件、插件没登记、快照里没这一份）才不报这一格：那不是「问
+ * 过了没数字」，是没人去问。
+ */
+function quotaAnswerOf(quota: QuotaView | null, row: ProviderRow | null): UpstreamQuota | undefined {
+  const conclusion = conclusionOfRow(row);
+  if (quota) return quotaMessage(quota, conclusion);
+  if (!row || !conclusion) return undefined;
+  // 没有数字的那一份只要归属与结论：upstreamId 是平台（面板按它分组），
+  // accountId 是这个账号。
+  return quotaMessage({ upstreamId: row.platform, accountId: row.id }, conclusion);
+}
+
+/**
+ * 平台这一行按住哪个账号的结论。
+ *
+ * 有数字时就是那份额度所属的账号；没有数字时报名下第一个有结论的那个 ——
+ * 面板要能说清这个平台为什么没有数字。
+ */
+function quotaRowOfPlatform(rows: ProviderRow[], quota: QuotaView | null): ProviderRow | null {
+  if (quota) return rows.find((row) => row.id === quota.accountId) ?? null;
+  return rows.find((row) => conclusionOfRow(row) !== null) ?? null;
+}
+
+/**
+ * 这一次 GetBalance 要报哪些账号。
+ *
+ * 指定了上游就只报它名下的：平台 id 报全部账号，账号 id 就报那一个。
+ */
+function balanceScope(wanted: string): ProviderRow[] {
+  if (!wanted) return listProviders();
+  if (isPlatform(wanted)) return accountsOfPlatform(wanted);
+  const row = provider(wanted);
+  return row ? [row] : [];
 }
 
 /**
@@ -289,15 +365,15 @@ function platformMessage(
   open: OpenPlatformRow | null,
 ) {
   const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
+  // 名下的账号行：判定那一份已经读过表了，没判定就现读。额度与账号两处都要它。
+  const rows = availability ? availability.rows : accountsOfPlatform(id);
   const quota = upstreamQuota(id);
   // 冷却：路由绕开这个账号到什么时候，面板要看得见。
   const cooling = upstreamCooling(id);
   // 面板上该做什么：冷却与额度那一层的话更细（几点的窗口、为什么冷却、几个
   // 账号里的几个），别的（没有账号、账号都关着、没有凭据）只有判定说得清。
   const stateReason = availability ? cooling.stateReason || availability.advice : cooling.stateReason;
-  const enabled = availability
-    ? availability.on > 0
-    : accountsOfPlatform(id).some((row) => row.enabled);
+  const enabled = availability ? availability.on > 0 : rows.some((row) => row.enabled);
   return create(UpstreamSchema, {
     id,
     // 平台的名字是模板里的那个（“Qoder（全球区）”）—— 账号的别名不能顶在这里：
@@ -329,7 +405,7 @@ function platformMessage(
       detail: credential.detail,
       generation: credential.generation,
     }),
-    quota: quota ? quotaMessage(quota) : undefined,
+    quota: quotaAnswerOf(quota, quotaRowOfPlatform(rows, quota)),
     // 地址：开放平台的在平台行里，模板平台的从名下一个账号的 kind 算。
     //
     // 开放平台必须报平台行里那份：平台刚建好还没加账号时，名下没有账号，
@@ -358,7 +434,7 @@ function platformMessage(
     // 不一样，记在交付记录里。
     recoversAtMs: BigInt(cooling.recoversAtMs),
     stateReason,
-    accounts: (availability ? availability.rows : accountsOfPlatform(id)).flatMap((row) => {
+    accounts: (availability ? availability.rows : rows).flatMap((row) => {
       // 账号视图是外面算好的那一份：这里再读一遍凭据的话，一个平台下的每个
       // 账号都要把全部账号的凭据读一遍（面板打开一次就是 O(N²)）。
       const account = accounts.get(row.id);
@@ -434,7 +510,7 @@ function accountRowMessage(row: AccountView) {
     // 权重：大的先试。面板上让人调。
     weight: row.weight,
     createdAt: BigInt(row.createdAt),
-    quota: quota ? quotaMessage(quota) : undefined,
+    quota: quotaAnswerOf(quota, provider(row.id)),
     cooldownUntilMs: BigInt(cooling.untilMs),
     cooldownReason: cooling.reason,
   });
@@ -823,8 +899,11 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     const accounts = listAccounts();
     // 每个账号的额度。额度在快照里，这里不现问上游（那是 GetBalance 的事）。
     const quotas = new Map<string, QuotaView>();
+    // 额度结论要的是账号行（插件从平台那一行读），顺手把它们存下来。
+    const rows = new Map<string, ProviderRow>();
     for (const row of listProviders()) {
       const id = row.id;
+      rows.set(id, row);
       for (const quota of await upstreamQuotas(id)) {
         quotas.set(quota.accountId, quota);
       }
@@ -842,7 +921,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           detail: account.detail,
           enabled: account.enabled,
           createdAt: BigInt(account.createdAt),
-          quota: quota ? quotaMessage(quota) : undefined,
+          quota: quotaAnswerOf(quota ?? null, rows.get(account.id) ?? null),
         });
       }),
     });
@@ -918,20 +997,33 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async getBalance(request) {
     const wanted = String(request.upstreamId ?? "");
-    const quotas = [];
+    const rows = balanceScope(wanted);
+    const quotas: UpstreamQuota[] = [];
+    // 已经有数字的账号：下面只给没有数字的那些补一条原因。
+    const withNumbers = new Set<string>();
     if (wanted) {
       // 问一个平台：只刷这个平台名下的账号，不碰别人。
       for (const quota of await upstreamQuotas(wanted, true, Boolean(request.force))) {
-        quotas.push(quotaMessage(quota));
+        const row = rows.find((r) => r.id === quota.accountId) ?? null;
+        quotas.push(quotaMessage(quota, conclusionOfRow(row)));
+        withNumbers.add(quota.accountId);
       }
     } else {
       // 没指定平台：整轮刷新一次（一次就够），然后从快照里读。
       await freshHealthSnapshot(Boolean(request.force));
-      for (const row of listProviders()) {
+      for (const row of rows) {
         for (const quota of await upstreamQuotas(row.id)) {
-          quotas.push(quotaMessage(quota));
+          quotas.push(quotaMessage(quota, conclusionOfRow(row)));
+          withNumbers.add(quota.accountId);
         }
       }
+    }
+    // 没有数字但有结论的账号也报一条：见底、不能用、凭据被拒、被限流、没填
+    // 凭据、问不到 —— 六种都不是 0，面板要看得见状态与那句话，而不是一行零。
+    for (const row of rows) {
+      if (withNumbers.has(row.id)) continue;
+      const answer = quotaAnswerOf(null, row);
+      if (answer) quotas.push(answer);
     }
     return create(GetBalanceResponseSchema, { quotas });
   },

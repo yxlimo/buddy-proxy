@@ -2,16 +2,31 @@
 //
 // 插件只回答一件事：「这次问到了什么」。ok / no_quota / blocked / unauthorized /
 // rate_limited / missing / unknown 这七种就是插件能说的全部。至于「见底了怎么
-// 办、被限流了怎么办、凭据被拒了怎么办」是平台的事，只写在 applyProbeEffect 这
-// 一处 —— 七家平台各写一遍，就会有七份不一样的判断，其中六份迟早跟第七份不一致。
+// 办、凭据被拒了怎么办」是平台的事，只写在 applyProbeEffect 这一处 —— 七家平台
+// 各写一遍，就会有七份不一样的判断，其中六份迟早跟第七份不一致。
+//
+// 被限流不在这里写冷却：额度探测打到的是查额度的那个接口，它答 429 只说明那个
+// 接口这会儿忙。路由冷却说的是「这个账号暂时不能接推理请求」，两件事没有关系 ——
+// 把前者写成后者，一次额度探测的限流就能把一个能推理的账号踢下线。
 //
 // 状态集只在这里定义：拼错一个字母就静默变成「不知道」，而「不知道」与「没钱」
 // 是两件事，混起来就是替上游说话。
 
-import { rateCooldownMs, setCooldown } from "./cooldown.ts";
+import { openPlatformOf } from "./open-platforms.ts";
 import type { HealthSnapshot, QuotaView } from "./provider-kinds.ts";
 import type { ProviderRow } from "./providers.ts";
 import type { QuotaProbe } from "./quota-plugins.ts";
+
+/**
+ * 这个账号的额度归哪个插件问。
+ *
+ * 只有一个来源：平台行那一格（platform.quota_plugin）。写快照的一头按它问，读
+ * 结论的一头也按它取 —— kind 那边再写一份插件 id，两边就有了两份判断，改一边
+ * 忘一边时面板自相矛盾：数字在 A 插件下，结论从 B 插件读。
+ */
+export function quotaPluginIdOf(provider: Pick<ProviderRow, "platform">): string {
+  return openPlatformOf(provider.platform)?.quotaPlugin?.trim() ?? "";
+}
 
 /** 一次探测的结论。 */
 export type QuotaState =
@@ -84,7 +99,8 @@ export function probeOf(
  * 面板上那几行数字。
  *
  * 只有 ok 有数字：别的状态都不是「还剩多少」这个问题的答案。见底与「账号不能
- * 用」另给一条只有说明的额度 —— 两种都不能接，原因不同，面板要能分辨。
+ * 用」也不给一条数字全 0 的额度 —— 写 0 是在说「额度是 0」，而我们只该说
+ * 「用尽」或「不能用」，那两件事由 quotaConclusionOf 的状态与一句话说。
  */
 export function quotaViewsOf(
   provider: ProviderRow,
@@ -93,14 +109,11 @@ export function quotaViewsOf(
 ): QuotaView[] {
   const probe = probeOf(snapshot, pluginId, provider.id);
   if (!probe) return [];
-  if (probe.state === "ok") {
-    // 面板按这两个 id 分组：按当前账号写一遍，快照里那一份是谁的都不影响。
-    return probe.views.map((view) => ({ ...view, upstreamId: provider.id, accountId: provider.id }));
-  }
-  if (probe.state === "no_quota" || probe.state === "blocked") {
-    return [reasonView(provider, probe)];
-  }
-  return [];
+  if (probe.state !== "ok") return [];
+  // 面板按这两个 id 分组：upstreamId 是**平台**（余额页按平台分组，同一平台的
+  // 几份余额能合起来看），accountId 是这条数字属于哪个账号。两个都按当前账号
+  // 行写，快照里那一份是怎么写的都不影响。
+  return probe.views.map((view) => ({ ...view, upstreamId: provider.platform, accountId: provider.id }));
 }
 
 /**
@@ -144,21 +157,61 @@ export function recoverAtOf(
 export type ProbeLog = (message: string) => void;
 
 /**
+ * 面板上要显示的那份额度结论：状态、恢复时刻、一句话。
+ *
+ * 数字回答「还剩多少」，这三格回答「为什么没有数字」—— 用尽、不能用、问不到
+ * 都不是 0，把这三件事写成一条数字全 0 的额度等于替上游说「额度是 0」。
+ */
+export interface QuotaConclusion {
+  /** 认得的那个状态；null = 这一份答复没有额度结论。 */
+  state: QuotaState | null;
+  /** 什么时候恢复（Unix 毫秒）；0 = 不知道。 */
+  recoverAtMs: number;
+  /** 给人看的一句话；空串 = 没有话要说。 */
+  message: string;
+}
+
+/**
+ * 面板上要显示的那份额度结论。
+ *
+ * 没有结论时三格全是空 / 0：0 说的是「不知道」，不是「额度是 0」。判空与
+ * probeOf 一致：没指名插件、插件没登记、快照里没这一份。
+ */
+export function quotaConclusionOf(
+  provider: ProviderRow,
+  snapshot: HealthSnapshot | null | undefined,
+  pluginId: string,
+): QuotaConclusion {
+  const probe = probeOf(snapshot, pluginId, provider.id);
+  if (!probe) return { state: null, recoverAtMs: 0, message: "" };
+  return {
+    state: probe.state,
+    // 哪几种状态有恢复时刻由 recoverAtOf 一处决定，这里不再写一遍。
+    recoverAtMs: recoverAtOf(provider, snapshot, pluginId) ?? 0,
+    message: probe.message,
+  };
+}
+
+/**
  * 结论带来的副作用：唯一一处做这件事的地方。
  *
- * 只有限流会写冷却：被限流的账号等一会儿就能再用，而「见底」不是等出来的（等
- * 到什么时候由快照里的恢复时刻说），「凭据被拒」要重新授权（那是凭据那条线的
- * 事），「没填凭据」是用户还没填。把这几种都写成冷却，等于拿冷却当垃圾桶。
+ * 只有一种状态要记一笔：被限流时留一行日志（带插件 id — 哪个接口限的，账号，
+ * 恢复时刻）。不写路由冷却 —— 查额度的接口 429 与「这个账号能不能接推理请求」
+ * 是两件事，拿冷却去记它等于让一次额度探测把账号踢下线。见底不是等出来的（恢复
+ * 时刻在快照里），「凭据被拒」要重新授权，「没填凭据」是用户还没填，三种都不该
+ * 拿冷却当垃圾桶。
  */
-export function applyProbeEffect(provider: ProviderRow, probe: QuotaProbe, log: ProbeLog = () => {}): void {
+export function applyProbeEffect(
+  provider: ProviderRow,
+  probe: QuotaProbe,
+  pluginId: string,
+  log: ProbeLog = () => {},
+): void {
   switch (probe.state) {
     case "rate_limited": {
-      const now = Date.now();
-      // 上游说了多久就等多久；没说、或者说的时刻已经过去，按平台的默认时长。
-      const until =
-        probe.recoverAt !== null && probe.recoverAt > now ? probe.recoverAt : now + rateCooldownMs();
-      setCooldown(provider.id, until, "rate-limit");
-      log(`[QUOTA] 账号 ${provider.id} 被限流，冷却到 ${new Date(until).toISOString()}：${probe.message}`);
+      // 恢复时刻照上游说的报；没说就是「不知道」，不编一个。
+      const at = probe.recoverAt === null ? "不知道" : new Date(probe.recoverAt).toISOString();
+      log(`[QUOTA] 账号 ${provider.id} 的额度接口被限流（插件 ${pluginId}），恢复时刻 ${at}：${probe.message}`);
       return;
     }
     case "unauthorized":
@@ -173,18 +226,4 @@ export function applyProbeEffect(provider: ProviderRow, probe: QuotaProbe, log: 
       // 从快照里算出来的，没填凭据是用户还没填。
       return;
   }
-}
-
-/**
- * 一条只有说明、没有数字的额度。
- *
- * 见底与「账号不能用」都不是「还剩多少」。数字写 0 的含义是「不知道」，面板不
- * 显示一行零，只显示 note 里那句话 —— 两种原因的话不一样，面板才分得出来。
- */
-function reasonView(provider: ProviderRow, probe: QuotaProbe): QuotaView {
-  return {
-    upstreamId: provider.id,
-    accountId: provider.id,
-    credits: { total: 0, used: 0, remaining: 0, lots: [], note: probe.message },
-  };
 }

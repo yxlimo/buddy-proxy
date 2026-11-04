@@ -291,10 +291,25 @@ export function migratePlatformQuotaPlugins(db: DatabaseSync): void {
     "UPDATE platform SET quota_plugin = ?, updated_at = ? WHERE id = ? AND TRIM(quota_plugin) = ''",
   );
   const now = Date.now();
-  for (const t of PLATFORM_TEMPLATES) {
-    // 七牛的用户自己选插件，星火没有接口：模板里空着的就不补。
-    if (!t.quotaPlugin) continue;
-    set.run(t.quotaPlugin, now, t.suggestedId);
+  // 三行要么都补上要么都不补：补到一半的话，重启后剩下的那几家会看着像「这个
+  // 平台没额度插件」—— 那是错的话，比不补更糟。
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const t of PLATFORM_TEMPLATES) {
+      // 七牛的用户自己选插件，星火没有接口：模板里空着的就不补。
+      if (!t.quotaPlugin) continue;
+      set.run(t.quotaPlugin, now, t.suggestedId);
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* 事务可能已经没了 */
+    }
+    throw new Error(
+      `额度插件的迁移失败：${(e as Error)?.message ?? String(e)}。事务已整个回滚，没有平台的额度插件被改。`,
+    );
   }
 }
 

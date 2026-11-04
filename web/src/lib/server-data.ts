@@ -54,8 +54,13 @@ const readers: Record<ServerData, readonly (readonly unknown[])[]> = {
   ],
   accounts: accountReaders,
   credentials: accountReaders,
-  // 额度页那份，和总览里按平台给的那几行。
-  quotas: [queryKeys.balances.root, queryKeys.system.status],
+  // 额度页那份，和总览里按平台给的那几行。额度变了平台那份答复也变了（平台上
+  // 带着额度快照与结论），所以额度也读平台那一份。
+  quotas: [
+    queryKeys.balances.root,
+    queryKeys.system.status,
+    queryKeys.upstreams.all,
+  ],
   benefits: [queryKeys.benefits.all],
   publishedModels: [queryKeys.publishedModels.all],
   config: [queryKeys.config.all, queryKeys.system.status],

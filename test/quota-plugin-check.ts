@@ -300,9 +300,23 @@ const qiniuKind = kindOf("qiniu");
 const kindSnapshot = {
   plugins: { [qiniuQuotaPlugin.id]: { [QINIU_ACCOUNT.id]: OK_PROBE } },
 } as any;
+
+/** 一组额度，去掉两个「这一条是谁的」的 id：它们由 kind 按当前账号行重新写。 */
+function withoutIds(views: any[]): any[] {
+  return views.map(({ upstreamId, accountId, ...rest }) => rest);
+}
+
 check(
-  "种类转给插件之后，数字还是那些",
-  same(qiniuKind?.quotas(QINIU_ACCOUNT, kindSnapshot), pluginViews),
+  "种类转给插件之后，数字还是那些（两个 id 除外）",
+  same(withoutIds(qiniuKind?.quotas(QINIU_ACCOUNT, kindSnapshot) ?? []), withoutIds(pluginViews)),
+  JSON.stringify(qiniuKind?.quotas(QINIU_ACCOUNT, kindSnapshot)),
+);
+// 两个 id 的规矩：upstreamId 是平台（余额页按平台分组），accountId 是这个账号。
+const qiniuKindViews = qiniuKind?.quotas(QINIU_ACCOUNT, kindSnapshot) ?? [];
+check(
+  "upstreamId 是平台、accountId 是账号",
+  qiniuKindViews[0]?.upstreamId === QINIU_ACCOUNT.platform && qiniuKindViews[0]?.accountId === QINIU_ACCOUNT.id,
+  `${qiniuKindViews[0]?.upstreamId} / ${qiniuKindViews[0]?.accountId}`,
 );
 check(
   "种类的用尽判定还是那些",

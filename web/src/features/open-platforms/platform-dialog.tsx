@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type {
-  QuotaPlugin,
-  Upstream,
-} from '@/gen/buddy/admin/v1/admin_pb'
+import type { Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -24,13 +21,57 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { describeError } from '@/lib/errors'
+import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
 import { PLATFORM_TEMPLATES, type PlatformTemplate } from './templates'
 
 /**
- * 「不选插件」在契约里是空串，但下拉框的选项不能是空串（那是控件的限制），
+ * 「不用插件」在契约里是空串，但下拉框的选项不能是空串（那是控件的限制），
  * 所以这里用一个别的值代表它，提交时再换回空串。
+ *
+ * 这个串不能跟真的插件 id 撞：登记表里的 id 只由小写字母、数字与连字符组成
+ * （`[a-z0-9-]`），所以带星号的这一串永远不会是插件 id。
  */
-const NO_PLUGIN = '__none__'
+const NO_PLUGIN = '*none*'
+
+/**
+ * 下拉里那一项「已选、但登记表里没有」的 id 怎么显示。
+ *
+ * 「未知插件」只有在登记表到手之后才说得准：还在加载、或者取不到的时候，
+ * 登记过的插件也会被说成「未知」—— 那句话是错的，所以那样的时候只说
+ * 「登记表还没到手 / 取不到」，把 id 原样摆着。
+ *
+ * 不管哪一种，提交上去的都是原来那个 id：面板不替用户把它改成第一项。
+ */
+function storedPluginLabel(id: string, registry: QuotaRegistry): string {
+  switch (registry.status) {
+    case 'pending':
+      return `${id}（登记表还没到手）`
+    case 'error':
+      return `${id}（登记表取不到）`
+    default:
+      return `未知插件 ${id}`
+  }
+}
+
+/**
+ * 下拉框下面那一行提示。
+ *
+ * 先按登记表的状态说：没到手的时候「不在登记表里」这个判断本身就不成立 ——
+ * 登记过的插件也会被说成填错了。只有到手了、且里面真的没这个 id，才说可能
+ * 填错或插件下线。
+ */
+function pluginHint(registry: QuotaRegistry, unregistered: string): string {
+  switch (registry.status) {
+    case 'pending':
+      return '额度插件登记表还没到手：现在只看得见存着的那个 id'
+    case 'error':
+      return `额度插件登记表取不到：${registry.message}`
+    default:
+      return unregistered
+        ? '这个 id 不在额度插件登记表里：可能填错了，或者那个插件下线了。存下去原样保留'
+        : '插件决定这个平台的额度怎么问、怎么读'
+  }
+}
 
 export type PlatformSubmit = {
   id: string
@@ -64,7 +105,7 @@ type Draft = {
 export function PlatformDialog({
   open,
   platform,
-  plugins,
+  registry,
   pending,
   error,
   onSubmit,
@@ -73,8 +114,8 @@ export function PlatformDialog({
   open: boolean
   /** 要改的平台。新增的时候不给。 */
   platform?: Upstream
-  /** 服务端登记的额度插件。 */
-  plugins: QuotaPlugin[]
+  /** 额度插件登记表：三档（加载中 / 取不到 / 到手）。 */
+  registry: QuotaRegistry
   pending: boolean
   /** 上一次提交的错误：服务端的话，原样显示。 */
   error?: unknown
@@ -113,8 +154,10 @@ export function PlatformDialog({
     setDraft((prev) => ({ ...prev, ...part }))
 
   const editing = platform !== undefined
-  // 选中的插件：登记表里有的那个。用户填了没登记的 id 时，那一格也要看得见
-  // （不然下拉框里是空的，看着像没选）。
+  // 登记表到手了才有可选项；没到手、取不到的时候只有存着的那个 id。
+  const plugins = registry.status === 'ready' ? registry.plugins : []
+  // 选中的插件：登记表里有的那个。存着的 id 不在登记表里（或者登记表还没
+  // 到手）时，那一格也要看得见 —— 不然下拉框里是空的，看着像没选。
   const selected = plugins.find((item) => item.id === draft.quotaPlugin)
   const unregistered =
     draft.quotaPlugin !== '' && !selected ? draft.quotaPlugin : ''
@@ -257,22 +300,23 @@ export function PlatformDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={NO_PLUGIN}>不选插件</SelectItem>
+                    <SelectItem value={NO_PLUGIN}>不用插件</SelectItem>
                     {plugins.map((item) => (
                       <SelectItem key={item.id} value={item.id}>
                         {item.label}
                       </SelectItem>
                     ))}
-                    {/* 填了但没登记的 id：显示出来，别让它变成一个空下拉框 */}
+                    {/* 存着的 id 不在可选项里：摆出来，别让它变成一个空下拉框，
+                        也别把它静默改写回第一项。 */}
                     {unregistered ? (
                       <SelectItem value={unregistered}>
-                        {unregistered}（没登记）
+                        {storedPluginLabel(unregistered, registry)}
                       </SelectItem>
                     ) : null}
                   </SelectContent>
                 </Select>
                 <p className='text-xs text-muted-foreground'>
-                  插件决定这个平台的额度怎么问、怎么读。没选插件的时候额度那格显示未知
+                  {pluginHint(registry, unregistered)}
                 </p>
               </div>
 

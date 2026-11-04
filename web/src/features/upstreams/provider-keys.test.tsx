@@ -896,6 +896,78 @@ describe('凭据弹窗按平台渲染格子', () => {
     })
   })
 
+  it('开放平台：插件不要额外的凭据（额度走登录会话）：只有推理那一格', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('my-open', 'openai', '我的开放平台', {
+          isOpenPlatform: true,
+          quotaPlugin: 'sensenova-pools',
+        }),
+        sent,
+        [
+          create(QuotaPluginSchema, {
+            id: 'sensenova-pools',
+            label: 'SenseNova 积分池',
+            // 额度用的是登录会话，不另填凭据。
+            fields: [],
+          }),
+        ]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'my-open')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    // 格子总数说准：推理那一格，加上插件那段（零段）。
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.querySelectorAll('input')).toHaveLength(1)
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-infer']])
+    })
+  })
+
+  it('SenseNova：选出额度插件也不往上加格子（仍是一格）', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('sensenova', 'sensenova', 'SenseNova'),
+        sent,
+        [
+          create(QuotaPluginSchema, {
+            id: 'sensenova-pools',
+            label: 'SenseNova 积分池',
+            fields: [],
+          }),
+        ]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'sensenova')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog')
+    // 一格：额度插件那段不往上加格子。
+    expect(dialog.querySelectorAll('input')).toHaveLength(1)
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-sense-1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-sense-1']])
+    })
+  })
+
   it('那个「每行一把」的文本框没有了：弹窗里只有带标签的格子', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []

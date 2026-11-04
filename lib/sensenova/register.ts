@@ -5,13 +5,14 @@
 
 import { senseNovaCatalogModels } from "../catalog-models.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
-import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
+import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { senseNovaStatus } from "./auth.ts";
 import { SENSENOVA_INFER_BASE } from "./config.ts";
-// 引用即登记：这个 kind 的额度归这个插件问，读法也归它 —— register 里不再有
-// 第二份「池子怎么报成额度」的代码，两份迟早会走样。
-import { senseNovaPoolsPlugin } from "./quota-plugin.ts";
+// 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
+// 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
+// 一头就有了两个来源，两边不一致时面板自相矛盾。
+import "./quota-plugin.ts";
 import { senseNovaCatalog, senseNovaInferenceKey } from "./transport.ts";
 
 export const senseNovaKind = registerCompatiblePlatform({
@@ -28,9 +29,9 @@ export const senseNovaKind = registerCompatiblePlatform({
   keyOf: (provider, accountId) => senseNovaInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
   models: () => senseNovaCatalogModels(senseNovaCatalog()),
-  // 额度读的是插件问回来的那一份结论。平台行没指名插件、插件没登记、这一轮没
+  // 额度读的是插件问回来的那一份结论：平台行没指名插件、插件没登记、这一轮没
   // 问到 —— 三种都是「不知道」，不是 0。
-  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, senseNovaPoolsPlugin.id),
-  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, senseNovaPoolsPlugin.id),
-  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, senseNovaPoolsPlugin.id),
+  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, quotaPluginIdOf(provider)),
 });

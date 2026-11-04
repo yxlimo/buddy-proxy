@@ -5,15 +5,16 @@
 
 import { internAiCatalogModels } from "../catalog-models.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
-import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
+import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { internAiStatus } from "./auth.ts";
 // 登录链登记：引用即登记（见 lib/login-flow.ts）。
 import "./login-flow.ts";
 import { INTERN_AI_DISCOVERY_API_BASE } from "./config.ts";
-// 引用即登记：这个 kind 的额度归这个插件问，读法也归它 —— register 里不再有
-// 第二份「墨点怎么报成额度」的代码，两份迟早会走样。
-import { internAiCreditsPlugin } from "./quota-plugin.ts";
+// 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
+// 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
+// 一头就有了两个来源，两边不一致时面板自相矛盾。
+import "./quota-plugin.ts";
 import { internAiCatalog, internAiInferenceKey } from "./transport.ts";
 
 export const internAiKind = registerCompatiblePlatform({
@@ -30,7 +31,7 @@ export const internAiKind = registerCompatiblePlatform({
   models: () => internAiCatalogModels(internAiCatalog()),
   // 额度读的是插件问回来的那一份结论：「平台说账号不能用」（blocked）与「墨点没了」
   // （no_quota）是插件分的，这里只照结论读 —— 两句话不一样，面板才分得清。
-  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, internAiCreditsPlugin.id),
-  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, internAiCreditsPlugin.id),
-  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, internAiCreditsPlugin.id),
+  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, quotaPluginIdOf(provider)),
 });

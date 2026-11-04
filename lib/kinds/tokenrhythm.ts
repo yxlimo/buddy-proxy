@@ -5,12 +5,13 @@
 // whose credit expires first.
 
 import { tokenRhythmCatalogModels } from "../catalog-models.ts";
-import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
+import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { TOKENRHYTHM_API_BASE } from "../tokenrhythm/accounts.ts";
 import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balance.ts";
-// 引用即登记：这个 kind 的额度归这个插件问，读法也归它 —— 这里不再有第二份
-// 「钱包怎么报成余额」的代码，两份迟早会走样。
-import { tokenRhythmWalletPlugin } from "../tokenrhythm/quota-plugin.ts";
+// 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
+// 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
+// 一头就有了两个来源，两边不一致时面板自相矛盾。
+import "../tokenrhythm/quota-plugin.ts";
 import { tokenRhythmStatus } from "../tokenrhythm/wallet.ts";
 import { fromUpstreamStatus, registerKind } from "./shared.ts";
 
@@ -29,9 +30,9 @@ registerKind({
   models: () => tokenRhythmCatalogModels(),
   // 额度读的是插件问回来的那一份结论：钱包读不到是「不知道」，不是「没钱」——
   // 那一条由插件的状态说，这里不重判。
-  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, tokenRhythmWalletPlugin.id),
-  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, tokenRhythmWalletPlugin.id),
-  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, tokenRhythmWalletPlugin.id),
+  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, quotaPluginIdOf(provider)),
   // 定时扫描余额，把「现在该用哪个账户」钉下来（赠金最先到期的那个）。
   // 钉住的单位是平台：一副账号里哪个先用是平台的事。
   scan: async (provider) => {

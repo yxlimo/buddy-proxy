@@ -173,4 +173,49 @@ describe('改完数据，读它的查询重新取数', () => {
     })
     expect(balanceCalls).toBe(2)
   })
+
+  it('签到：平台那份也重新取数（平台上带着额度快照）', async () => {
+    let listCalls = 0
+    let balanceCalls = 0
+    const client = mockAdminClient({
+      ListUpstreams: () => {
+        listCalls += 1
+        return create(ListUpstreamsResponseSchema, { upstreams: [] })
+      },
+      GetBalance: () => {
+        balanceCalls += 1
+        return create(GetBalanceResponseSchema, { quotas: [] })
+      },
+      GetBenefitStatus: () =>
+        create(GetBenefitStatusResponseSchema, { benefits: [] }),
+      RunBenefitNow: () =>
+        create(RunBenefitNowResponseSchema, { ok: true, lines: [] }),
+    })
+
+    const { result } = renderHook(
+      () => ({
+        upstreams: useUpstreams(),
+        balance: useBalance(''),
+        run: useRunBenefitNow(),
+      }),
+      { wrapper: wrapper(client) }
+    )
+
+    await waitFor(() => {
+      expect(result.current.upstreams.isSuccess).toBe(true)
+      expect(result.current.balance.isSuccess).toBe(true)
+    })
+    expect(listCalls).toBe(1)
+    expect(balanceCalls).toBe(1)
+
+    await result.current.run.mutateAsync(undefined)
+
+    // 签到签到手的积分写进额度里，而平台那一行上也摆着额度：那份答复也变了。
+    await waitFor(() => {
+      expect(balanceCalls).toBe(2)
+    })
+    await waitFor(() => {
+      expect(listCalls).toBe(2)
+    })
+  })
 })

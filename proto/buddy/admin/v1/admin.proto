@@ -167,6 +167,14 @@ message UpstreamQuota {
   CreditSummary credits = 4;
   // 套餐额度（按窗口的百分比）。
   TokenPlan token_plan = 5;
+  // 这一次问额度的结论，原样透出插件给的状态：ok / no_quota / blocked /
+  // unauthorized / rate_limited / missing / unknown。空串 = 这一份答复没有额度
+  // 结论（没选插件、插件没登记、这一轮没问），与 unknown（问了但问不到）不同。
+  string quota_state = 6;
+  // 什么时候恢复。Unix 毫秒；0 = 不知道。
+  int64 recover_at_ms = 7;
+  // 给人看的一句话（为什么没有数字、为什么用不了）。空串 = 没有话要说。
+  string message = 8;
 }
 
 // 余额：钱。同一平台的多个账号可以合并。

@@ -15,7 +15,7 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 
 const { parseRespackOverview } = await import("../lib/qiniu/quota.ts");
 const { qiniuQuotaPlugin, qiniuQuotas } = await import("../lib/qiniu/quota-plugin.ts");
-const { cooldownUntil, rateCooldownMs } = await import("../lib/cooldown.ts");
+const { cooldownUntil, listCooldowns } = await import("../lib/cooldown.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
@@ -24,6 +24,7 @@ const { platformOfAny } = await import("../lib/platforms.ts");
 const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
 const { addAccount, provider: providerRow } = await import("../lib/providers.ts");
 const { refreshHealthSnapshot } = await import("../lib/admin/upstreams.ts");
+const { quotaConclusionOf } = await import("../lib/quota-state.ts");
 const { peekHealthSnapshot } = await import("../lib/health-cache.ts");
 
 let pass = 0;
@@ -215,15 +216,14 @@ check(
   "快照里没有这一份 → 不知道，不算用尽",
   kind?.outOfCredits(PROVIDER, snapshotWith(null)) === false,
 );
+// 见底不是「还剩 0」：数字全 0 的占位行在说「额度是 0」。用尽这件事由结论的
+// 状态与一句话说（lib/quota-state.ts 的 quotaConclusionOf，面板上那三格）。
+const emptyViews = kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE)) ?? [];
+check("见底没有额度视图", emptyViews.length === 0, JSON.stringify(emptyViews));
 check(
-  "见底那条没有数字，只有一句说明",
-  (kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE)) ?? []).every((view) => !view.credits?.lots?.length),
-  JSON.stringify(kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE))),
-);
-check(
-  "见底那条说的是「用尽」",
-  String((kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE)) ?? [])[0]?.credits?.note ?? "").includes("用尽"),
-  JSON.stringify(kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE))),
+  "见底的那句话在结论里（说的是「用尽」）",
+  String(quotaConclusionOf(PROVIDER, snapshotWith(EMPTY_PROBE), "qiniu").message).includes("用尽"),
+  JSON.stringify(quotaConclusionOf(PROVIDER, snapshotWith(EMPTY_PROBE), "qiniu")),
 );
 
 section("没指名插件时是不知道");
@@ -354,10 +354,10 @@ check(
 check("门户 401：不算用尽", kind?.outOfCredits(accountRow, snapshotDenied) === false);
 check("门户 401：不写冷却", cooldownUntil(accountId) === null, String(cooldownUntil(accountId)));
 
-// ④ 门户回 429：限流。这不是额度问题，但要给这个账号写冷却 —— 门户现在不给额度，
-//    再敲一遍也是同一个答复。
+// ④ 门户回 429：额度接口限流。这不是路由冷却 —— 查额度的接口忙一会儿，跟
+//    「这个账号能不能接推理请求」是两件事。只记一行日志，冷却表里不能有这一行。
 portalStatus = 429;
-const beforeRate = Date.now();
+warns = [];
 const snapshotRate = await refreshed();
 check(
   "门户 429：结论是 rate_limited",
@@ -365,13 +365,20 @@ check(
   JSON.stringify(snapshotRate?.plugins?.qiniu?.[accountId]),
 );
 check("门户 429：不算用尽（限流不是没钱）", kind?.outOfCredits(accountRow, snapshotRate) === false);
-const rateUntil = cooldownUntil(accountId);
-check("门户 429：写了冷却", rateUntil !== null, String(rateUntil));
+check("门户 429：不写路由冷却", cooldownUntil(accountId) === null, String(cooldownUntil(accountId)));
 check(
-  "门户 429：冷却时长按平台默认",
-  rateUntil !== null && Math.abs(rateUntil - (beforeRate + rateCooldownMs())) < 5_000,
-  `${rateUntil} / ${beforeRate + rateCooldownMs()}`,
+  "门户 429：冷却表里没有这个账号的行",
+  !listCooldowns().some((row) => row.providerId === accountId),
+  JSON.stringify(listCooldowns().filter((row) => row.providerId === accountId)),
 );
+// 这条日志是唯一的痕迹：说清哪个接口、哪个插件、哪个账号，不拿「冷却」当说法。
+const rateLine = warns.find((line) => line.includes("额度接口被限流"));
+check(
+  "门户 429：记一行日志说额度接口被限流（带插件与账号）",
+  rateLine !== undefined && rateLine.includes("qiniu") && rateLine.includes(accountId),
+  warns.join(" / "),
+);
+check("门户 429：那一行不说冷却", rateLine !== undefined && !rateLine.includes("冷却"), String(rateLine));
 // 门户不报 Retry-After 的时候不该猜一个别的时长；报了就用它。
 check(
   "门户 429：门户没说多久，恢复时刻就不编",
