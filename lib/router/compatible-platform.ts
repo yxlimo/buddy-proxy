@@ -58,6 +58,13 @@ export interface CompatiblePlatform {
    * 的，而 `provider` 只说明是哪个平台。
    */
   keyOf(provider: ProviderRow, accountId?: string): string;
+  /**
+   * 问上游要模型目录时带的鉴权头。不给就按 Bearer 发。
+   *
+   * 与推理那一条路分开：绝大多数上游两处一个样，但 Anthropic 那一族不是
+   * （目录也只认 `x-api-key`），所以方言要说得出自己的头。
+   */
+  catalogAuth?(key: string): Record<string, string>;
   /** 模型目录。 */
   models(provider: ProviderRow): CatalogModel[];
   /** 额度视图。不给就是没有。 */
@@ -87,6 +94,10 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     policies: platform.policies ?? ["single", "fallback"],
     baseUrl: platform.baseUrl,
     inferWith: platform.inferWith,
+    // 明文 key 也登记到注册表上：转发层与「问上游要模型目录」要的是同一把，
+    // 各自去各家私有的 getter 取一遍就是两份知识。
+    keyOf: platform.keyOf,
+    ...(platform.catalogAuth ? { catalogAuth: platform.catalogAuth } : {}),
     credential: platform.credential ?? (() => missingCredential()),
     models: platform.models,
     quotas: platform.quotas ?? (() => []),

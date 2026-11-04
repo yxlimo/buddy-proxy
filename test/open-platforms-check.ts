@@ -46,7 +46,10 @@ const {
   openPlatformOf,
 } = await import("../lib/open-platforms.ts");
 const { addAccount, provider } = await import("../lib/providers.ts");
-const { store, migratePlatforms } = await import("../lib/store.ts");
+const { store, migratePlatforms, seedPlatformModels } = await import("../lib/store.ts");
+const { kindOf } = await import("../lib/provider-kinds.ts");
+// 引用即登记：这一节要拿 kind.models() 报的代码目录做对照。
+await import("../lib/kinds/index.ts");
 const { PLATFORM_TEMPLATES, PLATFORM_KIND_OPTIONS, platformKindOptionOf } = await import(
   "../lib/platform-catalog.ts"
 );
@@ -105,6 +108,26 @@ function insertRow(id: string, label: string): void {
     .run(id, label, "https://example.test/v1", "[]", 1, "", now, now);
 }
 
+/**
+ * 一个最小的账号行：这几家的 models() 只看 kind（只有开放平台那一类看平台行）。
+ *
+ * 造它而不是真去加一个账号：这一节查的是目录，加账号会顺带写凭据。
+ */
+function codeRow(platform: string) {
+  return {
+    id: "0",
+    platform,
+    kind: openPlatformOf(platform)?.kind ?? "",
+    region: "",
+    alias: "",
+    enabled: true,
+    weight: 0,
+    policy: "single" as const,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
 section("新库");
 
 check(
@@ -146,7 +169,24 @@ for (const t of PLATFORM_TEMPLATES) {
     String(seeded?.baseUrl),
   );
   check(`${t.key} 没有区域`, seeded?.region === "", JSON.stringify(seeded?.region));
-  check(`${t.key} 的目录是空的`, (seeded?.models.items.length ?? -1) === 0, JSON.stringify(seeded?.models));
+  // 目录：播种把手上已有的那一份搬进这一行。有代码目录的三家逐条对（顺序也
+  // 对：目录的顺序决定面板与路由里的模型次序）；SenseNova 与书生·端砚的
+  // 目录是问上游要来的（落在 cache 表里），这个测试里没有那一行 —— 那种情况
+  // 下播种安静地留空，不是「必须为空」。
+  const codeCatalog = (kindOf(t.kind)?.models(codeRow(t.key)) ?? []).map((model) => model.id);
+  if (codeCatalog.length) {
+    check(
+      `${t.key} 的目录与代码目录逐条一致`,
+      (seeded?.models.items ?? []).join(",") === codeCatalog.join(","),
+      `${(seeded?.models.items ?? []).join(",")} / ${codeCatalog.join(",")}`,
+    );
+  } else {
+    check(
+      `${t.key}：cache 里没有目录时播种安静地留空`,
+      (seeded?.models.items ?? []).length === 0,
+      JSON.stringify(seeded?.models),
+    );
+  }
   // 平台列表里那一行用的是它自己的 kind：填成清一色的 openai 就把这一族
   // （七牛云要两段凭据、书生·端砚要两段）的差别抹掉了。
   check(
@@ -155,6 +195,36 @@ for (const t of PLATFORM_TEMPLATES) {
     String(allPlatforms().find((p) => p.id === t.key)?.kind),
   );
 }
+
+// 播种不许覆盖已有的人工目录。跟 test/open-platform:kind 里那条「非空不覆盖」
+// 不是一回事：那条看的是空不空，这条看的是来源 —— 人工那一行（source=manual、
+// 自动那格关着）哪怕以后被清空，也不该被一次重启填回来。
+const manualSeeded = createOpenPlatform({
+  id: "seed-manual-row",
+  label: "Seed Manual",
+  baseUrl: "https://api.manual.test/v1",
+});
+check("人工目录的行建得起来", manualSeeded.ok === true, manualSeeded.message);
+updateOpenPlatform("seed-manual-row", { models: ["hand-1"] });
+seedPlatformModels(store());
+const manualAfter = openPlatformOf("seed-manual-row");
+check(
+  "播种没改人工目录的模型",
+  (manualAfter?.models.items ?? []).join(",") === "hand-1",
+  JSON.stringify(manualAfter?.models),
+);
+check(
+  "播种没把自动那一格打开",
+  manualAfter?.models.auto === false,
+  JSON.stringify(manualAfter?.models),
+);
+check(
+  "人工目录的来源还是 manual",
+  manualAfter?.models.source === "manual",
+  JSON.stringify(manualAfter?.models),
+);
+// 删掉：后面的计数按「用户自己建的行」算。
+deleteOpenPlatform("seed-manual-row");
 
 // 模板那一侧：模拟端那五家还在代码里，kind 还是它们自己的。
 check(
@@ -386,17 +456,17 @@ const typed = createOpenPlatform({
   id: "kinds-demo",
   label: "Kinds Demo",
   baseUrl: "https://kinds.test/v1",
-  kind: "sensenova",
+  kind: "anthropic",
 });
 check("带 kind 的建得起来", typed.ok === true, typed.message);
 check(
   "kind 写进库里了",
-  openPlatformOf("kinds-demo")?.kind === "sensenova",
+  openPlatformOf("kinds-demo")?.kind === "anthropic",
   String(openPlatformOf("kinds-demo")?.kind),
 );
 check(
   "平台列表里报的也是它",
-  platformOfAny("kinds-demo")?.kind === "sensenova",
+  platformOfAny("kinds-demo")?.kind === "anthropic",
   String(platformOfAny("kinds-demo")?.kind),
 );
 
@@ -431,35 +501,44 @@ const badKind = createOpenPlatform({
 });
 check("没登记的 kind 不收", badKind.ok === false, badKind.message);
 check(
-  "拒绝的话说的是那个 kind 与能建的那些（用 label）",
-  badKind.message.includes("没有这一类平台：no-such-kind") && badKind.message.includes("七牛云"),
+  "拒绝的话说的是那个 kind 与能建的两种方言（用 label）",
+  badKind.message.includes("没有这一类平台：no-such-kind") &&
+    badKind.message.includes("OpenAI 兼容") &&
+    badKind.message.includes("Anthropic 兼容") &&
+    // 厂商那五家不再列在候选里。
+    !["七牛云", "讯飞星火", "SenseNova", "书生·端砚", "TokenRhythm"].some((name) =>
+      badKind.message.includes(name),
+    ),
   badKind.message,
 );
 check("被拒的那一行没写进表", openPlatformOf("kinds-bad") === null, JSON.stringify(openPlatformOf("kinds-bad")));
 
-// 模拟客户端那五家：一个客户端一份会话，不属于「用户自己加一个」的那一类，
-// 所以不在这张表里。
-const simulated = createOpenPlatform({
-  id: "kinds-minimax",
-  label: "Kinds Minimax",
-  baseUrl: "https://minimax.test/v1",
-  kind: "minimax",
-});
-check("模拟客户端那一类建不了", simulated.ok === false, simulated.message);
-check(
-  "说的是没有这一类",
-  simulated.message.includes("没有这一类平台：minimax"),
-  simulated.message,
-);
-check("那一行也没写进表", openPlatformOf("kinds-minimax") === null);
+// 厂商与模拟客户端都不是用户能建的一类：厂商是本仓预置的模板（迁移补出来的
+// 库行，kind 已经体现了协议差异），模拟客户端是一个客户端一份会话 —— 两种都
+// 不该出现在下拉里，同一个理由，所以放在一条里比。
+for (const kind of ["minimax", "sensenova"]) {
+  const rejected = createOpenPlatform({
+    id: `kinds-${kind}`,
+    label: `Kinds ${kind}`,
+    baseUrl: "https://simulated.test/v1",
+    kind,
+  });
+  check(`厂商或模拟客户端类型不可建：${kind}`, rejected.ok === false, rejected.message);
+  check(
+    `${kind} 说的是没有这一类`,
+    rejected.message.includes(`没有这一类平台：${kind}`),
+    rejected.message,
+  );
+  check(`${kind} 那一行也没写进表`, openPlatformOf(`kinds-${kind}`) === null);
+}
 
 // 建好之后换不了类型：换类型要连它名下的凭据一起重算，那是另一件事。
-const switched = updateOpenPlatform("kinds-demo", { kind: "qiniu", label: "Kinds Demo 改" });
+const switched = updateOpenPlatform("kinds-demo", { kind: "openai", label: "Kinds Demo 改" });
 check("换类型被拒", switched.ok === false, switched.message);
 check("说的是不能换类型", switched.message.includes("不能换类型"), switched.message);
 check(
   "库里 kind 没变",
-  openPlatformOf("kinds-demo")?.kind === "sensenova",
+  openPlatformOf("kinds-demo")?.kind === "anthropic",
   String(openPlatformOf("kinds-demo")?.kind),
 );
 check(
@@ -469,39 +548,53 @@ check(
 );
 
 // 同一类当没传：别的字段照常改。
-const sameKind = updateOpenPlatform("kinds-demo", { kind: "sensenova", label: "Kinds Demo 改" });
+const sameKind = updateOpenPlatform("kinds-demo", { kind: "anthropic", label: "Kinds Demo 改" });
 check("同 kind 当没传，改得掉", sameKind.ok === true, sameKind.message);
 check("名字改了", openPlatformOf("kinds-demo")?.label === "Kinds Demo 改", String(openPlatformOf("kinds-demo")?.label));
 check(
   "kind 还是原来那个",
-  openPlatformOf("kinds-demo")?.kind === "sensenova",
+  openPlatformOf("kinds-demo")?.kind === "anthropic",
   String(openPlatformOf("kinds-demo")?.kind),
 );
 
-// 那张表本身：六条，第一条是通用平台（没有默认地址 —— 通用平台叫什么只有
-// 用户知道），星火没有模型清单接口。
-check("能建的一共六类", PLATFORM_KIND_OPTIONS.length === 6, String(PLATFORM_KIND_OPTIONS.length));
+// 那张表本身：只有两种方言 —— 向上游讲 OpenAI 格式，还是讲 Anthropic Messages。
+// 厂商那五家是本仓预置的模板（迁移补出来的库行），不是用户能选的一类，这是
+// 本次收敛的判据：表里出现任何一个厂商 kind 都算坏掉。
+const VENDOR_KINDS = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
+check("能建的一共两类", PLATFORM_KIND_OPTIONS.length === 2, String(PLATFORM_KIND_OPTIONS.length));
+check(
+  "两类就是两种方言，openai 在前",
+  PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(",") === "openai,anthropic",
+  PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(","),
+);
+check(
+  "表里不含任何厂商 kind",
+  VENDOR_KINDS.every(
+    (kind) => platformKindOptionOf(kind) === null && !PLATFORM_KIND_OPTIONS.some((o) => o.kind === kind),
+  ),
+  PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(","),
+);
 check(
   "第一条是 openai",
   PLATFORM_KIND_OPTIONS[0]?.kind === "openai",
   String(PLATFORM_KIND_OPTIONS[0]?.kind),
 );
 check(
-  "openai 没有默认地址",
-  PLATFORM_KIND_OPTIONS[0]?.defaultBaseUrl === "",
-  JSON.stringify(PLATFORM_KIND_OPTIONS[0]?.defaultBaseUrl),
+  "第二条是 anthropic（排在 openai 后面）",
+  PLATFORM_KIND_OPTIONS[1]?.kind === "anthropic" && PLATFORM_KIND_OPTIONS[1]?.label === "Anthropic 兼容",
+  String(PLATFORM_KIND_OPTIONS[1]?.kind),
 );
-check("星火不能从上游拉目录", platformKindOptionOf("xinghuo")?.modelsFromUpstream === false, "");
+check(
+  "两类都没有默认地址（哪家服务只有用户知道）",
+  PLATFORM_KIND_OPTIONS.every((o) => o.defaultBaseUrl === ""),
+  JSON.stringify(PLATFORM_KIND_OPTIONS.map((o) => o.defaultBaseUrl)),
+);
+check(
+  "两类都能从上游拉目录",
+  PLATFORM_KIND_OPTIONS.every((o) => o.modelsFromUpstream === true),
+  JSON.stringify(PLATFORM_KIND_OPTIONS.map((o) => o.modelsFromUpstream)),
+);
 check("认不出的 kind 是 null", platformKindOptionOf("minimax") === null, JSON.stringify(platformKindOptionOf("minimax")));
-// 那一家的名字与地址跟模板表逐字一致：同一份数据两处写着，靠这条钉住走样。
-for (const template of PLATFORM_TEMPLATES) {
-  const option = platformKindOptionOf(template.kind);
-  check(
-    `${template.kind} 的名字与地址跟模板表一致`,
-    option?.label === template.label && option?.defaultBaseUrl === template.defaultBaseUrl,
-    JSON.stringify([option, template.label, template.defaultBaseUrl]),
-  );
-}
 
 // 上面建的几行删掉：后面的小节按行数比。
 for (const id of ["kinds-demo", "kinds-plain", "kinds-empty"]) deleteOpenPlatform(id);

@@ -501,13 +501,13 @@ const typed = await addPlatform({
   id: "kind-demo",
   label: "Kind Demo",
   baseUrl: "https://api.kind.test/v1",
-  kind: "sensenova",
+  kind: "anthropic",
 });
 check("带 kind 的平台建得起来", typed.ok === true, typed.message);
-check("答复里报的是那一类", typed.platform?.kind === "sensenova", show(typed.platform?.kind));
-check("库里那一行是那一类", openPlatformOf("kind-demo")?.kind === "sensenova", String(openPlatformOf("kind-demo")?.kind));
+check("答复里报的是那一类", typed.platform?.kind === "anthropic", show(typed.platform?.kind));
+check("库里那一行是那一类", openPlatformOf("kind-demo")?.kind === "anthropic", String(openPlatformOf("kind-demo")?.kind));
 const kindListed = (await listUpstreams()).find((u) => u.id === "kind-demo");
-check("ListUpstreams 里这个平台的 kind 是 sensenova", kindListed?.kind === "sensenova", show(kindListed?.kind));
+check("ListUpstreams 里这个平台的 kind 是 anthropic", kindListed?.kind === "anthropic", show(kindListed?.kind));
 
 // 模板平台照实报它自己那一类（不是清一色的 openai）。
 const templateKinds = (await listUpstreams()).filter((u) => !u.isOpenPlatform);
@@ -526,45 +526,55 @@ const badKind = await addPlatform({
 });
 check("没登记的 kind 被拒", badKind.ok === false, show(badKind));
 check(
-  "说的是那个 kind 与至少一个真名字",
-  String(badKind.message ?? "").includes("no-such-kind") && String(badKind.message ?? "").includes("七牛云"),
+  "说的是那个 kind 与能建的两种方言",
+  String(badKind.message ?? "").includes("no-such-kind") &&
+    String(badKind.message ?? "").includes("OpenAI 兼容") &&
+    String(badKind.message ?? "").includes("Anthropic 兼容") &&
+    // 厂商那五家不再列在候选里。
+    !["七牛云", "讯飞星火", "SenseNova", "书生·端砚", "TokenRhythm"].some((name) =>
+      String(badKind.message ?? "").includes(name),
+    ),
   String(badKind.message),
 );
 check("被拒的那一行没写进表", openPlatformOf("kind-bad") === null, show(openPlatformOf("kind-bad")));
 
-// 模拟客户端那几家：一个客户端一份会话，不属于「用户自己加一个」的那一类。
-const simulated = await addPlatform({
-  id: "kind-minimax",
-  label: "Kind Minimax",
-  baseUrl: "https://api.kind.test/v1",
-  kind: "minimax",
-});
-check("模拟客户端那一类被拒", simulated.ok === false, show(simulated));
-check(
-  "说的是没有这一类",
-  String(simulated.message ?? "").includes("没有这一类平台：minimax"),
-  String(simulated.message),
-);
-check("它也没写进表", openPlatformOf("kind-minimax") === null, show(openPlatformOf("kind-minimax")));
+// 厂商与模拟客户端都不是能建的一类：厂商是本仓预置的模板（迁移补出来的库行，
+// kind 已经体现了协议差异），模拟客户端是一个客户端一份会话 —— 同一个理由，
+// 放在一条里比。
+for (const kind of ["minimax", "sensenova"]) {
+  const rejected = await addPlatform({
+    id: `kind-reject-${kind}`,
+    label: `Kind Reject ${kind}`,
+    baseUrl: "https://api.kind.test/v1",
+    kind,
+  });
+  check(`厂商或模拟客户端类型不可建：${kind}`, rejected.ok === false, show(rejected));
+  check(
+    `${kind} 说的是没有这一类`,
+    String(rejected.message ?? "").includes(`没有这一类平台：${kind}`),
+    String(rejected.message),
+  );
+  check(`${kind} 也没写进表`, openPlatformOf(`kind-reject-${kind}`) === null, show(openPlatformOf(`kind-reject-${kind}`)));
+}
 
 // 建好之后换不了类型。
 //
 // 线上换不了：UpdatePlatformRequest 里没有 kind 这一格（只有 AddPlatformRequest
 // 有），面板送不上来。这里走数据层那一层：内部调用方（迁移、脚本）想改类型的
 // 时候，得有个说得清楚的拒绝，而不是默默写成别的。
-const kindSwitch = updateOpenPlatform("kind-demo", { kind: "qiniu", label: "Kind Demo 改名" });
+const kindSwitch = updateOpenPlatform("kind-demo", { kind: "openai", label: "Kind Demo 改名" });
 check("换类型被拒", kindSwitch.ok === false, kindSwitch.message);
-check("库里 kind 不变", openPlatformOf("kind-demo")?.kind === "sensenova", String(openPlatformOf("kind-demo")?.kind));
+check("库里 kind 不变", openPlatformOf("kind-demo")?.kind === "anthropic", String(openPlatformOf("kind-demo")?.kind));
 check(
   "被拒的那一次别的字段也没动",
   openPlatformOf("kind-demo")?.label === "Kind Demo",
   String(openPlatformOf("kind-demo")?.label),
 );
 // 同一类当没传：别的字段照常改（否则「同 kind 当没传」就是整个更新都拒了）。
-const sameKind = updateOpenPlatform("kind-demo", { kind: "sensenova", label: "Kind Demo 改名" });
+const sameKind = updateOpenPlatform("kind-demo", { kind: "anthropic", label: "Kind Demo 改名" });
 check("同 kind 放行", sameKind.ok === true, sameKind.message);
 check("名字改了", openPlatformOf("kind-demo")?.label === "Kind Demo 改名", String(openPlatformOf("kind-demo")?.label));
-check("kind 还是原来那个", openPlatformOf("kind-demo")?.kind === "sensenova", String(openPlatformOf("kind-demo")?.kind));
+check("kind 还是原来那个", openPlatformOf("kind-demo")?.kind === "anthropic", String(openPlatformOf("kind-demo")?.kind));
 
 // 收尾：上面建的这一个删掉，后面按行数比的小节不受影响。
 const droppedTyped = await deletePlatform({ id: "kind-demo" });
@@ -578,7 +588,7 @@ check("表里回到基线", countPlatforms() === platformsBefore, `${countPlatfo
 section("能建的平台种类");
 
 const kindOptions = await listPlatformKinds();
-check("返回六条", kindOptions.length === 6, show(kindOptions.map((k: any) => k.kind)));
+check("返回两条", kindOptions.length === 2, show(kindOptions.map((k: any) => k.kind)));
 check(
   "顺序跟那张表一样",
   kindOptions.map((k: any) => k.kind).join(",") === PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(","),
@@ -597,9 +607,18 @@ check(
 const openaiOption = kindOptions.find((k: any) => k.kind === "openai");
 check("openai 的默认地址是空串", openaiOption?.defaultBaseUrl === "", show(openaiOption?.defaultBaseUrl));
 check("openai 能从上游拉目录", openaiOption?.modelsFromUpstream === true, show(openaiOption?.modelsFromUpstream));
-const xinghuoOption = kindOptions.find((k: any) => k.kind === "xinghuo");
-check("星火不能从上游拉目录", xinghuoOption?.modelsFromUpstream === false, show(xinghuoOption?.modelsFromUpstream));
-// 模拟客户端那几家不在里面：它们不是用户能自己加的一类。
+const anthropicOption = kindOptions.find((k: any) => k.kind === "anthropic");
+check("anthropic 的默认地址是空串", anthropicOption?.defaultBaseUrl === "", show(anthropicOption?.defaultBaseUrl));
+check("anthropic 能从上游拉目录", anthropicOption?.modelsFromUpstream === true, show(anthropicOption?.modelsFromUpstream));
+// 面板要收的是方言：厂商那五家是本仓预置的模板，模拟客户端那五家一个客户端
+// 一份会话 —— 都不在能建的清单里（本次收敛的判据）。
+check(
+  "厂商类型不在里面",
+  ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].every(
+    (kind) => !kindOptions.some((k: any) => k.kind === kind) && platformKindOptionOf(kind) === null,
+  ),
+  show(kindOptions.map((k: any) => k.kind)),
+);
 check(
   "模拟客户端那几家不在里面",
   ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "workbuddy-global"].every(

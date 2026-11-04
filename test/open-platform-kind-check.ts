@@ -51,7 +51,13 @@ function section(name: string): void {
  * ------------------------------------------------------------------ */
 
 /** 假上游收到过的请求。 */
-const seen: { method: string; path: string; authorization: string }[] = [];
+const seen: {
+  method: string;
+  path: string;
+  authorization: string;
+  xApiKey: string;
+  anthropicVersion: string;
+}[] = [];
 
 /** 假上游的 /models 答什么（换形状就改它）。 */
 let modelsPayload: unknown = { data: [{ id: "m-1" }, { id: "m-2" }] };
@@ -67,6 +73,8 @@ const upstream = http.createServer(async (req, res) => {
     method: req.method ?? "",
     path: url.pathname,
     authorization: String(req.headers.authorization ?? ""),
+    xApiKey: String(req.headers["x-api-key"] ?? ""),
+    anthropicVersion: String(req.headers["anthropic-version"] ?? ""),
   });
   if (req.method === "GET" && url.pathname.endsWith("/models")) {
     res.writeHead(modelsStatus, { "content-type": "application/json" });
@@ -108,7 +116,9 @@ const { createOpenPlatform, openPlatformOf, updateOpenPlatform } = await import(
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { platformAvailability } = await import("../lib/admin/platform-state.ts");
-const { refreshOpenPlatformCatalog } = await import("../lib/open-platform-catalog.ts");
+const { refreshOpenPlatformCatalog, openPlatformCatalogRefreshable } = await import(
+  "../lib/open-platform-catalog.ts"
+);
 const { saveAggregateModel, reloadAggregate } = await import("../lib/aggregate.ts");
 
 const server = app.listen(0, "127.0.0.1");
@@ -135,6 +145,238 @@ async function call(
   }
   return { status: res.status, json, text };
 }
+
+/* ------------------------------------------------------------------ *
+ * 0. 播种：平台行自己的模型目录
+ * ------------------------------------------------------------------ */
+
+section("0. 播种平台行的模型目录");
+
+const { store, seedPlatformModels, setCached } = await import("../lib/store.ts");
+const { QINIU_MODELS } = await import("../lib/qiniu/models.ts");
+const { XINGHUO_MODELS } = await import("../lib/xinghuo/models.ts");
+const { TOKENRHYTHM_MODELS } = await import("../lib/tokenrhythm/models.ts");
+
+/**
+ * 一个最小的账号行：这几家的 models() 只看 kind（只有开放平台那一类看平台行）。
+ *
+ * 造它而不是真去加一个账号：这一节查的是目录，加账号会顺带写凭据。
+ */
+function bareRow(platform: string) {
+  return {
+    id: "0",
+    platform,
+    kind: openPlatformOf(platform)?.kind ?? "",
+    region: "",
+    alias: "",
+    enabled: true,
+    weight: 0,
+    policy: "single" as const,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
+/** 表里那一行现在有的目录。 */
+function rowIds(platform: string): string[] {
+  return openPlatformOf(platform)?.models.items ?? [];
+}
+
+/** 代码里那一份目录（kind.models() 报的），用来逐条比。 */
+function kindIds(platform: string): string[] {
+  const row = bareRow(platform);
+  return (kindOf(row.kind)?.models(row) ?? []).map((model) => model.id);
+}
+
+/**
+ * 直接写一行平台。
+ *
+ * 不走 createOpenPlatform：它的 kind 要过「能建哪几种」那张选单，而这张选单
+ * 正在改成方言（OpenAI / Anthropic）。这里要的是「表里有一行 kind=tokenrhythm
+ * 的平台」——那是代码里的模板，不是用户在面板上选的类型。
+ */
+function insertPlatform(id: string, kind: string, baseUrl: string): void {
+  const now = Date.now();
+  store()
+    .prepare(
+      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, 1, '', ?, '', ?, ?)",
+    )
+    .run(id, id, baseUrl, JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }), kind, now, now);
+}
+
+// 代码里有目录的三家：播种后非空，且与 kind.models() 逐条一致。
+const CODE_CATALOGS: [string, { id: string }[]][] = [
+  ["qiniu", QINIU_MODELS],
+  ["xinghuo", XINGHUO_MODELS],
+  ["tokenrhythm", TOKENRHYTHM_MODELS],
+];
+for (const [id, table] of CODE_CATALOGS) {
+  check(`${id}：模板行在表里`, Boolean(openPlatformOf(id)), String(openPlatformOf(id)));
+  check(`${id}：播种后非空`, rowIds(id).length > 0, JSON.stringify(rowIds(id)));
+  check(
+    `${id}：代码目录有 ${table.length} 个模型`,
+    table.length > 0,
+    String(table.length),
+  );
+  check(
+    `${id}：与代码目录逐条一致`,
+    rowIds(id).join(",") === kindIds(id).join(","),
+    `${rowIds(id).join(",")} / ${kindIds(id).join(",")}`,
+  );
+  check(
+    `${id}：来源是 auto、拉的时刻是 0（不是从上游拉的）`,
+    openPlatformOf(id)?.models.source === "auto" && openPlatformOf(id)?.models.fetchedAt === 0,
+    JSON.stringify(openPlatformOf(id)?.models),
+  );
+}
+
+// SenseNova 与书生·端砚没有代码里的目录：目录是问上游要来的，落在 cache 表里。
+// 全新库里还没有那一行 —— 留空，不报错、不造数据。
+for (const id of ["sensenova", "intern-ai"]) {
+  check(
+    `${id}：cache 里还没有目录时留空（全新库的正常形态）`,
+    rowIds(id).length === 0,
+    JSON.stringify(rowIds(id)),
+  );
+}
+let seedThrew = "";
+let seedFilled = -1;
+try {
+  seedFilled = seedPlatformModels(store());
+} catch (e) {
+  seedThrew = String((e as Error)?.message ?? e);
+}
+check("cache 缺席时播种不报错", seedThrew === "", seedThrew);
+check("cache 缺席时一行都没填", seedFilled === 0, String(seedFilled));
+
+// 塞一份 cache（就是上游抓到过一份之后库里的样子），再播一次。
+const SENSENOVA_CATALOG = [
+  { id: "SenseChat-5", name: "SenseChat 5", contextLength: 32768, maxOutputLength: 4096, inputModalities: ["text"], outputModalities: ["text"], features: ["tools"] },
+  { id: "SenseNova-V6-Pro", name: "SenseNova V6 Pro", contextLength: 131072, maxOutputLength: 8192, inputModalities: ["text"], outputModalities: ["text"], features: [] },
+];
+const INTERN_AI_CATALOG = [
+  { id: "intern-s1", name: "Intern S1", reasoning: true, toolCall: true, contextLength: 262144 },
+  { id: "internlm3-latest", name: "InternLM3", reasoning: false, toolCall: true, contextLength: 32768 },
+];
+setCached("sensenova:catalog", { items: SENSENOVA_CATALOG, at: Date.now() });
+setCached("intern-ai:catalog", { items: INTERN_AI_CATALOG, at: Date.now() });
+const primed = seedPlatformModels(store());
+check("cache 有了目录之后播种填了两家", primed === 2, String(primed));
+for (const id of ["sensenova", "intern-ai"]) {
+  check(`${id}：播种后非空`, rowIds(id).length > 0, JSON.stringify(rowIds(id)));
+  check(
+    `${id}：与 kind.models() 逐条一致`,
+    rowIds(id).join(",") === kindIds(id).join(","),
+    `${rowIds(id).join(",")} / ${kindIds(id).join(",")}`,
+  );
+}
+
+// 幂等：再跑一次，五行的目录一动不动。
+const FIVE = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
+const before = FIVE.map((id) => JSON.stringify(openPlatformOf(id)?.models));
+const again = seedPlatformModels(store());
+check("再跑一次一行都不填", again === 0, String(again));
+const after = FIVE.map((id) => JSON.stringify(openPlatformOf(id)?.models));
+check("再跑一次目录没变", before.join("|") === after.join("|"), after.join("|"));
+
+// 厂商模板行的目录是代码挑过的一份（lib/qiniu/models.ts 这些常量表），不是
+// 「上游报什么就收什么」：上游那份更宽（七牛报 78 个模型），盖上来会出现被上游
+// 拒的模型。所以播种同时把「自动拉」那一格关掉。
+for (const id of FIVE) {
+  check(
+    `${id}：播种后不自动拉（目录是代码挑的）`,
+    openPlatformOf(id)?.models.auto === false,
+    JSON.stringify(openPlatformOf(id)?.models),
+  );
+  const row = openPlatformOf(id)!;
+  check(
+    `${id}：说不用去拉目录`,
+    openPlatformCatalogRefreshable(row) === false,
+    String(openPlatformCatalogRefreshable(row)),
+  );
+}
+
+// 老库里的厂商行：目录是早先播种写进去的那一份，models_auto 还是 1。播种要补上
+// 那一格，目录本身不动 —— 挡的是「下次启动被上游那份盖掉」。
+insertPlatform("qiniu-legacy", "qiniu", upstreamBase);
+store()
+  .prepare("UPDATE platform SET models = ? WHERE id = ?")
+  .run(JSON.stringify({ items: ["legacy-1"], fetchedAt: 0, source: "auto" }), "qiniu-legacy");
+const legacyRow = openPlatformOf("qiniu-legacy")!;
+check("老库的厂商行还是自动拉", legacyRow.models.auto === true, JSON.stringify(legacyRow.models));
+check(
+  "老库的厂商行：说不去拉（第二道闸，不靠播种）",
+  openPlatformCatalogRefreshable(legacyRow) === false,
+  String(openPlatformCatalogRefreshable(legacyRow)),
+);
+const legacySeeded = seedPlatformModels(store());
+check("老库的厂商行：播种没填", legacySeeded === 0, String(legacySeeded));
+check(
+  "老库的厂商行：自动拉关掉了",
+  openPlatformOf("qiniu-legacy")?.models.auto === false,
+  JSON.stringify(openPlatformOf("qiniu-legacy")?.models),
+);
+check(
+  "老库的厂商行：目录没被动",
+  rowIds("qiniu-legacy").join(",") === "legacy-1",
+  JSON.stringify(openPlatformOf("qiniu-legacy")?.models),
+);
+
+// 人写的目录不动。
+const manualSeed = createOpenPlatform({ id: "seed-manual", label: "Seed Manual", baseUrl: upstreamBase });
+check("手工目录的平台建得起来", manualSeed.ok === true, manualSeed.message);
+updateOpenPlatform("seed-manual", { models: ["hand-1"] });
+// 人清空的目录也不填回来：models_auto 关着说的是「以后别自动往里写」。
+//
+// 地址用一个**目录表里有**的厂商（lib/model-catalog.json）：拿一个不认识的
+// 地址，播种本来就是空的，这条判断删掉也不会红 —— 那就不算在查这件事。
+const clearedSeed = createOpenPlatform({
+  id: "seed-cleared",
+  label: "Seed Cleared",
+  baseUrl: "https://api.deepseek.com/v1",
+});
+check("清空目录的平台建得起来", clearedSeed.ok === true, clearedSeed.message);
+updateOpenPlatform("seed-cleared", { models: [] });
+seedPlatformModels(store());
+check(
+  "人写的目录没被播种改",
+  rowIds("seed-manual").join(",") === "hand-1",
+  JSON.stringify(openPlatformOf("seed-manual")?.models),
+);
+check(
+  "人清空的目录没被填回来",
+  rowIds("seed-cleared").length === 0,
+  JSON.stringify(openPlatformOf("seed-cleared")?.models),
+);
+
+// 通用开放平台：这一行背后是哪家厂商由地址说明。
+const deepseekSeed = createOpenPlatform({
+  id: "seed-deepseek",
+  label: "Seed DeepSeek",
+  baseUrl: "https://api.deepseek.com/v1",
+});
+check("按地址认厂商的平台建得起来", deepseekSeed.ok === true, deepseekSeed.message);
+const unknownSeed = createOpenPlatform({
+  id: "seed-unknown",
+  label: "Seed Unknown",
+  baseUrl: "https://no-such-vendor.invalid/v1",
+});
+check("认不出厂商的平台建得起来", unknownSeed.ok === true, unknownSeed.message);
+seen.length = 0;
+const vendorFilled = seedPlatformModels(store());
+check("按地址播种填了一行", vendorFilled === 1, String(vendorFilled));
+check(
+  "deepseek 的地址播种出两个模型",
+  rowIds("seed-deepseek").length === 2,
+  JSON.stringify(rowIds("seed-deepseek")),
+);
+check(
+  "认不出的地址留空，不报错",
+  rowIds("seed-unknown").length === 0,
+  JSON.stringify(rowIds("seed-unknown")),
+);
+check("播种没碰网络", seen.length === 0, JSON.stringify(seen));
 
 /* ------------------------------------------------------------------ *
  * 一个开放平台：一个账号，一把 key，一份手写的目录
@@ -781,6 +1023,207 @@ for (const c of quietStates) {
 putHealthSnapshot({ plugins: { "sensenova-pools": {} } });
 const noConclusion = await upstreamOf("quota-demo");
 check("没有结论就不报这一格", noConclusion?.quota === undefined, show(noConclusion?.quota));
+
+/* ------------------------------------------------------------------ *
+ * 10. 拿各家自己的推理 key 去问目录
+ * ------------------------------------------------------------------ */
+
+section("10. 拿各家自己的推理 key 去问目录");
+
+const { saveSession: saveTokenRhythmSession } = await import("../lib/tokenrhythm/accounts.ts");
+
+// 中转站：推理 key 与门户会话是两个东西。问目录要带那把 key，不是 cookie。
+insertPlatform("relay-demo", "tokenrhythm", upstreamBase);
+const relayAccount = addAccount({ platform: "relay-demo" });
+const relayAccountId = relayAccount.id ?? "";
+check("中转站账号加得起来", relayAccount.ok === true && relayAccountId !== "", relayAccount.message);
+const relayKey = setProviderKeys(relayAccountId, ["sk-tr-infer-1"]);
+check("中转站的推理 key 写进去了", relayKey.ok === true && relayKey.count === 1, relayKey.message);
+// 再给它一份门户会话：cookie 只用来读钱包，不是推理凭据。
+saveTokenRhythmSession(
+  {
+    accountId: relayAccountId,
+    cookie: "PORTAL-COOKIE-MUST-NOT-BE-SENT",
+    csrf: "csrf-1",
+    userId: "u-1",
+    name: "relay",
+    obtainedAtMs: Date.now(),
+    expiresAtMs: Date.now() + 30 * 24 * 60 * 60_000,
+  },
+  { force: true },
+);
+
+modelsStatus = 200;
+modelsPayload = { data: [{ id: "tr-1" }, { id: "tr-2" }] };
+seen.length = 0;
+const relayPull = await refreshOpenPlatformCatalog("relay-demo", { force: true });
+check("中转站：拉到了", relayPull.ok === true, relayPull.message);
+check("中转站：真的问了上游的 /models", modelsHits() === 1, JSON.stringify(seen.map((s) => `${s.method} ${s.path}`)));
+check(
+  "中转站：带的是推理 key",
+  seen.some((s) => s.authorization === "Bearer sk-tr-infer-1"),
+  JSON.stringify(seen.map((s) => s.authorization)),
+);
+check(
+  "中转站：不是门户 cookie",
+  !seen.some((s) => s.authorization.includes("PORTAL-COOKIE")),
+  JSON.stringify(seen.map((s) => s.authorization)),
+);
+check(
+  "中转站：目录写回了表里",
+  openPlatformOf("relay-demo")?.models.items.join(",") === "tr-1,tr-2",
+  JSON.stringify(openPlatformOf("relay-demo")?.models),
+);
+
+// 七牛云：两段凭据，推理用第一段。
+insertPlatform("qiniu-demo", "qiniu", upstreamBase);
+const qiniuDemoAccount = addAccount({ platform: "qiniu-demo" });
+const qiniuKeyed = setProviderKeys(qiniuDemoAccount.id ?? "", ["sk-qiniu-infer", "PORTAL-COOKIE-QINIU"]);
+check("七牛：两段凭据都写进去了", qiniuKeyed.ok === true && qiniuKeyed.count === 2, qiniuKeyed.message);
+modelsStatus = 200;
+modelsPayload = { data: [{ id: "q-1" }] };
+seen.length = 0;
+const qiniuPull = await refreshOpenPlatformCatalog("qiniu-demo", { force: true });
+check("七牛：拉到了", qiniuPull.ok === true, qiniuPull.message);
+check("七牛：真的问了上游的 /models", modelsHits() === 1, JSON.stringify(seen.map((s) => `${s.method} ${s.path}`)));
+check(
+  "七牛：带的是推理 key",
+  seen.some((s) => s.authorization === "Bearer sk-qiniu-infer"),
+  JSON.stringify(seen.map((s) => s.authorization)),
+);
+check(
+  "七牛：不是门户 cookie",
+  !seen.some((s) => s.authorization.includes("PORTAL-COOKIE-QINIU")),
+  JSON.stringify(seen.map((s) => s.authorization)),
+);
+check("七牛：目录写回了表里", rowIds("qiniu-demo").join(",") === "q-1", JSON.stringify(rowIds("qiniu-demo")));
+
+// 只配了门户 cookie 的七牛账号：不能推理，也就不去问目录。
+insertPlatform("cookie-demo", "qiniu", upstreamBase);
+const cookieAccount = addAccount({ platform: "cookie-demo" });
+setProviderKeys(cookieAccount.id ?? "", ["", "PORTAL-ONLY"]);
+seen.length = 0;
+const cookiePull = await refreshOpenPlatformCatalog("cookie-demo", { force: true });
+check(
+  "只有门户 cookie：报没有能用的 API key",
+  cookiePull.ok === false && /API key/.test(cookiePull.message),
+  cookiePull.message,
+);
+check("只有门户 cookie：没问上游", seen.length === 0, JSON.stringify(seen));
+
+// 没有 key：报那句话，不问上游。
+insertPlatform("nokey-demo", "tokenrhythm", upstreamBase);
+addAccount({ platform: "nokey-demo" });
+seen.length = 0;
+const noKeyPull2 = await refreshOpenPlatformCatalog("nokey-demo", { force: true });
+check(
+  "没有推理 key：报那句话",
+  noKeyPull2.ok === false && /API key/.test(noKeyPull2.message),
+  noKeyPull2.message,
+);
+check("没有推理 key：没问上游", seen.length === 0, JSON.stringify(seen));
+
+// 有 key 但上游 500：保留原来那份目录。
+modelsStatus = 500;
+modelsPayload = { data: [{ id: "nope" }] };
+const relayFail = await refreshOpenPlatformCatalog("relay-demo", { force: true });
+check("上游 500：不报成功", relayFail.ok === false, relayFail.message);
+check(
+  "上游 500：原来那份目录留着",
+  openPlatformOf("relay-demo")?.models.items.join(",") === "tr-1,tr-2",
+  JSON.stringify(openPlatformOf("relay-demo")?.models),
+);
+modelsStatus = 200;
+
+/* ------------------------------------------------------------------ *
+ * 11. 拉目录的鉴权头跟着方言走
+ * ------------------------------------------------------------------ */
+
+section("11. 拉目录的鉴权头跟着方言走");
+
+// Anthropic 兼容的上游不认 `Authorization: Bearer`：问 `/models` 也只用
+// `x-api-key` 加版本头。发错了回 401 —— 看着像 key 不对，其实是头不对，
+// 目录永远拉不到。
+const anthCreated = createOpenPlatform({
+  id: "anth-cat",
+  label: "Anth Cat",
+  baseUrl: upstreamBase,
+  kind: "anthropic",
+});
+check("anthropic 平台建得起来", anthCreated.ok === true, anthCreated.message);
+const anthAccount = addAccount({ platform: "anth-cat" });
+const anthAccountId = anthAccount.id ?? "";
+check("anthropic：账号加得起来", anthAccount.ok === true && anthAccountId !== "", anthAccount.message);
+setProviderKeys(anthAccountId, ["sk-anth-1"]);
+
+seen.length = 0;
+modelsPayload = { data: [{ id: "a-1" }] };
+const anthPull = await refreshOpenPlatformCatalog("anth-cat", { force: true });
+check("anthropic：拉到了", anthPull.ok === true, anthPull.message);
+const anthModelsHits = seen.filter((s) => s.method === "GET" && s.path.endsWith("/models"));
+check("anthropic：问了一次 /models", anthModelsHits.length === 1, JSON.stringify(seen.map((s) => `${s.method} ${s.path}`)));
+check(
+  "anthropic：带的是 x-api-key",
+  anthModelsHits[0]?.xApiKey === "sk-anth-1",
+  JSON.stringify(anthModelsHits.map((s) => s.xApiKey)),
+);
+check(
+  "anthropic：带 anthropic-version",
+  anthModelsHits[0]?.anthropicVersion === "2023-06-01",
+  JSON.stringify(anthModelsHits.map((s) => s.anthropicVersion)),
+);
+check(
+  "anthropic：没有 authorization",
+  !anthModelsHits.some((s) => s.authorization !== ""),
+  JSON.stringify(anthModelsHits.map((s) => s.authorization)),
+);
+check(
+  "anthropic：目录写回了表里",
+  openPlatformOf("anth-cat")?.models.items.join(",") === "a-1",
+  JSON.stringify(openPlatformOf("anth-cat")?.models),
+);
+
+// 控制组：方言另一侧照旧发 Bearer —— 新加的那一项没有把保底行为改坏。
+seen.length = 0;
+modelsPayload = { data: [{ id: "o-1" }] };
+const openaiPull = await refreshOpenPlatformCatalog("auto-cat", { force: true });
+check("openai：拉到了", openaiPull.ok === true, openaiPull.message);
+const openaiModelsHits = seen.filter((s) => s.method === "GET" && s.path.endsWith("/models"));
+check(
+  "openai：带的还是 Bearer",
+  openaiModelsHits[0]?.authorization === "Bearer sk-auto-1",
+  JSON.stringify(openaiModelsHits.map((s) => s.authorization)),
+);
+check(
+  "openai：没有 x-api-key",
+  !openaiModelsHits.some((s) => s.xApiKey !== ""),
+  JSON.stringify(openaiModelsHits.map((s) => s.xApiKey)),
+);
+
+/* ------------------------------------------------------------------ *
+ * 12. 厂商行的目录归人管，方言行照旧能刷
+ * ------------------------------------------------------------------ */
+
+section("12. 厂商行的目录归人管");
+
+// 面板上那个「刷新模型目录」按钮走的就是这条路。
+const vendorRefresh = await adminService.refreshPlatformModels!({ platformId: "qiniu" } as any);
+check("厂商行：刷新被拒", vendorRefresh.ok === false, vendorRefresh.message);
+check("厂商行：说的是目录是人写的", /人写的/.test(vendorRefresh.message), vendorRefresh.message);
+check(
+  "厂商行：目录没动",
+  rowIds("qiniu").join(",") === kindIds("qiniu").join(","),
+  JSON.stringify(rowIds("qiniu")),
+);
+
+modelsPayload = { data: [{ id: "m-9" }, { id: "m-10" }] };
+const dialectRefresh = await adminService.refreshPlatformModels!({ platformId: "auto-cat" } as any);
+check("方言行：还能刷新", dialectRefresh.ok === true, dialectRefresh.message);
+check(
+  "方言行：目录换成了上游那份",
+  openPlatformOf("auto-cat")?.models.items.join(",") === "m-9,m-10",
+  JSON.stringify(openPlatformOf("auto-cat")?.models),
+);
 
 /* ------------------------------------------------------------------ *
  * 收尾

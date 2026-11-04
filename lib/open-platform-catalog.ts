@@ -12,12 +12,17 @@
 //
 // 它不碰额度：额度是那个额度插件的事，还没接。
 
-import { openPlatformKeyOf } from "./open-platform-credentials.ts";
 import { openPlatformOf, updateOpenPlatform, type OpenPlatformRow } from "./open-platforms.ts";
 // 模板的 id 名单住在叶子模块里（lib/platform-templates.ts）：这一层要判「表里
 // 那一行跟代码里的模板重名」，引 lib/platforms.ts 会绕成环（那一层引这一层）。
 import { PLATFORMS } from "./platform-templates.ts";
+import { isVendorTemplateKind } from "./platform-catalog.ts";
+import { kindOf } from "./provider-kinds.ts";
 import { accountsOfPlatform } from "./providers.ts";
+// 引用即登记：问目录要拿各家的推理 key，而登记发生在各平台模块的求值期。环上
+// 的模块不能在这里读别人的常量 —— 这里读的都是函数，调用时才取值（与
+// lib/admin/accounts.ts 那条 import 同一个理由）。
+import "./kinds/index.ts";
 
 /** 拉目录最多等多久（毫秒）：上游慢的时候不占着后台。 */
 const FETCH_TIMEOUT_MS = 10_000;
@@ -97,19 +102,36 @@ function isTemplatePlatformId(id: string): boolean {
  * 边还在每 5 分钟带真 key 打一次上游，而写回必然被拒。
  */
 export function openPlatformCatalogRefreshable(row: OpenPlatformRow): boolean {
-  return row.models.auto && !isTemplatePlatformId(row.id);
+  // 厂商模板行（七牛云、讯飞星火、SenseNova、书生·端砚、TokenRhythm）的目录是
+  // 代码挑过的一份：上游那份更宽（七牛上游报 78 个模型），盖上来会出现被上游
+  // 拒的模型。它们不属于「可以拿上游那份盖掉」的那一类。
+  //
+  // 播种已经把这些行的 models_auto 关了（新库），这一句管的是老库：那些行是
+  // 播种改口径之前写进去的，models_auto 还是 1。两处都要 —— 只靠播种，老库
+  // 里那几行照样每次启动都被上游那份盖一次。
+  return row.models.auto && !isTemplatePlatformId(row.id) && !isVendorTemplateKind(row.kind);
 }
 
 /**
- * 平台上第一个有 key 的账号的 key。
+ * 平台上第一个能推理的账号的那把明文 key。
+ *
+ * 走注册表的 `keyOf`，不按「key 存在 `key:provider:<id>:key`」找：那只是通用
+ * 开放平台存 key 的位置，七牛云、讯飞星火、SenseNova、书生·端砚、TokenRhythm
+ * 各有各的凭据块（七牛还分「推理 key」与「门户 cookie」两段）。按 kind 问，
+ * 这几家与以后新添的方言类都走同一条路。
+ *
+ * 判据是 `inferWith === "api_key"`：配了门户 cookie 的七牛云账号一个推理请求
+ * 也发不出去，拿 cookie 去问模型清单只会被上游拒（还像是去扫接口）。
  *
  * 没有就空字符串：没有 key 就没法问上游（有些平台的 /models 要鉴权），那时
  * 不该发请求 —— 白跑一趟，还像是去扫接口。
  */
 function accountKeyOf(platform: string): string {
   for (const account of accountsOfPlatform(platform)) {
-    const key = openPlatformKeyOf(account.id);
-    if (key?.apiKey) return key.apiKey;
+    const kind = kindOf(account.kind);
+    if (!kind || kind.inferWith !== "api_key") continue;
+    const key = String(kind.keyOf?.(account, account.id) ?? "").trim();
+    if (key) return key;
   }
   return "";
 }
@@ -169,10 +191,21 @@ export async function fetchOpenPlatformModels(
   const apiKey = key ?? accountKeyOf(row.id);
   // 没有 key 是正常状态，不是故障：不问，也不吵。
   if (!apiKey) return null;
+  let url: URL;
+  try {
+    // new URL 会替我们把结尾的斜杠拼对：手写 `base + "/models"` 在 base 以斜杠
+    // 结尾时拼出 `//models`，有些上游对那个路径答 404。
+    url = new URL(`${base.replace(/\/+$/, "")}/models`);
+  } catch {
+    return null;
+  }
   let payload: unknown;
   try {
-    const res = await fetch(`${base}/models`, {
-      headers: { accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    // 鉴权头跟着方言走：Anthropic 那一族只认 x-api-key 加版本头，发 Bearer
+    // 回的是 401 —— 看着像 key 不对，其实是头不对。
+    const auth = kindOf(row.kind)?.catalogAuth?.(apiKey) ?? { Authorization: `Bearer ${apiKey}` };
+    const res = await fetch(url, {
+      headers: { accept: "application/json", ...auth },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {

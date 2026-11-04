@@ -1,7 +1,7 @@
 // lib/platform-catalog.ts — 平台模板表：还没迁进开放平台表的那几个。
 //
 // 另有一张「能建的平台种类」表（PLATFORM_KIND_OPTIONS）在后面：面板新增平台时
-// 的下拉，说的是能建哪几种，不是预置了哪几行。
+// 的下拉，收的是**方言**（向上游讲谁的格式），不是厂商，也不是预置了哪几行。
 //
 // 这一层是叶子：不引任何模块。面板与迁移都要引它（引了 store 就成环）。
 //
@@ -92,11 +92,21 @@ export function platformTemplateOf(key: string): PlatformTemplate | null {
 }
 
 /**
+ * 这个 kind 是不是本仓预置的那五家厂商模板。
+ *
+ * 它们的模型目录是**代码挑过的一份**（lib/qiniu/models.ts 这些常量表），不是
+ * 上游报什么就收什么：上游那份更宽（七牛报 78 个模型，比我们分组的那份宽），
+ * 盖上来会出现被上游拒的模型。所以这一类平台的目录不归自动拉管。
+ */
+export function isVendorTemplateKind(kind: string): boolean {
+  return PLATFORM_TEMPLATES.some((t) => t.kind === kind);
+}
+
+/**
  * 用户能自己建的一类平台：面板上「新增平台」的那个下拉，一格一条。
  *
  * 与模板表的分工：模板表说的是「代码里预置了哪些平台行」，这一张说的是
- * 「用户能建哪几种」。两者有重叠（那五家迁成库行之后既能预置、也能再建一个
- * 同类的账号），但不是一件事 —— 面板要的是 kind 与它的默认值，不是某个 id。
+ * 「用户能建哪几种」。两者不重叠 —— 这一张收的是方言，不是厂商。
  */
 export interface PlatformKindOption {
   kind: string;
@@ -109,53 +119,29 @@ export interface PlatformKindOption {
 /**
  * 能建的平台种类，顺序就是面板上下拉的顺序。
  *
- * 模拟客户端那五家（minimax / qoder / qoder-cn / workbuddy-cn /
- * workbuddy-global）**不在这里**：它们是一个客户端一份会话，靠登录拿到凭据，
- * 不属于「用户自己加一个」的那一类 —— 建出来的空平台没有模拟端可用，也拉不
- * 到会话。它们照着代码里的模板走（lib/platform-templates.ts）。
+ * 只有两种**方言**：向上游讲 OpenAI 格式，还是讲 Anthropic Messages 格式。
  *
- * 地址与名字跟模板表逐字一致（同一个服务，两处说法不该有两样）。这里写成字面
- * 量而不是从模板表算：模板表里可能有一天不再有某一家（迁走了、下线了），而它
- * 仍然是用户能建的一类；反过来也一样。两处走样由 test/open-platforms-check.ts
- * 对着模板表比。
+ * 厂商那五家（七牛云 / 讯飞星火 / SenseNova / 书生·端砚 / TokenRhythm）
+ * **不在这里**：它们是本仓预置的平台模板（上面那张表，迁移补出来的库行），各自
+ * kind 已经体现了协议差异 —— 用户加一个同类账号要的是「往这个地址讲这个方言」，
+ * 不是建一个新厂商。模拟客户端那五家（minimax / qoder / qoder-cn /
+ * workbuddy-cn / workbuddy-global）同理不在：一个客户端一份会话，靠登录拿凭据，
+ * 建出来的空平台没有模拟端可用。
+ *
+ * 两类都没有默认地址：一个讲 OpenAI、一个讲 Anthropic Messages，哪家中转站、
+ * 哪个自建服务，只有用户知道。
  */
 export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
   {
     kind: "openai",
     label: "OpenAI 兼容",
-    // 通用平台没有默认地址：哪家中转站、哪个自建服务，只有用户知道。
     defaultBaseUrl: "",
     modelsFromUpstream: true,
   },
   {
-    kind: "qiniu",
-    label: "七牛云",
-    defaultBaseUrl: "https://api.qnaigc.com/v1",
-    modelsFromUpstream: true,
-  },
-  {
-    kind: "xinghuo",
-    label: "讯飞星火",
-    defaultBaseUrl: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
-    // 它没有模型清单接口：目录只能人写。
-    modelsFromUpstream: false,
-  },
-  {
-    kind: "sensenova",
-    label: "SenseNova",
-    defaultBaseUrl: "https://token.sensenova.cn/v1",
-    modelsFromUpstream: true,
-  },
-  {
-    kind: "intern-ai",
-    label: "书生·端砚",
-    defaultBaseUrl: "https://discovery-api.intern-ai.org.cn/v1",
-    modelsFromUpstream: true,
-  },
-  {
-    kind: "tokenrhythm",
-    label: "TokenRhythm",
-    defaultBaseUrl: "https://tokenrhythm.studio/v1",
+    kind: "anthropic",
+    label: "Anthropic 兼容",
+    defaultBaseUrl: "",
     modelsFromUpstream: true,
   },
 ];

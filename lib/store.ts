@@ -23,7 +23,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
 // 平台模板表（叶子模块，不引任何东西）：迁移要把那几行补进 platform 表。
-import { PLATFORM_TEMPLATES } from "./platform-catalog.ts";
+import { isVendorTemplateKind, PLATFORM_TEMPLATES } from "./platform-catalog.ts";
+// 播种用的模型目录：与各 kind 的代码目录同一个来源（见 seedPlatformModels）。
+import { knownCatalogForBaseUrl } from "./model-catalog.ts";
+import { QINIU_MODELS } from "./qiniu/models.ts";
+import { TOKENRHYTHM_MODELS } from "./tokenrhythm/models.ts";
+import { XINGHUO_MODELS } from "./xinghuo/models.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -174,6 +179,7 @@ export function store(): DatabaseSync {
   migrateProviderToAccounts(db);
   migrateProviderWeight(db);
   migratePlatforms(db);
+  seedPlatformModels(db);
   migrateAccountIds(db);
   return db;
 }
@@ -275,6 +281,155 @@ export function migratePlatforms(db: DatabaseSync): void {
   migratePlatformColumns(db);
   seedPlatformTemplates(db);
   migratePlatformQuotaPlugins(db);
+}
+
+/**
+ * 表里的平台那一格 `kind` 说它是通用开放平台时用的名字。
+ *
+ * 与 lib/open-platforms.ts 的 OPEN_PLATFORM_KIND_NAME 是同一个值 —— 从那边
+ * 取会绕成环（那一层引这一层），所以写在这里，只此一处。
+ */
+const OPEN_PLATFORM_KIND = "openai";
+
+/**
+ * 播种用的目录：按 kind 分，与各 kind 的**代码目录**同一个来源。
+ *
+ * 不调 kindOf(kind).models()：注册表要靠各平台模块求值才登记，而这一层是最低
+ * 层（引 lib/kinds/index.ts 会把各家平台都拖进来，绕成环）。所以取的是那些
+ * 模块自己的常量表 —— 同一份数据，换个入口读。测试对着 kind.models() 逐条比，
+ * 两边走样就会红。
+ *
+ * SenseNova 与书生·端砚没有代码里的目录：它们的目录是从上游拉的，落在 cache
+ * 表里。那两家就读 cache 那一行 —— 搬的是「现在正在服务的那份」，不是另造
+ * 一份事实。cache 里还没有就是空（全新库的正常形态），不报错、不告警。
+ */
+const SEEDED_MODEL_IDS: Record<string, (db: DatabaseSync) => string[]> = {
+  qiniu: () => QINIU_MODELS.map((model) => model.id),
+  xinghuo: () => XINGHUO_MODELS.map((model) => model.id),
+  tokenrhythm: () => TOKENRHYTHM_MODELS.map((model) => model.id),
+  sensenova: (db) => cachedModelIds(db, "sensenova:catalog"),
+  "intern-ai": (db) => cachedModelIds(db, "intern-ai:catalog"),
+};
+
+/** cache 表里那一份目录的模型 id。没有那一行、读不出来都是空数组。 */
+function cachedModelIds(db: DatabaseSync, id: string): string[] {
+  const row = db.prepare("SELECT data FROM cache WHERE id = ?").get(id) as
+    | { data?: string }
+    | undefined;
+  if (!row?.data) return [];
+  try {
+    const parsed = JSON.parse(row.data) as { items?: unknown } | null;
+    if (!Array.isArray(parsed?.items)) return [];
+    // cache 里存的是上游报的那一行原样（对象），不是名字：这里取它的 id。
+    return normalizeSeedIds(
+      parsed.items.map((item) =>
+        item && typeof item === "object" ? (item as { id?: unknown }).id : item,
+      ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** 模型名：去空的、去重号的。与读目录那一层同一个口径。 */
+function normalizeSeedIds(items: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const raw of items) {
+    const name = String(raw ?? "").trim();
+    if (!name || out.includes(name)) continue;
+    out.push(name);
+  }
+  return out;
+}
+
+/** 这一行的目录现在有什么（认不出来的形状当空）。 */
+function seededCurrentIds(raw: unknown): string[] {
+  try {
+    const parsed = JSON.parse(String(raw ?? "")) as any;
+    // 早期存的是单纯的模型名数组。
+    if (Array.isArray(parsed)) return normalizeSeedIds(parsed);
+    if (!parsed || typeof parsed !== "object") return [];
+    return normalizeSeedIds(Array.isArray(parsed.items) ? parsed.items : []);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 这一行的目录是不是播种写进去的那一份：`source` 不是 manual，`fetchedAt` 是 0。
+ *
+ * 区分「代码搬进去的」与「人写的 / 从上游拉的」：只有前者可以被播种顺手改成
+ * 「不自动拉」。
+ */
+function isSeededCatalog(raw: unknown): boolean {
+  try {
+    const parsed = JSON.parse(String(raw ?? "")) as any;
+    // 早期存的是单纯的模型名数组：读出来就是 auto + 没拉过。
+    if (Array.isArray(parsed)) return true;
+    if (!parsed || typeof parsed !== "object") return false;
+    return parsed.source !== "manual" && Number(parsed.fetchedAt ?? 0) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把平台行自己的模型目录播种出来。
+ *
+ * 以前这些行的 models 是空的，而它们各自是哪个模型只有代码知道（七牛、星火、
+ * TokenRhythm 的常量表），或者只有上游缓存里那一份（SenseNova、端砚）。空的
+ * 目录对开放平台是合法状态，但对这几家意味着平台在面板上看不见 —— 把手上已经
+ * 有的那一份搬进去。
+ *
+ * 只填**空着的**：已经有内容的那一行要么是用户手写的，要么是上游拉回来的，都不
+ * 能动。`models_auto` 关着的也不填：那一格说的是「以后别自动往里写」，而播种
+ * 也是一次自动写入。人把目录清空是明确的意思，不该被重启填回来。
+ *
+ * 写的不是从上游拉的那一份：`source` 记 auto、`fetchedAt` 留 0（没拉过）—— 0
+ * 就是「没拉过」的意思，写成现在会让目录看起来刚拉过，半小时内不再去问上游。
+ *
+ * 厂商模板行（七牛云、讯飞星火、SenseNova、书生·端砚、TokenRhythm）写完把
+ * `models_auto` 关掉：它们的目录是代码挑过的一份，上游那份更宽（七牛报 78 个
+ * 模型），拿它盖上来会出现被上游拒的模型。方言类（openai / anthropic）不关，
+ * 它们的目录本来就是上游说了算。
+ *
+ * 幂等：填过的行目录非空，再跑一次连 updated_at 都不动。返回填了几行。
+ */
+export function seedPlatformModels(db: DatabaseSync): number {
+  const rows = db
+    .prepare("SELECT id, kind, base_url, models, models_auto FROM platform")
+    .all() as { id?: string; kind?: string; base_url?: string; models?: unknown; models_auto?: unknown }[];
+  const fill = db.prepare("UPDATE platform SET models = ?, models_auto = ?, updated_at = ? WHERE id = ?");
+  // 只翻那一格：目录不动 —— 已经有内容的是人写的或从上游拉回来的，不能碰。
+  const stopAuto = db.prepare("UPDATE platform SET models_auto = 0, updated_at = ? WHERE id = ?");
+  const now = Date.now();
+  let seeded = 0;
+  for (const row of rows) {
+    const id = String(row.id ?? "");
+    if (!id) continue;
+    if (Number(row.models_auto ?? 1) === 0) continue;
+    const kind = String(row.kind ?? "").trim() || OPEN_PLATFORM_KIND;
+    const vendor = isVendorTemplateKind(kind);
+    if (seededCurrentIds(row.models).length) {
+      // 已有目录：人写的或上游拉的，不动。
+      //
+      // 例外是厂商模板行上**播种自己写进去的**那一份（source=auto、没拉过）：
+      // 老库里那几行是播种改口径之前写进去的，models_auto 还是 1 —— 补上这一格，
+      // 它们就不必等下一次「目录被上游那份盖掉」才被发现。
+      if (vendor && isSeededCatalog(row.models)) stopAuto.run(now, id);
+      continue;
+    }
+    // 通用开放平台：这一行背后是哪家厂商由地址说明（lib/model-catalog.ts）。
+    // 表里没有这家厂商就是空 —— 用户在面板上手填，不是错误。
+    const items =
+      kind === OPEN_PLATFORM_KIND
+        ? normalizeSeedIds(knownCatalogForBaseUrl(String(row.base_url ?? ""))?.models.map((m) => m.id) ?? [])
+        : (SEEDED_MODEL_IDS[kind]?.(db) ?? []);
+    if (!items.length) continue;
+    fill.run(JSON.stringify({ items, fetchedAt: 0, source: "auto" }), vendor ? 0 : 1, now, id);
+    seeded++;
+  }
+  return seeded;
 }
 
 /**

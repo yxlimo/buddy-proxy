@@ -40,8 +40,21 @@ export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null
   const open = openPlatformOf(row.platform);
   if (!open) return null;
   if (platformOf(row.platform) !== null) return null;
-  return open.kind === OPEN_PLATFORM_KIND_NAME ? open : null;
+  return GENERIC_OPEN_PLATFORM_KINDS.has(open.kind) ? open : null;
 }
+
+/**
+ * 凭据形状是「一把推理 key，加上额度插件要的那几段」的那几类开放平台。
+ *
+ * openai 与 anthropic 只差报文方言，凭据完全一样（同一把 x-api-key），所以
+ * 它们走同一档，各写一份就是两份知识。名字分别住在 lib/kinds/openai.ts 与
+ * lib/kinds/anthropic.ts；这里写成字面量是因为那一层会把转发层（lib/router/）
+ * 拖进来，反过来引它就成了环。
+ */
+const GENERIC_OPEN_PLATFORM_KINDS: ReadonlySet<string> = new Set([
+  OPEN_PLATFORM_KIND_NAME,
+  "anthropic",
+]);
 
 /**
  * 这个账号（或那个平台）属于哪一类上游。

@@ -80,6 +80,8 @@ export const openaiKind = registerCompatiblePlatform({
   baseUrl: (provider) => openPlatformOf(provider.platform)?.baseUrl ?? "",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => openPlatformKeyOf(accountId ?? provider.id)?.apiKey ?? "",
+  // 目录那一个端点收 Bearer，与推理一样。
+  catalogAuth: (key) => ({ Authorization: `Bearer ${key}` }),
   credential: (provider) => fromUpstreamStatus(openPlatformStatus(provider), "api_key"),
   models: openPlatformCatalogModels,
   // 没有插件、或者快照里没有这个账号的那一份：额度是「未知」。空数组不是 0 ——

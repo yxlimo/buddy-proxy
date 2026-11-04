@@ -233,6 +233,30 @@ export interface ProviderKind {
    * 请求也发不出去。
    */
   inferWith: InferenceCredential;
+  /**
+   * 发推理请求时用的那把**明文** key。空串表示没有。
+   *
+   * 与 `inferenceCredentialOf`（lib/admin/accounts.ts）不是一回事：那个给的是
+   * 面板要看的一条凭据（掩码、指纹、状态），拿不去发请求。这里只回答「发请求
+   * 时带什么」，也就是转发层与「问上游要模型目录」要的那一份。
+   *
+   * 只有以 key 鉴权的种类才有这一项：`inferWith` 是 session 的种类，凭据就是
+   * 会话本身，没有第二把 key 可给。
+   *
+   * 第二个参数是策略选中的那个账号：一个平台下有多个账号，key 是按账号取的，
+   * 而 `provider` 只说明是哪个平台。
+   */
+  keyOf?(provider: ProviderRow, accountId?: string): string;
+  /**
+   * 问上游要模型目录（`/models`）时带的鉴权头。
+   *
+   * 目录那一个端点的鉴权跟着方言走：多数上游收 `Authorization: Bearer`，
+   * Anthropic 那一族只认 `x-api-key` 加版本头 —— 发错了上游回 401，看着像
+   * key 不对，其实是头不对，目录永远拉不到。
+   *
+   * 没有这一项的种类按 Bearer 发：那是绝大多数上游的约定，保底行为不变。
+   */
+  catalogAuth?(key: string): Record<string, string>;
   /** 凭据。 */
   credential(provider: ProviderRow): CredentialView;
   /** 模型目录。 */
