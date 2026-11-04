@@ -14,10 +14,16 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-qiniu-"));
 process.env.BUDDY_DATA_DIR = DATA_DIR;
 
 const { parseRespackOverview } = await import("../lib/qiniu/quota.ts");
+const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
+const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
 const { platformOfAny } = await import("../lib/platforms.ts");
+const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
+const { addAccount, provider: providerRow } = await import("../lib/providers.ts");
+const { refreshHealthSnapshot } = await import("../lib/admin/upstreams.ts");
+const { peekHealthSnapshot } = await import("../lib/health-cache.ts");
 
 let pass = 0;
 let fail = 0;
@@ -82,7 +88,11 @@ const PROVIDER = {
   updatedAt: 0,
 } as any;
 
-/** 一个只带七牛云的快照。别的家是空的。 */
+/**
+ * 一个只带七牛云的快照。别的家是空的。
+ *
+ * 七牛的额度没有具名桶：它在插件桶里（插件 id → 账号 id → 那一份）。
+ */
 function snapshotWith(quota: unknown): any {
   return {
     qoder: {},
@@ -92,7 +102,7 @@ function snapshotWith(quota: unknown): any {
     tokenrhythm: {},
     sensenova: {},
     internAi: {},
-    qiniu: { [PROVIDER.id]: { quota } },
+    plugins: { [qiniuQuotaPlugin.id]: { [PROVIDER.id]: quota } },
   };
 }
 
@@ -151,6 +161,10 @@ check(
 
 section("额度");
 
+// 额度只在平台那一行指名了插件的时候才读得出来。
+const named = updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
+check("平台行指名了插件", named.ok === true, named.message);
+
 const kind = kindOf("qiniu");
 const views = kind?.quotas(PROVIDER, snapshotWith(QUOTA)) ?? [];
 const credits = views[0]?.credits;
@@ -193,6 +207,138 @@ check(
   "没读到额度（没有 cookie）→ 不知道，不算用尽",
   kind?.outOfCredits(PROVIDER, snapshotWith(null)) === false,
 );
+
+section("没指名插件时是不知道");
+
+// 用户还没在面板上选插件：不是「没有资源包」，是「没去问」。
+const cleared = updateOpenPlatform("qiniu", { quotaPlugin: "" });
+check("插件清掉了", cleared.ok === true, cleared.message);
+// 快照里那份数据还在，但没被指名就不该被读成额度 —— 问都没问过，
+// 读出一个数字等于替一个没问过的平台说话。
+const unasked = snapshotWith(QUOTA);
+check(
+  "没指名插件 → 没有额度视图（快照里有份也不读）",
+  (kind?.quotas(PROVIDER, unasked) ?? []).length === 0,
+  JSON.stringify(kind?.quotas(PROVIDER, unasked)),
+);
+check("没指名插件 → 不算用尽", kind?.outOfCredits(PROVIDER, unasked) === false);
+check("没指名插件 → 不知道什么时候恢复", (kind?.recoverAt?.(PROVIDER, unasked) ?? null) === null);
+
+/* ------------------------------------------------------------------ *
+ * 一整轮刷新：要不要去敲门户由平台那一行说了算
+ * ------------------------------------------------------------------ */
+
+section("刷新");
+
+// 门户换成假的：数它被敲了几次、答什么。真门户只认 https://portal.qiniu.com，
+// 别的地址一律当错误（不许真的出机器）。
+let portalCalls = 0;
+let portalStatus = 200;
+const realFetch = globalThis.fetch;
+const realWarn = console.warn;
+let warns: string[] = [];
+console.warn = (...args: unknown[]) => {
+  warns.push(args.map((arg) => String(arg)).join(" "));
+};
+globalThis.fetch = (async (input: unknown) => {
+  const url = String(
+    typeof input === "string" ? input : ((input as { url?: string } | null)?.url ?? ""),
+  );
+  if (!url.startsWith("https://portal.qiniu.com/")) {
+    throw new Error(`这个测试只认假门户：${url}`);
+  }
+  portalCalls++;
+  if (portalStatus !== 200) return new Response("", { status: portalStatus });
+  return new Response(JSON.stringify(OVERVIEW), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}) as typeof fetch;
+
+// 一个真的账号行：整轮刷新只问库里的账号。
+const added = addAccount({ platform: "qiniu" });
+const accountId = added.id ?? "";
+check("账号加得起来", added.ok === true && accountId !== "", added.message);
+// 两段都给全：推理 key + （过期了的）门户口令。
+writeQiniuAccount(accountId, { apiKey: "fake-inference-key", portalCookie: "fake-cookie=expired" });
+
+/** 这一轮刷新后库里的快照。 */
+async function refreshed(): Promise<any> {
+  await refreshHealthSnapshot();
+  return peekHealthSnapshot<any>()?.data;
+}
+
+// ① 平台行没指名插件 + 门户会回 401：一次也不该去敲。
+portalStatus = 401;
+warns = [];
+const callsBeforeNone = portalCalls;
+const snapshotNone = await refreshed();
+check("没指名插件：一次门户都没敲", portalCalls === callsBeforeNone, String(portalCalls - callsBeforeNone));
+check(
+  "没指名插件：快照里没有 qiniu 的份",
+  !snapshotNone?.plugins?.qiniu?.[accountId],
+  JSON.stringify(snapshotNone?.plugins?.qiniu),
+);
+check(
+  "没指名插件：日志里没有额度查询失败",
+  !warns.some((line) => line.includes("额度查询失败")),
+  warns.join(" | "),
+);
+const accountRow = providerRow(accountId)!;
+check(
+  "没指名插件：KIND 读出来是未知（不是 0）",
+  (kind?.quotas(accountRow, snapshotNone) ?? []).length === 0,
+  JSON.stringify(kind?.quotas(accountRow, snapshotNone)),
+);
+check(
+  "没指名插件：不算用尽",
+  kind?.outOfCredits(accountRow, snapshotNone) === false,
+);
+
+// ② 指名插件：额度落在插件桶里，键是插件 id 与账号 id。
+portalStatus = 200;
+const renamed = updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
+check("平台行指名了插件（给真实账号）", renamed.ok === true, renamed.message);
+const callsBeforeNamed = portalCalls;
+const snapshotNamed = await refreshed();
+check("指名插件：门户被问了一次", portalCalls === callsBeforeNamed + 1, String(portalCalls - callsBeforeNamed));
+check(
+  "指名插件：额度落在 snapshot.plugins[qiniu][账号]",
+  Array.isArray(snapshotNamed?.plugins?.["qiniu"]?.[accountId]?.respacks),
+  JSON.stringify(snapshotNamed?.plugins?.["qiniu"]?.[accountId]),
+);
+const fromRefresh = kind?.quotas(accountRow, snapshotNamed) ?? [];
+check("指名插件：quotas 读得回来", fromRefresh.length === 1, String(fromRefresh.length));
+check(
+  "指名插件：读回来的是两个包",
+  fromRefresh[0]?.credits?.lots?.length === 2,
+  JSON.stringify(fromRefresh[0]?.credits?.lots),
+);
+
+// ③ 指名了插件但门户回 401：这一轮这个账号没有额度份（未知）。
+portalStatus = 401;
+const snapshotDenied = await refreshed();
+check(
+  "门户 401：这一轮这个账号没有额度份",
+  snapshotDenied?.plugins?.qiniu?.[accountId] === undefined,
+  JSON.stringify(snapshotDenied?.plugins?.qiniu),
+);
+check(
+  "门户 401：读出来是未知（不是 0）",
+  (kind?.quotas(accountRow, snapshotDenied) ?? []).length === 0,
+  JSON.stringify(kind?.quotas(accountRow, snapshotDenied)),
+);
+check("门户 401：不算用尽", kind?.outOfCredits(accountRow, snapshotDenied) === false);
+
+// ④ 没有任何额度数据：不知道不等于见底。
+check(
+  "空快照 → 不算用尽",
+  kind?.outOfCredits(accountRow, { plugins: {} }) === false,
+);
+check("空快照 → 没有额度视图", (kind?.quotas(accountRow, { plugins: {} }) ?? []).length === 0);
+
+console.warn = realWarn;
+globalThis.fetch = realFetch;
 
 /* ------------------------------------------------------------------ *
  * 平台登记

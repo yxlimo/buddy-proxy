@@ -62,6 +62,8 @@ const { platformAvailability } = await import("../lib/router/availability.ts");
 const { inferenceCredentialOf } = await import("../lib/admin/accounts.ts");
 const { hasUsableCredential } = await import("../lib/admin/credentials.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
+const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
+const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
 const { putHealthSnapshot, clearHealthSnapshot } = await import("../lib/health-cache.ts");
 const { setCooldown, clearCooldown } = await import("../lib/cooldown.ts");
 
@@ -121,10 +123,14 @@ check(
 );
 
 // 额度用尽：还是就绪的样子，但接不了。
+// 额度由平台那一行指名的插件问回来：指名它，快照里那份才读得到。
+updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 putHealthSnapshot({
-  qiniu: {
-    [accountId]: {
-      quota: { respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }] },
+  plugins: {
+    [qiniuQuotaPlugin.id]: {
+      [accountId]: {
+        respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }],
+      },
     },
   },
 } as any);
@@ -247,9 +253,11 @@ function qoderSessionSecret(): Record<string, unknown> {
 
 // 额度用尽：402，类型是 usage_limit_error，文案点名平台。
 putHealthSnapshot({
-  qiniu: {
-    [accountId]: {
-      quota: { respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }] },
+  plugins: {
+    [qiniuQuotaPlugin.id]: {
+      [accountId]: {
+        respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }],
+      },
     },
   },
 } as any);

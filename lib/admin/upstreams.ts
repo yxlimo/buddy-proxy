@@ -30,7 +30,6 @@ import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
 import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
 import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
-import { qiniuQuotaOf } from "../qiniu/quota.ts";
 import { clearHealthSnapshot, peekHealthSnapshot, putHealthSnapshot } from "../health-cache.ts";
 import {
   accountsOfPlatform,
@@ -371,7 +370,6 @@ function emptySnapshot(): HealthSnapshot {
     tokenrhythm: {},
     sensenova: {},
     internAi: {},
-    qiniu: {},
     plugins: {},
   };
 }
@@ -407,7 +405,6 @@ function copySnapshot(snapshot: HealthSnapshot): HealthSnapshot {
     tokenrhythm: { ...snapshot.tokenrhythm },
     sensenova: { ...snapshot.sensenova },
     internAi: { ...snapshot.internAi },
-    qiniu: { ...snapshot.qiniu },
     // 抄两层：里层那张表在合并一个平台的数字时会被写，共用一张表会把那次写漏到
     // 副本外面去。
     plugins: Object.fromEntries(
@@ -437,8 +434,8 @@ function groupByPlatform(rows: ProviderRow[]): Map<string, ProviderRow[]> {
  */
 function applyPartial(snapshot: HealthSnapshot, partial: HealthSnapshot, rows: ProviderRow[]): void {
   for (const row of rows) {
-    // 开放平台没有具名桶：它的那一份在插件桶里（两层），按账号逐条合并。
-    if (row.kind === OPEN_PLATFORM_KIND_NAME) {
+    // 额度来自插件的那些 kind 没有具名桶：它的那一份在插件桶里（两层），按账号逐条合并。
+    if (quotaFromPlugin(row.kind)) {
       applyPluginPartial(snapshot, partial, row);
       continue;
     }
@@ -509,8 +506,52 @@ export async function refreshHealthSnapshot(): Promise<void> {
   healthRefreshedAt = Date.now();
 }
 
+/**
+ * 额度由平台那一行指名的插件问回来的那些 kind。
+ *
+ * 它们没有具名桶：快照里那一份存在插件桶里（插件 id → 账号 id → 原样答复）。
+ * 开放平台是数据，七牛云的额度在门户上、门户只认 cookie —— 两家都得由平台行
+ * 说了算：没指名插件就是「不知道」，不该自己找个地方去问。
+ */
+function quotaFromPlugin(kind: string): boolean {
+  return kind === OPEN_PLATFORM_KIND_NAME || kind === "qiniu";
+}
+
+/**
+ * 问平台那一行指名的额度插件，问回来的写进插件桶。
+ *
+ * 四种「不知道」都不写快照 —— 面板上显示「—」比写个 0 诚实：
+ *   没填插件     用户还没选（或者这一家本来就不打算问）
+ *   插件没登记   填的 id 没人认（用户可能先填 id 再让我们上线那个插件）
+ *   插件答 null  问过了，但没问到（门户拒绝了、没 cookie），这也是不知道
+ *   插件问失败   这一轮这个账号就是不知道
+ */
+async function refreshPluginQuota(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
+  const pluginId = openPlatformOf(row.platform)?.quotaPlugin?.trim() ?? "";
+  if (!pluginId) return;
+  const plugin = quotaPluginOf(pluginId);
+  if (!plugin) return;
+  try {
+    const payload = await plugin.fetch(row);
+    // 插件用 null 说「没问到」：写进去会让读的一方以为这是一份真的答复。
+    if (payload === null || payload === undefined) return;
+    const table = { ...snapshot.plugins[plugin.id] };
+    table[row.id] = payload;
+    snapshot.plugins[plugin.id] = table;
+  } catch (e) {
+    // 一个账号问不到，不该把整轮带挂：这一轮它就是「不知道」。
+    console.warn(`[QUOTA] 账号 ${row.id} 的额度没问到（插件 ${plugin.id}）：${(e as Error)?.message}`);
+  }
+}
+
 /** 问一家上游，把它那段填进快照。 */
 async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
+  // 额度归插件的那些 kind 先走插件：它们没有具名桶，下面那几个 case 是给自带
+  // 抓取逻辑的平台留的。
+  if (quotaFromPlugin(row.kind)) {
+    await refreshPluginQuota(snapshot, row);
+    return;
+  }
   switch (row.kind) {
     case "qoder": {
       let account: unknown;
@@ -554,31 +595,6 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
     case "intern-ai":
       snapshot.internAi[row.id] = await internAiCredits(row.id);
       return;
-    case "qiniu":
-      // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
-      snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
-      return;
-    case OPEN_PLATFORM_KIND_NAME: {
-      // 开放平台的额度是数据：平台那一行指名的插件去问，问回来的原样放着。
-      // 三种「不知道」都不写快照 —— 面板上显示「—」比写个 0 诚实：
-      //   没填插件     用户还没选
-      //   插件没登记   填的 id 没人认（用户可能先填 id 再让我们上线那个插件）
-      //   插件问失败   这一轮这个账号就是不知道
-      const pluginId = openPlatformOf(row.platform)?.quotaPlugin?.trim() ?? "";
-      if (!pluginId) return;
-      const plugin = quotaPluginOf(pluginId);
-      if (!plugin) return;
-      try {
-        const payload = await plugin.fetch(row);
-        const table = { ...snapshot.plugins[plugin.id] };
-        table[row.id] = payload;
-        snapshot.plugins[plugin.id] = table;
-      } catch (e) {
-        // 一个账号问不到，不该把整轮带挂：这一轮它就是「不知道」。
-        console.warn(`[QUOTA] 账号 ${row.id} 的额度没问到（插件 ${plugin.id}）：${(e as Error)?.message}`);
-      }
-      return;
-    }
   }
 }
 

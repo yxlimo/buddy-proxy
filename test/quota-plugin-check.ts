@@ -304,6 +304,10 @@ check(
 
 section("种类");
 
+// 七牛的种类也走插件：要不要问写在平台那一行（quota_plugin）。
+const qiniuPlatform = updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
+check("七牛的平台行指名了插件", qiniuPlatform.ok === true, qiniuPlatform.message);
+
 const qiniuKind = kindOf("qiniu");
 const kindSnapshot = {
   qoder: {},
@@ -313,8 +317,7 @@ const kindSnapshot = {
   tokenrhythm: {},
   sensenova: {},
   internAi: {},
-  qiniu: { [QINIU_ACCOUNT.id]: { quota: QUOTA } },
-  plugins: {},
+  plugins: { [qiniuQuotaPlugin.id]: { [QINIU_ACCOUNT.id]: QUOTA } },
 } as any;
 check(
   "种类转给插件之后，数字还是那些",
@@ -330,6 +333,20 @@ check(
   typeof qiniuKind?.recoverAt === "function" && qiniuKind.recoverAt(QINIU_ACCOUNT, kindSnapshot) === null,
   String(qiniuKind?.recoverAt?.(QINIU_ACCOUNT, kindSnapshot)),
 );
+
+// 平台行没指名插件：快照里有份也不读 —— 不知道不是 0。
+updateOpenPlatform("qiniu", { quotaPlugin: "" });
+check(
+  "没指名插件 → 没有额度视图",
+  (qiniuKind?.quotas(QINIU_ACCOUNT, kindSnapshot) ?? []).length === 0,
+  JSON.stringify(qiniuKind?.quotas(QINIU_ACCOUNT, kindSnapshot)),
+);
+check("没指名插件 → 不算用尽", qiniuKind?.outOfCredits(QINIU_ACCOUNT, kindSnapshot) === false);
+check(
+  "没指名插件 → 不知道什么时候恢复",
+  (qiniuKind?.recoverAt?.(QINIU_ACCOUNT, kindSnapshot) ?? null) === null,
+);
+updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 
 /* ------------------------------------------------------------------ *
  * 开放平台：额度走插件
@@ -365,7 +382,6 @@ function snapshotWithPlugins(plugins: Record<string, Record<string, unknown>>): 
     tokenrhythm: {},
     sensenova: {},
     internAi: {},
-    qiniu: {},
     plugins,
   };
 }

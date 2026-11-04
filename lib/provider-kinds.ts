@@ -181,8 +181,6 @@ export interface HealthSnapshot {
   sensenova: Record<string, { pools: unknown }>;
   /** 书生·端砚的墨点：余额与批次。 */
   internAi: Record<string, { balance: unknown; packs: unknown }>;
-  /** 七牛云的资源包。 */
-  qiniu: Record<string, { quota: unknown }>;
   /**
    * 额度插件问回来的东西：插件 id → 账号 id → 原始答复。
    *

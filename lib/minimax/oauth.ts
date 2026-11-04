@@ -215,9 +215,9 @@ function sessionFromGrant(grant: Grant, previous?: Session | null): Session {
 
 let cache: CredentialCache | null = null;
 
-function toCredential(session: Session): Credential {
+function toCredential(session: Session, providerId: string): Credential {
   return credentialFromSession(session, {
-    source: sessionId(),
+    source: sessionId(providerId),
     owner: "oauth",
     warnMs: WARN_MS,
     status: "authenticated",
@@ -298,7 +298,7 @@ export async function ensureCredential(providerId = "minimax"): Promise<Credenti
     lockId: sessionId(providerId),
     // 令牌是定时器换的，这里只取现在这一份。
     session: () => loadSession(providerId),
-    toCredential,
+    toCredential: (session) => toCredential(session, providerId),
     expired: (session) =>
       new AuthError(
         session ? `access token expired (generation ${session.generation})` : "no session",
@@ -437,8 +437,8 @@ export async function login(providerId = "minimax"): Promise<Session> {
   return session;
 }
 
-export async function revoke(): Promise<void> {
-  const session = loadSession();
+export async function revoke(providerId = "minimax"): Promise<void> {
+  const session = loadSession(providerId);
   if (!session) return;
   const r = await postForm(`${ORIGIN}/oauth2/revoke`, {
     token: session.refreshToken,
@@ -447,7 +447,7 @@ export async function revoke(): Promise<void> {
   });
   if (!r.ok) throw new AuthError(`revoke failed (${r.error ?? `HTTP ${r.status}`})`, "撤销失败。", 502);
   try {
-    deleteSecret(sessionId());
+    deleteSecret(sessionId(providerId));
   } catch {
     /* already gone */
   }
