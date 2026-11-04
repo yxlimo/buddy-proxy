@@ -100,15 +100,21 @@ export type QiniuQuotaAnswer =
 /**
  * 问门户要这个账号的资源包。
  *
+ * endpointBase 是门户那一台的根：平台行把地址指到了别处时，调用方换成那一台
+ * （主机名换掉，路径、请求头、超时都不动）。
+ *
  * 不抛：每一种失败都是一种能说清楚的回答。日志不在这里记 —— 结论由调用方翻成
  * 状态，写日志是那一层的事（一处记，不两处各记一遍）。
  */
-export async function fetchQiniuQuota(cookie: string): Promise<QiniuQuotaAnswer> {
+export async function fetchQiniuQuota(
+  cookie: string,
+  endpointBase: string = QINIU_PORTAL_BASE,
+): Promise<QiniuQuotaAnswer> {
   const credential = String(cookie ?? "").trim();
   if (!credential) {
     return { ok: false, reason: "unknown", status: 0, message: "没有门户 cookie", retryAfterMs: null };
   }
-  const url = `${QINIU_PORTAL_BASE}${QINIU_RESPACK_PATH}?page=1&page_size=10`;
+  const url = new URL(`${QINIU_RESPACK_PATH}?page=1&page_size=10`, endpointBase).toString();
   try {
     const res = await fetch(url, {
       headers: {

@@ -272,10 +272,31 @@ export function parseUsageSummary(body: any): InternAiUsageSummary {
   };
 }
 
-/** 查一次余额（墨点还剩多少）。 */
-export async function balance(session: InternAiSession, token: string): Promise<InternAiBalance> {
+/**
+ * 控制台请求打到哪个根。
+ *
+ * 平台行把地址指到别处时只取它的 origin：路径是控制台接口自己带的，用户填的地址
+ * 带不带 /v1 都不影响它。没指到别处就用默认那台，连它带的前缀一起用 —— 环境能把
+ * 默认地址配成带前缀的内网镜像（test/sensenova-intern-ai-check.ts 就是那样），
+ * 不能在中间插一道解析把它截掉。
+ */
+function consoleRoot(endpointBase: string): string {
+  return endpointBase === INTERN_AI_DISCOVERY_BASE ? endpointBase : new URL(endpointBase).origin;
+}
+
+/**
+ * 查一次余额（墨点还剩多少）。
+ *
+ * endpointBase 是 Discovery 那一台的根：平台行把地址指到了别处时，调用方换成
+ * 那一台（路径、鉴权、超时都不动）。
+ */
+export async function balance(
+  session: InternAiSession,
+  token: string,
+  endpointBase: string = INTERN_AI_DISCOVERY_BASE,
+): Promise<InternAiBalance> {
   const data = await consoleApi<any>(
-    INTERN_AI_DISCOVERY_BASE,
+    consoleRoot(endpointBase),
     "/api/tokenplan/v1/credits/balance",
     session,
     token,
@@ -287,10 +308,11 @@ export async function balance(session: InternAiSession, token: string): Promise<
 export async function creditPacks(
   session: InternAiSession,
   token: string,
+  endpointBase: string = INTERN_AI_DISCOVERY_BASE,
   query: Record<string, string | number | undefined> = {},
 ): Promise<InternAiCreditPack[]> {
   const data = await consoleApi<any>(
-    INTERN_AI_DISCOVERY_BASE,
+    consoleRoot(endpointBase),
     "/api/tokenplan/v1/credits/packages",
     session,
     token,

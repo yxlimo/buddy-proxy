@@ -37,7 +37,7 @@
 
 import { listAggregateModels } from "../aggregate.ts";
 import type { CatalogModel } from "../catalog-models.ts";
-import { listCooldowns, unavailableCooldownMs } from "../cooldown.ts";
+import { listCooldowns } from "../cooldown.ts";
 import { authLog } from "../credential.ts";
 import { peekHealthSnapshot } from "../health-cache.ts";
 import { exhaustedPlanWindowEndsAt } from "../plan-window.ts";
@@ -94,13 +94,17 @@ export interface PlatformAvailability {
    */
   cooling: Map<string, number>;
   /**
-   * 额度见底的账号：键是账号 id，值是额度什么时候回来。
+   * 额度见底的账号：键是账号 id，值是额度什么时候回来；null = 不知道。
    *
    * 见底是按账号判的：平台上还有一个账号有额度，这个平台就还能接 —— 所以
    * 「哪个账号见底、什么时候回来」得逐个账号说得清，平台那一档的 untilMs
    * 回答不了这个问题。
+   *
+   * null 与「不在表里」是两件事：在表里说的是「这个账号见底了」，null 说的是
+   * 「见底了，但没人知道什么时候回来」。额度不会因为过了一阵就回来，所以没有
+   * 时刻时答不知 道，不拿一个固定时长冒充。
    */
-  spent: Map<string, number>;
+  spent: Map<string, number | null>;
   /** 平台名下的账号总数。 */
   accounts: number;
   /** 平台名下的账号行。面板要逐个看账号时不用再读一遍表。 */
@@ -226,45 +230,21 @@ function platformCatalog(
 }
 
 /**
- * 这个平台的账号最早什么时候能接请求。
+ * 这个账号什么时候能再干活：插件说的时刻优先，没有就按窗口/冷却估。0 = 不知道。
  *
- * 额度用尽的看额度什么时候回来：平台自己说（每个种类知道自己的窗口/批次什么时候
- * 满），说不出来才退回套餐窗口，再说不出来就是固定冷却时长。面板那边算的是同一
- * 个时间（lib/admin/upstream-state.ts），两处必须一致。
+ * 面板上那一格与路由 402/503 那句都从这里取数：同一份快照与冷却下只能有一个答案。
+ * 「插件给的」还是「网关估的」是这里的事，出了这个函数就是同一个数。
  *
- * 冷却中的看冷却到什么时候。
+ * 三处来源，先命中先返回：
+ *
+ *   1. 平台自己说（每个种类知道自己的窗口/批次什么时候满）；说不出来就退回
+ *      套餐窗口 —— 见底的窗口什么时候结束才是恢复时刻。窗口还有额度的时候，
+ *      它的到期点只是一个边界（账号现在就能干活），拿它冒充恢复时间是在骗人。
+ *   2. 冷却表上的时刻：冷却结束就是真能再干活的时候。
+ *   3. 都不知道：0。额度不会因为过了五分钟就回来，拿固定时长兜底就是编时间 ——
+ *      调用方见 0 就不写时刻。
  */
-function recoveryTime(
-  rows: ProviderRow[],
-  allSpent: boolean,
-  cooldowns: Map<string, number>,
-  snapshot: HealthSnapshot | null,
-  now: number,
-): number {
-  const times = rows
-    .map((row) => {
-      if (allSpent) {
-        const kind = kindOf(row.kind);
-        const said = snapshot ? (kind?.recoverAt?.(row, snapshot) ?? null) : null;
-        // 见底的窗口什么时候结束才是恢复时刻：窗口还有额度的时候，它的到期点
-        // 只是一个边界（账号现在就能干活），拿它冒充恢复时间是在骗人。
-        const at = said ?? exhaustedPlanWindowEndsAt(row.id, now);
-        if (typeof at === "number" && at > now) return at;
-      }
-      return cooldowns.get(row.id) ?? null;
-    })
-    .filter((at): at is number => typeof at === "number" && at > now);
-  return times.length ? Math.min(...times) : now + unavailableCooldownMs();
-}
-
-/**
- * 这个账号的额度什么时候回来。
- *
- * 平台自己说（每个种类知道自己的窗口/批次什么时候满），说不出来才退回套餐
- * 窗口，再说不出来就是冷却表上的时刻，最后才用固定时长。跟平台那一档
- * （recoveryTime）用的是同一套来源 —— 两处算出来的恢复时刻必须一样。
- */
-function creditRecoveryAt(
+export function accountRecoveryAtMs(
   row: ProviderRow,
   snapshot: HealthSnapshot | null,
   cooldowns: Map<string, number>,
@@ -272,11 +252,52 @@ function creditRecoveryAt(
 ): number {
   const kind = kindOf(row.kind);
   const said = snapshot ? (kind?.recoverAt?.(row, snapshot) ?? null) : null;
-  const at = said ?? exhaustedPlanWindowEndsAt(row.id, now);
-  if (typeof at === "number" && at > now) return at;
+  const windowEnd = said ?? exhaustedPlanWindowEndsAt(row.id, now);
+  if (typeof windowEnd === "number" && windowEnd > now) return windowEnd;
   const cooling = cooldowns.get(row.id);
   if (typeof cooling === "number" && cooling > now) return cooling;
-  return now + unavailableCooldownMs();
+  return 0;
+}
+
+/**
+ * 这个平台的账号最早什么时候能接请求；null = 不知道。
+ *
+ * 额度用尽时看每个账号的额度什么时候回来（见 accountRecoveryAtMs）；冷却中的
+ * 只看冷却 —— 那时它们不是「额度用尽」，把额度那一档算进来会说早。
+ *
+ * 一个已知时刻都没有就是 null：不拿固定时长冒充。
+ */
+function recoveryTime(
+  rows: ProviderRow[],
+  allSpent: boolean,
+  cooldowns: Map<string, number>,
+  snapshot: HealthSnapshot | null,
+  now: number,
+): number | null {
+  const times = rows
+    .map((row) => {
+      if (allSpent) return accountRecoveryAtMs(row, snapshot, cooldowns, now);
+      const cooling = cooldowns.get(row.id) ?? 0;
+      return cooling > now ? cooling : 0;
+    })
+    .filter((at) => at > now);
+  return times.length ? Math.min(...times) : null;
+}
+
+/**
+ * 这个账号的额度什么时候回来；null = 不知道。
+ *
+ * 与 accountRecoveryAtMs 是同一个答案，只是把 0 说成 null —— 派发那边的表用
+ * null 表示「见底了，但不知道什么时候回来」（见 PlatformAvailability.spent）。
+ */
+function creditRecoveryAt(
+  row: ProviderRow,
+  snapshot: HealthSnapshot | null,
+  cooldowns: Map<string, number>,
+  now: number,
+): number | null {
+  const at = accountRecoveryAtMs(row, snapshot, cooldowns, now);
+  return at > 0 ? at : null;
 }
 
 /** 一句给日志用的话：这个平台为什么（不）能接请求。 */
@@ -394,7 +415,7 @@ function judge(
     const until = cooldowns.get(row.id);
     if (until !== undefined) coolingUntil.set(row.id, until);
   }
-  const spentUntil = new Map<string, number>();
+  const spentUntil = new Map<string, number | null>();
   for (const row of ready) {
     if (spent(row)) spentUntil.set(row.id, creditRecoveryAt(row, snapshot, cooldowns, now));
   }

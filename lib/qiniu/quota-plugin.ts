@@ -5,10 +5,11 @@
 // 的状态（没填 cookie / 凭据被拒 / 被限流 / 问不到）。
 
 import { quotaProbe, type QuotaState } from "../quota-state.ts";
-import { registerQuotaPlugin } from "../quota-plugins.ts";
+import { quotaEndpointBase, registerQuotaPlugin } from "../quota-plugins.ts";
 import type { CreditLotView, QuotaView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { qiniuPortalCookie, QINIU_ACCOUNT_FIELD } from "./account.ts";
+import { QINIU_PORTAL_BASE } from "./config.ts";
 import { fetchQiniuQuota, type QiniuQuota } from "./quota.ts";
 
 /**
@@ -80,7 +81,7 @@ export const qiniuQuotaPlugin = registerQuotaPlugin({
     const cookie = qiniuPortalCookie(account.id);
     if (!cookie) return quotaProbe("missing", "账号上没有门户 cookie，查不了资源包");
 
-    const answer = await fetchQiniuQuota(cookie);
+    const answer = await fetchQiniuQuota(cookie, quotaEndpointBase(account, QINIU_PORTAL_BASE));
     if (!answer.ok) {
       // 门户说的话原样带过去：状态码在日志与面板上是最有用的一句。
       return quotaProbe(stateOfReason(answer.reason), answer.message, {

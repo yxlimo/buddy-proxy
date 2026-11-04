@@ -14,7 +14,8 @@
 import type { CreditLotView, QuotaView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { quotaProbe } from "../quota-state.ts";
-import { registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
+import { quotaEndpointBase, registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
+import { INTERN_AI_DISCOVERY_BASE } from "./config.ts";
 import { InternAiError, loadSession, tokenFor } from "./auth.ts";
 import {
   balance as internAiBalance,
@@ -177,8 +178,10 @@ export const internAiCreditsPlugin = registerQuotaPlugin({
     if (!token) return quotaProbe("missing", "账号上没有 Discovery 子站的 token，查不了墨点");
 
     let balance: InternAiBalance;
+    // 墨点在 Discovery 那一台上；平台行把地址指到别处时问那一台。
+    const endpointBase = quotaEndpointBase(account, INTERN_AI_DISCOVERY_BASE);
     try {
-      balance = await internAiBalance(session, token);
+      balance = await internAiBalance(session, token, endpointBase);
     } catch (e) {
       return stateOfError(e);
     }
@@ -186,7 +189,7 @@ export const internAiCreditsPlugin = registerQuotaPlugin({
     // 批次是补充信息：问不到照样报余额，只是少几行批次。
     let packs: InternAiCreditPack[] | null = null;
     try {
-      packs = await internAiCreditPacks(session, token);
+      packs = await internAiCreditPacks(session, token, endpointBase);
     } catch (e) {
       console.warn(`[INTERN-AI] 墨点批次查询失败：${(e as Error)?.message}`);
     }

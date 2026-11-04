@@ -13,7 +13,8 @@
 //   1. 建一行 → 平台列表多出一条，kind 是 openai
 //   2. id 的规矩：不合法、保留字、跟模板重名、跟账号重名、重名，都不收
 //   3. 绕过校验插进去的一行（跟模板重名）被忽略，还是按模板算
-//   4. 改名字、改地址、改模型目录（手写的目录 source 是 manual）
+//   4. 改名字、改地址、改模型目录（手写的目录 source 是 manual）；没收登记的
+//      额度插件 id（没登记就不写库，原值留着）
 //   5. 删掉以后平台列表回到基线
 //   6. 坏掉的目录 JSON 读成空目录，不抛
 //   7. 账号 id 与平台 id 相互独立：账号 id 是自增数，关联只靠 provider.platform
@@ -168,7 +169,7 @@ const created = createOpenPlatform({
   id: "acme",
   label: "Acme",
   baseUrl: "https://api.acme.test/v1",
-  quotaPlugin: "acme",
+  quotaPlugin: "qiniu",
 });
 check("开放平台加得进去", created.ok === true, created.message);
 check(
@@ -184,7 +185,7 @@ check(
 const row = openPlatformOf("acme");
 check(
   "这一行读得回来",
-  row?.label === "Acme" && row?.baseUrl === "https://api.acme.test/v1" && row?.quotaPlugin === "acme",
+  row?.label === "Acme" && row?.baseUrl === "https://api.acme.test/v1" && row?.quotaPlugin === "qiniu",
   JSON.stringify(row),
 );
 check("查得到这个平台", platformOfAny("acme")?.id === "acme", JSON.stringify(platformOfAny("acme")));
@@ -297,7 +298,23 @@ check("改得掉", renamed.ok === true, renamed.message);
 const afterEdit = openPlatformOf("acme");
 check("名字改了", afterEdit?.label === "Acme Cloud", String(afterEdit?.label));
 check("地址改了", afterEdit?.baseUrl === "https://api.acme.test/v2", String(afterEdit?.baseUrl));
-check("没给的字段没动", afterEdit?.quotaPlugin === "acme", String(afterEdit?.quotaPlugin));
+check("没给的字段没动", afterEdit?.quotaPlugin === "qiniu", String(afterEdit?.quotaPlugin));
+
+// 没登记的插件 id：拒收，库里那一格原地不动 —— 存下去之后这个平台一条额度结论
+// 都不会有，而面板上看着「已选插件」。
+const badPluginId = updateOpenPlatform("acme", { quotaPlugin: "no-such-plugin" });
+check("没登记的插件 id 不收", badPluginId.ok === false, badPluginId.message);
+check(
+  "拒绝的话说的是那个 id 与登记过的插件",
+  badPluginId.message.includes("没有这个额度插件：no-such-plugin") &&
+    badPluginId.message.includes("七牛云资源包"),
+  badPluginId.message,
+);
+check(
+  "库里那一格没被改",
+  openPlatformOf("acme")?.quotaPlugin === "qiniu",
+  String(openPlatformOf("acme")?.quotaPlugin),
+);
 
 // null 是「把这一格清空」，不是「别动它」。
 const nulled = updateOpenPlatform("acme", { quotaPlugin: null as unknown as string });

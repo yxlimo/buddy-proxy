@@ -15,7 +15,7 @@ import { PLATFORMS } from "./platform-templates.ts";
 // 额度插件的登记表（lib/quota-plugins.ts）反过来要读这一层的平台表，所以这两
 // 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
 // 那里也不在求值期读这边的东西。
-import { warnUnknownQuotaPlugin } from "./quota-plugins.ts";
+import { allQuotaPlugins, quotaPluginOf } from "./quota-plugins.ts";
 
 /**
  * 开放平台的 kind 名字。
@@ -145,6 +145,8 @@ export function createOpenPlatform(input: {
   const now = Date.now();
   const models: OpenPlatformModels = { items: [], auto: true, fetchedAt: 0, source: "auto" };
   const quotaPlugin = String(input.quotaPlugin ?? "").trim();
+  const pluginProblem = checkQuotaPlugin(quotaPlugin);
+  if (pluginProblem) return { ok: false, message: pluginProblem };
   store()
     .prepare(
       "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at) " +
@@ -160,9 +162,6 @@ export function createOpenPlatform(input: {
       now,
       now,
     );
-  // 填了额度插件却没人登记：说一声，但照样写进去 —— 用户可能先填 id 再让我们
-  // 上线那个插件，拦下来反而让人没法保存。
-  warnUnknownQuotaPlugin(id, quotaPlugin);
   return { ok: true, message: `加好了：${label}` };
 }
 
@@ -200,6 +199,8 @@ export function updateOpenPlatform(
   if (urlProblem) return { ok: false, message: urlProblem };
   // null 与没给是两回事：null 是「把这一格清空」，没给是「别动它」。
   const quotaPlugin = patch.quotaPlugin === undefined ? row.quotaPlugin : String(patch.quotaPlugin ?? "").trim();
+  const pluginProblem = checkQuotaPlugin(quotaPlugin);
+  if (pluginProblem) return { ok: false, message: pluginProblem };
 
   let models = row.models;
   if (patch.models !== undefined) {
@@ -234,8 +235,6 @@ export function updateOpenPlatform(
       Date.now(),
       id,
     );
-  // 填了额度插件却没人登记：说一声，但照样写进去（同 createOpenPlatform）。
-  warnUnknownQuotaPlugin(id, quotaPlugin);
   return { ok: true, message: "改好了" };
 }
 
@@ -282,6 +281,24 @@ function checkId(id: string): string | null {
 function isAccountId(id: string): boolean {
   const row = store().prepare("SELECT id FROM provider WHERE id = ?").get(id);
   return row !== undefined;
+}
+
+/**
+ * 额度插件这一格填的 id 得有人登记。
+ *
+ * 空串是「不用额度插件」，那是合法的一种选择。没登记的 id 一旦存下去，这个
+ * 平台之后一条额度结论都不会有，而面板上看着「已选插件」—— 静默的不工作比
+ * 拒绝保存更难查，所以拦在写库之前，一个字都不落库。
+ *
+ * 拒绝时要把登记过的插件列出来（用插件自己的 label：面板与答复里是同一个
+ * 名字）：只说「不行」，调用方没法自己改对。
+ */
+function checkQuotaPlugin(pluginId: string): string | null {
+  if (!pluginId) return null;
+  if (quotaPluginOf(pluginId)) return null;
+  const known = allQuotaPlugins().map((plugin) => `${plugin.label}（${plugin.id}）`);
+  const hint = known.length ? `登记过的有：${known.join("、")}` : "现在一个额度插件都没登记";
+  return `没有这个额度插件：${pluginId}。${hint}`;
 }
 
 /** 地址能不能用。不能的话给一句人话。 */

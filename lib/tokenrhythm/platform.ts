@@ -22,6 +22,26 @@ import { retryAfterMs } from "../upstream-status.ts";
 export interface PlatformRequest {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
+  /**
+   * 另一台机器（平台行把地址指到别处时）。
+   *
+   * 额度要问的是「这个平台在跟谁说话」：行上写的那台与默认的那台不同时，只换
+   * 主机名，路径、请求头、超时与凭据都一样。不给就是默认那台。
+   */
+  base?: string;
+}
+
+/**
+ * 请求的地址。
+ *
+ * 没给 base、或给的就是默认那台，照旧把路径接在配置地址后面。给了别的地址
+ * （平台行上那台）就按 URL 解析：以它的 origin 为根，用户填的地址带不带 /v1
+ * 都不影响路径。
+ */
+function requestUrl(base: string | undefined, path: string): string {
+  const other = String(base ?? "").trim();
+  if (!other || other === TOKENRHYTHM_API_BASE) return `${TOKENRHYTHM_API_BASE}${path}`;
+  return new URL(path, other).toString();
 }
 
 /**
@@ -37,7 +57,7 @@ export async function platformApi<T>(
 ): Promise<T> {
   const method = init.method ?? "GET";
   const write = method !== "GET";
-  const r = await fetch(`${TOKENRHYTHM_API_BASE}${path}`, {
+  const r = await fetch(requestUrl(init.base, path), {
     method,
     headers: write
       ? writeHeaders(session)

@@ -39,6 +39,11 @@ const {
 } = await import("../lib/tokenrhythm/accounts.ts");
 const { resetTokenRhythmStatusCache } = await import("../lib/tokenrhythm/wallet.ts");
 const { saveSession: saveInternAiSession } = await import("../lib/intern-ai/auth.ts");
+const { createOpenPlatform } = await import("../lib/open-platforms.ts");
+const { consoleApi: senseConsoleApi } = await import("../lib/sensenova/platform.ts");
+const { platformApi: twPlatformApi } = await import("../lib/tokenrhythm/platform.ts");
+const { loadSession: loadSenseSession } = await import("../lib/sensenova/auth.ts");
+const { loadSession: loadTwSession } = await import("../lib/tokenrhythm/accounts.ts");
 
 let pass = 0;
 let fail = 0;
@@ -251,8 +256,12 @@ function answer(platform: string, body: unknown): Response {
   }
 }
 
+/** 假上游收到的每一个地址（看主机与路径）。 */
+const asked: string[] = [];
+
 globalThis.fetch = (async (input: any) => {
   const url = String(typeof input === "string" ? input : (input?.url ?? ""));
+  asked.push(url);
   const route = new URL(url).pathname;
   if (route.endsWith("/lite/console/v1/tokenplan/pool-usage")) {
     calls.sensenova++;
@@ -313,7 +322,7 @@ function snapshotWithProbe(pluginId: string, accountId: string, probe: any): any
   return { plugins: { [pluginId]: { [accountId]: probe } } };
 }
 
-function senseSession(): void {
+function senseSession(accountId: string = senseRow.id): void {
   saveSenseNovaSession(
     {
       cookie: "oauth2=cookie",
@@ -323,11 +332,11 @@ function senseSession(): void {
       obtainedAtMs: Date.now(),
       username: "tester",
     },
-    senseRow.id,
+    accountId,
   );
 }
 
-function internSession(): void {
+function internSession(accountId: string = internRow.id): void {
   saveInternAiSession(
     {
       sites: [
@@ -338,14 +347,14 @@ function internSession(): void {
       obtainedAtMs: Date.now(),
       username: "tester",
     },
-    internRow.id,
+    accountId,
   );
 }
 
-function twSession(): void {
-  saveTokenRhythmCredential(twRow.id, { account: "tester", password: "pw-for-test", apiKey: "key-for-test" });
+function twSession(accountId: string = twRow.id): void {
+  saveTokenRhythmCredential(accountId, { account: "tester", password: "pw-for-test", apiKey: "key-for-test" });
   saveTokenRhythmSession({
-    accountId: twRow.id,
+    accountId,
     cookie: "PHPSESSID=cookie-for-test",
     csrf: "csrf-for-test",
     userId: "1",
@@ -635,6 +644,197 @@ const internNoBefore = calls.intern;
 const internMissing = await internAiCreditsPlugin.probe(internRow);
 check("没有会话 → missing", internMissing.state === "missing", JSON.stringify(internMissing));
 check("没有会话就不去问", calls.intern === internNoBefore, String(calls.intern));
+
+/* ------------------------------------------------------------------ *
+ * 额度问哪一台
+ *
+ * 额度接口的地址是代码里写死的（控制台、钱包那几台）。平台行上写的是「这个平台
+ * 在跟谁说话」：用户把地址指到别处时，额度也要问同一台 —— 否则自建/自测端点上
+ * 的额度永远问不到。三家各一条，断言用 URL 解析的结果，不比手拼的字符串。
+ * ------------------------------------------------------------------ */
+
+section("额度问哪一台");
+
+/** 自建端点。用户会填的形状：带 /v1 前缀。 */
+const SELF = "https://self-hosted.invalid/v1";
+const { store: platformDb } = await import("../lib/store.ts");
+
+/** 这一段时间里发出去的地址。 */
+function askedSince(from: number): string[] {
+  return asked.slice(from);
+}
+
+/** 只问了一次，而且问的就是这个地址（用 URL 解析，不比手拼的字符串）。 */
+function askedAt(urls: string[], path: string, base: string): boolean {
+  return urls.length === 1 && urls[0] === new URL(path, base).toString();
+}
+
+// 1. 模板平台：行上的地址等于模板的默认值 → 额度照旧问代码里那台。
+senseSession();
+internSession();
+twSession();
+mode.sensenova = "ok";
+mode.intern = "ok";
+mode.tokenrhythm = "ok";
+let mark = asked.length;
+await senseNovaPoolsPlugin.probe(senseRow);
+check(
+  "模板平台（SenseNova）问的是默认那台",
+  askedSince(mark).length === 1 && new URL(askedSince(mark)[0]).host === "platform.sensenova.cn",
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+await internAiCreditsPlugin.probe(internRow);
+check(
+  "模板平台（端砚）问的是默认那台",
+  askedSince(mark).length === 2 &&
+    askedSince(mark).every((url) => new URL(url).host === "discovery.intern-ai.org.cn"),
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+resetTokenRhythmStatusCache(twRow.id);
+await tokenRhythmWalletPlugin.probe(twRow);
+check(
+  "模板平台（TokenRhythm）问的是默认那台",
+  askedSince(mark).length === 2 && askedSince(mark).every((url) => new URL(url).host === "tokenrhythm.studio"),
+  askedSince(mark).join(" / "),
+);
+
+// 2. 自建平台：行上的地址不是模板默认值 → 额度问那一台（主机换成行上的，路径不变）。
+const selfSense = createOpenPlatform({
+  id: "self-sensenova",
+  label: "自建 SenseNova",
+  baseUrl: SELF,
+  quotaPlugin: "sensenova-pools",
+});
+check("自建平台建得起来（SenseNova）", selfSense.ok === true, selfSense.message);
+const selfSenseId = accountOf("self-sensenova", "自建 SenseNova 账号").row;
+senseSession(selfSenseId);
+mark = asked.length;
+const selfSenseProbe = await senseNovaPoolsPlugin.probe(provider(selfSenseId)!);
+check("自建平台（SenseNova）问到了额度", selfSenseProbe.state === "ok", JSON.stringify(selfSenseProbe));
+check(
+  "自建平台（SenseNova）问的是行上那台、路径不变",
+  askedAt(askedSince(mark), "/lite/console/v1/tokenplan/pool-usage", SELF),
+  askedSince(mark).join(" / "),
+);
+
+const selfIntern = createOpenPlatform({
+  id: "self-intern-ai",
+  label: "自建端砚",
+  baseUrl: SELF,
+  quotaPlugin: "intern-ai-credits",
+});
+check("自建平台建得起来（端砚）", selfIntern.ok === true, selfIntern.message);
+const selfInternId = accountOf("self-intern-ai", "自建端砚账号").row;
+internSession(selfInternId);
+mark = asked.length;
+const selfInternProbe = await internAiCreditsPlugin.probe(provider(selfInternId)!);
+check("自建平台（端砚）问到了墨点", selfInternProbe.state === "ok", JSON.stringify(selfInternProbe));
+const selfInternAsked = askedSince(mark);
+check(
+  "自建平台（端砚）的余额与批次都问行上那台",
+  selfInternAsked.length === 2 &&
+    selfInternAsked[0] === new URL("/api/tokenplan/v1/credits/balance", SELF).toString() &&
+    selfInternAsked[1] === new URL("/api/tokenplan/v1/credits/packages", SELF).toString(),
+  selfInternAsked.join(" / "),
+);
+
+const selfTw = createOpenPlatform({
+  id: "self-tokenrhythm",
+  label: "自建中转站",
+  baseUrl: SELF,
+  quotaPlugin: "tokenrhythm-wallet",
+});
+check("自建平台建得起来（TokenRhythm）", selfTw.ok === true, selfTw.message);
+const selfTwId = accountOf("self-tokenrhythm", "自建中转站账号").row;
+twSession(selfTwId);
+resetTokenRhythmStatusCache(selfTwId);
+mark = asked.length;
+const selfTwProbe = await tokenRhythmWalletPlugin.probe(provider(selfTwId)!);
+check("自建平台（TokenRhythm）问到了钱包", selfTwProbe.state === "ok", JSON.stringify(selfTwProbe));
+const selfTwAsked = askedSince(mark);
+check(
+  "自建平台（TokenRhythm）的钱包与批次都问行上那台",
+  selfTwAsked.length === 2 &&
+    selfTwAsked[0] === new URL("/api/wallet/summary", SELF).toString() &&
+    selfTwAsked[1] ===
+      new URL(
+        "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
+        SELF,
+      ).toString(),
+  selfTwAsked.join(" / "),
+);
+
+// 3. 行上带尾部斜杠：与不带时一模一样（地址交给 URL 解析，不靠手写裁剪）。
+for (const id of ["self-sensenova", "self-intern-ai", "self-tokenrhythm"]) {
+  platformDb().prepare("UPDATE platform SET base_url = ? WHERE id = ?").run(`${SELF}/`, id);
+}
+mark = asked.length;
+await senseNovaPoolsPlugin.probe(provider(selfSenseId)!);
+check(
+  "行上带尾部斜杠 → SenseNova 问的还是同一个地址",
+  askedAt(askedSince(mark), "/lite/console/v1/tokenplan/pool-usage", SELF),
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+await internAiCreditsPlugin.probe(provider(selfInternId)!);
+check(
+  "行上带尾部斜杠 → 端砚问的还是同一个地址",
+  askedSince(mark)[0] === new URL("/api/tokenplan/v1/credits/balance", SELF).toString(),
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+resetTokenRhythmStatusCache(selfTwId);
+await tokenRhythmWalletPlugin.probe(provider(selfTwId)!);
+check(
+  "行上带尾部斜杠 → 钱包问的还是同一个地址",
+  askedSince(mark)[0] === new URL("/api/wallet/summary", SELF).toString(),
+  askedSince(mark).join(" / "),
+);
+
+// 4. 行上地址是空的（旧库、手改过的库）：退回默认那台，不拼空地址。
+for (const id of ["self-sensenova", "self-intern-ai", "self-tokenrhythm"]) {
+  platformDb().prepare("UPDATE platform SET base_url = '' WHERE id = ?").run(id);
+}
+mark = asked.length;
+await senseNovaPoolsPlugin.probe(provider(selfSenseId)!);
+check(
+  "行上没地址 → SenseNova 退回默认那台",
+  askedSince(mark).length === 1 && new URL(askedSince(mark)[0]).host === "platform.sensenova.cn",
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+await internAiCreditsPlugin.probe(provider(selfInternId)!);
+check(
+  "行上没地址 → 端砚退回默认那台",
+  askedSince(mark).every((url) => new URL(url).host === "discovery.intern-ai.org.cn"),
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+resetTokenRhythmStatusCache(selfTwId);
+await tokenRhythmWalletPlugin.probe(provider(selfTwId)!);
+check(
+  "行上没地址 → 钱包退回默认那台",
+  askedSince(mark).length === 2 && askedSince(mark).every((url) => new URL(url).host === "tokenrhythm.studio"),
+  askedSince(mark).join(" / "),
+);
+
+// 不传 base 的调用点（别处的代码还是这样调）：打的是默认那台，一字不改。
+mark = asked.length;
+await senseConsoleApi("/console/v1/tokenplan/pool-usage", loadSenseSession(senseRow.id)!);
+check(
+  "不传 base → SenseNova 打的是默认那台",
+  askedSince(mark).length === 1 && new URL(askedSince(mark)[0]).host === "platform.sensenova.cn",
+  askedSince(mark).join(" / "),
+);
+mark = asked.length;
+await twPlatformApi("/api/wallet/summary", loadTwSession(twRow.id)!);
+check(
+  "不传 base → 钱包打的是默认那台",
+  askedSince(mark).length === 1 && new URL(askedSince(mark)[0]).host === "tokenrhythm.studio",
+  askedSince(mark).join(" / "),
+);
 
 /* ------------------------------------------------------------------ *
  * 平台行的默认插件（迁移）

@@ -13,7 +13,8 @@
 import type { QuotaView, CreditLotView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { quotaProbe } from "../quota-state.ts";
-import { registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
+import { quotaEndpointBase, registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
+import { SENSENOVA_PLATFORM_BASE } from "./config.ts";
 import { loadSession, SenseNovaError } from "./auth.ts";
 import { poolUsage, totalRemaining, type SenseNovaPool, type SenseNovaPoolUsage } from "./quota.ts";
 
@@ -116,8 +117,10 @@ export const senseNovaPoolsPlugin = registerQuotaPlugin({
     if (!session) return quotaProbe("missing", "账号上没有控制台会话，查不了积分池");
 
     let usage: SenseNovaPoolUsage;
+    // 积分池在控制台上；平台行把地址指到别处时问那一台。
+    const endpointBase = quotaEndpointBase(account, SENSENOVA_PLATFORM_BASE);
     try {
-      usage = await poolUsage(session);
+      usage = await poolUsage(session, endpointBase);
     } catch (e) {
       return stateOfError(e);
     }

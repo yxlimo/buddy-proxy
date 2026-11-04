@@ -57,7 +57,9 @@ const UNIT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "availability-unit-"));
 // 数据目录要在导入库模块之前定下来：store 是进程里的单例。
 process.env.BUDDY_DATA_DIR = UNIT_DIR;
 
-const { addAccount, setProviderEnabled, updateProvider } = await import("../lib/providers.ts");
+const { addAccount, listProviders, setProviderEnabled, updateProvider } = await import("../lib/providers.ts");
+const { quotaConclusionOf, quotaPluginIdOf } = await import("../lib/quota-state.ts");
+const { cooldownStamp } = await import("../lib/router/account-cooldown.ts");
 const { platformAvailability } = await import("../lib/router/availability.ts");
 const { inferenceCredentialOf } = await import("../lib/admin/accounts.ts");
 const { hasUsableCredential } = await import("../lib/admin/credentials.ts");
@@ -126,21 +128,54 @@ check(
 // 额度由平台那一行指名的插件问回来：指名它，快照里那份才读得到。
 // 快照里存的是那一次的结论（状态 + 面板那几行），不是门户的原样答复。
 updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
-putHealthSnapshot({
+// 两个快照：插件不给时刻的，与插件给了时刻的。同一份快照两处（面板 / 路由）
+// 必须报同一个数。
+const noTimeSnapshot = {
   plugins: {
     [qiniuQuotaPlugin.id]: {
       [accountId]: { state: "no_quota", views: [], recoverAt: null, message: "资源包全部用尽" },
     },
   },
-} as any);
+} as any;
+const PLUGIN_AT = Date.now() + 30 * 60_000;
+const timedSnapshot = {
+  plugins: {
+    [qiniuQuotaPlugin.id]: {
+      [accountId]: { state: "no_quota", views: [], recoverAt: PLUGIN_AT, message: "资源包全部用尽" },
+    },
+  },
+} as any;
+
+/** 面板那一格报的时刻（走 quotaConclusionOf，不自己拼快照）。 */
+function panelRecoverAt(snapshot: any, cooling: Map<string, number>): number {
+  const row = listProviders().find((r) => r.id === accountId)!;
+  return quotaConclusionOf(row, snapshot, quotaPluginIdOf(row), cooling).recoverAtMs;
+}
+
+putHealthSnapshot(noTimeSnapshot);
 const spent = platformAvailability("qiniu");
 check("额度用尽 → out_of_credits", spent.state === "out_of_credits", spent.state);
 check("额度用尽 → 没有能接的账号", spent.usable.length === 0, String(spent.usable.length));
 check("额度用尽 → 目录不摘模型", spent.ids.length === 5, JSON.stringify(spent.ids));
+// 插件不给时刻、也没有冷却：没人知道什么时候回来。额度不会因为过了五分钟就回
+// 来 —— 那时答「不知道」（null / 0），不拿一个固定时长冒充。
+check("额度用尽、插件不给时刻 → 判定不编时刻（null）", spent.untilMs === null, String(spent.untilMs));
 check(
-  "额度用尽 → 恢复时间是未来的时刻",
-  spent.untilMs !== null && spent.untilMs > Date.now(),
-  String(spent.untilMs),
+  "额度用尽、插件不给时刻 → spent 表里是 null（见底但不知道什么时候回来）",
+  spent.spent.get(accountId) === null,
+  String(spent.spent.get(accountId)),
+);
+check("额度用尽、插件不给时刻 → 面板那一格也是 0", panelRecoverAt(noTimeSnapshot, spent.cooling) === 0, String(panelRecoverAt(noTimeSnapshot, spent.cooling)));
+
+// 控制组：插件给了时刻就是它（上面那两条不是写死的）。
+putHealthSnapshot(timedSnapshot);
+const timedSpent = platformAvailability("qiniu");
+check("额度用尽、插件给了时刻 → 判定给的就是它", timedSpent.untilMs === PLUGIN_AT, `${timedSpent.untilMs} 与 ${PLUGIN_AT}`);
+check("同一个账号的 spent 值也是它", timedSpent.spent.get(accountId) === PLUGIN_AT, String(timedSpent.spent.get(accountId)));
+check(
+  "面板那一格与路由是同一个数",
+  panelRecoverAt(timedSnapshot, timedSpent.cooling) === PLUGIN_AT,
+  `${panelRecoverAt(timedSnapshot, timedSpent.cooling)} 与 ${PLUGIN_AT}`,
 );
 clearHealthSnapshot();
 
@@ -152,6 +187,11 @@ check("冷却中 → cooling", cooling.state === "cooling", cooling.state);
 check("冷却中 → 没有能接的账号", cooling.usable.length === 0, String(cooling.usable.length));
 check("冷却中 → 目录不摘模型", cooling.ids.length === 5, JSON.stringify(cooling.ids));
 check("冷却中 → 恢复时间是冷却结束的那一刻", cooling.untilMs === until, `${cooling.untilMs} 与 ${until}`);
+check(
+  "冷却中、插件不给时刻 → 面板那一格也是冷却结束那一刻（同一个数）",
+  panelRecoverAt(noTimeSnapshot, cooling.cooling) === until,
+  `${panelRecoverAt(noTimeSnapshot, cooling.cooling)} 与 ${until}`,
+);
 clearCooldown(accountId);
 const recovered = platformAvailability("qiniu");
 check("冷却结束 → 又就绪了", recovered.state === "ready", recovered.state);
@@ -228,6 +268,16 @@ function caught(run: () => unknown): any {
   return null;
 }
 
+/** 同上，给 async 的那条路（派发）。 */
+async function caughtAsync(run: () => Promise<unknown>): Promise<any> {
+  try {
+    await run();
+  } catch (e) {
+    return e;
+  }
+  return null;
+}
+
 /** Qoder 的会话：形状与真的那份一致（凭据就是登录会话本身）。 */
 function qoderSessionSecret(): Record<string, unknown> {
   const now = Date.now();
@@ -250,14 +300,9 @@ function qoderSessionSecret(): Record<string, unknown> {
   };
 }
 
-// 额度用尽：402，类型是 usage_limit_error，文案点名平台。
-putHealthSnapshot({
-  plugins: {
-    [qiniuQuotaPlugin.id]: {
-      [accountId]: { state: "no_quota", views: [], recoverAt: null, message: "资源包全部用尽" },
-    },
-  },
-} as any);
+// 额度用尽、插件给了时刻：402，类型是 usage_limit_error，文案点名平台并带上
+// 同一个时刻（面板那一格报的也是它）。
+putHealthSnapshot(timedSnapshot);
 const spentPlatform = platformAvailability("qiniu");
 check("额度用尽 → 判定是 out_of_credits", spentPlatform.state === "out_of_credits", spentPlatform.state);
 const spentAnswer = caught(() => routeInGroup("qiniu", spentPlatform.ids[0], routingContextOf(spentPlatform)));
@@ -265,10 +310,53 @@ check("额度用尽 → 答 402", spentAnswer?.status === 402, String(spentAnswe
 check("额度用尽 → 类型是 usage_limit_error", spentAnswer?.type === "usage_limit_error", String(spentAnswer?.type));
 check("额度用尽 → 文案点名了平台", String(spentAnswer?.hint ?? "").includes("qiniu"), String(spentAnswer?.hint));
 check("额度用尽 → 文案说了什么时候恢复", String(spentAnswer?.hint ?? "").includes("恢复"), String(spentAnswer?.hint));
+check(
+  "额度用尽 → 文案里那个时刻就是面板那一格",
+  String(spentAnswer?.hint ?? "").includes(cooldownStamp(PLUGIN_AT)),
+  String(spentAnswer?.hint),
+);
 clearHealthSnapshot();
 
-// 冷却：503，点名平台，说清什么时候再试。
-setCooldown(accountId, Date.now() + 10 * 60_000, "test");
+// 额度用尽、插件不给时刻、也没有冷却：402 还在（见底的账号不去打），但正文里
+// 不出现时刻、也不说「恢复」—— 额度不会因为过了五分钟就回来，编一个时刻是在
+// 骗人。这里走真正的派发那条路（underPolicy），不是自己拼错误。
+putHealthSnapshot(noTimeSnapshot);
+const unknownSpent = platformAvailability("qiniu");
+check("不知道时刻 → 判定还是 out_of_credits", unknownSpent.state === "out_of_credits", unknownSpent.state);
+check(
+  "不知道时刻 → 路由不禁用（它自己按平台级说不清）",
+  caught(() => routeInGroup("qiniu", unknownSpent.ids[0], routingContextOf(unknownSpent))) === null,
+  "路由抛错了",
+);
+let unknownRan = false;
+const unknownAnswer = await caughtAsync(() =>
+  underPolicy("qiniu", "test", async () => {
+    unknownRan = true;
+    return "不该跑到这里";
+  }),
+);
+check("不知道时刻 → 派发还是答 402", unknownAnswer?.status === 402, String(unknownAnswer?.status));
+check("不知道时刻 → 见底的账号根本没去打", unknownRan === false);
+check(
+  "不知道时刻 → 文案里没有任何时刻",
+  !/\d{4}/.test(String(unknownAnswer?.hint ?? "")),
+  String(unknownAnswer?.hint),
+);
+check(
+  "不知道时刻 → 文案里没有「恢复」二字",
+  !String(unknownAnswer?.hint ?? "").includes("恢复"),
+  String(unknownAnswer?.hint),
+);
+check(
+  "不知道时刻 → 没有 Retry-After（不编一个「过一会」）",
+  unknownAnswer?.retryAfterUntilMs === undefined,
+  String(unknownAnswer?.retryAfterUntilMs),
+);
+clearHealthSnapshot();
+
+// 冷却：503，点名平台，说清什么时候再试 —— 那是真实的冷却结束时刻，不是估的。
+const coolingUntil = Date.now() + 10 * 60_000;
+setCooldown(accountId, coolingUntil, "test");
 const coolingPlatform = platformAvailability("qiniu");
 check("冷却中 → 判定是 cooling", coolingPlatform.state === "cooling", coolingPlatform.state);
 const coolingRouteAnswer = caught(() =>
@@ -284,6 +372,16 @@ check(
   "冷却 → 文案说了在冷却",
   String(coolingRouteAnswer?.hint ?? "").includes("冷却"),
   String(coolingRouteAnswer?.hint),
+);
+check(
+  "冷却 → 文案里那个时刻就是冷却结束",
+  String(coolingRouteAnswer?.hint ?? "").includes(cooldownStamp(coolingUntil)),
+  String(coolingRouteAnswer?.hint),
+);
+check(
+  "冷却 → 面板那一格也是冷却结束（同一个数）",
+  panelRecoverAt(noTimeSnapshot, coolingPlatform.cooling) === coolingPlatform.untilMs,
+  `${panelRecoverAt(noTimeSnapshot, coolingPlatform.cooling)} 与 ${coolingPlatform.untilMs}`,
 );
 clearCooldown(accountId);
 

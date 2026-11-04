@@ -283,6 +283,8 @@ export function quotaMessage(quota: QuotaView, conclusion?: QuotaConclusion | nu
     // 这一次问额度的结论：状态原样透出，恢复时刻不知道就是 0，一句话没有就是
     // 空串。认不出的状态与「没有结论」都落到空串 —— 契约说空串是「没有结论」。
     quotaState: conclusion?.state ?? "",
+    // 这个数与路由 402/503 那句是同一个：都由 accountRecoveryAtMs 算
+    // （lib/admin/platform-state.ts），这里不再自己取一份。
     recoverAtMs: BigInt(wholeMs(conclusion?.recoverAtMs ?? 0)),
     message: conclusion?.message ?? "",
   });

@@ -23,10 +23,13 @@ const {
 // 种类与插件都是导入时登记的：导入它，它们才都在。
 await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
-const { parseRespackOverview } = await import("../lib/qiniu/quota.ts");
+const { parseRespackOverview, fetchQiniuQuota } = await import("../lib/qiniu/quota.ts");
+const { QINIU_RESPACK_PATH } = await import("../lib/qiniu/config.ts");
 const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
 const { writeQiniuAccount, qiniuAccountId } = await import("../lib/qiniu/account.ts");
 const { createOpenPlatform, openPlatformOf, updateOpenPlatform } = await import("../lib/open-platforms.ts");
+// 旧库里那种「填了个没登记的插件 id」的行，写路径现在拦住了，只能直接写库造出来。
+const { store } = await import("../lib/store.ts");
 
 let pass = 0;
 let fail = 0;
@@ -135,20 +138,41 @@ const OVERVIEW = {
 /** 快照里那一份：两个包。 */
 const QUOTA = { respacks: parseRespackOverview(OVERVIEW), at: 1767225600000 };
 
-/** 假上游：门户只回这一份，别的地址一律当作出错（不许真的出机器）。 */
+/**
+ * 假上游。两台：门户（代码里写死的那台）与自建端点（平台行上填的那台）。
+ *
+ * 别的地址一律当作出错 —— 一次请求都不许出机器。
+ */
+const PORTAL_HOST = "portal.qiniu.com";
+/** 自建端点。用户会填的形状：带 /v1 前缀。 */
+const SELF_HOSTED_BASE = "https://self-hosted.invalid/v1";
+/** 门户收到了几次请求。 */
 let portalCalls = 0;
+/** 自建端点收到了哪些地址（看主机与路径）。 */
+const selfCalls: string[] = [];
+/** 最近一次门户请求的地址。 */
+let lastPortalUrl = "";
 /** 门户这一轮答什么（换它来演「一包不剩」）。 */
 let portalBody: unknown = OVERVIEW;
 globalThis.fetch = (async (input: any) => {
   const url = String(typeof input === "string" ? input : (input?.url ?? ""));
-  if (!url.startsWith("https://portal.qiniu.com")) {
-    throw new Error(`这个测试只认假门户：${url}`);
+  const host = new URL(url).host;
+  if (host === PORTAL_HOST) {
+    lastPortalUrl = url;
+    portalCalls++;
+    return new Response(JSON.stringify(portalBody), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   }
-  portalCalls++;
-  return new Response(JSON.stringify(portalBody), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
+  if (url.startsWith(`${SELF_HOSTED_BASE}/`) || url.startsWith("https://self-hosted.invalid/")) {
+    selfCalls.push(url);
+    return new Response(JSON.stringify(portalBody), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  throw new Error(`这个测试只认假门户与假自建端点：${url}`);
 }) as typeof fetch;
 
 /* ------------------------------------------------------------------ *
@@ -351,7 +375,29 @@ section("开放平台");
 
 createOpenPlatform({ id: "quota-demo", label: "带额度的开放平台", baseUrl: "https://example.invalid/v1", quotaPlugin: "qiniu" });
 createOpenPlatform({ id: "quota-demo-none", label: "没有额度的开放平台", baseUrl: "https://example.invalid/v1" });
-createOpenPlatform({ id: "quota-demo-bad", label: "填错插件的开放平台", baseUrl: "https://example.invalid/v1", quotaPlugin: "no-such-plugin" });
+
+// 没登记的插件 id：拒收，一个字都不落库 —— 存下去之后这个平台一条额度结论
+// 都不会有，而面板上看着「已选插件」。
+const badCreate = createOpenPlatform({
+  id: "quota-demo-bad",
+  label: "填错插件的开放平台",
+  baseUrl: "https://example.invalid/v1",
+  quotaPlugin: "no-such-plugin",
+});
+check("没登记的插件 id 建不了平台", badCreate.ok === false, badCreate.message);
+check("拒绝的话说的是那个 id", badCreate.message.includes("没有这个额度插件：no-such-plugin"), badCreate.message);
+check("拒绝的话列了登记过的插件", badCreate.message.includes("七牛云资源包"), badCreate.message);
+check("没登记的插件 id → 表里没有这一行", openPlatformOf("quota-demo-bad") === null, JSON.stringify(openPlatformOf("quota-demo-bad")));
+
+// 旧库里的那一行：绕过写路径，直接塞一个没登记的 id。读的那一头（下面几节与
+// 启动校验）还是得容得下它。
+createOpenPlatform({ id: "quota-demo-bad", label: "填错插件的开放平台", baseUrl: "https://example.invalid/v1" });
+store().prepare("UPDATE platform SET quota_plugin = ? WHERE id = ?").run("no-such-plugin", "quota-demo-bad");
+check(
+  "旧库里那一格读得回来",
+  openPlatformOf("quota-demo-bad")?.quotaPlugin === "no-such-plugin",
+  String(openPlatformOf("quota-demo-bad")?.quotaPlugin),
+);
 
 function openAccount(id: string): any {
   return {
@@ -455,14 +501,16 @@ console.warn = (...args: unknown[]) => {
 };
 let assertThrew = false;
 try {
-  // 又填错一个插件 id：写进去的时候说一次（一个平台的这个插件只说一次）。
+  // 旧库里又有一行填错了插件（写路径现在拦住了，直接写库）：启动校验得说它一次，
+  // 而且一个进程只一次 —— 这是配置错误，不该跟着启动刷屏。
   createOpenPlatform({
     id: "quota-demo-bad-2",
     label: "填错插件的开放平台二",
     baseUrl: "https://example.invalid/v1",
-    quotaPlugin: "no-such-plugin",
   });
-  // 启动校验说的是同一件事：它不再重复说（去重就是干这个的）。
+  store().prepare("UPDATE platform SET quota_plugin = ? WHERE id = ?").run("no-such-plugin-startup", "quota-demo-bad-2");
+  assertQuotaPlugins();
+  // 第二次：去重就是干这个的。
   assertQuotaPlugins();
 } catch {
   assertThrew = true;
@@ -470,14 +518,20 @@ try {
   console.warn = realWarn;
 }
 check("填错了插件 id → 不抛", !assertThrew);
-check(
-  "填错了插件 id → warn 一行",
-  warnings.length === 1 && warnings[0].includes("这个平台填的额度插件没登记：no-such-plugin"),
-  warnings.join(" / "),
-);
+/** 说的是这个平台、这个插件的那一行。 */
+function startupLines(): string[] {
+  return warnings.filter((line) => line.includes("quota-demo-bad-2"));
+}
+check("旧库里那一行 → warn 一行", startupLines().length === 1, warnings.join(" / "));
 check(
   "警告说的是那个 id",
-  warnings.length === 1 && !warnings[0].includes("这个平台填的额度插件没登记：qiniu"),
+  startupLines().some((line) => line.includes("这个平台填的额度插件没登记：no-such-plugin-startup")),
+  warnings.join(" / "),
+);
+check("启动两次也只说一次", warnings.filter((line) => line.includes("no-such-plugin-startup")).length === 1, warnings.join(" / "));
+check(
+  "登记的插件不说",
+  !warnings.some((line) => line.includes("这个平台填的额度插件没登记：qiniu")),
   warnings.join(" / "),
 );
 
@@ -523,7 +577,8 @@ check("清掉之后是空串", pluginFieldOf(FIELD_ACCOUNT, "account") === "", p
 createOpenPlatform({
   id: "quota-demo-qiniu",
   label: "带七牛额度的开放平台",
-  baseUrl: "https://example.invalid/v1",
+  // 地址指到自建端点：额度也该问那一台（门户只认它自己那台，自测全靠这一条）。
+  baseUrl: SELF_HOSTED_BASE,
   quotaPlugin: "qiniu",
 });
 const e2e = addAccount({ platform: "quota-demo-qiniu" });
@@ -585,31 +640,102 @@ check("只写了推理 key", setPlain.count === 1, String(setPlain.count));
 check("文案说清了只写了推理 key", setPlain.message.includes("多余的 key 没写"), setPlain.message);
 check("第二把没落到任何地方", pluginFieldOf(plainId, "account") === "", pluginFieldOf(plainId, "account"));
 
-// 填错了插件 id：说一声，但照样写进去（用户可能先填 id 再让我们上线那个插件）。
-const updateWarnings: string[] = [];
-const realUpdateWarn = console.warn;
-console.warn = (...args: unknown[]) => {
-  updateWarnings.push(args.map((a) => String(a)).join(" "));
-};
-let updateThrew = false;
-try {
-  updateOpenPlatform("quota-demo-none", { quotaPlugin: "no-such-plugin-3" });
-} catch {
-  updateThrew = true;
-} finally {
-  console.warn = realUpdateWarn;
-}
-check("填错了插件 id → 不抛", !updateThrew);
+// 填错了插件 id：拒收，库里那一格原地不动（存下去之后这个平台一条额度结论都没有）。
+const plainBefore = openPlatformOf("quota-demo-none")?.quotaPlugin ?? "";
+const refused = updateOpenPlatform("quota-demo-none", { quotaPlugin: "no-such-plugin-3" });
+check("没登记的插件 id 改不进去", refused.ok === false, refused.message);
+check("拒绝的话说的是那个 id", refused.message.includes("没有这个额度插件：no-such-plugin-3"), refused.message);
 check(
-  "填错了插件 id → 写进去了",
-  (openPlatformOf("quota-demo-none")?.quotaPlugin ?? "") === "no-such-plugin-3",
-  String(openPlatformOf("quota-demo-none")?.quotaPlugin),
+  "拒绝的话列了登记过的插件",
+  refused.message.includes("七牛云资源包") && refused.message.includes("qiniu"),
+  refused.message,
 );
 check(
-  "填错了插件 id → warn 一行",
-  updateWarnings.length === 1 &&
-    updateWarnings[0].includes("这个平台填的额度插件没登记：no-such-plugin-3"),
-  updateWarnings.join(" / "),
+  "库里那一格没动",
+  (openPlatformOf("quota-demo-none")?.quotaPlugin ?? "") === plainBefore,
+  String(openPlatformOf("quota-demo-none")?.quotaPlugin),
+);
+
+/* ------------------------------------------------------------------ *
+ * 额度问哪一台
+ *
+ * 额度接口的地址是代码里写死的（门户那台）。平台行上写的是「这个平台在跟谁
+ * 说话」：用户把地址指到别处时，额度也要问同一台 —— 否则自建/自测端点上的
+ * 额度永远问不到，e2e 只能靠改写 fetch 的主机名绕过去。
+ * ------------------------------------------------------------------ */
+
+section("额度问哪一台");
+
+/** 自建端点收到的那一个地址：插件路径与原有的查询串都在里面。 */
+const RESPACK_URL = new URL(`${QINIU_RESPACK_PATH}?page=1&page_size=10`, SELF_HOSTED_BASE).toString();
+
+// 1. 模板平台：行上的地址就是模板的默认值（推理端点），额度照旧问门户那台。
+const templatePortalBefore = portalCalls;
+const templateSelfBefore = selfCalls.length;
+const templateProbe = await qiniuQuotaPlugin.probe(QINIU_ACCOUNT);
+check("模板平台问到额度", templateProbe.state === "ok", JSON.stringify(templateProbe));
+check("模板平台问的是门户那台", new URL(lastPortalUrl).host === PORTAL_HOST, lastPortalUrl);
+check("模板平台问了一次门户", portalCalls === templatePortalBefore + 1, String(portalCalls - templatePortalBefore));
+check("模板平台没去问自建端点", selfCalls.length === templateSelfBefore, String(selfCalls.length));
+
+// 2. 自建平台：行上的地址不是模板默认值 → 额度问那一台。
+createOpenPlatform({
+  id: "quota-endpoint",
+  label: "地址指到自建端点的平台",
+  baseUrl: SELF_HOSTED_BASE,
+  quotaPlugin: "qiniu",
+});
+const endpointAccount = addAccount({ platform: "quota-endpoint" });
+const endpointId = endpointAccount.id ?? "";
+check("账号加得起来", endpointAccount.ok === true && endpointId !== "", endpointAccount.message);
+setProviderKeys(endpointId, ["sk-demo-endpoint", "fake-portal-cookie=1"]);
+
+const selfBefore = selfCalls.length;
+const portalBeforeSelf = portalCalls;
+const endpointProbe = await qiniuQuotaPlugin.probe(provider(endpointId) as any);
+check("自建平台问到额度", endpointProbe.state === "ok", JSON.stringify(endpointProbe));
+check("自建平台问的是自建端点", selfCalls.length === selfBefore + 1, String(selfCalls.length - selfBefore));
+check("自建平台没去问门户", portalCalls === portalBeforeSelf, String(portalCalls - portalBeforeSelf));
+check(
+  // 行上写的是 https://…/v1，路径却从根开始：/v1 是用户自己填的，不替用户拼。
+  "自建端点收到的是 origin + 原来的 resppack 路径",
+  selfCalls[selfBefore] === RESPACK_URL,
+  `${selfCalls[selfBefore]} / ${RESPACK_URL}`,
+);
+
+// 3. 行上带尾部斜杠：与不带时一模一样（地址交给 URL 解析，不靠手写裁剪）。
+store()
+  .prepare("UPDATE platform SET base_url = ? WHERE id = ?")
+  .run(`${SELF_HOSTED_BASE}/`, "quota-endpoint");
+const slashBefore = selfCalls.length;
+const slashProbe = await qiniuQuotaPlugin.probe(provider(endpointId) as any);
+check("行上带尾部斜杠也问得通", slashProbe.state === "ok", JSON.stringify(slashProbe));
+check(
+  "带斜杠与不带斜杠是同一个地址",
+  selfCalls[slashBefore] === RESPACK_URL,
+  `${selfCalls[slashBefore]} / ${RESPACK_URL}`,
+);
+
+// 4. 行上地址是空的（旧库、手改过的库）：退回插件自己那台，不拼空地址。
+store().prepare("UPDATE platform SET base_url = '' WHERE id = ?").run("quota-endpoint");
+const emptySelfBefore = selfCalls.length;
+const emptyPortalBefore = portalCalls;
+const emptyProbe = await qiniuQuotaPlugin.probe(provider(endpointId) as any);
+check("行上没地址 → 问到额度", emptyProbe.state === "ok", JSON.stringify(emptyProbe));
+check("行上没地址 → 退回门户那台", portalCalls === emptyPortalBefore + 1, String(portalCalls - emptyPortalBefore));
+check("行上没地址 → 没去问自建端点", selfCalls.length === emptySelfBefore, String(selfCalls.length));
+check("行上没地址 → 地址里没有空主机", new URL(lastPortalUrl).host === PORTAL_HOST, lastPortalUrl);
+// 改回去：后面的段落还要用这个平台。
+store().prepare("UPDATE platform SET base_url = ? WHERE id = ?").run(SELF_HOSTED_BASE, "quota-endpoint");
+
+// 不传 base 的调用点（别处的代码还是这样调）：打的是默认那台，一字不改。
+const directBefore = portalCalls;
+const direct = await fetchQiniuQuota("fake-portal-cookie=1");
+check("不传 base 也能问到", direct.ok === true, JSON.stringify(direct));
+check(
+  "不传 base 打的是默认门户",
+  portalCalls === directBefore + 1 && new URL(lastPortalUrl).host === PORTAL_HOST,
+  lastPortalUrl,
 );
 
 /* ------------------------------------------------------------------ *
@@ -662,7 +788,7 @@ registerQuotaPlugin({
 createOpenPlatform({
   id: "quota-live",
   label: "额度真被拉的开放平台",
-  baseUrl: "https://example.invalid/v1",
+  baseUrl: SELF_HOSTED_BASE,
   quotaPlugin: "qiniu",
 });
 createOpenPlatform({
@@ -674,8 +800,9 @@ createOpenPlatform({
   id: "quota-live-bad",
   label: "插件没登记的开放平台",
   baseUrl: "https://example.invalid/v1",
-  quotaPlugin: "no-such-plugin-live",
 });
+// 旧库里的形状：插件 id 没登记。写路径现在拦住了，直接写库造出来。
+store().prepare("UPDATE platform SET quota_plugin = ? WHERE id = ?").run("no-such-plugin-live", "quota-live-bad");
 createOpenPlatform({
   id: "quota-live-boom",
   label: "插件会炸的开放平台",

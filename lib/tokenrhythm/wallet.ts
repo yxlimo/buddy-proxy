@@ -16,11 +16,13 @@ import {
   sessionId,
   tokenRhythmCredentialOf,
   TokenRhythmError,
+  TOKENRHYTHM_API_BASE,
   type TokenRhythmErrorKind,
   type TokenRhythmSession,
 } from "./accounts.ts";
 import { accountsOfPlatform, provider } from "../providers.ts";
 import { platformOf } from "../platforms.ts";
+import { quotaEndpointBase } from "../quota-plugins.ts";
 
 export interface TokenRhythmWallet {
   currency: string;
@@ -78,8 +80,19 @@ export function platformOfAccount(id: string): string {
   return platformOf(id) ? id : (provider(id)?.platform ?? id);
 }
 
+/**
+ * 钱包该问哪一台：平台行把地址指到别处时就问那一台。
+ *
+ * 在钱包这一层算，不在插件里算：钱包是缓存的（一个平台一份，路由与面板读的
+ * 是同一份），同一个平台两份地址会让两边拿到不同机器上的数。
+ */
+function walletEndpointBase(accountId: string): string {
+  const row = provider(accountId);
+  return row ? quotaEndpointBase(row, TOKENRHYTHM_API_BASE) : TOKENRHYTHM_API_BASE;
+}
+
 export async function wallet(session: TokenRhythmSession, accountId = session.accountId): Promise<TokenRhythmWallet> {
-  const data = await platformApi<any>("/api/wallet/summary", session);
+  const data = await platformApi<any>("/api/wallet/summary", session, { base: walletEndpointBase(accountId) });
   // A fresh wallet means the cached view is stale: which account runs out
   // first may have changed, and the next request has to decide again. Only
   // this platform's view goes — another platform's accounts did not change.
@@ -95,10 +108,14 @@ export async function wallet(session: TokenRhythmSession, accountId = session.ac
   };
 }
 
-export async function credits(session: TokenRhythmSession): Promise<TokenRhythmCredits> {
+export async function credits(
+  session: TokenRhythmSession,
+  accountId = session.accountId,
+): Promise<TokenRhythmCredits> {
   const data = await platformApi<any>(
     "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
     session,
+    { base: walletEndpointBase(accountId) },
   );
   const list: TokenRhythmGift[] = (Array.isArray(data?.list) ? data.list : []).map((row: any) => ({
     id: String(row?.id ?? ""),
@@ -194,7 +211,7 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
       // to fill in (the panel writes it): the gateway does not build one for
       // them, so an account without one simply stays out.
       status.wallet = await wallet(session, row.id);
-      status.credits = await credits(session);
+      status.credits = await credits(session, row.id);
     } catch (e) {
       status.error = (e as Error).message;
       status.errorKind = e instanceof TokenRhythmError ? e.kind : "unknown";

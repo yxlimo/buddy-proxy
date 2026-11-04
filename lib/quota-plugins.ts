@@ -16,7 +16,8 @@
 
 import type { QuotaView } from "./provider-kinds.ts";
 import type { ProviderRow } from "./providers.ts";
-import { listOpenPlatforms } from "./open-platforms.ts";
+import { listOpenPlatforms, openPlatformOf } from "./open-platforms.ts";
+import { platformTemplateOf } from "./platform-catalog.ts";
 import type { QuotaState } from "./quota-state.ts";
 
 /** 面板按它渲染的一个输入框。 */
@@ -84,6 +85,48 @@ export function allQuotaPlugins(): QuotaPlugin[] {
 }
 
 /**
+ * 两个地址是不是「同一台同一段」。
+ *
+ * 走 URL 解析，比的是解析后的 origin 与 pathname，不是原文：大小写、默认端口这些
+ * 差异由标准库归一。地址写进库里的时候已经去过尾部斜杠（lib/open-platforms.ts 的
+ * normalizeBaseUrl），这边不再自己裁。
+ */
+function sameBase(a: string, b: string): boolean {
+  try {
+    const left = new URL(a);
+    const right = new URL(b);
+    return left.origin === right.origin && left.pathname === right.pathname;
+  } catch {
+    // 不是完整网址：认不出「同一台」，只好按原文比。
+    return a === b;
+  }
+}
+
+/**
+ * 额度请求该打哪台：平台行指向了别处就用它，否则用插件自己那台。
+ *
+ * 各平台的额度接口地址是代码里的常量（门户、控制台、钱包）。平台行上写的却是
+ * 「这个平台在跟谁说话」—— 用户把地址指到别处（自建端点、自测端点）时，额度
+ * 也该问同一台，否则那个平台的额度永远问不到，自测只能靠改写主机名绕过去。
+ *
+ * 模板平台的默认地址不算「指到别处」：表里那些行是迁移按模板补出来的，地址等于
+ * 模板的默认值，照它去问会把额度请求糊到推理端点上。
+ *
+ * 返回的是行上那个地址原文：路径怎么拼是调用方的事（`new URL(路径, 它)`）。
+ */
+export function quotaEndpointBase(account: ProviderRow, vendorBase: string): string {
+  const row = openPlatformOf(account.platform);
+  if (!row) return vendorBase;
+  const base = String(row.baseUrl ?? "").trim();
+  if (!base) return vendorBase;
+  // kind 认不出模板（比如开放平台的 openai）就没有「默认地址」这一说：行上写的
+  // 那个地址就是用户要的地址。
+  const template = platformTemplateOf(account.kind || row.kind);
+  if (template && sameBase(base, template.defaultBaseUrl)) return vendorBase;
+  return base;
+}
+
+/**
  * 「这个平台没有额度接口」的声明。
  *
  * 理由留着：「这个平台没有额度」与「还没顾上搬」是两回事，只有前者是决定。
@@ -107,16 +150,17 @@ export function noQuotaPluginReason(id: string): string | null {
 /**
  * 已经报过「这个平台的额度插件没登记」的那些。
  *
- * 一个平台的这个插件说一次：这句话是配置错误，不该跟着保存平台的次数刷屏，
- * 也不能把真正的故障淹掉。
+ * 一个平台的这个插件说一次：这句话是配置错误，不该跟着启动的次数刷屏，也
+ * 不能把真正的故障淹掉。
  */
 const warnedUnknownPlugins = new Set<string>();
 
 /**
  * 这个平台填的额度插件没登记就说一声。
  *
- * 说了照样写进去（写不写是调用方的事）：用户可能先填 id 再让我们上线那个插件，
- * 拦下来反而让人没法保存。
+ * 只在读旧数据时用：写路径（lib/open-platforms.ts 的 createOpenPlatform /
+ * updateOpenPlatform）现在直接拒绝没登记的 id，新数据进不了库。旧库里可能还
+ * 有以前存下的这种行（那时只 warn、照样写），启动校验替它们说一句。
  *
  * 一个 id 一个进程只说一次。
  */

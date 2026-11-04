@@ -292,6 +292,87 @@ check(
   show(withPluginListed?.quotaPlugin),
 );
 
+// 没登记的插件 id：拒绝保存。收下去之后这个平台一条额度结论都不会有，而面板上
+// 看着「已选插件」—— 静默不工作比拒绝保存更难查。
+const badPlugin = await updatePlatform({
+  id: "acme",
+  label: "Acme Cloud",
+  baseUrl: "https://api.acme.test/v1",
+  quotaPlugin: "qiniu-portal",
+});
+check("没登记的插件 id 被拒", badPlugin.ok === false, show(badPlugin));
+check(
+  "说的是没有这个额度插件",
+  String(badPlugin.message ?? "").includes("没有这个额度插件：qiniu-portal"),
+  String(badPlugin.message),
+);
+check(
+  "列了登记过的插件（用插件自己的名字）",
+  String(badPlugin.message ?? "").includes("七牛云资源包") && String(badPlugin.message ?? "").includes("qiniu"),
+  String(badPlugin.message),
+);
+// 被拒的那次什么都没写：库里、ListUpstreams、答复里带回来的平台都是原来那个。
+check("被拒时答复里没有平台", badPlugin.platform === undefined, show(badPlugin.platform));
+const afterBadPlugin = (await listUpstreams()).find((u) => u.id === "acme");
+check(
+  "库里那一格没被改",
+  openPlatformOf("acme")?.quotaPlugin === "qiniu",
+  String(openPlatformOf("acme")?.quotaPlugin),
+);
+check(
+  "ListUpstreams 报的还是原来那个",
+  afterBadPlugin?.quotaPlugin === "qiniu",
+  show(afterBadPlugin?.quotaPlugin),
+);
+check(
+  "名字与地址也没被顺手改掉",
+  openPlatformOf("acme")?.label === "Acme Cloud" && openPlatformOf("acme")?.baseUrl === "https://api.acme.test/v1",
+  show([openPlatformOf("acme")?.label, openPlatformOf("acme")?.baseUrl]),
+);
+
+// 空串 = 不选插件，那是合法的：清得掉。
+const clearedPlugin = await updatePlatform({
+  id: "acme",
+  label: "Acme Cloud",
+  baseUrl: "https://api.acme.test/v1",
+  quotaPlugin: "",
+});
+check("空串 = 不选插件，收得下", clearedPlugin.ok === true, clearedPlugin.message);
+check("插件那一格清掉了", openPlatformOf("acme")?.quotaPlugin === "", String(openPlatformOf("acme")?.quotaPlugin));
+check(
+  "ListUpstreams 报的是空串",
+  (await listUpstreams()).find((u) => u.id === "acme")?.quotaPlugin === "",
+  show((await listUpstreams()).find((u) => u.id === "acme")?.quotaPlugin),
+);
+// 清完再选回来：下面的手工目录那一节要用带插件的平台。
+const restoredPlugin = await updatePlatform({
+  id: "acme",
+  label: "Acme Cloud",
+  baseUrl: "https://api.acme.test/v1",
+  quotaPlugin: "qiniu",
+});
+check("登记的插件选得回来", restoredPlugin.ok === true, restoredPlugin.message);
+
+// AddPlatform 现在不接 quota_plugin：契约里 AddPlatformRequest 只有 id、名字、
+// 地址三格。所以“加平台时写插件”本来就没路，想加插件得建完再 UpdatePlatform；
+// 将来接了这一格也得走同一校验。这条断言钉的就是“现在不接”：请求里塞了也不
+// 进库。
+const addedWithPlugin = await addPlatform({
+  id: "acme-plugin-ignored",
+  label: "带插件的加平台",
+  baseUrl: "https://api.acme.test/v1",
+  quotaPlugin: "no-such-plugin",
+});
+check("加平台不看 quota_plugin（契约里没这一格）", addedWithPlugin.ok === true, addedWithPlugin.message);
+check(
+  "所以没登记的插件带不进库",
+  openPlatformOf("acme-plugin-ignored")?.quotaPlugin === "",
+  String(openPlatformOf("acme-plugin-ignored")?.quotaPlugin),
+);
+// 这个平台只是为了上面那两条断言：删掉，免得影响后面按行数比的那几节。
+const droppedExtra = await deletePlatform({ id: "acme-plugin-ignored" });
+check("为了那条断言建的平台删得掉", droppedExtra.ok === true, droppedExtra.message);
+
 const manual = await updatePlatform({
   id: "acme",
   label: "Acme Cloud",

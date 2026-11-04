@@ -517,10 +517,13 @@ export async function underPolicy<T>(
     }
     // 额度见底同样要明确拒绝：见底的账号打过去只会换一个 402，而判定已经知道
     // 它没钱了。不去打，也不悄悄换到别的账号身上去。
+    //
+    // 值是 null 说的是「见底了，但没人知道什么时候回来」：那时答复里不写时刻，
+    // 不拿一个固定时长冒充恢复时间。
     const onlySpent = judged.spent.get(only.id);
     if (onlySpent !== undefined) {
       console.log(
-        `[ROUTE] ${what} account=${only.id} is out of credits (until ${cooldownStamp(onlySpent)}), not switching`,
+        `[ROUTE] ${what} account=${only.id} is out of credits (until ${untilText(onlySpent)}), not switching`,
       );
       throw accountSpentError(platform, only.id, onlySpent);
     }
@@ -544,12 +547,11 @@ export async function underPolicy<T>(
     // 有账号，但现在一个都接不了：是额度用尽、凭据过期、凭据读不出来，还是
     // 都在冷却 —— 哪一种由判定说。恢复时间只有额度用尽与冷却有（凭据那两档等
     // 的是人，不是钟）。
-    const until = judged.untilMs ?? now;
     if (judged.state === "out_of_credits") {
       console.log(
-        `[ROUTE] ${what} every account is out of credits (until ${cooldownStamp(until)}), not switching`,
+        `[ROUTE] ${what} every account is out of credits (until ${untilText(judged.untilMs)}), not switching`,
       );
-      throw spentError(until);
+      throw spentError(judged.untilMs);
     }
     // 网关自己的故障：不是「等一会儿就好」，所以没有 Retry-After —— 等一会儿
     // 不会让凭据自己读出来，也不会让它自己过期。
@@ -565,6 +567,7 @@ export async function underPolicy<T>(
       );
       throw credentialFaultError(platform, "credential_expired", 503);
     }
+    const until = judged.untilMs ?? now;
     console.log(
       `[ROUTE] ${what} every account is cooling down (until ${cooldownStamp(until)}), not switching`,
     );
@@ -683,14 +686,31 @@ export function coolingError(accountId: string, untilMs: number, all = false, wh
 }
 
 /**
+ * 日志里那个「到什么时候」：不知道就写 unknown，不写一个编出来的时刻。
+ */
+function untilText(untilMs: number | null): string {
+  return untilMs === null ? "unknown" : cooldownStamp(untilMs);
+}
+
+/**
  * 额度用尽：所有账号都没额度了。
  *
  * 402：额度用尽是客户端能动手的事（充值，或者等额度回来），所以是 402，不是
  * 503 —— 503 说的是「等一会儿就好」，而额度等的是窗口。
  *
  * 额度什么时候回来跟着错误走（Retry-After）：那是平台自己说的窗口，不是猜的。
+ * null 是「没人知道什么时候回来」：那时正文里不写时刻（也不说「恢复」），
+ * 因为额度不会因为过了某个固定时长就回来。
  */
-export function spentError(untilMs: number): AuthError {
+export function spentError(untilMs: number | null): AuthError {
+  if (untilMs === null) {
+    return new AuthError(
+      "every upstream account is out of credits",
+      "网关这边所有账号的额度都用尽了。额度回来之前接不了这个请求；能做的就是充值或者等额度。",
+      402,
+      "usage_limit_error",
+    );
+  }
   const minutes = Math.max(1, Math.ceil((untilMs - Date.now()) / 60_000));
   const when = cooldownStamp(untilMs);
   const error = new AuthError(
@@ -710,15 +730,28 @@ export function spentError(untilMs: number): AuthError {
  * 是「单一」，不会换到别的账号身上去，客户端要知道自己在等的是哪一个。
  *
  * Retry-After 跟着错误走（deliver.ts 把它写进头里）：什么时候恢复是平台自己
- * 说的窗口，不是猜的。
+ * 说的窗口，不是猜的。null 是不知什么时候回来：不写时刻，不说「恢复」。
  */
-export function accountSpentError(platform: string, accountId: string, untilMs: number): AuthError {
+export function accountSpentError(
+  platform: string,
+  accountId: string,
+  untilMs: number | null,
+): AuthError {
+  const reason =
+    "能做的就是充值或者等额度；这个上游的生效策略是「单一」，不会换到别的账号。";
+  if (untilMs === null) {
+    return new AuthError(
+      "upstream account is out of credits",
+      `上游 ${platform} 的账号 ${accountId} 的额度用尽了。${reason}`,
+      402,
+      "usage_limit_error",
+    );
+  }
   const minutes = Math.max(1, Math.ceil((untilMs - Date.now()) / 60_000));
   const when = cooldownStamp(untilMs);
   const error = new AuthError(
     "upstream account is out of credits",
-    `上游 ${platform} 的账号 ${accountId} 的额度用尽了，最早 ${when} 恢复（约 ${minutes} 分钟后）。` +
-      `这个上游的生效策略是「单一」，不会换到别的账号；能做的就是充值或者等额度。`,
+    `上游 ${platform} 的账号 ${accountId} 的额度用尽了，最早 ${when} 恢复（约 ${minutes} 分钟后）。${reason}`,
     402,
     "usage_limit_error",
   );

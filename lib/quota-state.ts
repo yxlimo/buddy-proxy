@@ -12,6 +12,8 @@
 // 状态集只在这里定义：拼错一个字母就静默变成「不知道」，而「不知道」与「没钱」
 // 是两件事，混起来就是替上游说话。
 
+import { accountRecoveryAtMs } from "./admin/platform-state.ts";
+import { listCooldowns } from "./cooldown.ts";
 import { openPlatformOf } from "./open-platforms.ts";
 import type { HealthSnapshot, QuotaView } from "./provider-kinds.ts";
 import type { ProviderRow } from "./providers.ts";
@@ -132,9 +134,13 @@ export function outOfCreditsOf(
 }
 
 /**
- * 什么时候回来（Unix 毫秒）。
+ * 插件说的恢复时刻（Unix 毫秒）—— 原样，不估。
  *
- * 只有三种状态有那个时刻：见底、被停用、被限流。其余都是 null —— 不知道，不猜。
+ * 只有三种状态带那个时刻：见底、被停用、被限流。其余都是 null —— 插件不知道，
+ * 不猜。
+ *
+ * 这是**插件那一份**（种类用它当 recoverAt）；面板那格与路由那句用的是
+ * accountRecoveryAtMs（插件没说时按窗口/冷却估），不是这个。
  */
 export function recoverAtOf(
   provider: ProviderRow,
@@ -176,18 +182,27 @@ export interface QuotaConclusion {
  *
  * 没有结论时三格全是空 / 0：0 说的是「不知道」，不是「额度是 0」。判空与
  * probeOf 一致：没指名插件、插件没登记、快照里没这一份。
+ *
+ * 恢复时刻由 accountRecoveryAtMs 一处给：面板这一格与路由 402/503 那句必须是
+ * 同一个数。吞在这里算一份、路由再算一份，两边就会各说各的（插件不给时刻时
+ * 一边报 0、一边报一个固定时长）。
  */
 export function quotaConclusionOf(
   provider: ProviderRow,
   snapshot: HealthSnapshot | null | undefined,
   pluginId: string,
+  /** 冷却表（账号 id → 冷却到什么时候）。不传就自己读一次。 */
+  cooldowns?: Map<string, number>,
+  now = Date.now(),
 ): QuotaConclusion {
   const probe = probeOf(snapshot, pluginId, provider.id);
   if (!probe) return { state: null, recoverAtMs: 0, message: "" };
+  const cooling =
+    cooldowns ?? new Map(listCooldowns(now).map((row) => [row.providerId, row.untilMs]));
   return {
     state: probe.state,
-    // 哪几种状态有恢复时刻由 recoverAtOf 一处决定，这里不再写一遍。
-    recoverAtMs: recoverAtOf(provider, snapshot, pluginId) ?? 0,
+    // 0 = 不知道：额度不会因为过了一阵就回来。
+    recoverAtMs: accountRecoveryAtMs(provider, snapshot ?? null, cooling, now),
     message: probe.message,
   };
 }

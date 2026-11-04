@@ -14,9 +14,11 @@
 //   2. rate_limited 的分支里加回 setCooldown → rate_limited 一节的「没有冷却行」红
 //   3. quotaViewsOf 给 no_quota / blocked 塞回一条占位额度 → no_quota 与
 //      blocked 两节的「空数组」断言红
-//   4. quotaConclusionOf 只给状态、不读 recoverAtOf → no_quota / blocked /
+//   4. quotaConclusionOf 只给状态、不读恢复时刻 → no_quota / blocked /
 //      rate_limited 三节的「恢复时刻」红
 //   5. quotaViewsOf 的 upstreamId 写回账号 id → ok 一节的「挂在平台上」红
+//   6. accountRecoveryAtMs 只返回插件值 → 「插件不给、账号在冷却」两节红
+//   7. quotaConclusionOf 改回读 recoverAtOf（插件原值）→ 同上，冷却那一格变 0
 
 import fs from "node:fs";
 import os from "node:os";
@@ -28,6 +30,10 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 const { applyProbeEffect, outOfCreditsOf, probeOf, quotaConclusionOf, quotaProbe, quotaViewsOf, recoverAtOf } =
   await import("../lib/quota-state.ts");
 const { cooldownUntil, setCooldown } = await import("../lib/cooldown.ts");
+// 平台行那一格指名插件：恢复时刻要和路由那边一样从同一格取（kind.recoverAt
+// 就是按它找插件的），不填两边都读不到插件给的时刻。
+const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
+updateOpenPlatform("qiniu", { quotaPlugin: "qiniu" });
 
 let pass = 0;
 let fail = 0;
@@ -404,6 +410,76 @@ check(
 
 // 冷却那一行清掉，别的断言才不会看到上一节的残留。
 setCooldown(PROBE_ID, Date.now() - 1_000, "test");
+
+/* ------------------------------------------------------------------ *
+ * 恢复时刻：一处算，面板与路由读同一个数
+ * ------------------------------------------------------------------ */
+
+section("恢复时刻：一处算，面板与路由读同一个数");
+
+// 这一格以前两条路各算一份：面板只读插件给的值（插件不给就是 0），路由拿固
+// 定时长兜底 —— 同一份快照两处报不一样的时刻。现在只有 accountRecoveryAtMs
+// 一处算，两边都读它。
+const { accountRecoveryAtMs } = await import("../lib/admin/platform-state.ts");
+const { clearCooldown, listCooldowns } = await import("../lib/cooldown.ts");
+
+const AT_ID = "quota-state-recover-at";
+const atRow = account(AT_ID);
+const noCooldowns = new Map<string, number>();
+
+// 1. 插件给了时刻：就是它。
+const PLUGIN_AT = Date.now() + 2 * 60 * 60_000;
+const pluginAt = snapshotOf({ qiniu: { [AT_ID]: quotaProbe("no_quota", "用尽", { recoverAt: PLUGIN_AT }) } });
+check(
+  "插件给了时刻 → 就是它",
+  accountRecoveryAtMs(atRow, pluginAt, noCooldowns, Date.now()) === PLUGIN_AT,
+  String(accountRecoveryAtMs(atRow, pluginAt, noCooldowns, Date.now())),
+);
+check(
+  "面板那一格也是它",
+  quotaConclusionOf(atRow, pluginAt, "qiniu", noCooldowns).recoverAtMs === PLUGIN_AT,
+  String(quotaConclusionOf(atRow, pluginAt, "qiniu", noCooldowns).recoverAtMs),
+);
+
+// 2. 插件不给、账号在冷却：冷却结束那一刻。
+const COOL_AT = Date.now() + 10 * 60_000;
+setCooldown(AT_ID, COOL_AT, "test");
+const silent = snapshotOf({ qiniu: { [AT_ID]: quotaProbe("no_quota", "用尽", { recoverAt: null }) } });
+const cooling = new Map(listCooldowns().map((row) => [row.providerId, row.untilMs]));
+check(
+  "插件不给、账号在冷却 → 冷却结束那一刻",
+  accountRecoveryAtMs(atRow, silent, cooling, Date.now()) === COOL_AT,
+  String(accountRecoveryAtMs(atRow, silent, cooling, Date.now())),
+);
+check(
+  "面板那一格也是冷却结束那一刻（不传冷却表时自己读表）",
+  quotaConclusionOf(atRow, silent, "qiniu").recoverAtMs === COOL_AT,
+  String(quotaConclusionOf(atRow, silent, "qiniu").recoverAtMs),
+);
+check("recoverAtOf 还是插件原值（不估）", recoverAtOf(atRow, silent, "qiniu") === null);
+clearCooldown(AT_ID);
+
+// 3. 两者都没有：不知道，就是 0。额度不会因为过了五分钟就回来，不拿固定时长
+// 冒充恢复时刻（路由那边见 0 就不写时刻）。
+check(
+  "都没有 → 0（不知道）",
+  accountRecoveryAtMs(atRow, silent, noCooldowns, Date.now()) === 0,
+  String(accountRecoveryAtMs(atRow, silent, noCooldowns, Date.now())),
+);
+check(
+  "面板那一格也是 0（不知道）",
+  quotaConclusionOf(atRow, silent, "qiniu").recoverAtMs === 0,
+  String(quotaConclusionOf(atRow, silent, "qiniu").recoverAtMs),
+);
+
+// 3 的控制组：把冷却行加回去，同一个快照立刻给时刻 —— 上面那条不是写死的。
+setCooldown(AT_ID, COOL_AT, "test");
+check(
+  "控制组：加回冷却行就有时刻了",
+  quotaConclusionOf(atRow, silent, "qiniu").recoverAtMs === COOL_AT,
+  String(quotaConclusionOf(atRow, silent, "qiniu").recoverAtMs),
+);
+clearCooldown(AT_ID);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
