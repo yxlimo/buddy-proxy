@@ -22,6 +22,8 @@ import type {
   InternAiCreditWindow,
 } from "./quota.ts";
 import { internAiCatalog, internAiInferenceKey } from "./transport.ts";
+// import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
+import "./quota-plugin.ts";
 
 function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
   const balance = snapshot.internAi?.[provider.id]?.balance as InternAiBalance | null;

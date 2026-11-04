@@ -16,6 +16,8 @@ import { senseNovaStatus } from "./auth.ts";
 import { SENSENOVA_INFER_BASE } from "./config.ts";
 import { totalRemaining, type SenseNovaPoolUsage } from "./quota.ts";
 import { senseNovaCatalog, senseNovaInferenceKey } from "./transport.ts";
+// import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
+import "./quota-plugin.ts";
 
 function senseNovaQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
   const usage = snapshot.sensenova?.[provider.id]?.pools as SenseNovaPoolUsage | null;

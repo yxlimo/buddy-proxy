@@ -16,6 +16,7 @@ import {
   writeHeaders,
   type TokenRhythmSession,
 } from "./accounts.ts";
+import { retryAfterMs } from "../upstream-status.ts";
 
 /** How to ask: which method, and what to send. */
 export interface PlatformRequest {
@@ -54,7 +55,7 @@ export async function platformApi<T>(
 
   if (r.status === 401) {
     forgetSession(session);
-    throw new TokenRhythmError("登录已过期", 503);
+    throw new TokenRhythmError("登录已过期", 503, "unauthorized");
   }
   if (r.status === 403) {
     // A write that fails the security check is a different thing from a dead
@@ -65,9 +66,20 @@ export async function platformApi<T>(
     }
     if (!write) {
       forgetSession(session);
-      throw new TokenRhythmError("登录已过期", 503);
+      throw new TokenRhythmError("登录已过期", 503, "unauthorized");
     }
     throw new TokenRhythmError(`接口失败（HTTP ${r.status}）：${body?.message ?? text.slice(0, 200)}`);
+  }
+  if (r.status === 429) {
+    // 限流是「等一会儿」，不是「不行了」：调用方（额度）要用这个分别决定要不要
+    // 写冷却，以及等到什么时候。Retry-After 只有这里看得到。
+    const error = new TokenRhythmError(
+      `接口被限流了（HTTP 429）：${body?.message ?? text.slice(0, 200)}`,
+      429,
+      "rate_limited",
+    );
+    error.retryAfterMs = retryAfterMs(r);
+    throw error;
   }
   if (!r.ok) {
     throw new TokenRhythmError(`接口失败（HTTP ${r.status}）：${body?.message ?? text.slice(0, 200)}`);

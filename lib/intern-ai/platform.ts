@@ -28,6 +28,7 @@
 //   upstream  上游挂了 → 重试可能有用
 
 import { INTERN_AI_TOKEN_COOKIE } from "./config.ts";
+import { retryAfterMs } from "../upstream-status.ts";
 import { InternAiError, classify, clearSession, type InternAiSession } from "./auth.ts";
 
 /** 一次调用怎么发。 */
@@ -109,7 +110,11 @@ export async function consoleApi<T>(
     throw new InternAiError("auth", `控制台接口 ${new URL(url).pathname}：会话已过期（HTTP 401），重新登录`, 503);
   }
   if (!r.ok) {
-    throw classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
+    const error = classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
+    // 429 会带 Retry-After：额度要用它算出「什么时候恢复」，而 classify 只看得到
+    // 状态码与正文。只在这一处补上。
+    error.retryAfterMs = retryAfterMs(r);
+    throw error;
   }
   // 业务错误藏在信封里，状态码还是 200。
   const code = body?.code;

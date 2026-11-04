@@ -17,6 +17,8 @@ import type { TokenRhythmAccountStatus } from "../tokenrhythm/wallet.ts";
 import { TOKENRHYTHM_API_BASE } from "../tokenrhythm/accounts.ts";
 import { tokenRhythmStatus } from "../tokenrhythm/wallet.ts";
 import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balance.ts";
+// import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
+import "../tokenrhythm/quota-plugin.ts";
 
 function tokenrhythmQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
   // 快照里一个平台一段，装着这个平台每个账号的钱包；这一行账号取自己那一个。

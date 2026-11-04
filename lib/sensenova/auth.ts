@@ -105,6 +105,13 @@ export type SenseNovaErrorKind = "auth" | "forbidden" | "rate" | "request" | "up
 export class SenseNovaError extends Error {
   kind: SenseNovaErrorKind;
   status: number;
+  /**
+   * 上游说多久之后再来（毫秒）；没说就是 null。
+   *
+   * 只有 429 会带这个头。额度要把它换算成「什么时候恢复」—— 缺了它，限流就只能
+   * 按平台的默认时长等，而上游说的可能长得多的多。
+   */
+  retryAfterMs: number | null = null;
 
   constructor(kind: SenseNovaErrorKind, message: string, status = 502) {
     super(message);

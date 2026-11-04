@@ -10,7 +10,15 @@
 // models. Two rows of the same platform are two accounts with two wallets.
 
 import { platformApi } from "./platform.ts";
-import { loadSession, sessionFor, sessionId, tokenRhythmCredentialOf, type TokenRhythmSession } from "./accounts.ts";
+import {
+  loadSession,
+  sessionFor,
+  sessionId,
+  tokenRhythmCredentialOf,
+  TokenRhythmError,
+  type TokenRhythmErrorKind,
+  type TokenRhythmSession,
+} from "./accounts.ts";
 import { accountsOfPlatform, provider } from "../providers.ts";
 import { platformOf } from "../platforms.ts";
 
@@ -134,7 +142,19 @@ export interface TokenRhythmAccountStatus {
   wallet: TokenRhythmWallet | null;
   credits: TokenRhythmCredits | null;
   error: string | null;
+  /**
+   * 这次没读到钱袋的原因。
+   *
+   * 额度要分清楚「还没填账号密码」「平台拒了登录」「被限流了」「问不到」：四种在
+   * 面板上是四种话，而且只有其中一种会自己好。字符串错误消息分不出它们。
+   */
+  errorKind?: TokenRhythmWalletFailure | null;
+  /** 平台说多久之后再来（毫秒）；没说就是 null。 */
+  errorRetryAfterMs?: number | null;
 }
+
+/** 没读到钱袋的四种原因：平台的三种拒法，加上「凭据还没填」。 */
+export type TokenRhythmWalletFailure = TokenRhythmErrorKind | "missing";
 
 const mask = (account: string): string =>
   account.length <= 4 ? "***" : `${account.slice(0, 3)}***${account.slice(-2)}`;
@@ -153,6 +173,9 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
       wallet: null,
       credits: null,
       error: stored ? null : "这个账号还没有账号密码",
+      // 没填凭据不是平台拒了：那是用户还没填。
+      errorKind: stored ? null : "missing",
+      errorRetryAfterMs: null,
     };
     out.push(status);
     if (!stored) continue;
@@ -174,6 +197,8 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
       status.credits = await credits(session);
     } catch (e) {
       status.error = (e as Error).message;
+      status.errorKind = e instanceof TokenRhythmError ? e.kind : "unknown";
+      status.errorRetryAfterMs = e instanceof TokenRhythmError ? e.retryAfterMs : null;
     }
   }
   return out;

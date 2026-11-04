@@ -183,11 +183,26 @@ export function forgetTokenRhythmCredential(accountId: string): number {
 
 export class TokenRhythmError extends Error {
   status: number;
-  constructor(message: string, status = 502) {
+  /**
+   * 这次是哪种拒法。
+   *
+   * 平台的回答里没有这个分别，但调用方要分：会话没了要重新登录，限流等一会儿
+   * 就好，其余是「问不到」。把三种混成同一句话，额度就只能一律当「不知道」。
+   */
+  kind: TokenRhythmErrorKind;
+  /** 平台说多久之后再来（毫秒）；没说就是 null。 */
+  retryAfterMs: number | null;
+
+  constructor(message: string, status = 502, kind: TokenRhythmErrorKind = "unknown") {
     super(message);
     this.status = status;
+    this.kind = kind;
+    this.retryAfterMs = null;
   }
 }
+
+/** 平台拒绝的三种情形。 */
+export type TokenRhythmErrorKind = "unauthorized" | "rate_limited" | "unknown";
 
 /**
  * 用一组账号密码登录，把会话拿回来（不存）。

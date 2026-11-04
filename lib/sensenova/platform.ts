@@ -16,6 +16,7 @@
 //   upstream  上游挂了 → 重试可能有用
 
 import { SENSENOVA_IAM_BASE, SENSENOVA_PLATFORM_BASE } from "./config.ts";
+import { retryAfterMs } from "../upstream-status.ts";
 import { SenseNovaError, classify, clearSession, type SenseNovaSession } from "./auth.ts";
 
 /** 一次调用怎么发。 */
@@ -62,7 +63,11 @@ async function requestJson(url: string, session: SenseNovaSession, init: Platfor
   if (!r.ok) {
     // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。
     if (r.status === 401) clearSession();
-    throw classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
+    const error = classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
+    // 429 会带 Retry-After：额度要用它算出「什么时候恢复」，而 classify 只看得到
+    // 状态码与正文，看不到头。只在这一处补上。
+    error.retryAfterMs = retryAfterMs(r);
+    throw error;
   }
   // 有些接口用 code 表示业务错误。成功的结果里没有这个字段。
   if (body && typeof body.code === "number" && body.code !== 0) {
