@@ -9,9 +9,13 @@
 // no_quota（带恢复时刻）、401/403 是 unauthorized、429 是 rate_limited、其它非
 // 2xx 是 unknown；端砚另加 blocked（平台说这个账号不能用）。
 //
-// 「口径没变」的对照用的是**还在的那份旧实现**：kindOf("sensenova").quotas() 之类
-// 还没有删（下一单才搬），所以同一份上游答复分别喂给旧的 quotas() 与新的 probe()，
-// 逐字段比一遍。测试里不另抄一份旧逻辑 —— 抄的那份会跟着插件一起漂。
+// 「口径没变」的对照：三个 kind 的额度读法都搬进了插件，register 里不再有第二份
+// 计算（具名桶已经删掉）。所以这里两边都走真的那条路：probe() 问一次得到结论，
+// 把结论按 refreshOne 的位置放进插件桶，再用 kindOf(...).quotas() 读出来，逐字段
+// 对一遍。下面每一条都另外钉住具体的数 —— 两边同时漂的话，「一样」是查不出来的。
+//
+// 平台行指名插件、以及迁移补默认值这两件事也在这里验：面板读得到数字的前提是
+// 平台行与快照两边都到位。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -28,15 +32,13 @@ const { allQuotaPlugins, quotaPluginOf } = await import("../lib/quota-plugins.ts
 const { senseNovaPoolsPlugin } = await import("../lib/sensenova/quota-plugin.ts");
 const { tokenRhythmWalletPlugin } = await import("../lib/tokenrhythm/quota-plugin.ts");
 const { internAiCreditsPlugin } = await import("../lib/intern-ai/quota-plugin.ts");
-const { parsePoolUsage } = await import("../lib/sensenova/quota.ts");
 const { saveSession: saveSenseNovaSession } = await import("../lib/sensenova/auth.ts");
 const {
   saveTokenRhythmCredential,
   saveSession: saveTokenRhythmSession,
 } = await import("../lib/tokenrhythm/accounts.ts");
-const { tokenRhythmStatuses, resetTokenRhythmStatusCache } = await import("../lib/tokenrhythm/wallet.ts");
+const { resetTokenRhythmStatusCache } = await import("../lib/tokenrhythm/wallet.ts");
 const { saveSession: saveInternAiSession } = await import("../lib/intern-ai/auth.ts");
-const { parseBalance, parseCreditPack } = await import("../lib/intern-ai/quota.ts");
 
 let pass = 0;
 let fail = 0;
@@ -301,6 +303,16 @@ const senseRow = provider(senseAccount.row)!;
 const twRow = provider(twAccount.row)!;
 const internRow = provider(internAccount.row)!;
 
+/** 一组额度，去掉两个「这一条是谁的」的 id。 */
+function stripIds(views: any[]): any[] {
+  return views.map(({ upstreamId, accountId, ...rest }) => rest);
+}
+
+/** 快照里那一家的一份额度：插件 id → 账号 id → 那一次的结论（与 refreshOne 存的位置一样）。 */
+function snapshotWithProbe(pluginId: string, accountId: string, probe: any): any {
+  return { plugins: { [pluginId]: { [accountId]: probe } } };
+}
+
 function senseSession(): void {
   saveSenseNovaSession(
     {
@@ -397,11 +409,17 @@ check(
 check("两个池子各报一个窗口", senseOK.views[0]?.tokenPlan?.windows?.length === 2, JSON.stringify(senseOK.views[0]?.tokenPlan));
 check("没有到期时刻也算 ok", senseOK.recoverAt === null, String(senseOK.recoverAt));
 
-// 旧口径：同一份答复交给还在的那份实现。
-const senseOldSnapshot = { sensenova: { [senseRow.id]: { pools: parsePoolUsage(SENSE_POOLS_RAW) } } } as any;
-const senseOldViews = kindOf("sensenova")!.quotas(senseRow, senseOldSnapshot);
-check("与旧口径逐字段相同", same(senseOK.views, senseOldViews), JSON.stringify(senseOK.views));
-check("旧实现的「见底」判据也是 false", kindOf("sensenova")!.outOfCredits(senseRow, senseOldSnapshot) === false);
+// 口径没变：插件桶里那一份经 kind 出来还是这些数。
+const senseSnapshot = snapshotWithProbe(senseNovaPoolsPlugin.id, senseRow.id, senseOK);
+const senseKindViews = kindOf("sensenova")!.quotas(senseRow, senseSnapshot);
+check("插件那一份经 kind 出来与 probe 逐字段相同", same(senseKindViews, senseOK.views), JSON.stringify(senseKindViews));
+check(
+  "活动积分还是 5000、两个窗口",
+  senseKindViews[0]?.credits?.remaining === 5000 && senseKindViews[0]?.tokenPlan?.windows?.length === 2,
+  JSON.stringify(senseKindViews[0]),
+);
+check("ok 不算见底", kindOf("sensenova")!.outOfCredits(senseRow, senseSnapshot) === false);
+check("ok 没有恢复时刻", (kindOf("sensenova")!.recoverAt?.(senseRow, senseSnapshot) ?? null) === null);
 
 mode.sensenova = "drained";
 const senseDrained = await senseNovaPoolsPlugin.probe(senseRow);
@@ -414,8 +432,13 @@ check(
   String(senseDrained.recoverAt),
 );
 check("见底那句话说了用尽", senseDrained.message.includes("用尽"), senseDrained.message);
-const senseDrainedOld = { sensenova: { [senseRow.id]: { pools: parsePoolUsage(SENSE_POOLS_DRAINED_RAW) } } } as any;
-check("旧实现的「见底」判据也是 true", kindOf("sensenova")!.outOfCredits(senseRow, senseDrainedOld) === true);
+const senseDrainedSnapshot = snapshotWithProbe(senseNovaPoolsPlugin.id, senseRow.id, senseDrained);
+check("见底的结论 → kind 也说见底", kindOf("sensenova")!.outOfCredits(senseRow, senseDrainedSnapshot) === true);
+check(
+  "见底的恢复时刻照结论",
+  (kindOf("sensenova")!.recoverAt?.(senseRow, senseDrainedSnapshot) ?? null) === senseDrained.recoverAt,
+  String(senseDrained.recoverAt),
+);
 
 mode.sensenova = "401";
 const senseUnauthorized = await senseNovaPoolsPlugin.probe(senseRow);
@@ -469,11 +492,22 @@ check("余额是钱包里的那个数", twOK.views[0]?.balance?.availableCny ===
 check("两批赠金", twOK.views[0]?.balance?.lots?.length === 2, JSON.stringify(twOK.views[0]?.balance?.lots));
 check("额度挂在账号上", twOK.views[0]?.accountId === twRow.id, String(twOK.views[0]?.accountId));
 
-const twStatuses = await tokenRhythmStatuses(twRow.id);
-const twOldSnapshot = { tokenrhythm: { [twRow.id]: { tenants: twStatuses } } } as any;
-const twOldViews = kindOf("tokenrhythm")!.quotas(twRow, twOldSnapshot);
-check("与旧口径逐字段相同", same(twOK.views, twOldViews), JSON.stringify(twOK.views));
-check("旧实现的「见底」判据也是 false", kindOf("tokenrhythm")!.outOfCredits(twRow, twOldSnapshot) === false);
+const twSnapshot = snapshotWithProbe(tokenRhythmWalletPlugin.id, twRow.id, twOK);
+const twKindViews = kindOf("tokenrhythm")!.quotas(twRow, twSnapshot);
+// 两个 id 不比：插件那一份写的是平台（钱包挂平台），kind 读的时候一律按账号写
+// （与开放平台同一条规矩，面板靠 accountId 分清是哪一条余额）。
+check(
+  "插件那一份经 kind 出来与 probe 逐字段相同（两个 id 除外）",
+  same(stripIds(twKindViews), stripIds(twOK.views)),
+  JSON.stringify(twKindViews),
+);
+check(
+  "余额还是钱包里的 18.5、两批赠金",
+  twKindViews[0]?.balance?.availableCny === 18.5 && twKindViews[0]?.balance?.lots?.length === 2,
+  JSON.stringify(twKindViews[0]),
+);
+check("额度挂在账号上", twKindViews[0]?.accountId === twRow.id, String(twKindViews[0]?.accountId));
+check("有钱不算见底", kindOf("tokenrhythm")!.outOfCredits(twRow, twSnapshot) === false);
 
 mode.tokenrhythm = "drained";
 const twDrained = await probeWallet(twRow);
@@ -531,13 +565,17 @@ check("余额是平台报的那个数", internOK.views[0]?.credits?.remaining ==
 check("一个批次报一条", internOK.views[0]?.credits?.lots?.length === 1, JSON.stringify(internOK.views[0]?.credits?.lots));
 check("两个窗口都报了", internOK.views[0]?.tokenPlan?.windows?.length === 1, JSON.stringify(internOK.views[0]?.tokenPlan));
 
-const internOldSnapshot = {
-  internAi: {
-    [internRow.id]: { balance: parseBalance(INTERN_BALANCE_RAW), packs: INTERN_PACKS_RAW.packages.map(parseCreditPack) },
-  },
-} as any;
-const internOldViews = kindOf("intern-ai")!.quotas(internRow, internOldSnapshot);
-check("与旧口径逐字段相同", same(internOK.views, internOldViews), JSON.stringify(internOK.views));
+const internSnapshot = snapshotWithProbe(internAiCreditsPlugin.id, internRow.id, internOK);
+const internKindViews = kindOf("intern-ai")!.quotas(internRow, internSnapshot);
+check("插件那一份经 kind 出来与 probe 逐字段相同", same(internKindViews, internOK.views), JSON.stringify(internKindViews));
+check(
+  "墨点还是 1.698、一个批次、一个窗口",
+  internKindViews[0]?.credits?.remaining === 1.698 &&
+    internKindViews[0]?.credits?.lots?.length === 1 &&
+    internKindViews[0]?.tokenPlan?.windows?.length === 1,
+  JSON.stringify(internKindViews[0]),
+);
+check("墨点还没用完 → 不算见底", kindOf("intern-ai")!.outOfCredits(internRow, internSnapshot) === false);
 
 mode.intern = "drained";
 const internDrained = await internAiCreditsPlugin.probe(internRow);
@@ -582,6 +620,121 @@ const internNoBefore = calls.intern;
 const internMissing = await internAiCreditsPlugin.probe(internRow);
 check("没有会话 → missing", internMissing.state === "missing", JSON.stringify(internMissing));
 check("没有会话就不去问", calls.intern === internNoBefore, String(calls.intern));
+
+/* ------------------------------------------------------------------ *
+ * 平台行的默认插件（迁移）
+ * ------------------------------------------------------------------ */
+
+section("平台行的默认插件");
+
+const { store, migratePlatformQuotaPlugins } = await import("../lib/store.ts");
+const { openPlatformOf } = await import("../lib/open-platforms.ts");
+const db = store();
+
+/** 表里那一行现在指的插件。 */
+function pluginOf(id: string): string {
+  return openPlatformOf(id)?.quotaPlugin ?? "<没有这一行>";
+}
+
+/** 三家的插件与写入时刻，用来验「再跑一次什么都不变」。 */
+function pluginRows(): string {
+  const rows = db
+    .prepare("SELECT id, quota_plugin, updated_at FROM platform WHERE id IN ('sensenova','intern-ai','tokenrhythm') ORDER BY id")
+    .all() as any[];
+  return JSON.stringify(rows.map((row) => [row.id, row.quota_plugin, Number(row.updated_at)]));
+}
+
+// 模拟老库：三行都在，插件是空的（模板补进表时还不带插件）。
+const blank = db.prepare(
+  "UPDATE platform SET quota_plugin = '' WHERE id IN ('sensenova','intern-ai','tokenrhythm')",
+);
+blank.run();
+check("清空之后三家都是空的", [pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")].every((id) => id === ""), JSON.stringify([pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")]));
+
+migratePlatformQuotaPlugins(db);
+check(
+  "空着的补上默认值",
+  pluginOf("sensenova") === "sensenova-pools" &&
+    pluginOf("intern-ai") === "intern-ai-credits" &&
+    pluginOf("tokenrhythm") === "tokenrhythm-wallet",
+  JSON.stringify([pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")]),
+);
+
+// 用户自己选过的插件不能被启动时的迁移改掉。
+db.prepare("UPDATE platform SET quota_plugin = ? WHERE id = 'sensenova'").run("qiniu-portal");
+migratePlatformQuotaPlugins(db);
+check("已选的不覆盖", pluginOf("sensenova") === "qiniu-portal", pluginOf("sensenova"));
+check("没选过的照旧是默认值", pluginOf("tokenrhythm") === "tokenrhythm-wallet", pluginOf("tokenrhythm"));
+
+const before = pluginRows();
+migratePlatformQuotaPlugins(db);
+check("再跑一次不变（连写入时刻都不动）", pluginRows() === before, `${before} / ${pluginRows()}`);
+
+// 后面那一段要三家都指着自己的插件。
+blank.run();
+migratePlatformQuotaPlugins(db);
+check("恢复成默认值", pluginOf("sensenova") === "sensenova-pools" && pluginOf("intern-ai") === "intern-ai-credits");
+
+/* ------------------------------------------------------------------ *
+ * refreshOne 走插件
+ * ------------------------------------------------------------------ */
+
+section("刷新快照时走的是插件");
+
+const { refreshHealthSnapshot } = await import("../lib/admin/upstreams.ts");
+const { peekHealthSnapshot } = await import("../lib/health-cache.ts");
+
+// 三家都答「问到了」：这一轮的份才写得进去。会话先补回来（上面有几段清过）。
+senseSession();
+internSession();
+twSession();
+mode.sensenova = "ok";
+mode.tokenrhythm = "ok";
+mode.intern = "ok";
+resetTokenRhythmStatusCache(twRow.id);
+
+const beforeCalls = { ...calls };
+await refreshHealthSnapshot();
+const snapshot = peekHealthSnapshot<any>()?.data ?? null;
+
+check(
+  // 一次 probe 不一定是发一个请求（令牌、钱包、批次各一个）：只要还是「问到了
+  // 东西」就说明这一轮确实走到了插件，而不是照旧去读具名桶。
+  "三家都被问了（走的是插件，不是具名桶）",
+  calls.sensenova > beforeCalls.sensenova &&
+    calls.tokenrhythm > beforeCalls.tokenrhythm &&
+    calls.intern > beforeCalls.intern,
+  JSON.stringify({ beforeCalls, calls }),
+);
+check(
+  "SenseNova 的份在 plugins[sensenova-pools][账号]",
+  snapshot?.plugins?.["sensenova-pools"]?.[senseRow.id]?.state === "ok",
+  JSON.stringify(snapshot?.plugins?.["sensenova-pools"]),
+);
+check(
+  "TokenRhythm 的份在 plugins[tokenrhythm-wallet][账号]",
+  snapshot?.plugins?.["tokenrhythm-wallet"]?.[twRow.id]?.state === "ok",
+  JSON.stringify(snapshot?.plugins?.["tokenrhythm-wallet"]),
+);
+check(
+  "端砚的份在 plugins[intern-ai-credits][账号]",
+  snapshot?.plugins?.["intern-ai-credits"]?.[internRow.id]?.state === "ok",
+  JSON.stringify(snapshot?.plugins?.["intern-ai-credits"]),
+);
+check(
+  "三家都不再写真名桶",
+  snapshot?.sensenova === undefined && snapshot?.internAi === undefined && snapshot?.tokenrhythm === undefined,
+  JSON.stringify(Object.keys(snapshot ?? {})),
+);
+check(
+  "面板那条路读得到数字",
+  (kindOf("sensenova")!.quotas(senseRow, snapshot)[0]?.credits?.remaining ?? 0) === 5000 &&
+    (kindOf("tokenrhythm")!.quotas(twRow, snapshot)[0]?.balance?.availableCny ?? 0) === 18.5,
+  JSON.stringify({
+    sensenova: kindOf("sensenova")!.quotas(senseRow, snapshot),
+    tokenrhythm: kindOf("tokenrhythm")!.quotas(twRow, snapshot),
+  }),
+);
 
 /* ------------------------------------------------------------------ *
  * probe 从不 reject

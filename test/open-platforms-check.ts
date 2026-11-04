@@ -129,7 +129,11 @@ check(
 for (const t of PLATFORM_TEMPLATES) {
   const seeded = openPlatformOf(t.key);
   check(`${t.key} 的 kind 是模板的`, seeded?.kind === t.kind, String(seeded?.kind));
-  check(`${t.key} 的额度插件是空的`, seeded?.quotaPlugin === "", JSON.stringify(seeded?.quotaPlugin));
+  check(
+    `${t.key} 的额度插件是模板的`,
+    seeded?.quotaPlugin === t.quotaPlugin,
+    JSON.stringify(seeded?.quotaPlugin),
+  );
   check(`${t.key} 的名字跟模板一致`, seeded?.label === t.label, String(seeded?.label));
   check(
     `${t.key} 的地址是模板的默认地址`,

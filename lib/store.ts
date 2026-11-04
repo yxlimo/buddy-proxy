@@ -274,6 +274,28 @@ function migrateProviderWeight(db: DatabaseSync): void {
 export function migratePlatforms(db: DatabaseSync): void {
   migratePlatformColumns(db);
   seedPlatformTemplates(db);
+  migratePlatformQuotaPlugins(db);
+}
+
+/**
+ * 三家插件平台的默认额度插件补进已有的行。
+ *
+ * 模板里现在写着插件 id（lib/platform-catalog.ts），但已有的库里那几行是空的：
+ * 当初补进表时不带插件。补的只有**空着的**那一格 —— 用户自己选过的插件（比如
+ * 七牛换了一个门户插件）不能被启动时的迁移改掉。
+ *
+ * 幂等：值非空的行不 UPDATE，所以再跑一次连 updated_at 都不动。
+ */
+export function migratePlatformQuotaPlugins(db: DatabaseSync): void {
+  const set = db.prepare(
+    "UPDATE platform SET quota_plugin = ?, updated_at = ? WHERE id = ? AND TRIM(quota_plugin) = ''",
+  );
+  const now = Date.now();
+  for (const t of PLATFORM_TEMPLATES) {
+    // 七牛的用户自己选插件，星火没有接口：模板里空着的就不补。
+    if (!t.quotaPlugin) continue;
+    set.run(t.quotaPlugin, now, t.suggestedId);
+  }
 }
 
 /**
@@ -295,8 +317,8 @@ function migratePlatformColumns(db: DatabaseSync): void {
  * 把那五个还没迁完的平台补成表里的行。
  *
  * 幂等：已经有的行不动（INSERT OR IGNORE）—— 用户改过的名字与地址不能被启动
- * 时的迁移顺手抹掉。模型目录是空的（自动拉，让上游自己报），额度插件是空的
- * （插件是用户填的）。
+ * 时的迁移顺手抹掉。模型目录是空的（自动拉，让上游自己报）；额度插件填模板里
+ * 那一个（三家插件的额度只有插件问得到，七牛与星火是空串）。
  */
 function seedPlatformTemplates(db: DatabaseSync): void {
   const insert = db.prepare(

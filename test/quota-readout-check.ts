@@ -205,10 +205,36 @@ const poolUsage = {
   ],
 };
 
-const quotas = senseNova?.quotas?.(
-  { id: "sensenova", kind: "sensenova", alias: "", region: "", enabled: true, policy: "single", createdAt: 0, updatedAt: 0 },
-  { sensenova: { sensenova: { pools: poolUsage } } } as any,
-) ?? [];
+// 额度是插件问回来的那一份结论：面板读的是快照的插件桶（插件 id → 账号 id）。
+// 这里用插件自己的翻译函数把答复摆成那一份 —— 与网关真跑一轮的结果同一个形状，
+// 下面的数字断言才是对着真口径的。
+const { senseNovaPoolsViews } = await import("../lib/sensenova/quota-plugin.ts");
+const SENSE_ROW = {
+  id: "sensenova",
+  platform: "sensenova",
+  kind: "sensenova",
+  alias: "",
+  region: "",
+  enabled: true,
+  weight: 100,
+  policy: "single",
+  createdAt: 0,
+  updatedAt: 0,
+} as any;
+const senseSnapshot = {
+  plugins: {
+    "sensenova-pools": {
+      [SENSE_ROW.id]: {
+        state: "ok",
+        views: senseNovaPoolsViews(SENSE_ROW, poolUsage as any),
+        recoverAt: null,
+        message: "",
+      },
+    },
+  },
+} as any;
+
+const quotas = senseNova?.quotas?.(SENSE_ROW, senseSnapshot) ?? [];
 
 const quota = quotas[0];
 check("有额度", quota !== undefined, JSON.stringify(quotas));

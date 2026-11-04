@@ -54,7 +54,8 @@ export const PLATFORM_TEMPLATES: PlatformTemplate[] = [
     // 与 lib/sensenova/config.ts 的 SENSENOVA_INFER_BASE 一致。
     defaultBaseUrl: "https://token.sensenova.cn/v1",
     suggestedId: "sensenova",
-    quotaPlugin: "",
+    // 积分池在控制台上，问它的插件随 kind 一起登记（lib/sensenova/quota-plugin.ts）。
+    quotaPlugin: "sensenova-pools",
     region: "",
   },
   {
@@ -65,7 +66,8 @@ export const PLATFORM_TEMPLATES: PlatformTemplate[] = [
     // 这一侧的推理端点；浦语那一侧是 INTERN_AI_CHAT_API_BASE）。
     defaultBaseUrl: "https://discovery-api.intern-ai.org.cn/v1",
     suggestedId: "intern-ai",
-    quotaPlugin: "",
+    // 墨点在 Discovery 子站的控制台上（lib/intern-ai/quota-plugin.ts）。
+    quotaPlugin: "intern-ai-credits",
     region: "",
   },
   {
@@ -75,7 +77,8 @@ export const PLATFORM_TEMPLATES: PlatformTemplate[] = [
     // 与 lib/tokenrhythm/accounts.ts 的 TOKENRHYTHM_INFER_BASE 一致。
     defaultBaseUrl: "https://tokenrhythm.studio/v1",
     suggestedId: "tokenrhythm",
-    quotaPlugin: "",
+    // 钱包只能拿会话 cookie 读（lib/tokenrhythm/quota-plugin.ts）。
+    quotaPlugin: "tokenrhythm-wallet",
     region: "",
   },
 ];

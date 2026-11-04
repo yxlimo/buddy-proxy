@@ -25,11 +25,6 @@ import {
   type WorkBuddyModel,
 } from "../workbuddy/models.ts";
 import { regionOf } from "../workbuddy/auth.ts";
-import { tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
-import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
-import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
-import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
-import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
 import { clearHealthSnapshot, peekHealthSnapshot, putHealthSnapshot } from "../health-cache.ts";
 import {
   accountsOfPlatform,
@@ -316,48 +311,6 @@ export async function miniMaxCreditFallback(
 }
 
 /**
- * SenseNova 的积分池。
- *
- * 问的是控制台（要登录态），没登录就问不了 —— 那是「不知道」，不是「没有」。
- */
-async function senseNovaPools(providerId = "sensenova"): Promise<unknown> {
-  const session = loadSenseNovaSession(providerId);
-  if (!session) return null;
-  try {
-    return await senseNovaPoolUsage(session);
-  } catch (e) {
-    console.warn(`[SENSENOVA] 积分池查询失败：${(e as Error)?.message}`);
-    return null;
-  }
-}
-
-/**
- * 书生·端砚的墨点：余额与批次。
- *
- * 两个接口都要登录态（Discovery 子站的 token）。批次拿不到时余额照样报 ——
- * 余额才是那个最要紧的数。
- */
-async function internAiCredits(providerId = "intern-ai"): Promise<{ balance: unknown; packs: unknown }> {
-  const session = loadInternAiSession(providerId);
-  if (!session) return { balance: null, packs: null };
-  const token = internAiTokenFor(session, "discovery");
-  if (!token) return { balance: null, packs: null };
-  try {
-    const balance = await internAiBalance(session, token);
-    let packs: unknown = null;
-    try {
-      packs = await internAiCreditPacks(session, token);
-    } catch (e) {
-      console.warn(`[INTERN-AI] 墨点批次查询失败：${(e as Error)?.message}`);
-    }
-    return { balance, packs };
-  } catch (e) {
-    console.warn(`[INTERN-AI] 墨点余额查询失败：${(e as Error)?.message}`);
-    return { balance: null, packs: null };
-  }
-}
-
-/**
  * 空快照：每个桶都是空的。
  *
  * 全量刷新从空快照开始填；单独刷一个平台时，它当「这个平台这一轮的结果」。
@@ -368,26 +321,13 @@ function emptySnapshot(): HealthSnapshot {
     minimax: {},
     zcode: {},
     workbuddy: {},
-    tokenrhythm: {},
-    sensenova: {},
-    internAi: {},
     plugins: {},
   };
 }
 
-/**
- * 桶的名字。
- *
- * 快照按 kind 分桶：每个 kind 一张「账号 id → 那一份」的表。kind 与桶名
- * 只有 intern-ai 这一处对不上（桶叫 internAi）。
- */
-function bucketOf(kind: string): string {
-  return kind === "intern-ai" ? "internAi" : kind;
-}
-
 /** 快照里的一张表。桶不存在就是没有这一家。 */
 function bucketTable(snapshot: HealthSnapshot, bucket: string): Record<string, unknown> | undefined {
-  // SAFETY: 快照的每个桶都是「账号 id → 那一份」的表；桶名对不上时取到 undefined。
+  // SAFETY: 快照的每个具名桶都是「账号 id → 那一份」的表；没有这一桶时取到 undefined。
   const tables = snapshot as unknown as Record<string, Record<string, unknown>>;
   return tables[bucket];
 }
@@ -403,9 +343,6 @@ function copySnapshot(snapshot: HealthSnapshot): HealthSnapshot {
     minimax: { ...snapshot.minimax },
     zcode: { ...snapshot.zcode },
     workbuddy: { ...snapshot.workbuddy },
-    tokenrhythm: { ...snapshot.tokenrhythm },
-    sensenova: { ...snapshot.sensenova },
-    internAi: { ...snapshot.internAi },
     // 抄两层：里层那张表在合并一个平台的数字时会被写，共用一张表会把那次写漏到
     // 副本外面去。
     plugins: Object.fromEntries(
@@ -440,10 +377,9 @@ function applyPartial(snapshot: HealthSnapshot, partial: HealthSnapshot, rows: P
       applyPluginPartial(snapshot, partial, row);
       continue;
     }
-    const bucket = bucketOf(row.kind);
-    const target = bucketTable(snapshot, bucket);
+    const target = bucketTable(snapshot, row.kind);
     if (!target) continue;
-    const value = bucketTable(partial, bucket)?.[row.id];
+    const value = bucketTable(partial, row.kind)?.[row.id];
     if (value === undefined) delete target[row.id];
     else target[row.id] = value;
   }
@@ -514,14 +450,25 @@ export async function refreshHealthSnapshot(): Promise<void> {
 }
 
 /**
- * 额度由平台那一行指名的插件问回来的那些 kind。
+ * 额度归插件问的那些 kind。
  *
  * 它们没有具名桶：快照里那一份存在插件桶里（插件 id → 账号 id → 那一次的结论）。
+ * 问哪个插件由平台那一行说（七牛、开放平台是用户选的），读法由 kind 自己说。
  * 开放平台是数据，七牛云的额度在门户上、门户只认 cookie —— 两家都得由平台行
- * 说了算：没指名插件就是「不知道」，不该自己找个地方去问。
+ * 说了算：没指名插件就是「不知道」，不该自己找个地方去问。三家插件是跟 kind
+ * 一起登记的（SenseNova / TokenRhythm / 书生·端砚），模板行填的默认值就是它们
+ * 的插件。
  */
+const QUOTA_FROM_PLUGIN: ReadonlySet<string> = new Set([
+  OPEN_PLATFORM_KIND_NAME,
+  "qiniu",
+  "sensenova",
+  "intern-ai",
+  "tokenrhythm",
+]);
+
 function quotaFromPlugin(kind: string): boolean {
-  return kind === OPEN_PLATFORM_KIND_NAME || kind === "qiniu";
+  return QUOTA_FROM_PLUGIN.has(kind);
 }
 
 /**
@@ -593,16 +540,6 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
         credits: await fetchWorkBuddyCredits(row.id),
         resources: await fetchWorkBuddyResources(row.id),
       } as WorkBuddySnapshotEntry;
-      return;
-    case "tokenrhythm":
-      // 一个账号一行一个钱包：快照也按账号存。
-      snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
-      return;
-    case "sensenova":
-      snapshot.sensenova[row.id] = { pools: await senseNovaPools(row.id) };
-      return;
-    case "intern-ai":
-      snapshot.internAi[row.id] = await internAiCredits(row.id);
       return;
   }
 }

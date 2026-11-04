@@ -178,16 +178,12 @@ export interface HealthSnapshot {
   /** ZCode 的 Start Plan 额度。 */
   zcode: Record<string, { quota: unknown }>;
   workbuddy: Record<string, { credits: unknown }>;
-  tokenrhythm: Record<string, { tenants: unknown }>;
-  /** SenseNova 的积分池。 */
-  sensenova: Record<string, { pools: unknown }>;
-  /** 书生·端砚的墨点：余额与批次。 */
-  internAi: Record<string, { balance: unknown; packs: unknown }>;
   /**
    * 额度插件问回来的结论：插件 id → 账号 id → 那一次的结论。
    *
-   * 上面那几个桶是一个平台一个：平台是代码，可以有自己那一桶。开放平台是数据，
-   * 它没有桶 —— 它的额度只能由平台那一行指名的插件问回来。
+   * 上面那几个桶是自带抓取逻辑的平台留下的（它们还没搬成插件）。额度归插件的
+   * 那些平台没有具名桶 —— 包括开放平台（数据，插件由平台那一行指名）与三家插件
+   * 随 kind 一起登记的平台（SenseNova、TokenRhythm、书生·端砚）。
    *
    * 存结论而不存原样答复：状态怎么处理是平台的事（lib/quota-state.ts），插件只
    * 管翻译，快照里存的就只能是翻译完的东西。

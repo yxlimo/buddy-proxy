@@ -298,13 +298,6 @@ check("七牛的平台行指名了插件", qiniuPlatform.ok === true, qiniuPlatf
 
 const qiniuKind = kindOf("qiniu");
 const kindSnapshot = {
-  qoder: {},
-  minimax: {},
-  zcode: {},
-  workbuddy: {},
-  tokenrhythm: {},
-  sensenova: {},
-  internAi: {},
   plugins: { [qiniuQuotaPlugin.id]: { [QINIU_ACCOUNT.id]: OK_PROBE } },
 } as any;
 check(
@@ -362,16 +355,7 @@ function openAccount(id: string): any {
 }
 
 function snapshotWithPlugins(plugins: Record<string, Record<string, unknown>>): any {
-  return {
-    qoder: {},
-    minimax: {},
-    zcode: {},
-    workbuddy: {},
-    tokenrhythm: {},
-    sensenova: {},
-    internAi: {},
-    plugins,
-  };
+  return { plugins };
 }
 
 const openKind = kindOf("openai");
