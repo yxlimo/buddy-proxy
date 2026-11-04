@@ -574,7 +574,10 @@ async function callUpstream(
  * 两个都是 0 表示上游没给 usage，不是空答复。
  *
  * 两条分支：正文几乎没有（<=5），以及思考吃掉大量预算、正文只剩一点
- * （思考 >= 2000 且正文 <= 100）。单看「正文很小」分不开正常短答复和空答复。
+ * （思考 >= 2000 且正文 <= 100）。单看「正文很小」分不开正常短答复和空答复，
+ * 所以先决条件是「思考真的在吃输出」：思考为 0（没有思考可吃）或者思考不比
+ * 正文多，都不是「输出全在思考里」。少了这个先决条件，5 个 token 的正常短
+ * 答复（completion=5 reasoning=0）会被当成空答复误报。
  */
 export function isAllThinking(usage?: {
   completionTokens?: number;
@@ -585,6 +588,9 @@ export function isAllThinking(usage?: {
   if (completion <= 0) return false;
   const reasoning = usage?.reasoningTokens ?? 0;
   const visible = completion - reasoning;
+  // 先决条件：思考在吃输出。没有思考（0）说明这条答复没有思考段，短答复
+  // 也归在这里；思考不比正文多，说明正文才是主体。
+  if (!(reasoning > 0 && reasoning > visible)) return false;
   // 一、正文几乎没有。
   if (visible <= 5) return true;
   // 二、思考吃了大量预算，正文只剩一点。短答复（思考也少）走不到这里，
