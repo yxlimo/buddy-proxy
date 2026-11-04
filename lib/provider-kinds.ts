@@ -18,6 +18,8 @@ import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import type { CatalogModel } from "./router/catalog.ts";
 import type { Dialect } from "./router/deliver.ts";
 import type { Route } from "./router/routes.ts";
+// 只为快照里那一桶的类型：额度插件问回来的结论。
+import type { QuotaProbe } from "./quota-plugins.ts";
 // 只为 `dispatch` 的参数类型：upstreams/tokenrhythm.ts 从这边取 kindOf，值上不互相引用。
 import type { UpstreamContext } from "./router/upstreams/index.ts";
 /** 面板上登录的方式。 */
@@ -182,12 +184,15 @@ export interface HealthSnapshot {
   /** 书生·端砚的墨点：余额与批次。 */
   internAi: Record<string, { balance: unknown; packs: unknown }>;
   /**
-   * 额度插件问回来的东西：插件 id → 账号 id → 原始答复。
+   * 额度插件问回来的结论：插件 id → 账号 id → 那一次的结论。
    *
    * 上面那几个桶是一个平台一个：平台是代码，可以有自己那一桶。开放平台是数据，
    * 它没有桶 —— 它的额度只能由平台那一行指名的插件问回来。
+   *
+   * 存结论而不存原样答复：状态怎么处理是平台的事（lib/quota-state.ts），插件只
+   * 管翻译，快照里存的就只能是翻译完的东西。
    */
-  plugins: Record<string, Record<string, unknown>>;
+  plugins: Record<string, Record<string, QuotaProbe>>;
 }
 
 /* ------------------------------------------------------------------ *

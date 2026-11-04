@@ -4,16 +4,17 @@
 // 形状原样过去，答案原样回来，鉴权是一把 API key 作 Bearer。
 // 七牛云剩下的只有三件事：地址、key 从哪来、额度怎么问。
 //
-// 额度现在是插件（lib/qiniu/quota-plugin.ts）：问门户与读资源包都在那边。要不要
+// 额度现在是插件（lib/qiniu/quota-plugin.ts）：问门户与翻状态都在那边。要不要
 // 问由**平台那一行**说了算（platform.quota_plugin）—— 门户 cookie 会过期，没被
-// 指名的时候不该每轮都去敲一次门户。这个文件只把快照里那一份交给插件。
+// 指名的时候不该每轮都去敲一次门户。这个文件只把快照里那一次结论交给通用的读法
+// （lib/quota-state.ts）。
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 // 平台行是额度插件的出处：指名的那个插件问回来，没指名就是「不知道」。
 import { openPlatformOf } from "../open-platforms.ts";
-import { quotaPluginOf, type QuotaPlugin } from "../quota-plugins.ts";
+import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { qiniuInferenceKey, qiniuStatus } from "./account.ts";
 import { qiniuCatalogModels } from "./catalog.ts";
@@ -23,15 +24,13 @@ import { QINIU_MODELS } from "./models.ts";
 import { qiniuQuotaPlugin } from "./quota-plugin.ts";
 
 /**
- * 这个平台的额度插件。
+ * 这个平台的额度插件 id。
  *
  * 插件 id 写在平台那一行：没写、写了个没人登记的 id，都是「不知道」—— 不是
  * 错误。用户可能还在输，而网关得照样转发。
  */
-function quotaPluginOfPlatform(provider: ProviderRow): QuotaPlugin | null {
-  const id = openPlatformOf(provider.platform)?.quotaPlugin?.trim() ?? "";
-  if (!id) return null;
-  return quotaPluginOf(id);
+function quotaPluginIdOf(provider: ProviderRow): string {
+  return openPlatformOf(provider.platform)?.quotaPlugin?.trim() ?? "";
 }
 
 export const qiniuKind = registerCompatiblePlatform({
@@ -50,24 +49,12 @@ export const qiniuKind = registerCompatiblePlatform({
   models: () => qiniuCatalogModels(QINIU_MODELS),
   // 没有插件、或者快照里没有这个账号的那一份：额度是「未知」。空数组不是 0 ——
   // 0 说的是「一点不剩」，那是在替一个根本没问过的平台撒谎。
-  quotas: (provider, snapshot) => {
-    const plugin = quotaPluginOfPlatform(provider);
-    if (!plugin) return [];
-    return plugin.quotas(provider, snapshot.plugins?.[plugin.id]?.[provider.id]);
-  },
+  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),
   // 不知道就不该断路：问不到额度的账号还是能接请求的账号。
-  outOfCredits: (provider, snapshot) => {
-    const plugin = quotaPluginOfPlatform(provider);
-    if (!plugin) return false;
-    return plugin.outOfCredits?.(provider, snapshot.plugins?.[plugin.id]?.[provider.id]) ?? false;
-  },
+  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, quotaPluginIdOf(provider)),
   // 资源包不会自己长回来，所以没有「什么时候回来」这个时刻：插件答 null（「不
   // 知道」），没人知道的时候调用方要的也是 null。
-  recoverAt: (provider, snapshot) => {
-    const plugin = quotaPluginOfPlatform(provider);
-    if (!plugin) return null;
-    return plugin.recoverAt?.(provider, snapshot.plugins?.[plugin.id]?.[provider.id]) ?? null;
-  },
+  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, quotaPluginIdOf(provider)),
 });
 
 // 推理用 API Key、额度用门户 cookie，两样都不是会话。

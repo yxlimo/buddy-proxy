@@ -14,7 +14,8 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-qiniu-"));
 process.env.BUDDY_DATA_DIR = DATA_DIR;
 
 const { parseRespackOverview } = await import("../lib/qiniu/quota.ts");
-const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
+const { qiniuQuotaPlugin, qiniuQuotas } = await import("../lib/qiniu/quota-plugin.ts");
+const { cooldownUntil, rateCooldownMs } = await import("../lib/cooldown.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
@@ -109,6 +110,16 @@ function snapshotWith(quota: unknown): any {
 /** 快照里那个额度：读出来的那两个包。 */
 const QUOTA = { respacks: parseRespackOverview(OVERVIEW), at: Date.now() };
 
+/**
+ * 快照里那一份：插件在 ok 的时候给的那一种。
+ *
+ * 快照存的是结论（状态 + 面板那几行），不是门户的原样答复：怎么读答复是插件的事，
+ * 读完了才写进快照。
+ */
+function okProbe(quota: unknown): any {
+  return { state: "ok", views: qiniuQuotas(PROVIDER, quota), recoverAt: null, message: "" };
+}
+
 /* ------------------------------------------------------------------ *
  * 门户的回答怎么读
  * ------------------------------------------------------------------ */
@@ -166,7 +177,7 @@ const named = updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 check("平台行指名了插件", named.ok === true, named.message);
 
 const kind = kindOf("qiniu");
-const views = kind?.quotas(PROVIDER, snapshotWith(QUOTA)) ?? [];
+const views = kind?.quotas(PROVIDER, snapshotWith(okProbe(QUOTA))) ?? [];
 const credits = views[0]?.credits;
 check("报一个额度", views.length === 1, String(views.length));
 check("两个包报成两条", credits?.lots?.length === 2, String(credits?.lots?.length));
@@ -189,23 +200,30 @@ check("资源包没有到期时间", credits?.lots?.[0]?.expiresAt === 0, String
 
 section("用尽了吗");
 
-const empty = {
-  respacks: parseRespackOverview({
-    code: 200,
-    data: {
-      records: OVERVIEW.data.records.map((row) => ({ ...row, month_remain: "0" })),
-    },
-  }),
-  at: Date.now(),
-};
-check("两个包都空了 → 用尽", kind?.outOfCredits(PROVIDER, snapshotWith(empty)) === true);
+/** 两个包都空了：门户说的一点不剩。 */
+const EMPTY_PROBE = { state: "no_quota", views: [], recoverAt: null, message: "资源包全部用尽" };
+check("两个包都空了 → 用尽", kind?.outOfCredits(PROVIDER, snapshotWith(EMPTY_PROBE)) === true);
 check(
   "还有一个包有剩 → 没用尽",
-  kind?.outOfCredits(PROVIDER, snapshotWith(QUOTA)) === false,
+  kind?.outOfCredits(PROVIDER, snapshotWith(okProbe(QUOTA))) === false,
 );
 check(
-  "没读到额度（没有 cookie）→ 不知道，不算用尽",
+  "没填门户 cookie（missing）→ 不知道，不算用尽",
+  kind?.outOfCredits(PROVIDER, snapshotWith({ state: "missing", views: [], recoverAt: null, message: "" })) === false,
+);
+check(
+  "快照里没有这一份 → 不知道，不算用尽",
   kind?.outOfCredits(PROVIDER, snapshotWith(null)) === false,
+);
+check(
+  "见底那条没有数字，只有一句说明",
+  (kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE)) ?? []).every((view) => !view.credits?.lots?.length),
+  JSON.stringify(kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE))),
+);
+check(
+  "见底那条说的是「用尽」",
+  String((kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE)) ?? [])[0]?.credits?.note ?? "").includes("用尽"),
+  JSON.stringify(kind?.quotas(PROVIDER, snapshotWith(EMPTY_PROBE))),
 );
 
 section("没指名插件时是不知道");
@@ -215,7 +233,7 @@ const cleared = updateOpenPlatform("qiniu", { quotaPlugin: "" });
 check("插件清掉了", cleared.ok === true, cleared.message);
 // 快照里那份数据还在，但没被指名就不该被读成额度 —— 问都没问过，
 // 读出一个数字等于替一个没问过的平台说话。
-const unasked = snapshotWith(QUOTA);
+const unasked = snapshotWith(okProbe(QUOTA));
 check(
   "没指名插件 → 没有额度视图（快照里有份也不读）",
   (kind?.quotas(PROVIDER, unasked) ?? []).length === 0,
@@ -303,9 +321,14 @@ const callsBeforeNamed = portalCalls;
 const snapshotNamed = await refreshed();
 check("指名插件：门户被问了一次", portalCalls === callsBeforeNamed + 1, String(portalCalls - callsBeforeNamed));
 check(
-  "指名插件：额度落在 snapshot.plugins[qiniu][账号]",
-  Array.isArray(snapshotNamed?.plugins?.["qiniu"]?.[accountId]?.respacks),
+  "指名插件：结论落在 snapshot.plugins[qiniu][账号]",
+  snapshotNamed?.plugins?.["qiniu"]?.[accountId]?.state === "ok",
   JSON.stringify(snapshotNamed?.plugins?.["qiniu"]?.[accountId]),
+);
+check(
+  "指名插件：结论里带着面板那几行",
+  snapshotNamed?.plugins?.["qiniu"]?.[accountId]?.views?.[0]?.credits?.lots?.length === 2,
+  JSON.stringify(snapshotNamed?.plugins?.["qiniu"]?.[accountId]?.views),
 );
 const fromRefresh = kind?.quotas(accountRow, snapshotNamed) ?? [];
 check("指名插件：quotas 读得回来", fromRefresh.length === 1, String(fromRefresh.length));
@@ -315,13 +338,13 @@ check(
   JSON.stringify(fromRefresh[0]?.credits?.lots),
 );
 
-// ③ 指名了插件但门户回 401：这一轮这个账号没有额度份（未知）。
+// ③ 指名了插件但门户回 401：凭据被拒，不是没钱。
 portalStatus = 401;
 const snapshotDenied = await refreshed();
 check(
-  "门户 401：这一轮这个账号没有额度份",
-  snapshotDenied?.plugins?.qiniu?.[accountId] === undefined,
-  JSON.stringify(snapshotDenied?.plugins?.qiniu),
+  "门户 401：结论是 unauthorized",
+  snapshotDenied?.plugins?.qiniu?.[accountId]?.state === "unauthorized",
+  JSON.stringify(snapshotDenied?.plugins?.qiniu?.[accountId]),
 );
 check(
   "门户 401：读出来是未知（不是 0）",
@@ -329,8 +352,34 @@ check(
   JSON.stringify(kind?.quotas(accountRow, snapshotDenied)),
 );
 check("门户 401：不算用尽", kind?.outOfCredits(accountRow, snapshotDenied) === false);
+check("门户 401：不写冷却", cooldownUntil(accountId) === null, String(cooldownUntil(accountId)));
 
-// ④ 没有任何额度数据：不知道不等于见底。
+// ④ 门户回 429：限流。这不是额度问题，但要给这个账号写冷却 —— 门户现在不给额度，
+//    再敲一遍也是同一个答复。
+portalStatus = 429;
+const beforeRate = Date.now();
+const snapshotRate = await refreshed();
+check(
+  "门户 429：结论是 rate_limited",
+  snapshotRate?.plugins?.qiniu?.[accountId]?.state === "rate_limited",
+  JSON.stringify(snapshotRate?.plugins?.qiniu?.[accountId]),
+);
+check("门户 429：不算用尽（限流不是没钱）", kind?.outOfCredits(accountRow, snapshotRate) === false);
+const rateUntil = cooldownUntil(accountId);
+check("门户 429：写了冷却", rateUntil !== null, String(rateUntil));
+check(
+  "门户 429：冷却时长按平台默认",
+  rateUntil !== null && Math.abs(rateUntil - (beforeRate + rateCooldownMs())) < 5_000,
+  `${rateUntil} / ${beforeRate + rateCooldownMs()}`,
+);
+// 门户不报 Retry-After 的时候不该猜一个别的时长；报了就用它。
+check(
+  "门户 429：门户没说多久，恢复时刻就不编",
+  snapshotRate?.plugins?.qiniu?.[accountId]?.recoverAt === null,
+  String(snapshotRate?.plugins?.qiniu?.[accountId]?.recoverAt),
+);
+
+// ⑤ 没有任何额度数据：不知道不等于见底。
 check(
   "空快照 → 不算用尽",
   kind?.outOfCredits(accountRow, { plugins: {} }) === false,

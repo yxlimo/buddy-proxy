@@ -41,7 +41,8 @@ import {
 import { isPlatform, platformOfAny } from "../platforms.ts";
 // 开放平台的额度是数据：平台那一行指名的插件去问。
 import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
-import { quotaPluginOf } from "../quota-plugins.ts";
+import { quotaPluginOf, type QuotaProbe } from "../quota-plugins.ts";
+import { applyProbeEffect, quotaProbe } from "../quota-state.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds/index.ts";
 // The judgment lives here: the panel and the route must read the same answer.
@@ -515,7 +516,7 @@ export async function refreshHealthSnapshot(): Promise<void> {
 /**
  * 额度由平台那一行指名的插件问回来的那些 kind。
  *
- * 它们没有具名桶：快照里那一份存在插件桶里（插件 id → 账号 id → 原样答复）。
+ * 它们没有具名桶：快照里那一份存在插件桶里（插件 id → 账号 id → 那一次的结论）。
  * 开放平台是数据，七牛云的额度在门户上、门户只认 cookie —— 两家都得由平台行
  * 说了算：没指名插件就是「不知道」，不该自己找个地方去问。
  */
@@ -524,30 +525,32 @@ function quotaFromPlugin(kind: string): boolean {
 }
 
 /**
- * 问平台那一行指名的额度插件，问回来的写进插件桶。
+ * 问平台那一行指名的额度插件，把这一次的结论写进插件桶。
  *
- * 四种「不知道」都不写快照 —— 面板上显示「—」比写个 0 诚实：
- *   没填插件     用户还没选（或者这一家本来就不打算问）
- *   插件没登记   填的 id 没人认（用户可能先填 id 再让我们上线那个插件）
- *   插件答 null  问过了，但没问到（门户拒绝了、没 cookie），这也是不知道
- *   插件问失败   这一轮这个账号就是不知道
+ * 每一种结论都写 —— 面板要能回答「为什么这里没有数字」：「没填凭据」「凭据
+ * 被拒」「问不到」是三件不同的事，只写问到的那几种会把它们全变回「不知道」。
+ * 结论带来的副作用（写冷却、交给凭据线）由 lib/quota-state.ts 统一做。
+ *
+ * 没指名插件、或者指名的插件没登记：不写。那不是「问过了」，是没人去问。
  */
 async function refreshPluginQuota(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
   const pluginId = openPlatformOf(row.platform)?.quotaPlugin?.trim() ?? "";
   if (!pluginId) return;
   const plugin = quotaPluginOf(pluginId);
   if (!plugin) return;
+  let probe: QuotaProbe;
   try {
-    const payload = await plugin.fetch(row);
-    // 插件用 null 说「没问到」：写进去会让读的一方以为这是一份真的答复。
-    if (payload === null || payload === undefined) return;
-    const table = { ...snapshot.plugins[plugin.id] };
-    table[row.id] = payload;
-    snapshot.plugins[plugin.id] = table;
+    probe = await plugin.probe(row);
   } catch (e) {
-    // 一个账号问不到，不该把整轮带挂：这一轮它就是「不知道」。
+    // 插件不许 reject（翻不动的都归 unknown）。真 reject 了是插件的错：这一轮当
+    // 「问不到」，但要说出来 —— 否则面板上它就是个没有理由的空。
     console.warn(`[QUOTA] 账号 ${row.id} 的额度没问到（插件 ${plugin.id}）：${(e as Error)?.message}`);
+    probe = quotaProbe("unknown", `插件问的时候抛了：${(e as Error)?.message ?? String(e)}`);
   }
+  const table = { ...snapshot.plugins[plugin.id] };
+  table[row.id] = probe;
+  snapshot.plugins[plugin.id] = table;
+  applyProbeEffect(row, probe, (line) => console.warn(line));
 }
 
 /** 问一家上游，把它那段填进快照。 */

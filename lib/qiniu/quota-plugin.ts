@@ -1,20 +1,22 @@
 // lib/qiniu/quota-plugin.ts — 七牛云的额度做成一个插件。
 //
 // 额度在门户上，而门户只认门户 cookie：推理用的那把 key 在这里没有用。查不到额度
-// 不是错误 —— 推理不需要它。所以 fetch 拿不到就返回 null（不知道），不抛。
+// 不是错误 —— 推理不需要它。所以 probe 从不 reject：拿不到就翻成一种说清楚原因
+// 的状态（没填 cookie / 凭据被拒 / 被限流 / 问不到）。
 
+import { quotaProbe, type QuotaState } from "../quota-state.ts";
 import { registerQuotaPlugin } from "../quota-plugins.ts";
 import type { CreditLotView, QuotaView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
-import { QINIU_ACCOUNT_FIELD } from "./account.ts";
-import { qiniuQuotaOf, type QiniuQuota } from "./quota.ts";
+import { qiniuPortalCookie, QINIU_ACCOUNT_FIELD } from "./account.ts";
+import { fetchQiniuQuota, type QiniuQuota } from "./quota.ts";
 
 /**
  * 门户 cookie 那一段在凭据里的字段名。
  *
  * name 不是给人看的名字（那是 label），是这段凭据在库里的 id 后缀：它必须与
  * lib/qiniu/account.ts 的 qiniuAccountId() 一致，否则插件读不到它。
- * 开放平台的账号按同一个规则写同一个位置，qiniuQuotaOf 就读得到。
+ * 开放平台的账号按同一个规则写同一个位置，qiniuPortalCookie() 就读得到。
  *
  * 名字只有那一个来源：QINIU_ACCOUNT_FIELD。
  */
@@ -73,15 +75,35 @@ export const qiniuQuotaPlugin = registerQuotaPlugin({
   id: "qiniu",
   label: "七牛云资源包",
   fields: [{ name: QINIU_ACCOUNT_FIELD, label: "门户 cookie", secret: true }],
-  fetch: (account) => qiniuQuotaOf(account.id),
-  quotas: (account, payload) => qiniuQuotas(account, payload),
-  outOfCredits: (account, payload) => {
-    const quota = qiniuQuotaOfPayload(payload);
-    // 读不到不等于没钱：那是「不知道」。
-    if (!quota || !quota.respacks.length) return false;
+  probe: async (account) => {
+    // 没填门户 cookie：用户还没填，不是门户拒绝了什么。
+    const cookie = qiniuPortalCookie(account.id);
+    if (!cookie) return quotaProbe("missing", "账号上没有门户 cookie，查不了资源包");
+
+    const answer = await fetchQiniuQuota(cookie);
+    if (!answer.ok) {
+      // 门户说的话原样带过去：状态码在日志与面板上是最有用的一句。
+      return quotaProbe(stateOfReason(answer.reason), answer.message, {
+        // 限流才有「多久之后再来」：门户说了就用它，没说平台按默认时长冷却。
+        recoverAt: answer.retryAfterMs === null ? null : Date.now() + answer.retryAfterMs,
+      });
+    }
+
+    const quota = answer.quota;
+    const remaining = quota.respacks.reduce((sum, pack) => sum + pack.remaining, 0);
+    const unit = quota.respacks[0]?.unit ?? "";
+    const summary = `资源包：${quota.respacks.length} 项，剩 ${remaining} ${unit}`;
     // 所有包都见底才算用尽 —— 还有一包剩着就还能走。
-    return quota.respacks.every((pack) => pack.remaining <= 0);
+    if (quota.respacks.every((pack) => pack.remaining <= 0)) {
+      // 数字全零，说的是「一包都不剩」：这时候面板要的是一句话，不是那几行零。
+      return quotaProbe("no_quota", `资源包全部用尽：${summary}`);
+    }
+    // 资源包不会自己长回来：见底了只能再买一个，没有「什么时候回来」这个时刻。
+    return quotaProbe("ok", summary, { views: qiniuQuotas(account, quota) });
   },
-  // 资源包不会自己长回来：见底了只能再买一个，没有「什么时候回来」这个时刻。
-  recoverAt: () => null,
 });
+
+/** 门户那边的原因，翻成状态。 */
+function stateOfReason(reason: "unauthorized" | "rate_limited" | "unknown"): QuotaState {
+  return reason;
+}

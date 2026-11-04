@@ -5,8 +5,10 @@
 // lib/kinds/*.ts 的 quotas() 里。开放平台（用户在面板上加的那些平台）进不了这条
 // 链 —— 它是数据，不是代码。
 //
-// 做成插件之后，一个插件把两半都回答了：怎么问上游（fetch）、问回来的怎么读
-// （quotas）。开放平台只要在 platform.quota_plugin 里填插件 id。
+// 做成插件之后，插件只回答一件事：问一次上游，把答复或异常翻成一个结论
+// （probe）。结论怎么处理（写冷却、算不算见底、什么时候恢复）是平台的事，写在
+// lib/quota-state.ts 一处 —— 插件里再各写一遍，就会有七份不一样的判断。
+// 开放平台只要在 platform.quota_plugin 里填插件 id。
 //
 // 插件的登记是模块求值期的副作用：每个平台在自己的模块里 import 自己的插件
 // 文件，登记就发生了。启动时的校验（assertQuotaPlugins）必须等这些副作用跑完
@@ -15,6 +17,7 @@
 import type { QuotaView } from "./provider-kinds.ts";
 import type { ProviderRow } from "./providers.ts";
 import { listOpenPlatforms } from "./open-platforms.ts";
+import type { QuotaState } from "./quota-state.ts";
 
 /** 面板按它渲染的一个输入框。 */
 export interface QuotaField {
@@ -26,11 +29,22 @@ export interface QuotaField {
   secret: boolean;
 }
 
+/** 插件问一次上游的结果。 */
+export interface QuotaProbe {
+  state: QuotaState;
+  /** 面板上显示的那几行（余额/积分/套餐）。没有就是空数组。 */
+  views: QuotaView[];
+  /** 什么时候恢复（毫秒）；不知道就是 null。 */
+  recoverAt: number | null;
+  /** 给人看的一句话（日志与面板提示）。不要放凭据。 */
+  message: string;
+}
+
 /**
- * 一个额度插件：怎么问这个平台的额度，问回来的怎么读。
+ * 一个额度插件：问一次上游，把答复或异常翻成一个结论。
  *
- * payload 是上游的原样答复，存进快照时不动它：在这一层就解析成一种形状，快照
- * 里存的形状就只有这个插件认得，重启以后再读还是得靠插件在。
+ * 插件只做翻译：上游说了什么（见底了、账号停用了、凭据被拒、限流了），或者什么
+ * 也没说出来（网络、解析）。结论怎么处理由平台统一做，插件不判「能不能接」。
  */
 export interface QuotaPlugin {
   /** 插件 id：写进 platform.quota_plugin 的那个字符串。 */
@@ -39,19 +53,8 @@ export interface QuotaPlugin {
   label: string;
   /** 查额度要哪些凭据。 */
   fields: QuotaField[];
-  /** 去问上游要一次额度。 */
-  fetch(account: ProviderRow): Promise<unknown>;
-  /** 快照里那一份读成面板视图。读不出来就返回空数组。 */
-  quotas(account: ProviderRow, payload: unknown): QuotaView[];
-  /**
-   * 这份额度算不算见底。
-   *
-   * 缺省当作没见底：查不到不该断路。「不知道」与「没钱」是两件事，把它们当成
-   * 一件事就是替上游说话。
-   */
-  outOfCredits?(account: ProviderRow, payload: unknown): boolean;
-  /** 什么时候恢复（毫秒）。缺省 null = 不知道。 */
-  recoverAt?(account: ProviderRow, payload: unknown): number | null;
+  /** 去问一次，把答复或异常翻成状态。不许 reject：翻不动的都归到 unknown。 */
+  probe(account: ProviderRow): Promise<QuotaProbe>;
 }
 
 const PLUGINS = new Map<string, QuotaPlugin>();

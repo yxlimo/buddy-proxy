@@ -79,8 +79,7 @@ const dummy = {
   id: "dummy-plugin",
   label: "假的",
   fields: [],
-  fetch: async () => null,
-  quotas: () => [],
+  probe: async () => ({ state: "unknown", views: [], recoverAt: null, message: "假的插件没去问" }),
 };
 registerQuotaPlugin(dummy);
 check("新注册的插件认得", quotaPluginOf("dummy-plugin") === dummy);
@@ -138,13 +137,15 @@ const QUOTA = { respacks: parseRespackOverview(OVERVIEW), at: 1767225600000 };
 
 /** 假上游：门户只回这一份，别的地址一律当作出错（不许真的出机器）。 */
 let portalCalls = 0;
+/** 门户这一轮答什么（换它来演「一包不剩」）。 */
+let portalBody: unknown = OVERVIEW;
 globalThis.fetch = (async (input: any) => {
   const url = String(typeof input === "string" ? input : (input?.url ?? ""));
   if (!url.startsWith("https://portal.qiniu.com")) {
     throw new Error(`这个测试只认假门户：${url}`);
   }
   portalCalls++;
-  return new Response(JSON.stringify(OVERVIEW), {
+  return new Response(JSON.stringify(portalBody), {
     status: 200,
     headers: { "content-type": "application/json" },
   });
@@ -172,22 +173,24 @@ const QINIU_ACCOUNT = {
 // 凭据是编的：门户 cookie 只用来问额度，这里问的是假门户。
 writeQiniuAccount(QINIU_ACCOUNT.id, { apiKey: "fake-key", portalCookie: "fake-cookie=1" });
 
-const fetched = await qiniuQuotaPlugin.fetch(QINIU_ACCOUNT);
-const fetchedQuota = fetched as typeof QUOTA;
+const probed = await qiniuQuotaPlugin.probe(QINIU_ACCOUNT);
 check("假门户被问了一次", portalCalls === 1, String(portalCalls));
-check("问回来的是资源包", Array.isArray(fetchedQuota?.respacks), JSON.stringify(fetched));
-check("两个包", fetchedQuota?.respacks?.length === 2, String(fetchedQuota?.respacks?.length));
+check("问到了 → ok", probed.state === "ok", JSON.stringify(probed));
+check("两个包", probed.views[0]?.credits?.lots?.length === 2, JSON.stringify(probed.views));
 check(
   "第一个包剩 3000",
-  fetchedQuota?.respacks?.[0]?.remaining === 3000,
-  String(fetchedQuota?.respacks?.[0]?.remaining),
+  probed.views[0]?.credits?.lots?.[0]?.remaining === 3000,
+  String(probed.views[0]?.credits?.lots?.[0]?.remaining),
 );
+/** 快照里存的那一份：问回来的结论。 */
+const OK_PROBE = { state: probed.state, views: probed.views, recoverAt: probed.recoverAt, message: probed.message };
 
-// 没有门户 cookie 就问不了：那是「不知道」，不是「没有资源包」。
+// 没有门户 cookie 就问不了：那是「没填凭据」，不是「没有资源包」。
 const NO_COOKIE = { ...QINIU_ACCOUNT, id: "qiniu-plugin-no-cookie" };
 const before = portalCalls;
-const nothing = await qiniuQuotaPlugin.fetch(NO_COOKIE);
-check("没有 cookie → 拿不到额度", nothing === null, JSON.stringify(nothing));
+const nothing = await qiniuQuotaPlugin.probe(NO_COOKIE);
+check("没有 cookie → missing", nothing.state === "missing", JSON.stringify(nothing));
+check("没有 cookie → 没有额度视图", nothing.views.length === 0, JSON.stringify(nothing.views));
 check("没有 cookie → 没有去问门户", portalCalls === before, String(portalCalls));
 
 /**
@@ -227,7 +230,7 @@ function legacyQiniuQuotas(provider: any, quota: any): any[] {
   ];
 }
 
-const pluginViews = qiniuQuotaPlugin.quotas(QINIU_ACCOUNT, QUOTA);
+const pluginViews = probed.views;
 const legacyViews = legacyQiniuQuotas(QINIU_ACCOUNT, QUOTA);
 check(
   "插件的输出与迁移前逐字段相同",
@@ -260,33 +263,18 @@ check(
   `${pluginViews[0]?.upstreamId} / ${pluginViews[0]?.accountId}`,
 );
 
-const emptyQuota = {
-  respacks: parseRespackOverview({
-    code: 200,
-    data: { records: OVERVIEW.data.records.map((row) => ({ ...row, month_remain: "0" })) },
-  }),
-  at: 1767225600000,
+// 门户答「全是 0」：翻成 no_quota，而且不再给数字 —— 数字全零说的是「一包都不剩」，
+// 这时候面板要的是一句话。
+portalBody = {
+  code: 200,
+  data: { records: OVERVIEW.data.records.map((row) => ({ ...row, month_remain: "0" })) },
 };
-check(
-  "两个包都空了 → 用尽",
-  qiniuQuotaPlugin.outOfCredits?.(QINIU_ACCOUNT, emptyQuota) === true,
-);
-check(
-  "还有一个包有剩 → 没用尽",
-  qiniuQuotaPlugin.outOfCredits?.(QINIU_ACCOUNT, QUOTA) === false,
-);
-check(
-  "没读到额度 → 不知道，不算用尽",
-  qiniuQuotaPlugin.outOfCredits?.(QINIU_ACCOUNT, null) === false,
-);
-check(
-  "读不出来的那一份 → 没有额度",
-  qiniuQuotaPlugin.quotas(QINIU_ACCOUNT, null).length === 0,
-);
-check(
-  "恢复时间不知道",
-  qiniuQuotaPlugin.recoverAt?.(QINIU_ACCOUNT, emptyQuota) === null,
-);
+const drained = await qiniuQuotaPlugin.probe(QINIU_ACCOUNT);
+check("两个包都空了 → no_quota", drained.state === "no_quota", JSON.stringify(drained));
+check("见底不给数字", drained.views.length === 0, JSON.stringify(drained.views));
+check("见底那句话说了「用尽」", drained.message.includes("用尽"), drained.message);
+check("见底没有恢复时刻（资源包不会长回来）", drained.recoverAt === null, String(drained.recoverAt));
+portalBody = OVERVIEW;
 
 // 插件要的那一份凭据：门户 cookie 那一段。
 const cookieField = qiniuQuotaPlugin.fields.find((f) => f.name === "account");
@@ -317,7 +305,7 @@ const kindSnapshot = {
   tokenrhythm: {},
   sensenova: {},
   internAi: {},
-  plugins: { [qiniuQuotaPlugin.id]: { [QINIU_ACCOUNT.id]: QUOTA } },
+  plugins: { [qiniuQuotaPlugin.id]: { [QINIU_ACCOUNT.id]: OK_PROBE } },
 } as any;
 check(
   "种类转给插件之后，数字还是那些",
@@ -387,12 +375,12 @@ function snapshotWithPlugins(plugins: Record<string, Record<string, unknown>>): 
 }
 
 const openKind = kindOf("openai");
-const withData = snapshotWithPlugins({ qiniu: { "quota-demo": QUOTA } });
+const withData = snapshotWithPlugins({ qiniu: { "quota-demo": OK_PROBE } });
 const openViews = openKind?.quotas(openAccount("quota-demo"), withData) ?? [];
 check("选了插件、快照里有数据 → 有额度视图", openViews.length === 1, String(openViews.length));
 check(
   "额度视图与插件算出来的一样",
-  same(openViews, qiniuQuotaPlugin.quotas(openAccount("quota-demo"), QUOTA)),
+  same(openViews, probed.views.map((view) => ({ ...view, upstreamId: "quota-demo", accountId: "quota-demo" }))),
 );
 check(
   "选了插件、快照里有数据 → 用尽判定照插件说的",
@@ -403,7 +391,7 @@ check(
   (openKind?.recoverAt?.(openAccount("quota-demo"), withData) ?? null) === null,
 );
 
-const withoutEntry = snapshotWithPlugins({ qiniu: { "somebody-else": QUOTA } });
+const withoutEntry = snapshotWithPlugins({ qiniu: { "somebody-else": OK_PROBE } });
 check(
   "快照里没有这个账号的那一份 → 没有额度视图",
   (openKind?.quotas(openAccount("quota-demo"), withoutEntry) ?? []).length === 0,
@@ -566,11 +554,14 @@ check("门户 cookie 有掩码", Boolean(rows[1]?.masked), String(rows[1]?.maske
 check("门户 cookie 有指纹", Boolean(rows[1]?.fingerprint), String(rows[1]?.fingerprint));
 
 const e2eAccount = provider(e2eId) as any;
-const e2ePayload = await qiniuQuotaPlugin.fetch(e2eAccount);
-check("插件从开放平台的账号上问到了额度", e2ePayload !== null, JSON.stringify(e2ePayload));
-const e2eViews = qiniuQuotaPlugin.quotas(e2eAccount, e2ePayload);
-check("额度读得到", e2eViews.length === 1, JSON.stringify(e2eViews));
-check("剩下的还是那些", e2eViews[0]?.credits?.remaining === 5000, JSON.stringify(e2eViews[0]?.credits));
+const e2eProbe = await qiniuQuotaPlugin.probe(e2eAccount);
+check("插件从开放平台的账号上问到了额度", e2eProbe.state === "ok", JSON.stringify(e2eProbe));
+check("额度读得到", e2eProbe.views.length === 1, JSON.stringify(e2eProbe.views));
+check(
+  "剩下的还是那些",
+  e2eProbe.views[0]?.credits?.remaining === 5000,
+  JSON.stringify(e2eProbe.views[0]?.credits),
+);
 
 // 只给推理 key：额度是「不知道」，不是「没有」。
 // 这个平台选了七牛那个插件（它要一段门户 cookie），所以数组得两段：短的数组
@@ -583,10 +574,9 @@ const setBare = setProviderKeys(bareId, ["sk-demo-bare", ""]);
 check("只写进去一段", setBare.count === 1, String(setBare.count));
 check("门户 cookie 那段是空的", pluginFieldOf(bareId, "account") === "", pluginFieldOf(bareId, "account"));
 const bareAccount = provider(bareId) as any;
-const barePayload = await qiniuQuotaPlugin.fetch(bareAccount);
-check("没有门户 cookie → 拿不到额度", barePayload === null, JSON.stringify(barePayload));
-check("没有额度视图", qiniuQuotaPlugin.quotas(bareAccount, barePayload).length === 0);
-check("不算用尽", qiniuQuotaPlugin.outOfCredits?.(bareAccount, barePayload) === false);
+const bareProbe = await qiniuQuotaPlugin.probe(bareAccount);
+check("没有门户 cookie → missing", bareProbe.state === "missing", JSON.stringify(bareProbe));
+check("没有额度视图", bareProbe.views.length === 0, JSON.stringify(bareProbe.views));
 
 // 平台没选插件却给了两把 key：多的那把没地方去，忽略掉，不报错。
 const plain = addAccount({ platform: "quota-demo-none" });
@@ -652,10 +642,10 @@ registerQuotaPlugin({
   id: "boom-plugin",
   label: "会炸的插件",
   fields: [],
-  fetch: async () => {
+  // 插件不该 reject（翻不动的都归 unknown）。这里故意违约：网关不许因此把整轮带挂。
+  probe: async () => {
     throw new Error("这个插件故意炸");
   },
-  quotas: () => [],
 });
 
 // 一个插件，两个账号用：这一轮谁能问、谁问不到是测试说了算。
@@ -664,11 +654,10 @@ registerQuotaPlugin({
   id: "two-accounts",
   label: "两个账号的插件",
   fields: [],
-  fetch: async (account) => {
+  probe: async (account) => {
     if (account.id === twoState.failFor) throw new Error("这一轮这个账号问不到");
-    return { who: account.id };
+    return { state: "ok", views: [], recoverAt: null, message: account.id };
   },
-  quotas: () => [],
 });
 
 // 四种开放平台：选了插件的、没选插件的、插件没登记的、插件会炸的。
@@ -742,12 +731,13 @@ try {
 }
 check("刷新不抛", !refreshThrew);
 
-const livePayload = pluginBucket().qiniu?.[liveId];
-check("额度被写进插件桶", Boolean(livePayload), JSON.stringify(livePayload));
+const livePayload = pluginBucket().qiniu?.[liveId] as any;
+check("结论被写进插件桶", Boolean(livePayload), JSON.stringify(livePayload));
+check("写进去的是 ok", livePayload?.state === "ok", JSON.stringify(livePayload));
 check(
-  "写进去的是门户那份",
-  Array.isArray((livePayload as any)?.respacks) && (livePayload as any).respacks.length === 2,
-  JSON.stringify(livePayload),
+  "写进去的带着面板那几行",
+  livePayload?.views?.[0]?.credits?.lots?.length === 2,
+  JSON.stringify(livePayload?.views),
 );
 check(
   "凭据表里两段都在",
@@ -762,7 +752,11 @@ check("剩下的是两个包之和", liveViews[0]?.credits?.remaining === 5000, 
 
 check("没选插件的账号没有份", !hasPluginEntry(noneLiveId));
 check("插件没登记的账号没有份", !hasPluginEntry(badLiveId));
-check("插件问炸了的账号没有份", !hasPluginEntry(boomLiveId));
+check(
+  "插件问炸了 → 结论是 unknown（写进去，不冒充没有）",
+  (pluginBucket()["boom-plugin"]?.[boomLiveId] as any)?.state === "unknown",
+  JSON.stringify(pluginBucket()["boom-plugin"]),
+);
 check(
   "插件问炸了 → warn 一行，说的是那个账号与那个插件",
   refreshWarnings.some(
@@ -780,12 +774,13 @@ check(
 check("两个账号都有份", hasPluginEntry(twoAId) && hasPluginEntry(twoBId));
 check(
   "两个账号各是各的",
-  (pluginBucket()["two-accounts"]?.[twoAId] as any)?.who === twoAId &&
-    (pluginBucket()["two-accounts"]?.[twoBId] as any)?.who === twoBId,
+  (pluginBucket()["two-accounts"]?.[twoAId] as any)?.message === twoAId &&
+    (pluginBucket()["two-accounts"]?.[twoBId] as any)?.message === twoBId,
   JSON.stringify(pluginBucket()["two-accounts"]),
 );
 
-// 下一轮只问得到一个：另一个这一轮没问到，它的旧份要删掉（与具名桶同语义）。
+// 下一轮只问得到一个：另一个这一轮问炸了，它那份变成 unknown —— 旧数字不留，
+// 也不冒充「问到了」。
 twoState.failFor = twoBId;
 let mergeThrew = false;
 try {
@@ -797,11 +792,18 @@ check("单平台刷新不抛", !mergeThrew);
 const merged = pluginBucket();
 check("问到的那个账号还在", Boolean(merged["two-accounts"]?.[twoAId]), JSON.stringify(merged["two-accounts"]));
 check(
-  "没问到的那个账号，旧份被删掉",
-  merged["two-accounts"]?.[twoBId] === undefined,
-  JSON.stringify(merged["two-accounts"]),
+  "问炸的那个账号，那份变成 unknown",
+  (merged["two-accounts"]?.[twoBId] as any)?.state === "unknown",
+  JSON.stringify(merged["two-accounts"]?.[twoBId]),
 );
-check("没问到的账号在插件桶里没有份", !hasPluginEntry(twoBId));
+// 平台行不再指名插件：这一轮没人去问，两个账号的旧份都该走（与具名桶同语义）。
+updateOpenPlatform("quota-live-two", { quotaPlugin: "" });
+await upstreamQuotas("quota-live-two", true, true);
+check(
+  "不再指名插件 → 两个账号的旧份都没了",
+  !hasPluginEntry(twoAId) && !hasPluginEntry(twoBId),
+  JSON.stringify(pluginBucket()["two-accounts"]),
+);
 check(
   "别的平台的份没被动",
   Boolean(merged.qiniu?.[liveId]) && Boolean(merged["two-accounts"]?.[twoAId]),

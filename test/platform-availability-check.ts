@@ -124,13 +124,12 @@ check(
 
 // 额度用尽：还是就绪的样子，但接不了。
 // 额度由平台那一行指名的插件问回来：指名它，快照里那份才读得到。
+// 快照里存的是那一次的结论（状态 + 面板那几行），不是门户的原样答复。
 updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 putHealthSnapshot({
   plugins: {
     [qiniuQuotaPlugin.id]: {
-      [accountId]: {
-        respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }],
-      },
+      [accountId]: { state: "no_quota", views: [], recoverAt: null, message: "资源包全部用尽" },
     },
   },
 } as any);
@@ -255,9 +254,7 @@ function qoderSessionSecret(): Record<string, unknown> {
 putHealthSnapshot({
   plugins: {
     [qiniuQuotaPlugin.id]: {
-      [accountId]: {
-        respacks: [{ itemCode: "respack-general", total: 100, used: 100, remaining: 0 }],
-      },
+      [accountId]: { state: "no_quota", views: [], recoverAt: null, message: "资源包全部用尽" },
     },
   },
 } as any);
