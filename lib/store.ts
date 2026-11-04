@@ -22,6 +22,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
+// 平台模板表（叶子模块，不引任何东西）：迁移要把那几行补进 platform 表。
+import { PLATFORM_TEMPLATES } from "./platform-catalog.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -151,6 +153,8 @@ export function store(): DatabaseSync {
       models       TEXT NOT NULL DEFAULT '[]',
       models_auto  INTEGER NOT NULL DEFAULT 1,
       quota_plugin TEXT NOT NULL DEFAULT '',
+      kind         TEXT NOT NULL DEFAULT 'openai',
+      region       TEXT NOT NULL DEFAULT '',
       created_at   INTEGER NOT NULL,
       updated_at   INTEGER NOT NULL
     )`,
@@ -169,6 +173,7 @@ export function store(): DatabaseSync {
   );
   migrateProviderToAccounts(db);
   migrateProviderWeight(db);
+  migratePlatforms(db);
   return db;
 }
 
@@ -259,6 +264,62 @@ function migrateProviderWeight(db: DatabaseSync): void {
   }
 }
 
+
+/**
+ * 平台表的两件迁移：补两列，再把那几行模板补进去。
+ *
+ * 导出：测试要能单独再跑一次（老库模拟），迁移本身得能被调用。
+ */
+export function migratePlatforms(db: DatabaseSync): void {
+  migratePlatformColumns(db);
+  seedPlatformTemplates(db);
+}
+
+/**
+ * 平台表补两列：kind 与 region。
+ *
+ * `kind` 是「怎么跟它说话」（kind 注册表里的那一类），`region` 是「在哪个区域」。
+ * 这两样以前只存在于代码里的模板（lib/platform-templates.ts），平台迁进表里就得
+ * 有地方放。旧库没有这两列：补上，缺的那一列按缺省算（kind 是 openai ——
+ * 表里那些行都是用户自己加的开放平台；region 是空串）。
+ */
+function migratePlatformColumns(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(platform)").all() as { name?: string }[];
+  const has = (name: string) => columns.some((c) => c.name === name);
+  if (!has("kind")) db.exec("ALTER TABLE platform ADD COLUMN kind TEXT NOT NULL DEFAULT 'openai'");
+  if (!has("region")) db.exec("ALTER TABLE platform ADD COLUMN region TEXT NOT NULL DEFAULT ''");
+}
+
+/**
+ * 把那五个还没迁完的平台补成表里的行。
+ *
+ * 幂等：已经有的行不动（INSERT OR IGNORE）—— 用户改过的名字与地址不能被启动
+ * 时的迁移顺手抹掉。模型目录是空的（自动拉，让上游自己报），额度插件是空的
+ * （插件是用户填的）。
+ */
+function seedPlatformTemplates(db: DatabaseSync): void {
+  const insert = db.prepare(
+    "INSERT OR IGNORE INTO platform " +
+      "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+      "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+  );
+  const now = Date.now();
+  for (const t of PLATFORM_TEMPLATES) {
+    insert.run(
+      t.suggestedId,
+      t.label,
+      t.defaultBaseUrl,
+      // 空的目录（跟 createOpenPlatform 写进去的形状一样：auto 那一格在列上，
+      // JSON 里只有模型名、上次拉的时刻与来源）。
+      JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }),
+      t.quotaPlugin,
+      t.kind,
+      t.region,
+      now,
+      now,
+    );
+  }
+}
 
 /** 旧行（kind + region）属于哪个平台。 */
 function platformOfLegacyRow(kind: string, region: string): string {

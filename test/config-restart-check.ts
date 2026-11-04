@@ -177,6 +177,22 @@ async function publishedOnRoot(): Promise<string[]> {
   return (body?.data ?? []).map((m: any) => String(m.id));
 }
 
+/**
+ * 一个平台名下那个唯一账号的 id。
+ *
+ * 账号 id 与平台 id 是两回事（前者是自增整数，后者是 `qoder` 这种）：开关按
+ * 账号 id 认人，拿平台 id 去改只会改到一个不存在的账号，断言就恒真了。
+ *
+ * 只认「唯一」账号：这一段的断言都是「把这个账号关掉，平台就不可用」，名下
+ * 不止一个账号时那句话不成立，所以这里直接炸，而不是随便挑一个。
+ */
+async function onlyAccountId(platform: string): Promise<string> {
+  const body = await admin("ListUpstreams");
+  const accounts = (body.upstreams ?? []).find((u: any) => u.id === platform)?.accounts ?? [];
+  if (accounts.length !== 1) throw new Error(`${platform} 名下的账号不是 1 个：${accounts.length}`);
+  return String(accounts[0].id);
+}
+
 /** 数据库里的配置表。 */
 function configRows(): { key: string; value: string }[] {
   const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"), { readOnly: true });
@@ -206,8 +222,10 @@ section("改之前");
 // 开关挂在账号上（provider 表一行一个账号），一个平台「开着」= 它名下至少
 // 一个账号开着。这一节要的是「全关着」，所以先把两个测试账号关掉 —— 这是布置，
 // 不是检查项。
-for (const id of ["qoder", "workbuddy-cn"]) {
-  await admin("SetAccountEnabled", { accountId: id, enabled: false });
+const qoderAccountId = await onlyAccountId("qoder");
+const workbuddyAccountId = await onlyAccountId("workbuddy-cn");
+for (const accountId of [qoderAccountId, workbuddyAccountId]) {
+  await admin("SetAccountEnabled", { accountId, enabled: false });
 }
 
 const before = await admin("GetSystemStatus");
@@ -252,13 +270,13 @@ check(
 
 section("改一个账号的开关");
 
-const switched = await admin("SetAccountEnabled", { accountId: "qoder", enabled: true });
+const switched = await admin("SetAccountEnabled", { accountId: qoderAccountId, enabled: true });
 check("面板能把账号打开", switched.ok === true, JSON.stringify(switched));
 check("改完没有待重启的东西", switched.pendingRestart === false, JSON.stringify(switched));
 
 // The switch lives in the provider table now, not in the config table.
 const rows = providerRows();
-const qoderRow = rows.find((r) => r.id === "qoder");
+const qoderRow = rows.find((r) => r.id === qoderAccountId);
 check("值进了数据库", qoderRow?.enabled === 1, JSON.stringify(rows));
 
 // 开关不在配置页里（上游那一页管），所以「读回来」问的是上游列表。
@@ -318,7 +336,7 @@ const hot = (listedModels.models ?? []).find((m: any) => m.id === "hot");
 check("面板说它已经公布了", hot?.published === true, JSON.stringify(hot));
 
 // 把账号关掉：模型还在库里，但没人能接了。
-await admin("SetAccountEnabled", { accountId: "qoder", enabled: false });
+await admin("SetAccountEnabled", { accountId: qoderAccountId, enabled: false });
 const rootAfterOff = await publishedOnRoot();
 check("账号一关，根路由就不公布了", !rootAfterOff.includes("hot"), JSON.stringify(rootAfterOff));
 const listedAfterOff = await admin("ListPublishedModels");
@@ -327,7 +345,7 @@ check("面板说它没有公布了", hotAfterOff?.published === false, JSON.stri
 check("模型还在库里", hotAfterOff?.id === "hot", JSON.stringify(hotAfterOff));
 
 // 再打开：立刻又公布了。
-await admin("SetAccountEnabled", { accountId: "qoder", enabled: true });
+await admin("SetAccountEnabled", { accountId: qoderAccountId, enabled: true });
 const rootAfterOn = await publishedOnRoot();
 check("账号再开，根路由又公布了", rootAfterOn.includes("hot"), JSON.stringify(rootAfterOn));
 const listedAfterOn = await admin("ListPublishedModels");
@@ -499,7 +517,7 @@ check("带钥匙就过（只是模型不存在，不是 401）", withKey.status 
 
 // 收尾：把前门关回去，把 Qoder 也关回去。
 await admin("SetConfig", { key: "REQUIRE_API_KEY", value: "false" });
-await admin("SetAccountEnabled", { accountId: "qoder", enabled: false });
+await admin("SetAccountEnabled", { accountId: qoderAccountId, enabled: false });
 const finalHealth = await health();
 check("收尾之后前门又开着", finalHealth.auth === "public", JSON.stringify(finalHealth.auth));
 check("收尾之后账号又关着", upstreamOn(finalHealth, "qoder") === false, JSON.stringify(finalHealth.providers));

@@ -44,39 +44,9 @@ fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 // so the environment has to point there first — otherwise this would write into
 // the machine's own database.
 process.env.BUDDY_DATA_DIR = DATA_DIR;
-const { setSecret } = await import("../lib/store.ts");
-{
-  const now = Date.now();
-  setSecret("session:provider:qoder", "session", {
-    schemaVersion: 1,
-    region: "global",
-    clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
-    accessToken: "dt-test-token",
-    refreshToken: "drt-test-token",
-    userId: "test-user",
-    expiresAtMs: now + 365 * 24 * 3600 * 1000,
-    refreshExpiresAtMs: now + 365 * 24 * 3600 * 1000,
-    machineId: "test-machine",
-    machineToken: "test-machine-token",
-    machineType: "test",
-    generation: 1,
-    loginAtMs: now,
-    refreshedAtMs: now,
-  });
-  setSecret("session:provider:workbuddy-cn", "session", {
-    accessToken: "wb-test-token",
-    refreshToken: "wb-test-refresh",
-    uid: "test-user",
-    nickname: "tester",
-    domain: "127.0.0.1",
-    region: "cn",
-    generation: 1,
-    expiresAtMs: now + 365 * 24 * 3600 * 1000,
-    refreshExpiresAtMs: now + 365 * 24 * 3600 * 1000,
-    loginAtMs: now,
-    refreshedAtMs: now,
-  });
-}
+// 账号与会话由 test/fake-sessions.ts 写（它在网关起来之前跑）：一份种的来源就够。
+// 早先这里还直接按平台名写过一份会话，账号 id 变成自增整数之后那些格子指向
+// 不存在的账号，等于没写。
 
 const mock = spawn(process.execPath, ["--experimental-strip-types", "test/mock-server.ts", String(mockPort)], {
   cwd: ROOT,

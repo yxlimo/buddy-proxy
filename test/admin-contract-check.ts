@@ -257,6 +257,9 @@ const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim()
 // 所以按面板的做法加一个，再往它的会话那一格写一份会话。
 const seeded = await call("AddAccount", { platform: "qoder", alias: "契约测试账号" });
 const seededId = String(seeded.body?.id ?? "");
+// 账号 id 是自增整数，面板给什么就用什么；空串以往会让后面的开关调用指向
+// 一个不存在的账号，而断言却照样通过。
+if (!seededId) throw new Error(`AddAccount 没有给出账号 id：${seeded.text.slice(0, 200)}`);
 {
   const conn = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
   conn.exec("PRAGMA busy_timeout = 5000");
@@ -321,7 +324,8 @@ console.log("契约：三十八个方法");
 const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "GetSystemStatus", request: {} },
   { method: "ListUpstreams", request: {} },
-  { method: "SetAccountEnabled", request: { accountId: "qoder", enabled: true } },
+  // 开关按账号 id 认人，平台 id 不是账号 id。
+  { method: "SetAccountEnabled", request: { accountId: seededId, enabled: true } },
   { method: "ListConfig", request: {} },
   // 用一个后面不会改的键：后面要验「改之前没有待重启」。
   { method: "SetConfig", request: { key: "REQUIRE_API_KEY", value: "false" } },

@@ -31,7 +31,7 @@ function section(name: string): void {
 const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
-const { platformOf } = await import("../lib/platforms.ts");
+const { platformOfAny } = await import("../lib/platforms.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { listAccounts } = await import("../lib/admin/accounts.ts");
@@ -61,7 +61,8 @@ const kind = kindOf("xinghuo");
 check("种类在", kind !== null, String(kind));
 check("名字是讯飞星火", kind?.label === "讯飞星火", String(kind?.label));
 check("登录方式是 api_key", kind?.login === "api_key", String(kind?.login));
-check("平台在", platformOf("xinghuo") !== null, String(platformOf("xinghuo")));
+// 星火现在在平台表里（不再在代码里的模板里）：两处数据源合起来才认得它。
+check("平台在", platformOfAny("xinghuo") !== null, String(platformOfAny("xinghuo")));
 check(
   "收 single 与 fallback",
   policiesOfKind("xinghuo").join(",") === "single,fallback",

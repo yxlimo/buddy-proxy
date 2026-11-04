@@ -462,16 +462,19 @@ function qoderSession(now: number): unknown {
  * 把 Qoder 的账号与会话种进去。
  *
  * 网关已经起来了才种：启动时没有账号，就不会有设备登录（那会真的去问平台）。
+ * 账号 id 是自增整数：种好之后把它记下来，会话删/还都挂那一格。
  */
-function seedQoderAccount(): void {
+let seededQoderId = "";
+async function seedQoderAccount(): Promise<void> {
+  // 建行走网关自己的 AddAccount（那个进程才是这个库的主人），再按它给的 id
+  // 把会话写进去。
+  const made = await admin("AddAccount", { platform: "qoder", alias: "测试 Qoder" });
+  seededQoderId = String(made?.id ?? "");
+  if (made?.ok !== true || !seededQoderId) throw new Error(`qoder 的账号建不出来：${JSON.stringify(made)}`);
   const now = Date.now();
   withDb((db) => {
-    db.prepare(
-      "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run("qoder", "qoder", "测试 Qoder", 1, 100, now, now);
     db.prepare("INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?)").run(
-      "session:provider:qoder",
+      `session:provider:${seededQoderId}`,
       "session",
       JSON.stringify(qoderSession(now)),
       now,
@@ -482,7 +485,7 @@ function seedQoderAccount(): void {
 /** 把会话拿走：这个账号开着，但没有凭据了。 */
 function dropQoderSession(): void {
   withDb((db) => {
-    db.prepare("DELETE FROM secrets WHERE id = ?").run("session:provider:qoder");
+    db.prepare("DELETE FROM secrets WHERE id = ?").run(`session:provider:${seededQoderId}`);
   });
 }
 
@@ -491,7 +494,7 @@ function restoreQoderSession(): void {
   const now = Date.now();
   withDb((db) => {
     db.prepare("INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?)").run(
-      "session:provider:qoder",
+      `session:provider:${seededQoderId}`,
       "session",
       JSON.stringify(qoderSession(now)),
       now,
@@ -527,9 +530,12 @@ function addOpenPlatform(id: string): void {
 }
 
 // 账号与会话。
-seedQoderAccount();
+await seedQoderAccount();
 const added = await admin("AddAccount", { platform: "qiniu", alias: "测试七牛" });
 check("面板能加一个七牛云的账号", added.ok === true, JSON.stringify(added));
+// 账号 id 是面板起的（自增数）：开关、冷却都挂在它上面，不是平台 id。
+const qiniuAccountId = String(added.id ?? "");
+check("七牛账号的 id 拿到了", /^\d+$/.test(qiniuAccountId), qiniuAccountId);
 
 // 发布两个模型：一个指向有凭据的 Qoder，一个指向没有凭据的七牛云。
 const publish = async (id: string, groupName: string, upstreamModel: string): Promise<any> =>
@@ -571,7 +577,7 @@ check(
   JSON.stringify(noCredential.json),
 );
 
-await admin("SetAccountEnabled", { accountId: "qiniu", enabled: false });
+await admin("SetAccountEnabled", { accountId: qiniuAccountId, enabled: false });
 const offAnswer = await chat("qiniu", "deepseek/deepseek-v4.1-flash-1017");
 check("账号都关着的时候请求被拒了", offAnswer.status === 400, `HTTP ${offAnswer.status}`);
 check(
@@ -579,7 +585,7 @@ check(
   String(offAnswer.json?.error?.message ?? "").includes("no account turned on"),
   JSON.stringify(offAnswer.json),
 );
-await admin("SetAccountEnabled", { accountId: "qiniu", enabled: true });
+await admin("SetAccountEnabled", { accountId: qiniuAccountId, enabled: true });
 
 section("根路由：发布过的模型，目标平台没凭据");
 
@@ -628,7 +634,7 @@ check("请求真的走到了那个上游", fake.seen.length === 1 && fake.seen[0
 
 section("冷却中：答 503 并说什么时候恢复");
 
-writeCooldown("qoder", Date.now() + 10 * 60_000);
+writeCooldown(seededQoderId, Date.now() + 10 * 60_000);
 const coolingAnswer = await chat("qoder", "glm-5.3");
 check("冷却的时候答 503", coolingAnswer.status === 503, `HTTP ${coolingAnswer.status} ${coolingAnswer.text.slice(0, 160)}`);
 check("提示里说了在冷却", String(coolingAnswer.json?.hint ?? "").includes("冷却"), JSON.stringify(coolingAnswer.json));
@@ -637,7 +643,7 @@ check(
   String(coolingAnswer.json?.hint ?? "").includes("qoder"),
   JSON.stringify(coolingAnswer.json),
 );
-clearCooldownRow("qoder");
+clearCooldownRow(seededQoderId);
 const afterCooldown = await chat("qoder", "glm-5.3");
 check("冷却结束之后又通了", afterCooldown.status === 200, `HTTP ${afterCooldown.status}`);
 

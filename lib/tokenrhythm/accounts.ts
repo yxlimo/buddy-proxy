@@ -20,11 +20,11 @@
 // inference. They are different things on the platform: the key cannot read
 // the wallet, and the session cannot call the models.
 //
-// The old shape is read once and moved over on the way (see `legacyIndex`):
-// the tenants used to live on the platform row, numbered in their ids
-// (`key:provider:tokenrhythm:tenant-2`, `account:tokenrhythm:2`) and in the
-// environment (`TOKEN_RHYTHM_2_*`). Those numbers map to the account rows the
-// account model gives them: 1 → `tokenrhythm`, 2 → `tokenrhythm-2`, …
+// The old shape is gone: the tenants used to live on the platform row, numbered
+// in their ids (`key:provider:tokenrhythm:tenant-2`, `account:tokenrhythm:2`).
+// Those records were moved onto account rows once and the old copy is not read
+// any more — reading it back would hand a brand new account the identity of an
+// old tenant, and the account ids say nothing about tenancy any more.
 
 import { configString } from "../config.ts";
 import { writeSession } from "../session.ts";
@@ -36,7 +36,7 @@ import { registerLoginFlow, type LoginContext, type LoginTicket, type SubmitInpu
 export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
 export const TOKENRHYTHM_INFER_BASE = configString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
 
-/** The platform id. Also the id of the account row the first tenant lands on. */
+/** The platform id. */
 const PLATFORM = "tokenrhythm";
 
 /** One account: what logs in, and the key the inference uses. */
@@ -53,38 +53,11 @@ export function tokenRhythmCredentialSecretId(accountId: string): string {
 }
 
 /**
- * 旧租户号（1、2、3……）的凭据存在哪。
- *
- * 只读：启动时归位（lib/store.ts 的 migrateTokenRhythmTenants）已经把旧的搬
- * 到账号行上并删掉了旧的。这里留着是给还没归位的旧库兜底。
- */
-function legacyCredentialIds(index: number): string[] {
-  return [providerSecretId(PLATFORM, `tenant-${index}`), `account:tokenrhythm:${index}`];
-}
-
-/**
- * The tenant number an account id came from.
- *
- * The old ids were numbered; the account ids the account model gives them keep
- * that number (`tokenrhythm`, `tokenrhythm-2`).
- */
-function legacyIndex(accountId: string): number | null {
-  if (accountId === PLATFORM) return 1;
-  const match = new RegExp(`^${PLATFORM}-(\\d+)$`).exec(accountId);
-  if (!match) return null;
-  const index = Number(match[1]);
-  return Number.isInteger(index) && index > 0 ? index : null;
-}
-
-/**
  * 账号行的凭据。
  *
- * 旧库里的凭据按租户号存着（`account:tokenrhythm:2`……）。那些在启动时已经
- * 归位到账号行上了（见 lib/store.ts 的 migrateTokenRhythmTenants）：搬完旧的
- * 就删掉，所以这里只读新位置。
- *
- * 早先这里是「读到旧的就搬过来」—— 那会让**新建**的账号继承一个旧租户的
- * 身份（账号 id 恰好也是 `tokenrhythm-2`）：不是新建，那是接管。
+ * 只读新位置（`key:provider:<id>:account`）。旧库里的凭据按租户号存着，早已
+ * 归位到账号行上；再读旧位置会让**新建**的账号继承一个旧租户的身份 ——
+ * 不是新建，那是接管。
  */
 export function tokenRhythmCredentialOf(accountId: string): TokenRhythmCredential | null {
   const id = tokenRhythmCredentialSecretId(accountId);
@@ -143,11 +116,6 @@ export function sessionId(accountId: string): string {
   return providerSecretId(accountId);
 }
 
-/** Where a tenant's session used to live, as a row of its own. */
-function legacySessionId(index: number): string {
-  return `session:tokenrhythm:${index}`;
-}
-
 /** Is this session one the platform would still accept? */
 function validSession(raw: any): boolean {
   if (!raw?.cookie) return false;
@@ -194,43 +162,16 @@ export function saveSession(
 /** Forget the session of an account: the next call logs in again. */
 export function forgetSession(accountId: string): void {
   if (getSecret(sessionId(accountId))) deleteSecret(sessionId(accountId));
-  const index = legacyIndex(accountId);
-  if (index !== null && getSecret(legacySessionId(index))) deleteSecret(legacySessionId(index));
 }
 
 /**
- * 注销：把这个账号的凭据全删掉，旧的那一份也删。
+ * 注销：把这个账号的凭据全删掉。
  *
- * 旧的那一份要删，否则下一次读又把它搬冐来 —— 面板上「注销」过的账号会自己
- * 带着登录态回来。
+ * 只删它自己那一份（`key:provider:<id>:account` 与 `session:provider:<id>`）：
+ * 删账号要留下的只有请求日志与聚合统计，所以这里删完就没痕迹了。
  */
-/**
- * 删掉一个账号在**旧位置**留下的记录。
- *
- * 旧库把每个租户的凭据与登录态按租户号存着（`account:tokenrhythm:2`、
- * `session:tokenrhythm:2`、`key:provider:tokenrhythm:tenant-2`）。删账号时只
- * 删新位置（`key:provider:<id>:…`）的话，这些尾巴会留着 —— 而启动时的归位
- * 看到它们就会把账号带回来：删了又活，凭据还串着。
- *
- * 所以删账号要把旧位置一起删干净：删干净了，系统里就没有它的痕迹了。
- */
-export function forgetLegacyTenantRecords(accountId: string): number {
-  const index = legacyIndex(accountId);
-  if (index === null) return 0;
-  const ids = [...legacyCredentialIds(index), legacySessionId(index)];
-  let removed = 0;
-  for (const id of ids) {
-    if (!getSecret(id)) continue;
-    deleteSecret(id);
-    removed++;
-  }
-  return removed;
-}
-
 export function forgetTokenRhythmCredential(accountId: string): number {
   const ids = [tokenRhythmCredentialSecretId(accountId), sessionId(accountId)];
-  const index = legacyIndex(accountId);
-  if (index !== null) ids.push(...legacyCredentialIds(index), legacySessionId(index));
   let removed = 0;
   for (const id of ids) {
     if (!getSecret(id)) continue;

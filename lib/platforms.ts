@@ -61,7 +61,10 @@ export function allPlatforms(): Platform[] {
       }
       continue;
     }
-    extra.push({ id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" });
+    // kind 与 region 取这一行自己的：表里那些行各有各的种类（七牛云、星火、
+    // SenseNova、书生·端砚、TokenRhythm），填成统一的开放平台就把它们那一族
+    // 的差别抹掉了。
+    extra.push({ id: row.id, kind: row.kind, label: row.label, region: row.region });
   }
   return [...PLATFORMS, ...extra];
 }
@@ -71,7 +74,7 @@ export function platformOfAny(id: string): Platform | null {
   const template = BY_ID.get(id);
   if (template) return template;
   const row = openPlatformOf(id);
-  return row ? { id: row.id, kind: OPEN_PLATFORM_KIND_NAME, label: row.label, region: "" } : null;
+  return row ? { id: row.id, kind: row.kind, label: row.label, region: row.region } : null;
 }
 
 /** 这个 id 是哪个平台。不认识的 id 就是 null。 */

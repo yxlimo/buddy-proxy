@@ -79,14 +79,18 @@ function stubKind(kind: string): void {
 stubKind("tokenrhythm");
 stubKind("qiniu");
 
-addAccount({ platform: "tokenrhythm", alias: "第一个" });
-addAccount({ platform: "qiniu", alias: "第二个" });
+const rhythmAccount = addAccount({ platform: "tokenrhythm", alias: "第一个" });
+const qiniuAccount = addAccount({ platform: "qiniu", alias: "第二个" });
 
 console.log("定时刷新");
 
 await runPeriodicOnce();
 check("两个账号都刷了", refreshed.length === 2, JSON.stringify(refreshed));
-check("刷的是账号自己的 id", refreshed.includes("tokenrhythm") && refreshed.includes("qiniu"), JSON.stringify(refreshed));
+check(
+  "刷的是账号自己的 id",
+  refreshed.includes(rhythmAccount.id!) && refreshed.includes(qiniuAccount.id!),
+  JSON.stringify(refreshed),
+);
 check("余额也扫了", scanned.length === 2, JSON.stringify(scanned));
 
 console.log("");
@@ -108,7 +112,11 @@ check(
   warnings.filter((w) => w.includes("invalid_grant")).length === 2,
   JSON.stringify(warnings),
 );
-check("说的是哪个账号", warnings.some((w) => w.includes("tokenrhythm")), JSON.stringify(warnings));
+check(
+  "说的是哪个账号",
+  warnings.some((w) => w.includes(`[AUTH] ${rhythmAccount.id}:`)),
+  JSON.stringify(warnings),
+);
 
 console.log("");
 console.log("刷得出来之后就不再提这件事");

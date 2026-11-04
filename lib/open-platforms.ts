@@ -62,6 +62,10 @@ export interface OpenPlatformRow {
   models: OpenPlatformModels;
   /** 额度那一份的插件名（空串就是没有）。 */
   quotaPlugin: string;
+  /** 怎么跟它说话（kind 注册表里的那一类）。 */
+  kind: string;
+  /** 区域（空串就是没有）。 */
+  region: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -98,7 +102,7 @@ function isTemplateId(id: string): boolean {
 export function listOpenPlatforms(): OpenPlatformRow[] {
   const rows = store()
     .prepare(
-      "SELECT id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at " +
+      "SELECT id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at " +
         "FROM platform ORDER BY id",
     )
     .all() as any[];
@@ -109,7 +113,7 @@ export function listOpenPlatforms(): OpenPlatformRow[] {
 export function openPlatformOf(id: string): OpenPlatformRow | null {
   const row = store()
     .prepare(
-      "SELECT id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at " +
+      "SELECT id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at " +
         "FROM platform WHERE id = ?",
     )
     .get(id) as any;
@@ -372,6 +376,8 @@ function toRow(row: any): OpenPlatformRow {
     baseUrl: String(row.base_url ?? ""),
     models: parseModels(row.models, auto),
     quotaPlugin: String(row.quota_plugin ?? ""),
+    kind: String(row.kind ?? "openai"),
+    region: String(row.region ?? ""),
     createdAt: Number(row.created_at ?? 0),
     updatedAt: Number(row.updated_at ?? 0),
   };

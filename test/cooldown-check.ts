@@ -421,7 +421,7 @@ console.log("场景一：限流 —— 换到下一个账号，冷却到「重�
     check("冷却的理由写下来了", row?.reason === "rate-limit", String(row?.reason));
     check(
       "日志里看得见冷却",
-      /cooling down \(until [^)]+\), trying minimax-2/.test(gw.log()),
+      new RegExp(`cooling down \\(until [^)]+\\), trying ${gw.accounts[1]}`).test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {

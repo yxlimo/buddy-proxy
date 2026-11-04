@@ -17,7 +17,7 @@ const { parseRespackOverview } = await import("../lib/qiniu/quota.ts");
 const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
-const { platformOf } = await import("../lib/platforms.ts");
+const { platformOfAny } = await import("../lib/platforms.ts");
 
 let pass = 0;
 let fail = 0;
@@ -203,7 +203,7 @@ section("登记");
 check("种类在", kind !== null, String(kind));
 check("名字是七牛云", kind?.label === "七牛云", String(kind?.label));
 check("登录方式是 api_key", kind?.login === "api_key", String(kind?.login));
-check("平台在", platformOf("qiniu") !== null, String(platformOf("qiniu")));
+check("平台在", platformOfAny("qiniu") !== null, String(platformOfAny("qiniu")));
 check(
   "收 single 与 fallback",
   policiesOfKind("qiniu").join(",") === "single,fallback",

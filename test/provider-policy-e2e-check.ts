@@ -34,6 +34,18 @@ const MODEL = "deepseek-v4.1-flash-1017";
 let pass = 0;
 let fail = 0;
 
+/** 账号 id 里可能有正则的元字符，拼进正则前先转义。 */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** 网关里那些账号的 id（按建出来的先后排）。断言用它们，别写死 id。 */
+function accountIds(gw: Gateway): string[] {
+  const ids = gw.accounts ?? [];
+  if (ids.length < 2) throw new Error(`账号 id 不齐：${ids.join(",")}`);
+  return ids;
+}
+
 function check(name: string, ok: boolean, detail = ""): void {
   if (ok) {
     pass++;
@@ -391,7 +403,10 @@ console.log("场景一：单一 —— 第一个账号接不了，不换");
     check("答复是第二个账号给的", String(after.body?.choices?.[0]?.message?.content ?? "").includes("tenant 2"), after.text.slice(0, 200));
     check(
       "日志里说了为什么换",
-      /account=tokenrhythm cannot serve it \([^)]*\), trying tokenrhythm-2/.test(gw.log()),
+      new RegExp(
+        `account=${escapeRegExp(accountIds(gw)[0])} cannot serve it \\([^)]*\\), ` +
+          `trying ${escapeRegExp(accountIds(gw)[1])}`,
+      ).test(gw.log()),
       gw.log().slice(-400),
     );
 
@@ -451,7 +466,10 @@ console.log("场景五：降级 —— 第一个账号没钱，换到下一个")
     check("答复是第二个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 2"), res.text.slice(0, 200));
     check(
       "日志里说了是没钱所以换",
-      /account=tokenrhythm cannot serve it \([^)]*(no-balance|quota)[^)]*\), trying tokenrhythm-2/.test(gw.log()),
+      new RegExp(
+        `account=${escapeRegExp(accountIds(gw)[0])} cannot serve it ` +
+          `\\([^)]*(no-balance|quota)[^)]*\\), trying ${escapeRegExp(accountIds(gw)[1])}`,
+      ).test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {
@@ -514,7 +532,10 @@ console.log("场景六之二：余额到期优先 —— 那个账号没钱时�
     check("答复是另一个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 1"), res.text.slice(0, 200));
     check(
       "日志里说了余额不足所以重新扫描",
-      /account=tokenrhythm-2 cannot serve it \([^)]*(no-balance|quota)[^)]*\), rescanning the balances/.test(gw.log()),
+      new RegExp(
+        `account=${escapeRegExp(accountIds(gw)[1])} cannot serve it ` +
+          `\\([^)]*(no-balance|quota)[^)]*\\), rescanning the balances`,
+      ).test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {

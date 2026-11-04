@@ -60,14 +60,15 @@ process.env.WORKBUDDY_CHAT_BASE = `http://127.0.0.1:${port}`;
 
 const { setSecret } = await import("../lib/store.ts");
 const { addAccount } = await import("../lib/providers.ts");
-// 账号是表里的行：先建一行，凭据挂在它的 id 上。
-addAccount({ platform: "qoder" });
-addAccount({ platform: "workbuddy-cn" });
+// 账号是表里的行：先建一行，凭据挂在它的 id 上，请求也带那个 id。
+const qoderId = String(addAccount({ platform: "qoder" }).id);
+const workbuddyId = String(addAccount({ platform: "workbuddy-cn" }).id);
+if (!qoderId || !workbuddyId) throw new Error("账号没有建出来");
 
 const now = Date.now();
 const year = now + 365 * 24 * 3600 * 1000;
 
-setSecret("session:provider:qoder", "session", {
+setSecret(`session:provider:${qoderId}`, "session", {
   schemaVersion: 1,
   region: "global",
   clientId: "test-client",
@@ -84,7 +85,7 @@ setSecret("session:provider:qoder", "session", {
   refreshedAtMs: now,
 });
 
-setSecret("session:provider:workbuddy-cn", "session", {
+setSecret(`session:provider:${workbuddyId}`, "session", {
   accessToken: "test-access-token",
   refreshToken: "test-refresh-token",
   uid: "test-uid",
@@ -143,7 +144,7 @@ console.log("Qoder：上游的 400");
   const error = await caught(() =>
     qoderChatCompletion(
       { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: "qoder", region: "global" },
+      { stream: false, providerId: qoderId, region: "global" },
     ),
   );
   check("上游的状态在错误上", upstreamStatusOf(error) === 400, String(upstreamStatusOf(error)));
@@ -166,7 +167,7 @@ console.log("Qoder：上游的 429（排队）");
   const error = await caught(() =>
     qoderChatCompletion(
       { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: "qoder", region: "global" },
+      { stream: false, providerId: qoderId, region: "global" },
     ),
   );
   check("是排队（LimitError）", error?.name === "LimitError", String(error?.name));
@@ -185,7 +186,7 @@ console.log("Qoder：上游的 500 与排队的正文要进日志");
   const warnings = await warningsDuring(() =>
     qoderChatCompletion(
       { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: "qoder", region: "global" },
+      { stream: false, providerId: qoderId, region: "global" },
     ),
   );
   check(
@@ -214,7 +215,7 @@ console.log("Qoder：上游的 500 与排队的正文要进日志");
   const warnings = await warningsDuring(() =>
     qoderChatCompletion(
       { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: "qoder", region: "global" },
+      { stream: false, providerId: qoderId, region: "global" },
     ),
   );
   check(
@@ -238,7 +239,7 @@ console.log("WorkBuddy：上游的 400");
   const error = await caught(() =>
     workbuddyChat(
       { model: "hy3", messages: [{ role: "user", content: "hi" }] },
-      { providerId: "workbuddy-cn" },
+      { providerId: workbuddyId },
     ),
   );
   check("上游的状态在错误上", upstreamStatusOf(error) === 400, String(upstreamStatusOf(error)));

@@ -8,7 +8,7 @@
 //
 //   1. AddPlatform：加得进去、库里的行数多一行、ListUpstreams 里有它
 //      （isOpenPlatform）、没有账号时状态是「没有凭据」
-//   2. AddPlatform 的四种拒绝：id 不合法、跟代码模板重名、跟账号撞、重复建
+//   2. AddPlatform 的三种拒绝：id 不合法、跟代码模板重名、重复建
 //   3. UpdatePlatform：改名生效、地址空串被拒且库没变、额度插件写进去、
 //      手工目录（models_auto=false + 清单）写进去
 //   4. DeletePlatform：平台行、账号、凭据都清掉，ListUpstreams 里不再出现；
@@ -222,21 +222,23 @@ check(
   String(templateClash.message),
 );
 
-// 账号占着的 id 平台不能要：两边共用一个命名空间，撞了面板分不清。
+// 账号 id 与平台 id 相互独立：账号 id 是自增数，平台表看不见它，也不占平台表
+// 的位置。
 const qoderFirst = addAccount({ platform: "qoder" });
 const qoderSecond = addAccount({ platform: "qoder" });
 check(
-  "账号 id 是平台 id 加序号",
-  qoderFirst.id === "qoder" && qoderSecond.id === "qoder-2",
+  "同一平台的两个账号 id 不同，都是自增数",
+  Boolean(qoderFirst.id && qoderSecond.id) &&
+    qoderFirst.id !== qoderSecond.id &&
+    /^\d+$/.test(qoderFirst.id!) &&
+    /^\d+$/.test(qoderSecond.id!),
   show([qoderFirst.id, qoderSecond.id]),
 );
-const accountClash = await addPlatform({
-  id: "qoder-2",
-  label: "撞账号",
-  baseUrl: "https://api.acme.test/v1",
-});
-check("跟账号撞了被拒", accountClash.ok === false, show(accountClash));
-check("说的是已经是账号了", String(accountClash.message ?? "").includes("账号"), String(accountClash.message));
+check(
+  "账号 id 里没有平台的名字",
+  [qoderFirst.id!, qoderSecond.id!].every((id) => !id.includes("qoder")),
+  show([qoderFirst.id, qoderSecond.id]),
+);
 
 const again = await addPlatform({
   id: "acme",

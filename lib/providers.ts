@@ -6,9 +6,13 @@
 //
 // 一行有三个来处：
 //
-//   id        账号自己的标识，自动生成（`minimax`、`minimax-2`）。路径里不用它。
+//   id        账号自己的键，自动生成（`1`、`2`……）。面板不显示它。
 //   platform  它属于哪个平台。平台决定 kind、region 与说话的方式。
 //   alias     面板上用来分辨两个账号。
+//
+// 账号 id 与平台 id 相互独立：关联只靠 provider.platform。id 不派生自平台
+// —— 派生出来的 id 在平台改名或换绑时会跟着错位，还会让后缀看起来像某种
+// 编号（它曾经被当成旧租户号读过）。面板显示 alias，id 只是键。
 //
 // kind 与 region 是从平台模板**派生**的，不是存的：它们是服务的属性，不是
 // 哪个登录的身份。
@@ -16,7 +20,6 @@
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
 import { allPlatforms, platformOfAny, platformPolicy } from "./platforms.ts";
-import { openPlatformOf } from "./open-platforms.ts";
 
 /** 一个账号。 */
 export interface ProviderRow {
@@ -116,12 +119,6 @@ function toRow(row: any): ProviderRow {
   };
 }
 
-/** A policy value from the database; anything unknown means 'single'. */
-function policyOfValue(value: unknown): ProviderPolicy {
-  const raw = String(value ?? "single");
-  return (PROVIDER_POLICIES as string[]).includes(raw) ? (raw as ProviderPolicy) : "single";
-}
-
 /**
  * 这个平台的生效策略：它名下的几个账号怎么选。
  *
@@ -159,8 +156,8 @@ export function updateProvider(
 /**
  * 在一个平台下加一个账号。
  *
- * id 是自动起的：平台 id 后面接序号（`minimax`、`minimax-2`、`minimax-3`……）。
- * 路径里用的是平台 id，所以账号 id 只要不重就行，不需要人取名。
+ * id 是自动起的独立序号（`1`、`2`……），跟平台无关。路径里用的是平台 id，
+ * 所以账号 id 只要不重就行；面板不显示它，认人靠 alias。
  */
 export function addAccount(input: {
   platform: string;
@@ -173,7 +170,7 @@ export function addAccount(input: {
   if (!platforms.some((p) => p.id === platform)) {
     return { ok: false, message: `没有这个平台：${platform}。可选：${platforms.map((p) => p.id).join("、")}` };
   }
-  const id = nextAccountId(platform);
+  const id = nextAccountId();
   const now = Date.now();
   const existing = accountsOfPlatform(platform).length;
   const alias = String(input.alias ?? "").trim() || `${platformOfAny(platform)?.label ?? platform}${existing ? ` ${existing + 1}` : ""}`;
@@ -189,21 +186,25 @@ export function addAccount(input: {
 }
 
 /**
- * 这个平台下一个没人用的账号 id。
+ * 下一个没人用的账号 id：一个自增整数。
  *
- * 契约：模板平台的第一个账号 id 就等于平台 id（`minimax` 的第一个账号叫
- * `minimax`），解析的时候平台优先 —— 同一个 id 既是平台又是第一个账号时，
- * 说的是平台。账号 id 与平台 id 共用一个命名空间，所以开放平台的 id 不许与
- * 账号 id 相撞：撞了面板分不清那个 id 说的是平台还是账号（账号 id 是
- * `<平台>-<序号>`，跟平台 id 长得一样）。
+ * 序号取现有数字 id 里最大的那个加一，不从 1 开始找空洞 —— 删掉的号不再发放，
+ * 免得新账号捡到旧账号的残留（冷却、日志里都按 id 认人）。
+ *
+ * id 只是一把键：它跟平台无关，也不给面板看。面板认人用 alias。
  */
-function nextAccountId(platform: string): string {
-  for (let n = 1; ; n++) {
-    const id = n === 1 ? platform : `${platform}-${n}`;
-    if (provider(id)) continue;
-    if (openPlatformOf(id)) continue;
-    return id;
+function nextAccountId(): string {
+  const rows = store().prepare("SELECT id FROM provider").all() as any[];
+  let next = 1;
+  const taken = new Set<string>();
+  for (const row of rows) {
+    const id = String(row.id);
+    taken.add(id);
+    if (!/^\d+$/.test(id)) continue;
+    next = Math.max(next, Number(id) + 1);
   }
+  while (taken.has(String(next))) next++;
+  return String(next);
 }
 
 /** 删一个 provider。它名下的凭据也一起删 —— 留着就没人认领了。 */

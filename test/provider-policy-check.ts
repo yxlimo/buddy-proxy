@@ -262,7 +262,7 @@ console.log("账号数");
 
 // 账号是 provider 表的行：一个平台加两个账号就是两行。
 check("Qoder 现在有一个账号", upstreamAccountCount("qoder") === 1, String(upstreamAccountCount("qoder")));
-addAccount({ platform: "qoder", alias: "第二个 Qoder" });
+const qoderSecond = addAccount({ platform: "qoder", alias: "第二个 Qoder" });
 check("加第二个就是两个", upstreamAccountCount("qoder") === 2, String(upstreamAccountCount("qoder")));
 check(
   "账号按创建先后排",
@@ -296,15 +296,15 @@ console.log("签到选账号");
 check("新账号是开着的", provider(trOne.id!)?.enabled === true);
 
 updateProvider(qoderAccount.id!, { enabled: false });
-updateProvider("qoder-2", { enabled: false });
+updateProvider(qoderSecond.id!, { enabled: false });
 check("都关着的时候不签到", benefitUpstreams().length === 0, benefitUpstreams().join(","));
 
 updateProvider(qoderAccount.id!, { enabled: true });
-updateProvider("qoder-2", { enabled: true });
+updateProvider(qoderSecond.id!, { enabled: true });
 let ups = benefitUpstreams();
 check(
   "两个 Qoder 账号都签到",
-  ups.includes(qoderAccount.id!) && ups.includes("qoder-2"),
+  ups.includes(qoderAccount.id!) && ups.includes(qoderSecond.id!),
   ups.join(","),
 );
 check("别的种类不签到", !ups.includes("zcode"), ups.join(","));
@@ -312,11 +312,11 @@ check("别的种类不签到", !ups.includes("zcode"), ups.join(","));
 // 策略是转发的事：签到一个都不许少。
 setPlatformPolicy("qoder", "single");
 ups = benefitUpstreams();
-check("策略不影响签到", ups.includes(qoderAccount.id!) && ups.includes("qoder-2"), ups.join(","));
+check("策略不影响签到", ups.includes(qoderAccount.id!) && ups.includes(qoderSecond.id!), ups.join(","));
 
 updateProvider(qoderAccount.id!, { enabled: false });
 ups = benefitUpstreams();
-check("关掉的账号不签到", !ups.includes(qoderAccount.id!) && ups.includes("qoder-2"), ups.join(","));
+check("关掉的账号不签到", !ups.includes(qoderAccount.id!) && ups.includes(qoderSecond.id!), ups.join(","));
 
 console.log("");
 console.log("每个账号都签到");
@@ -344,15 +344,15 @@ const fake = {
   },
 };
 
-const results = await runBenefits(["qoder-2"], fake);
-check("qoder 的账号走了 qoder 那条路", calls.join(",") === "qoder:qoder-2", calls.join(","));
-check("一条结果对一个账号", results.length === 1 && results[0].upstream === "qoder-2");
+const results = await runBenefits([qoderSecond.id!], fake);
+check("qoder 的账号走了 qoder 那条路", calls.join(",") === `qoder:${qoderSecond.id}`, calls.join(","));
+check("一条结果对一个账号", results.length === 1 && results[0].upstream === qoderSecond.id);
 
 calls.length = 0;
-await runBenefits(["zcode", "qoder-2"], fake);
+await runBenefits(["zcode", qoderSecond.id!], fake);
 check(
   "每个账号一次，不认的种类跳过",
-  calls.join(",") === "qoder:qoder-2",
+  calls.join(",") === `qoder:${qoderSecond.id}`,
   calls.join(","),
 );
 
@@ -369,10 +369,10 @@ check(
       return outcome(id);
     },
   };
-  // 账号号是行给的：第一个 MiniMax Code 账号叫 minimax，没有 -1 后缀。
+  // 账号 id 是行给的独立序号，跟平台 id 无关。
   const minimaxAccount = addAccount({ platform: "minimax" });
   const minimaxId = minimaxAccount.id!;
-  const results2 = await runBenefits([minimaxId, "qoder-2"], broken);
+  const results2 = await runBenefits([minimaxId, qoderSecond.id!], broken);
   check("出错的那个也出了结果", results2.length === 2, JSON.stringify(results2.length));
   check(
     "出错的那个说的是失败",
@@ -384,7 +384,7 @@ check(
     String(results2.find((r) => r.upstream === minimaxId)?.report.join("")).includes("会话坏了"),
     JSON.stringify(results2.find((r) => r.upstream === minimaxId)?.report),
   );
-  check("别的账号照样签了", calls2.includes("qoder:qoder-2"), calls2.join(","));
+  check("别的账号照样签了", calls2.includes(`qoder:${qoderSecond.id}`), calls2.join(","));
   check("出错的那个也轮到过", calls2.includes(`minimax:${minimaxId}`), calls2.join(","));
 }
 

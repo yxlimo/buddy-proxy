@@ -16,8 +16,10 @@
 //   4. 改名字、改地址、改模型目录（手写的目录 source 是 manual）
 //   5. 删掉以后平台列表回到基线
 //   6. 坏掉的目录 JSON 读成空目录，不抛
-//   7. 平台 id 与账号 id 共用一个命名空间：撞了就分不清
+//   7. 账号 id 与平台 id 相互独立：账号 id 是自增数，关联只靠 provider.platform
 //   8. 只加载 lib/open-platforms.ts 的进程里，模板的判重照样生效
+//   9. 表里那几行的 kind 是它们自己那一类（不是清一色的 openai），模板那一
+//      侧（minimax 等）还是模板
 //
 // 断言里不写平台的个数：一律跟 PLATFORMS.length 与表里的行数比。
 
@@ -40,8 +42,9 @@ const {
   listOpenPlatforms,
   openPlatformOf,
 } = await import("../lib/open-platforms.ts");
-const { addAccount } = await import("../lib/providers.ts");
-const { store } = await import("../lib/store.ts");
+const { addAccount, provider } = await import("../lib/providers.ts");
+const { store, migratePlatforms } = await import("../lib/store.ts");
+const { PLATFORM_TEMPLATES } = await import("../lib/platform-catalog.ts");
 
 let pass = 0;
 let fail = 0;
@@ -73,6 +76,19 @@ function expectedPlatformCount(): number {
   return PLATFORMS.length + rows.filter((row) => !PLATFORMS.some((p) => p.id === row.id)).length;
 }
 
+/** 迁移补进来的那几行的 id。 */
+const SEEDED_IDS = new Set(PLATFORM_TEMPLATES.map((t) => t.key));
+
+/**
+ * 用户自己建的行：不是迁移补进来的那几行。
+ *
+ * 迁移补的那几行用的是模板的 id（qiniu 之类），它们在表里，但不算「用户加的
+ * 开放平台」。
+ */
+function userPlatformRows(): { id: string }[] {
+  return listOpenPlatforms().filter((row) => !SEEDED_IDS.has(row.id));
+}
+
 /** 往表里直接插一行：绕过校验，用来试「模板优先」。 */
 function insertRow(id: string, label: string): void {
   const now = Date.now();
@@ -86,16 +102,64 @@ function insertRow(id: string, label: string): void {
 
 section("新库");
 
-check("新库里的平台就是模板那些", allPlatforms().length === PLATFORMS.length, `${allPlatforms().length}`);
-check("新库里没有开放平台的行", listOpenPlatforms().length === 0, listOpenPlatforms().map((r) => r.id).join(","));
+check(
+  "新库里的平台就是模板 + 迁移补进来的那几行",
+  allPlatforms().length === expectedPlatformCount(),
+  `${allPlatforms().length} vs ${expectedPlatformCount()}`,
+);
+check(
+  "新库里没有用户自己建的开放平台行",
+  userPlatformRows().length === 0,
+  userPlatformRows().map((r) => r.id).join(","),
+);
 check(
   "平台列表跟数据源对得上",
   allPlatforms().length === expectedPlatformCount(),
   `${allPlatforms().length} vs ${expectedPlatformCount()}`,
 );
 
-section("建一行");
+section("迁移补进来的平台行");
 
+// 迁移把那五个还没迁完的平台补成了表里的行：新库一开就有。
+check(
+  "五个模板都补成了行",
+  PLATFORM_TEMPLATES.length === 5 && PLATFORM_TEMPLATES.every((t) => openPlatformOf(t.key) !== null),
+  PLATFORM_TEMPLATES.filter((t) => openPlatformOf(t.key) === null).map((t) => t.key).join(","),
+);
+for (const t of PLATFORM_TEMPLATES) {
+  const seeded = openPlatformOf(t.key);
+  check(`${t.key} 的 kind 是模板的`, seeded?.kind === t.kind, String(seeded?.kind));
+  check(`${t.key} 的额度插件是空的`, seeded?.quotaPlugin === "", JSON.stringify(seeded?.quotaPlugin));
+  check(`${t.key} 的名字跟模板一致`, seeded?.label === t.label, String(seeded?.label));
+  check(
+    `${t.key} 的地址是模板的默认地址`,
+    seeded?.baseUrl === t.defaultBaseUrl,
+    String(seeded?.baseUrl),
+  );
+  check(`${t.key} 没有区域`, seeded?.region === "", JSON.stringify(seeded?.region));
+  check(`${t.key} 的目录是空的`, (seeded?.models.items.length ?? -1) === 0, JSON.stringify(seeded?.models));
+  // 平台列表里那一行用的是它自己的 kind：填成清一色的 openai 就把这一族
+  // （七牛云要两段凭据、书生·端砚要两段）的差别抹掉了。
+  check(
+    `${t.key} 在平台列表里的 kind 是 ${t.kind}`,
+    allPlatforms().find((p) => p.id === t.key)?.kind === t.kind,
+    String(allPlatforms().find((p) => p.id === t.key)?.kind),
+  );
+}
+
+// 模板那一侧：模拟端那五家还在代码里，kind 还是它们自己的。
+check(
+  "minimax 仍是模板",
+  PLATFORMS.some((p) => p.id === "minimax") && platformOfAny("minimax")?.kind === "minimax",
+  JSON.stringify(platformOfAny("minimax")),
+);
+check(
+  "模板里的 id 不在表里（模板与表各管各的）",
+  PLATFORMS.every((p) => openPlatformOf(p.id) === null),
+  PLATFORMS.filter((p) => openPlatformOf(p.id) !== null).map((p) => p.id).join(","),
+);
+
+const countBeforeCreate = allPlatforms().length;
 const created = createOpenPlatform({
   id: "acme",
   label: "Acme",
@@ -103,11 +167,15 @@ const created = createOpenPlatform({
   quotaPlugin: "acme",
 });
 check("开放平台加得进去", created.ok === true, created.message);
-check("表里多了一行", listOpenPlatforms().length === 1, listOpenPlatforms().map((r) => r.id).join(","));
+check(
+  "表里多了一行",
+  userPlatformRows().length === 1,
+  userPlatformRows().map((r) => r.id).join(","),
+);
 check(
   "平台列表多了一条",
-  allPlatforms().length === PLATFORMS.length + 1,
-  `${allPlatforms().length} vs ${PLATFORMS.length}`,
+  allPlatforms().length === countBeforeCreate + 1,
+  `${allPlatforms().length} vs ${countBeforeCreate}`,
 );
 const row = openPlatformOf("acme");
 check(
@@ -124,6 +192,8 @@ check(
 check("开放平台没有区域", platformOfAny("acme")?.region === "", JSON.stringify(platformOfAny("acme")?.region));
 check("模型目录先是空的", row?.models.items.length === 0, JSON.stringify(row?.models));
 check("新库里的目录还自动拉", row?.models.auto === true, JSON.stringify(row?.models));
+check("开放平台那一行的 kind 是 openai", row?.kind === "openai", String(row?.kind));
+check("开放平台那一行没有区域", row?.region === "", JSON.stringify(row?.region));
 
 section("id 的规矩");
 
@@ -166,20 +236,25 @@ check(
 );
 check(
   "上面那些都没写进表",
-  listOpenPlatforms().length === 1,
-  listOpenPlatforms().map((r) => r.id).join(","),
+  userPlatformRows().length === 1,
+  userPlatformRows().map((r) => r.id).join(","),
 );
 
 section("模板优先");
 
 // 绕过校验直接插一行（跟模板重名）：这种行代码里不该有，但旧库里可能有。
 const templateId = PLATFORMS[0].id;
+const rowsBeforeInsert = listOpenPlatforms().length;
 insertRow(templateId, "残留的行");
-check("表里确实多了一行", listOpenPlatforms().length === 2, listOpenPlatforms().map((r) => r.id).join(","));
+check(
+  "表里确实多了一行",
+  listOpenPlatforms().length === rowsBeforeInsert + 1,
+  listOpenPlatforms().map((r) => r.id).join(","),
+);
 check(
   "跟模板同 id 的行被忽略",
-  allPlatforms().length === PLATFORMS.length + 1,
-  `${allPlatforms().length} vs ${PLATFORMS.length}`,
+  allPlatforms().length === expectedPlatformCount(),
+  `${allPlatforms().length} vs ${expectedPlatformCount()}`,
 );
 check(
   "同 id 还是算模板",
@@ -205,7 +280,11 @@ check(
   `${allPlatforms().length} vs ${expectedPlatformCount()}`,
 );
 store().prepare("DELETE FROM platform WHERE id = ?").run(templateId);
-check("那行清掉了", listOpenPlatforms().length === 1, listOpenPlatforms().map((r) => r.id).join(","));
+check(
+  "那行清掉了",
+  listOpenPlatforms().length === rowsBeforeInsert,
+  listOpenPlatforms().map((r) => r.id).join(","),
+);
 
 section("改");
 
@@ -275,11 +354,15 @@ section("删");
 
 const deleted = deleteOpenPlatform("acme");
 check("删得掉", deleted.ok === true, deleted.message);
-check("表里没了", listOpenPlatforms().length === 0, listOpenPlatforms().map((r) => r.id).join(","));
+check(
+  "表里没了",
+  userPlatformRows().length === 0,
+  userPlatformRows().map((r) => r.id).join(","),
+);
 check(
   "平台列表回到基线",
-  allPlatforms().length === PLATFORMS.length,
-  `${allPlatforms().length} vs ${PLATFORMS.length}`,
+  allPlatforms().length === expectedPlatformCount(),
+  `${allPlatforms().length} vs ${expectedPlatformCount()}`,
 );
 check("删不存在的会说没有", deleteOpenPlatform("acme").ok === false);
 check("查不到了", platformOfAny("acme") === null, JSON.stringify(platformOfAny("acme")));
@@ -309,35 +392,36 @@ check("数组也读得出来", legacy?.models.items.join(",") === "x1,x2", JSON.
 deleteOpenPlatform("broken");
 check(
   "清干净了，平台列表回到基线",
-  allPlatforms().length === PLATFORMS.length,
-  `${allPlatforms().length} vs ${PLATFORMS.length}`,
+  allPlatforms().length === expectedPlatformCount(),
+  `${allPlatforms().length} vs ${expectedPlatformCount()}`,
 );
 
-section("账号 id 与平台 id");
+section("账号 id 与平台 id 相互独立");
 
-// 账号 id 是 `<平台>-<序号>`，跟平台 id 长得一样：两边各查各的表，撞了面板
-// 就分不清那个 id 说的是平台还是账号。
+// 账号 id 是一个独立的自增数，不派生自平台：两边各查各的表，账号靠
+// provider.platform 关联到平台。
 const qoderFirst = addAccount({ platform: "qoder" });
 const qoderSecond = addAccount({ platform: "qoder" });
 check(
-  "qoder 名下的账号 id 是平台 id 加序号",
-  qoderFirst.id === "qoder" && qoderSecond.id === "qoder-2",
+  "同一平台的两个账号 id 不同，都是自增数",
+  Boolean(qoderFirst.id && qoderSecond.id) &&
+    qoderFirst.id !== qoderSecond.id &&
+    /^\d+$/.test(qoderFirst.id!) &&
+    /^\d+$/.test(qoderSecond.id!),
   JSON.stringify([qoderFirst.id, qoderSecond.id]),
 );
-const clash = createOpenPlatform({
-  id: "qoder-2",
-  label: "撞账号",
-  baseUrl: "https://clash.test/v1",
-});
-check("账号占着的 id 平台不能要", clash.ok === false, clash.message);
 check(
-  "撞账号的没写进表",
-  listOpenPlatforms().some((row) => row.id === "qoder-2") === false,
-  listOpenPlatforms().map((row) => row.id).join(","),
+  "两个账号都挂在 qoder 上",
+  provider(qoderFirst.id!)?.platform === "qoder" && provider(qoderSecond.id!)?.platform === "qoder",
+  JSON.stringify([provider(qoderFirst.id!)?.platform, provider(qoderSecond.id!)?.platform]),
+);
+check(
+  "账号 id 里没有平台的名字",
+  [qoderFirst.id!, qoderSecond.id!].every((id) => !id.includes("qoder")),
+  JSON.stringify([qoderFirst.id, qoderSecond.id]),
 );
 
-// 反过来：平台表占着的 id，账号也不能要（账号 id 跟平台 id 共用一个命名
-// 空间）。
+// 平台表的 id 跟账号表不相干：开放平台叫什么，跟它名下账号叫什么没有关系。
 const zephyr = createOpenPlatform({
   id: "zephyr",
   label: "Zephyr",
@@ -346,9 +430,14 @@ const zephyr = createOpenPlatform({
 check("开放平台建得起来", zephyr.ok === true, zephyr.message);
 const zephyrAccount = addAccount({ platform: "zephyr" });
 check(
-  "账号 id 跳过了平台表占着的那个",
-  zephyrAccount.id === "zephyr-2",
+  "新平台下的账号 id 也是自增数，不接平台 id",
+  Boolean(zephyrAccount.id) && /^\d+$/.test(zephyrAccount.id!) && zephyrAccount.id !== "zephyr",
   String(zephyrAccount.id),
+);
+check(
+  "账号挂在它自己的平台上",
+  provider(zephyrAccount.id!)?.platform === "zephyr",
+  String(provider(zephyrAccount.id!)?.platform),
 );
 
 section("只加载 open-platforms 的进程");
@@ -408,8 +497,39 @@ check(
   String(openPlatformOf("slashy")?.baseUrl),
 );
 
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
+section("老库模拟");
 
+// 老库的平台表没有 kind 与 region 两列：迁移得把它们补上。
+store().exec("ALTER TABLE platform DROP COLUMN kind");
+store().exec("ALTER TABLE platform DROP COLUMN region");
+// 用户改过的名字：迁移不能把它盖掉（已有的行不动）。
+store().prepare("UPDATE platform SET label = ? WHERE id = ?").run("我改过的名字", "qiniu");
+migratePlatforms(store());
+
+check(
+  "老库里那一行没被覆盖",
+  openPlatformOf("qiniu")?.label === "我改过的名字",
+  String(openPlatformOf("qiniu")?.label),
+);
+check(
+  "老库那一行的地址也没被覆盖",
+  openPlatformOf("qiniu")?.baseUrl === "https://api.qnaigc.com/v1",
+  String(openPlatformOf("qiniu")?.baseUrl),
+);
+check("kind 列补回来了", openPlatformOf("qiniu")?.kind === "openai", String(openPlatformOf("qiniu")?.kind));
+check("region 列补回来了", openPlatformOf("qiniu")?.region === "", JSON.stringify(openPlatformOf("qiniu")?.region));
+check(
+  "别的几行补上了",
+  PLATFORM_TEMPLATES.filter((t) => t.key !== "qiniu").every((t) => openPlatformOf(t.key) !== null),
+  PLATFORM_TEMPLATES.filter((t) => openPlatformOf(t.key) === null).map((t) => t.key).join(","),
+);
+check(
+  "用户自己建的那行没被动",
+  openPlatformOf("slashy")?.label === "Slashy" && openPlatformOf("slashy")?.kind === "openai",
+  JSON.stringify(openPlatformOf("slashy")),
+);
+
+fs.rmSync(DATA_DIR, { recursive: true, force: true });
 console.log("");
 if (fail === 0) {
   console.log(`全部通过（${pass} 项）`);

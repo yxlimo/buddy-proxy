@@ -32,7 +32,6 @@ import type { OpenPlatformRow } from "../open-platforms.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
-  forgetLegacyTenantRecords,
   forgetTokenRhythmCredential,
   loadSession as loadTokenRhythmSession,
   login as loginTokenRhythm,
@@ -587,18 +586,14 @@ export function logoutAccount(accountId: string): { ok: boolean; message: string
 /**
  * 一个账号的凭据，删干净。
  *
- * 三处都要删：账号自己名下那些、旧库按租户号存的那一份、健康快照里它的那段。
- * 少删一处，那个账号就会带着旧身份回来 —— 旧记录会被搬回来，快照里的额度会
- * 继续显示着一个已经不存在的账号。
+ * 两处都要删：账号自己名下那些、健康快照里它的那段。少删一处，那个账号就会
+ * 带着旧身份回来 —— 快照里的额度会继续显示着一个已经不存在的账号。
  */
 export function forgetAccountRecords(accountId: string, kind?: string): number {
   let removed = deleteProviderCredentials(accountId);
   // 开放平台的凭据自己清一遍：那把 key 是这个账号的全部身份，删账号就得删它
   // —— 不然它就成了一条没人认领的孤儿记录（存凭据的地方换了位置也不怕）。
   clearOpenPlatformKey(accountId);
-  // 旧位置的记录（按租户号存的那份）也要删：留着它，启动时的归位会把账号
-  // 带回来 —— 删了又活，凭据还串着。
-  removed += forgetLegacyTenantRecords(accountId);
   forgetAccountSnapshot(accountId);
   if (kind === "tokenrhythm") removed += forgetTokenRhythmCredential(accountId);
   // 冷却也一起删：账号 id 会被复用（下一个账号接着排队），留着这一行，新账号

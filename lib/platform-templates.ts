@@ -7,6 +7,11 @@
 // 这一层是叶子：不引任何模块。两边都要认得模板的 id 名单（表里的开放平台
 // 不能跟模板重名），所以名单放在这里，谁都能直接引 —— 不用谁在求值期把名单
 // 交给别人（那件事出过事：模块求值期的先后顺序一变，判重就失效了）。
+//
+// 模板现在只剩「模拟客户端那一侧」的五家：它们按上游桌面端的指纹说话，行为
+// 写在代码里。开放平台那一族（七牛云、讯飞星火、SenseNova、书生·端砚、
+// TokenRhythm，还有用户自己加的那些）都在表里 —— 它们是谁由那一行的 kind
+// 与地址说明，代码里不再留一份。
 
 /** 一个平台：代码里的模板，或者表里的开放平台。 */
 export interface Platform {
@@ -32,9 +37,4 @@ export const PLATFORMS: Platform[] = [
   { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },
   { id: "workbuddy-cn", kind: "workbuddy", label: "WorkBuddy（中国区）", region: "cn" },
   { id: "workbuddy-global", kind: "workbuddy", label: "WorkBuddy（国际区）", region: "global" },
-  { id: "tokenrhythm", kind: "tokenrhythm", label: "TokenRhythm", region: "" },
-  { id: "sensenova", kind: "sensenova", label: "SenseNova", region: "" },
-  { id: "intern-ai", kind: "intern-ai", label: "书生·端砚", region: "" },
-  { id: "qiniu", kind: "qiniu", label: "七牛云", region: "" },
-  { id: "xinghuo", kind: "xinghuo", label: "讯飞星火", region: "" },
 ];

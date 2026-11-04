@@ -260,10 +260,13 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 }
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
-// 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
+// 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。账号 id 是
+// 自增整数，所以这里把它们记下来，下面的断言与凭据格子都用真的那份。
+const accountIdOf: Record<string, string> = {};
 for (const platform of ["minimax", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
-  if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
+  if (made.body?.ok === true) accountIdOf[platform] = String(made.body.id ?? "");
+  else console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
 
 /** 等到满足条件为止。条件可以是异步的。 */
@@ -466,13 +469,14 @@ check(
   approvedStatus.body?.session?.credential?.status === "CREDENTIAL_STATE_USABLE",
   JSON.stringify(approvedStatus.body?.session),
 );
+const minimaxSecretId = `session:provider:${String(approved.body?.session?.accountId ?? accountIdOf["minimax"] ?? "")}`;
 const secretAppeared = await waitFor(() =>
-  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:provider:minimax") as any)?.data),
+  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get(minimaxSecretId) as any)?.data),
 );
 check("凭据落进了 secrets 表", secretAppeared, JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
 const storedSecret = db
   .prepare("SELECT data FROM secrets WHERE id = ?")
-  .get("session:provider:minimax") as any;
+  .get(minimaxSecretId) as any;
 check(
   "落库的凭据里有 access token",
   String(storedSecret?.data ?? "").includes("at-test"),
@@ -553,11 +557,11 @@ console.log("账号密码、换码与回填");
 // 面板上要有地方点：能登录的账号都在列表里。
 const accounts = await call("ListAccounts", {});
 const accountList = Array.isArray(accounts.body?.accounts) ? accounts.body.accounts : [];
-check("MiniMax 在账号列表里", accountList.some((a: any) => a.id === "minimax"));
-check("Qoder 中国区在账号列表里", accountList.some((a: any) => a.id === "qoder-cn"));
-check("WorkBuddy 在账号列表里", accountList.some((a: any) => a.id === "workbuddy-cn"));
-check("SenseNova 在账号列表里", accountList.some((a: any) => a.id === "sensenova"));
-check("intern-ai 在账号列表里", accountList.some((a: any) => a.id === "intern-ai"));
+check("MiniMax 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["minimax"] && a.platform === "minimax"), JSON.stringify(accountList));
+check("Qoder 中国区在账号列表里", accountList.some((a: any) => a.id === accountIdOf["qoder-cn"] && a.platform === "qoder-cn"), JSON.stringify(accountList));
+check("WorkBuddy 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["workbuddy-cn"] && a.platform === "workbuddy-cn"), JSON.stringify(accountList));
+check("SenseNova 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["sensenova"] && a.platform === "sensenova"), JSON.stringify(accountList));
+check("intern-ai 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["intern-ai"] && a.platform === "intern-ai"), JSON.stringify(accountList));
 
 // 密码型上游不走 BeginLogin 的轮询；这里只验分派与错误。
 const wrongUpstream = await call("LoginWithPassword", { upstreamId: "qoder", username: "x", password: "y" });
@@ -595,7 +599,7 @@ console.log("登录不再替用户建 key");
 // 这里是判据：把 ensure 加回去，下面这几条立刻变红。
 const trLogin = await call("LoginWithPassword", {
   upstreamId: "tokenrhythm",
-  accountId: "tokenrhythm",
+  accountId: accountIdOf["tokenrhythm"],
   username: "someone",
   password: "secret",
 });
@@ -604,7 +608,7 @@ await new Promise((r) => setTimeout(r, 300));
 check("TokenRhythm：网关没有替用户建 key", trKeyCreates === 0, String(trKeyCreates));
 const trCredential = db
   .prepare("SELECT data FROM secrets WHERE id = ?")
-  .get("key:provider:tokenrhythm:account") as any;
+  .get(`key:provider:${accountIdOf["tokenrhythm"]}:account`) as any;
 check(
   "TokenRhythm：账号上没有多出 key",
   !String(trCredential?.data ?? "").includes("sk-"),

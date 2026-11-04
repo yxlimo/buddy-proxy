@@ -28,7 +28,8 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "rate-wait-"));
 process.env.BUDDY_DATA_DIR = DATA_DIR;
 
 const MODEL = "sensenova-6.8-flash-lite";
-const ACCOUNT = "sensenova";
+// 账号 id：建行的时候才知道（自增整数，与平台名无关）。
+let ACCOUNT = "";
 
 let pass = 0;
 let fail = 0;
@@ -148,18 +149,19 @@ const fakeBase = `http://127.0.0.1:${(fake.address() as net.AddressInfo).port}`;
  * ------------------------------------------------------------------ */
 
 const { store } = await import("../lib/store.ts");
+const { addAccount: addRateAccount } = await import("../lib/providers.ts");
 const db = store();
 const now = Date.now();
 
-db.prepare(
-  "INSERT OR REPLACE INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) " +
-    "VALUES (?, ?, ?, 1, 100, ?, ?)",
-).run(ACCOUNT, "sensenova", "假账号", now, now);
+// 账号行在，然后把会话与推理 key 挂在它自己的 id 上。
+const rateAccount = addRateAccount({ platform: "sensenova", alias: "假账号" });
+if (!rateAccount.ok || !rateAccount.id) throw new Error(`加不了账号：${rateAccount.message}`);
+ACCOUNT = rateAccount.id;
 
 db.prepare(
   "INSERT OR REPLACE INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?)",
 ).run(
-  "session:provider:sensenova",
+  `session:provider:${ACCOUNT}`,
   "session",
   JSON.stringify({
     cookie: "oauth2_authentication_session=abc",
@@ -175,7 +177,7 @@ db.prepare(
 db.prepare(
   "INSERT OR REPLACE INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?)",
 ).run(
-  "key:provider:sensenova:account",
+  `key:provider:${ACCOUNT}:account`,
   "account",
   JSON.stringify({ user: "someone", password: "", apiKey: "sk-sensenova-test" }),
   now,

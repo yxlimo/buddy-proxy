@@ -577,22 +577,18 @@ async function enableUpstream(id: string): Promise<void> {
 }
 
 // 账号模型下凭据挂在账号行上，所以先建这两个账号行，再打开它们。
-const now = Date.now();
-for (const account of [
-  { id: "sensenova", platform: "sensenova" },
-  { id: "intern-ai", platform: "intern-ai" },
-]) {
-  const conn = db();
-  conn
-    .prepare(
-      "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 100, ?, ?)",
-    )
-    .run(account.id, account.platform, "", now, now);
-  conn.close();
+// 账号 id 是自增整数：凭据、开关、登录都揣它，不再拿平台名顶替。建行走面板
+// 自己的那一条路（AddAccount）—— 网关那个进程才是这个库的主人。
+const senseAdded = await admin("AddAccount", { platform: "sensenova" });
+const internAdded = await admin("AddAccount", { platform: "intern-ai" });
+const SENSE_ID = String(senseAdded?.id ?? "");
+const INTERN_ID = String(internAdded?.id ?? "");
+if (senseAdded?.ok !== true || internAdded?.ok !== true || !SENSE_ID || !INTERN_ID) {
+  throw new Error(`账号没建出来：${JSON.stringify([senseAdded, internAdded])}`);
 }
 
-await enableUpstream("sensenova");
-await enableUpstream("intern-ai");
+await enableUpstream(SENSE_ID);
+await enableUpstream(INTERN_ID);
 
 function writeSecret(id: string, kind: string, data: unknown): void {
   const conn = db();
@@ -667,7 +663,8 @@ check(
 
 // 登录态先写进去：推理用的 key 是用户自己贴的（面板上贴一把），网关不替人建。
 //
-writeSecret("session:provider:sensenova", "session", {
+const now = Date.now();
+writeSecret(`session:provider:${SENSE_ID}`, "session", {
   cookie: "oauth2_authentication_session=abc",
   accessToken: "sense-token",
   refreshToken: "sense-refresh",
@@ -694,14 +691,14 @@ await new Promise((r) => setTimeout(r, 1000));
 check("SenseNova：网关没有替用户建 key", senseKeyCreates === 0, String(senseKeyCreates));
 check(
   "SenseNova：账号上还是那把没有 key 的账号",
-  !String(readSecret("key:provider:sensenova:account") ?? "").includes("sk-"),
-  String(readSecret("key:provider:sensenova:account") ?? ""),
+  !String(readSecret(`key:provider:${SENSE_ID}:account`) ?? "").includes("sk-"),
+  String(readSecret(`key:provider:${SENSE_ID}:account`) ?? ""),
 );
 
 // 回填 token：以前贴回 token 之后会建一把 Discovery 的 key。
 const imported = await admin("ImportLoginToken", {
   upstreamId: "intern-ai",
-  accountId: "intern-ai",
+  accountId: INTERN_ID,
   token: "fake-uaa-token",
 });
 check("intern-ai：token 导入成功", imported?.ok === true, JSON.stringify(imported));
@@ -709,17 +706,17 @@ await new Promise((r) => setTimeout(r, 500));
 check("intern-ai：网关没有替用户建 key", internKeyCreates === 0, String(internKeyCreates));
 check(
   "intern-ai：账号上还是那把没有 key 的账号",
-  !String(readSecret("key:provider:intern-ai:account") ?? "").includes("sk-"),
-  String(readSecret("key:provider:intern-ai:account") ?? ""),
+  !String(readSecret(`key:provider:${INTERN_ID}:account`) ?? "").includes("sk-"),
+  String(readSecret(`key:provider:${INTERN_ID}:account`) ?? ""),
 );
 
 // key 还是用户自己填进去的（面板上的 setProviderKeys）。
-writeSecret("key:provider:sensenova:account", "account", {
+writeSecret(`key:provider:${SENSE_ID}:account`, "account", {
   user: "someone",
   password: "",
   apiKey: "sk-sensenova-test",
 });
-writeSecret("session:provider:intern-ai", "session", {
+writeSecret(`session:provider:${INTERN_ID}`, "session", {
   sites: [
     { name: "discovery", token: "intern-token", clientId: "dagw" },
     { name: "chat", token: "intern-token", clientId: "ebmr" },
@@ -728,7 +725,7 @@ writeSecret("session:provider:intern-ai", "session", {
   obtainedAtMs: now,
   username: "someone",
 });
-writeSecret("key:provider:intern-ai:account", "account", {
+writeSecret(`key:provider:${INTERN_ID}:account`, "account", {
   user: "someone",
   password: "",
   discoveryKey: "sk-intern-test",
@@ -861,7 +858,7 @@ check(
 );
 
 // 上游关着的时候要说清楚。
-await admin("SetAccountEnabled", { accountId: "sensenova", enabled: false });
+await admin("SetAccountEnabled", { accountId: SENSE_ID, enabled: false });
 const off = await chat("sensenova", "sensenova-6.8-flash-lite");
 check("上游关着的时候被拒了", off.status === 400, `HTTP ${off.status}`);
 check(
@@ -869,7 +866,7 @@ check(
   String(off.json?.error?.message ?? "").includes("no account turned on"),
   JSON.stringify(off.json),
 );
-await admin("SetAccountEnabled", { accountId: "sensenova", enabled: true });
+await admin("SetAccountEnabled", { accountId: SENSE_ID, enabled: true });
 
 /* ------------------------------------------------------------------ *
  * 七、额度是积分，不是钱
@@ -950,7 +947,8 @@ check(
 // 快照刚刷过，所以要先过一会儿它才愿意再刷一次（网关不会把上游问得太勤）。
 await new Promise((r) => setTimeout(r, 5500));
 const balance = await admin("GetBalance", { upstreamId: "sensenova" });
-const senseBalance = (balance.quotas ?? []).find((b: any) => b.upstreamId === "sensenova");
+// 每一条额度是某个账号的（upstreamId 填的是账号 id，accountId 与它同一个）。
+const senseBalance = (balance.quotas ?? []).find((b: any) => b.accountId === SENSE_ID);
 check("问平台得来的也是积分", Boolean(senseBalance?.credits), JSON.stringify(senseBalance));
 check(
   "问平台得来的数与快照里的一样",

@@ -7,8 +7,7 @@
 // 两件事：
 //
 //   1. 权重：大的先试。降级时按它排先后。
-//   2. 删干净：删账号要把旧位置的记录一起删。留着它们，启动时的归位会把
-//      账号带回来 —— 删了又活，凭据还串着。
+//   2. 删干净：删账号只删它自己那一份，别的账号的凭据不动。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -107,65 +106,69 @@ check("两个账号都建好了", Boolean(first.id && second.id), `${first.id} $
 }
 
 console.log("");
-console.log("删账号要删干净");
+console.log("账号 id 是独立的自增数");
 
 {
-  // 旧库把租户的凭据按租户号存着。删账号时这些也要删。
-  setSecret("account:tokenrhythm:2", "account", { account: "18945877841", password: "pw", apiKey: "sk_tr_old" });
-  setSecret("session:tokenrhythm:2", "session", { accountId: "tokenrhythm-2", cookie: "tr_session=old" });
-  setSecret("key:provider:tokenrhythm:tenant-2", "key", { key: "sk_tr_old" });
-
-  // 先建第一个，第二个才是 tokenrhythm-2 —— 旧租户 2 留下的记录就是这个号。
-  addAccount({ platform: "tokenrhythm", alias: "租户 1" });
-  const made = addAccount({ platform: "tokenrhythm", alias: "租户 2" });
-  const id = made.id!;
-  check("账号建出来了", id === "tokenrhythm-2", id);
-
-  const result = deleteAccount(id);
-  check("删掉了", result.ok, result.message);
-  check("账号行没了", provider(id) === null);
-  check("旧位置的凭据没了", getSecret("account:tokenrhythm:2") === null);
-  check("旧位置的登录态没了", getSecret("session:tokenrhythm:2") === null);
-  check("旧位置的 key 没了", getSecret("key:provider:tokenrhythm:tenant-2") === null);
+  // 同一平台连加两个：id 是 1、2 这样的自增数，跟平台 id 没有字面关系。
+  const one = addAccount({ platform: "qoder-cn", alias: "甲" });
+  const two = addAccount({ platform: "qoder-cn", alias: "乙" });
+  check("两个账号的 id 不同", Boolean(one.id && two.id) && one.id !== two.id, `${one.id} ${two.id}`);
+  check("id 是自增整数", [one.id!, two.id!].every((id) => /^\d+$/.test(id)), `${one.id} ${two.id}`);
   check(
-    "新位置的凭据也没了",
-    listSecrets("key:provider:tokenrhythm-2").length === 0,
-    JSON.stringify(listSecrets("key:provider:tokenrhythm-2").map((s) => s.id)),
+    "id 里没有平台的名字",
+    [one.id!, two.id!].every((id) => !id.includes("qoder")),
+    `${one.id} ${two.id}`,
+  );
+  check(
+    "两个账号都挂在同一个平台上",
+    provider(one.id!)?.platform === "qoder-cn" && provider(two.id!)?.platform === "qoder-cn",
+    `${provider(one.id!)?.platform} ${provider(two.id!)?.platform}`,
+  );
+  check(
+    "后加的那个号比前面的大",
+    Number(two.id!) > Number(one.id!),
+    `${one.id} → ${two.id}`,
+  );
+  check(
+    "账号 id 不长成平台 id 的样子",
+    [one.id!, two.id!].every((id) => id !== "qoder-cn"),
+    `${one.id} ${two.id}`,
   );
 }
 
 console.log("");
-console.log("删过的账号不会被旧记录带回来");
+console.log("删账号只删它自己那一份");
 
 {
-  // 归位（启动时的动作）看到旧记录就把账号带回来。删干净的账号不该这样。
-  addAccount({ platform: "tokenrhythm", alias: "租户 1" });
-  addAccount({ platform: "tokenrhythm", alias: "租户 2" });
-  const made = addAccount({ platform: "tokenrhythm", alias: "租户 3" });
-  const id = made.id!;
-  // 旧位置有一条它的记录：旧库按租户号存，那一号就是它自己名字里的那个号。
-  const index = Number(id.split("-")[1] ?? 1);
-  const legacyId = `account:tokenrhythm:${index}`;
-  setSecret(legacyId, "account", { account: "18252587721", password: "pw", apiKey: "sk_tr_3" });
-  deleteAccount(id);
-  check("删干净了", provider(id) === null && getSecret(legacyId) === null, legacyId);
+  const one = addAccount({ platform: "tokenrhythm", alias: "租户 1" });
+  const two = addAccount({ platform: "tokenrhythm", alias: "租户 2" });
+  check("两个账号建出来了", Boolean(one.id && two.id) && one.id !== two.id, `${one.id} ${two.id}`);
+  setSecret(`key:provider:${one.id}:account`, "account", { account: "acct-one", password: "pw", apiKey: "sk_tr_one" });
+  setSecret(`key:provider:${two.id}:account`, "account", { account: "acct-two", password: "pw", apiKey: "sk_tr_two" });
 
-  // 再跑一次归位：库已经是新形状，归位不该建出任何行。
-  const { store } = await import("../lib/store.ts");
-  const db = store();
-  const rows = db
-    .prepare("SELECT id FROM provider WHERE platform = ? AND id = ?")
-    .all("tokenrhythm", id) as { id?: string }[];
-  check("归位没有把它带回来", rows.length === 0, JSON.stringify(rows.map((r) => r.id)));
-  check("它的新凭据也是空的", listSecrets(`key:provider:${id}`).length === 0);
+  const result = deleteAccount(two.id!);
+  check("删掉了", result.ok, result.message);
+  check("账号行没了", provider(two.id!) === null);
+  check("它自己的凭据没了", getSecret(`key:provider:${two.id}:account`) === null);
+  check(
+    "另一个账号的凭据还在，没被连坐",
+    (getSecret<any>(`key:provider:${one.id}:account`)?.account ?? "") === "acct-one",
+    JSON.stringify(getSecret(`key:provider:${one.id}:account`)),
+  );
+  check(
+    "删号没有留下别的记录",
+    listSecrets(`key:provider:${two.id}`).length === 0 && getSecret(`session:provider:${two.id}`) === null,
+    JSON.stringify(listSecrets(`key:provider:${two.id}`).map((s) => s.id)),
+  );
+  deleteAccount(one.id!);
 }
 
 console.log("");
 console.log("删账号要把冷却也删掉");
 
 {
-  // 账号 id 会被复用（下一个账号接着排队）。冷却留着，新账号开局就在冷却里：
-  // 面板说它可用，网关说它冷却中。
+  // 冷却按账号 id 认人。账号删了这一行就是孤儿 —— 指着一个不存在的账号的额度，
+  // 以后的统计与面板都要按 id 扫到它。
   const made = addAccount({ platform: "qoder", alias: "冷却过的账号" });
   const id = made.id!;
   setCooldown(id, Date.now() + 10 * 60_000, "quota");

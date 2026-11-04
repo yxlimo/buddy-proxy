@@ -23,7 +23,7 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 const { startGateway: startHarness } = await import("./harness.ts");
 type Gateway = import("./harness.ts").Gateway;
 const { tokenPlanView } = await import("../lib/admin/upstreams.ts");
-const { PLATFORMS } = await import("../lib/platforms.ts");
+const { PLATFORMS, allPlatforms } = await import("../lib/platforms.ts");
 
 const SERVICE = "/buddy.admin.v1.AdminService";
 
@@ -159,10 +159,10 @@ const status = await call("GetSystemStatus", {}, token);
 check("令牌对了就答", status.status === 200, String(status.status));
 check("答的是系统状态", Boolean(status.body?.version), JSON.stringify(status.body).slice(0, 120));
 check(
-  "上游列表就是代码里的模板（这个库里没有开放平台）",
+  "上游列表就是模板 + 表里的开放平台",
   sameIds(
     list(status.body?.upstreams).map((u: any) => String(u.id)),
-    PLATFORMS.map((p) => p.id),
+    allPlatforms().map((p) => p.id),
   ),
   JSON.stringify(list(status.body?.upstreams).map((u: any) => u.id)),
 );
@@ -186,10 +186,10 @@ console.log("上游与配置");
 
 const upstreams = await call("ListUpstreams", {}, token);
 check(
-  "上游列表就是代码里的模板（这个库里没有开放平台）",
+  "上游列表就是模板 + 表里的开放平台",
   sameIds(
     list(upstreams.body?.upstreams).map((u: any) => String(u.id)),
-    PLATFORMS.map((p) => p.id),
+    allPlatforms().map((p) => p.id),
   ),
   JSON.stringify(list(upstreams.body?.upstreams).map((u: any) => u.id)),
 );
@@ -201,11 +201,17 @@ for (const platform of ["qoder-cn", "qoder", "tokenrhythm", "qiniu"]) {
   const res = await call("AddAccount", { platform, alias: `${platform} 主账号` }, token);
   created[platform] = String(res.body?.id ?? "");
 }
+// 账号 id 是独立的自增数，跟平台 id 没有字面关系：关联只靠 platform 这一列。
+const rhythmAccountId = created["tokenrhythm"];
 check(
-  "账号按平台加得出来，id 就是平台 id 加序号",
-  created["qoder-cn"] === "qoder-cn" &&
-    created["qoder"] === "qoder" &&
-    created["tokenrhythm"] === "tokenrhythm",
+  "账号按平台加得出来，id 是独立的自增数",
+  Object.values(created).every((id) => /^\d+$/.test(id)) &&
+    new Set(Object.values(created)).size === Object.values(created).length,
+  JSON.stringify(created),
+);
+check(
+  "id 里没有平台的名字",
+  Object.entries(created).every(([platform, id]) => !id.includes(platform)),
   JSON.stringify(created),
 );
 
@@ -273,7 +279,7 @@ const policyQoder = list(policyList.body?.upstreams).find((u: any) => u.id === "
 check("上游带着策略", policyQoder?.policy === "PROVIDER_POLICY_SINGLE", JSON.stringify(policyQoder?.policy));
 
 // 策略有自己的方法：改它不碰别名与开关。
-await call("UpdateProvider", { id: "tokenrhythm", alias: "TokenRhythm" }, token);
+await call("UpdateProvider", { id: rhythmAccountId, alias: "TokenRhythm" }, token);
 const setPolicy = await call(
   "SetPlatformPolicy",
   { platform: "tokenrhythm", policy: "PROVIDER_POLICY_FALLBACK" },
@@ -285,7 +291,7 @@ const afterPolicy = await call("ListUpstreams", {}, token);
 const fallbackRhythm = list(afterPolicy.body?.upstreams).find((u: any) => u.id === "tokenrhythm");
 check("改完就是降级", fallbackRhythm?.policy === "PROVIDER_POLICY_FALLBACK", JSON.stringify(fallbackRhythm?.policy));
 const aliasAfterPolicy = list((await call("ListAccounts", {}, token)).body?.accounts).find(
-  (a: any) => a.id === "tokenrhythm",
+  (a: any) => a.id === rhythmAccountId,
 );
 check("改策略不动账号的别名", aliasAfterPolicy?.alias === "TokenRhythm", JSON.stringify(aliasAfterPolicy?.alias));
 
@@ -336,8 +342,8 @@ check(
 );
 
 // 策略不在 UpdateProvider 里了：改别名与开关都不该动它。
-await call("UpdateProvider", { id: "tokenrhythm", alias: "TokenRhythm" }, token);
-await call("UpdateProvider", { id: "tokenrhythm", enabled: true }, token);
+await call("UpdateProvider", { id: rhythmAccountId, alias: "TokenRhythm" }, token);
+await call("UpdateProvider", { id: rhythmAccountId, enabled: true }, token);
 const afterAlias = await call("ListUpstreams", {}, token);
 check(
   "只改别名与开关不动策略",
@@ -397,7 +403,8 @@ const accounts = await call("ListAccounts", {}, token);
 check("账号列出来了", list(accounts.body?.accounts).length >= 4);
 check(
   "账号带着平台",
-  list(accounts.body?.accounts).some((a: any) => a.platform === "qoder-cn" && a.id === "qoder-cn"),
+  list(accounts.body?.accounts).some((a: any) => a.platform === "qoder-cn" && a.id === created["qoder-cn"]),
+  JSON.stringify(list(accounts.body?.accounts).map((a: any) => `${a.id}:${a.platform}`)),
 );
 check(
   "账号带着开关与建出来的时刻",
@@ -414,7 +421,7 @@ qoderDb
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   )
   .run(
-    "session:provider:qoder-cn",
+    `session:provider:${created["qoder-cn"]}`,
     "session",
     JSON.stringify({
       accessToken: "test-access-token",
@@ -440,10 +447,10 @@ check(
   list(credentials.body?.credentials).some((c: any) => typeof c.fingerprint === "string" && c.fingerprint.length > 0),
 );
 
-const oneAccount = await call("ListCredentials", { accountId: "qoder-cn" }, token);
+const oneAccount = await call("ListCredentials", { accountId: created["qoder-cn"] }, token);
 check(
   "凭据能按账号筛",
-  oneAccount.body?.credentials?.every((c: any) => c.accountId === "qoder-cn"),
+  oneAccount.body?.credentials?.every((c: any) => c.accountId === created["qoder-cn"]),
 );
 
 // 中转站的会话挂在账号行上：一个账号一份，不再按租户号拼 id。
@@ -456,10 +463,10 @@ rhythmDb
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   )
   .run(
-    "session:provider:tokenrhythm",
+    `session:provider:${rhythmAccountId}`,
     "session",
     JSON.stringify({
-      accountId: "tokenrhythm",
+      accountId: rhythmAccountId,
       cookie: "tr_session=test",
       csrf: "test-csrf",
       userId: "u-1",
@@ -471,7 +478,7 @@ rhythmDb
   );
 rhythmDb.close();
 
-const rhythmCredentials = list((await call("ListCredentials", { accountId: "tokenrhythm" }, token)).body?.credentials);
+const rhythmCredentials = list((await call("ListCredentials", { accountId: rhythmAccountId }, token)).body?.credentials);
 const rhythmSession = rhythmCredentials.find((c: any) => c.kind === "session");
 check("中转站的会话凭据列出来了", Boolean(rhythmSession), JSON.stringify(rhythmCredentials));
 check(
@@ -481,7 +488,7 @@ check(
 );
 check(
   "中转站的会话凭据 id 就是账号那一格",
-  rhythmSession?.id === "session:provider:tokenrhythm",
+  rhythmSession?.id === `session:provider:${rhythmAccountId}`,
   String(rhythmSession?.id),
 );
 

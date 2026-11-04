@@ -15,8 +15,8 @@ import { writeInternAiKeys } from "../intern-ai/keys.ts";
 import { writeTokenRhythmKey } from "../tokenrhythm/keys.ts";
 import { quotaPluginOf } from "../quota-plugins.ts";
 import { writePluginField } from "../quota-plugin-credentials.ts";
-import { openPlatformOf, type OpenPlatformRow } from "../open-platforms.ts";
-import { platformOf } from "../platforms.ts";
+import { openPlatformOf, OPEN_PLATFORM_KIND_NAME, type OpenPlatformRow } from "../open-platforms.ts";
+import { platformOf, platformOfAny } from "../platforms.ts";
 import { provider, providerKindOf } from "../providers.ts";
 
 /**
@@ -28,13 +28,29 @@ import { provider, providerKindOf } from "../providers.ts";
  *
  * 表里有、代码里也有的 id 算模板：模板优先（lib/platforms.ts），那个账号不是
  * 开放平台的账号 —— 它按模板那一套算。
+ *
+ * 有自己那一类凭据形状的开放平台不算「开放平台」这一档：七牛云要两段（推理
+ * key 与门户 cookie），书生·端砚要两段，其余三家各一把。它们凭 kind 分流到
+ * 各自的那一档去 —— 这一档（通用开放平台）是一把推理 key 加额度插件要的那几
+ * 段，段数与位置都不一样。
  */
 export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null {
   const row = provider(accountId);
   if (!row) return null;
   const open = openPlatformOf(row.platform);
   if (!open) return null;
-  return platformOf(row.platform) === null ? open : null;
+  if (platformOf(row.platform) !== null) return null;
+  return open.kind === OPEN_PLATFORM_KIND_NAME ? open : null;
+}
+
+/**
+ * 这个账号（或那个平台）属于哪一类上游。
+ *
+ * 账号行说了算；账号行不在（面板上拿到的是平台 id）就按平台 id 认 —— 第一个
+ * 账号的 id 就是平台 id，这一路不是猜类别，是查平台。
+ */
+function kindNameOf(upstreamId: string): string {
+  return providerKindOf(upstreamId)?.kind ?? platformOfAny(upstreamId)?.kind ?? "";
 }
 
 /**
@@ -107,8 +123,8 @@ export function setProviderKeys(
     }
     return { ok: true, message, count };
   }
-  const kind = providerKindOf(upstreamId);
-  if (kind?.kind === "minimax" || upstreamId === "minimax") {
+  const kind = kindNameOf(upstreamId);
+  if (kind === "minimax") {
     // Code 网关只用会话：额度也走会话，没有要贴的 key。
     return {
       ok: false,
@@ -116,7 +132,7 @@ export function setProviderKeys(
       count: 0,
     };
   }
-  if (kind?.kind === "qiniu" || upstreamId === "qiniu") {
+  if (kind === "qiniu") {
     // 七牛云的凭据有两段：推理用的 API key 与门户 cookie（额度只认 cookie）。
     // 位置就是顺序：第一段是 key，第二段是 cookie。空的那段表示清掉它。
     const apiKey = String(keys[0] ?? "").trim();
@@ -132,7 +148,7 @@ export function setProviderKeys(
             : "只写了门户 cookie（不能推理）";
     return { ok: true, message, count };
   }
-  if (kind?.kind === "xinghuo" || upstreamId === "xinghuo") {
+  if (kind === "xinghuo") {
     // 讯飞星火只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
     const apiKey = String(keys[0] ?? "").trim();
     const count = writeXinghuoKey(upstreamId, apiKey);
@@ -142,7 +158,7 @@ export function setProviderKeys(
       count,
     };
   }
-  if (kind?.kind === "sensenova" || upstreamId === "sensenova") {
+  if (kind === "sensenova") {
     // SenseNova 只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
     const apiKey = String(keys[0] ?? "").trim();
     const count = writeSenseNovaKey(upstreamId, apiKey);
@@ -152,7 +168,7 @@ export function setProviderKeys(
       count,
     };
   }
-  if (kind?.kind === "intern-ai" || upstreamId === "intern-ai") {
+  if (kind === "intern-ai") {
     // 书生·端砚两把：位置 0 是 Discovery 的，位置 1 是 Chat 的。空的那把表示
     // 清掉它 —— Chat 的那把留着空不算错（网关推理走的是 Discovery）。
     const discoveryKey = String(keys[0] ?? "").trim();
@@ -166,7 +182,7 @@ export function setProviderKeys(
       : "清掉了书生·端砚的推理 key";
     return { ok: true, message, count };
   }
-  if (kind?.kind === "tokenrhythm" || upstreamId === "tokenrhythm") {
+  if (kind === "tokenrhythm") {
     // TokenRhythm 只有一把推理用的 key：位置就是第一个。空的那把表示清掉它。
     const apiKey = String(keys[0] ?? "").trim();
     const count = writeTokenRhythmKey(upstreamId, apiKey);

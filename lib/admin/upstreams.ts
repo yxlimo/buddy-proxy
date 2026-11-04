@@ -39,7 +39,7 @@ import {
   provider,
   setProviderEnabled,
 } from "../providers.ts";
-import { isPlatform, platformOf } from "../platforms.ts";
+import { isPlatform, platformOfAny } from "../platforms.ts";
 // 开放平台的额度是数据：平台那一行指名的插件去问。
 import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
 import { quotaPluginOf } from "../quota-plugins.ts";
@@ -147,7 +147,9 @@ export function upstreamAccountCount(id: string): number {
  * 之分（就一个站点）。
  */
 export function upstreamRegion(id: string): string {
-  return platformOf(id)?.region ?? provider(id)?.region ?? "";
+  // 两处数据源都要认：模板只有模拟端那五家，开放平台在表里。区域是平台的
+  // 属性，跟着平台走 —— 账号行只是平台的一个入口。
+  return platformOfAny(id)?.region ?? provider(id)?.region ?? "";
 }
 
 /* ------------------------------------------------------------------ *
