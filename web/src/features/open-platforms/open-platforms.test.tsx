@@ -23,6 +23,7 @@ import {
 } from '@/gen/buddy/admin/v1/admin_pb'
 import type { Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 import { UpstreamsPage } from '@/features/upstreams/index'
+import { PLATFORM_TEMPLATES } from '@/features/open-platforms/templates'
 import { formatLocalMoment } from '@/lib/format'
 import { mockAdminClient } from '@/test/mock-transport'
 import { renderWithClient } from '@/test/render'
@@ -735,8 +736,7 @@ describe('面板上的开放平台', () => {
     expect(screen.queryByText(/剩 0/)).not.toBeInTheDocument()
   })
 
-  it('额度问到了：显示插件名与它算出来的值', async () => {
-    const client = clientWith(
+  it('额度问到了：显示插件名与它算出来的值', async () => {    const client = clientWith(
       [
         openPlatform({
           quotaPlugin: 'qiniu',
@@ -771,5 +771,231 @@ describe('面板上的开放平台', () => {
     expect(screen.getByText('剩 1,200 点')).toBeInTheDocument()
     // 「不知道」的那些格没有出现在这一行上。
     expect(screen.queryByText(/未知/)).not.toBeInTheDocument()
+  })
+
+  it('选一条模板：id、名字、地址三格被填上，提交带的是这三格', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const client = clientWith([], {
+      AddPlatform: (input) => {
+        sent.push({
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+        })
+        return create(AddPlatformResponseSchema, {
+          ok: true,
+          message: '加上了',
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(
+      await screen.findByRole('button', { name: '新增平台' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    const list = within(dialog).getByRole('group', { name: '模板列表' })
+
+    // 88 条里挑一条：先搜，再点。
+    await user.type(within(dialog).getByLabelText('搜模板'), 'deepseek')
+    await user.click(within(list).getByRole('button', { name: /DeepSeek/ }))
+
+    // 三格被模板填上了。
+    expect(within(dialog).getByLabelText('平台 id')).toHaveValue('deepseek')
+    expect(within(dialog).getByLabelText('名字')).toHaveValue('DeepSeek')
+    expect(within(dialog).getByLabelText('地址')).toHaveValue(
+      'https://api.deepseek.com/v1'
+    )
+
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([
+        {
+          id: 'deepseek',
+          label: 'DeepSeek',
+          baseUrl: 'https://api.deepseek.com/v1',
+        },
+      ])
+    })
+  })
+
+  it('选完模板还能改那三格：改完提交的是改过的', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const client = clientWith([], {
+      AddPlatform: (input) => {
+        sent.push({
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+        })
+        return create(AddPlatformResponseSchema, {
+          ok: true,
+          message: '加上了',
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(
+      await screen.findByRole('button', { name: '新增平台' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    const list = within(dialog).getByRole('group', { name: '模板列表' })
+
+    await user.type(within(dialog).getByLabelText('搜模板'), 'deepseek')
+    await user.click(within(list).getByRole('button', { name: /DeepSeek/ }))
+
+    // 模板填的三格都能改：模板是起点。
+    await user.clear(within(dialog).getByLabelText('平台 id'))
+    await user.type(within(dialog).getByLabelText('平台 id'), 'my-deepseek')
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([
+        {
+          id: 'my-deepseek',
+          label: 'DeepSeek',
+          baseUrl: 'https://api.deepseek.com/v1',
+        },
+      ])
+    })
+  })
+
+  it('搜模板：输入 deep，只剩含 deep 的条目', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(
+      await screen.findByRole('button', { name: '新增平台' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    const list = within(dialog).getByRole('group', { name: '模板列表' })
+
+    // 没搜之前是整张表。
+    expect(within(list).getAllByRole('button')).toHaveLength(88)
+
+    await user.type(within(dialog).getByLabelText('搜模板'), 'deep')
+
+    // 只剩含 deep 的两条。
+    expect(within(list).getAllByRole('button')).toHaveLength(2)
+    expect(
+      within(list).getByRole('button', { name: /DeepInfra/ })
+    ).toBeInTheDocument()
+    expect(
+      within(list).getByRole('button', { name: /DeepSeek/ })
+    ).toBeInTheDocument()
+    // 别的条目被过滤掉了。
+    expect(
+      within(list).queryByRole('button', { name: /OpenAI/ })
+    ).not.toBeInTheDocument()
+  })
+
+  it('不选模板直接手填：也能加上', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const client = clientWith([], {
+      AddPlatform: (input) => {
+        sent.push({
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+        })
+        return create(AddPlatformResponseSchema, {
+          ok: true,
+          message: '加上了',
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(
+      await screen.findByRole('button', { name: '新增平台' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    // 模板表在那儿，手填这条路照样走。
+    await user.type(within(dialog).getByLabelText('平台 id'), 'my-gateway')
+    await user.type(within(dialog).getByLabelText('名字'), '我的中转站')
+    await user.type(
+      within(dialog).getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([
+        {
+          id: 'my-gateway',
+          label: '我的中转站',
+          baseUrl: 'https://api.example.com/v1',
+        },
+      ])
+    })
+  })
+
+  it('id 撞了：服务端说已经有这个平台了，那句话显示在表单里，弹窗不关', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([], {
+      AddPlatform: () =>
+        create(AddPlatformResponseSchema, {
+          ok: false,
+          // 服务端那一句原话（lib/open-platforms.ts：id 撞了已有的平台）。
+          message: '已经有这个平台了',
+        }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(
+      await screen.findByRole('button', { name: '新增平台' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('平台 id'), 'deepseek')
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    // 服务端那句话原样显示。
+    expect(
+      await within(dialog).findByText('已经有这个平台了')
+    ).toBeInTheDocument()
+    // 弹窗不关：还得改。
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+describe('平台模板表', () => {
+  it('88 条，id 不重复，都符合 id 的形状', () => {
+    expect(PLATFORM_TEMPLATES).toHaveLength(88)
+
+    const ids = PLATFORM_TEMPLATES.map((item) => item.id)
+    expect(new Set(ids).size).toBe(ids.length)
+
+    for (const item of PLATFORM_TEMPLATES) {
+      // id 是客户端地址里的一段，形状与服务端那套规则一样。
+      expect(item.id).toMatch(/^[a-z0-9][a-z0-9-]{0,30}$/)
+      expect(item.label).not.toBe('')
+      expect(item.baseUrl).toMatch(/^https:\/\//)
+    }
   })
 })

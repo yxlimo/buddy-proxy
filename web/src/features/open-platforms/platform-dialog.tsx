@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type {
   QuotaPlugin,
   Upstream,
@@ -24,6 +24,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { describeError } from '@/lib/errors'
+import { PLATFORM_TEMPLATES, type PlatformTemplate } from './templates'
 
 /**
  * 「不选插件」在契约里是空串，但下拉框的选项不能是空串（那是控件的限制），
@@ -81,13 +82,32 @@ export function PlatformDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [draft, setDraft] = useState<Draft>(() => toDraft(platform))
+  /** 模板搜索框里的字：按名字或 id 过滤模板列表。 */
+  const [templateQuery, setTemplateQuery] = useState('')
+  /** 选中的那条模板：只是标一下，不参与提交。 */
+  const [pickedTemplate, setPickedTemplate] = useState<string>('')
 
   useEffect(() => {
     // 只看 open：弹窗开着的时候服务端那边变了（刚刷新过目录），不该把用户
     // 已经填的东西抹掉。换个平台改的时候弹窗是关着开的，open 变一次就够。
-    if (open) setDraft(toDraft(platform))
+    if (open) {
+      setDraft(toDraft(platform))
+      setTemplateQuery('')
+      setPickedTemplate('')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  /** 模板列表：按名字或 id 过滤（大小写不管）。 */
+  const shownTemplates = useMemo(() => {
+    const query = templateQuery.trim().toLowerCase()
+    if (!query) return PLATFORM_TEMPLATES
+    return PLATFORM_TEMPLATES.filter(
+      (item) =>
+        item.label.toLowerCase().includes(query) ||
+        item.id.toLowerCase().includes(query)
+    )
+  }, [templateQuery])
 
   const patch = (part: Partial<Draft>) =>
     setDraft((prev) => ({ ...prev, ...part }))
@@ -98,6 +118,21 @@ export function PlatformDialog({
   const selected = plugins.find((item) => item.id === draft.quotaPlugin)
   const unregistered =
     draft.quotaPlugin !== '' && !selected ? draft.quotaPlugin : ''
+
+  /**
+   * 选一条模板：把 id、名字、地址三格填上。
+   *
+   * 填完这三格还是能改的 —— 模板是起点，不是定好的答案。模板表里不做「只能用
+   * 一次」那类判断：id 撞了就是那个平台已经存在，服务端会说明。
+   */
+  const pickTemplate = (template: PlatformTemplate) => {
+    setPickedTemplate(template.id)
+    patch({
+      id: template.id,
+      label: template.label,
+      baseUrl: template.baseUrl,
+    })
+  }
 
   const submit = () => {
     onSubmit({
@@ -121,11 +156,57 @@ export function PlatformDialog({
           <DialogDescription>
             {editing
               ? '这一单是整单提交的：改一处也要把现在的值一起带上。地址改了以后客户端要换地址'
-              : '先建一个空平台：不接 key、不接模型清单，那些是后面的事。id 是客户端地址里的一段'}
+              : '先建一个空平台：不接 key、不接模型清单，那些是后面的事。id 是客户端地址里的一段。上面选一条模板能少填几格'}
           </DialogDescription>
         </DialogHeader>
 
         <div className='grid gap-4'>
+          {editing ? null : (
+            <div className='grid gap-2'>
+              <Label htmlFor='platform-template-search'>搜模板</Label>
+              <Input
+                id='platform-template-search'
+                value={templateQuery}
+                placeholder='按名字或 id 搜'
+                onChange={(event) => setTemplateQuery(event.target.value)}
+              />
+              <div
+                role='group'
+                aria-label='模板列表'
+                className='max-h-56 overflow-y-auto rounded-md border'
+              >
+                {shownTemplates.length ? (
+                  shownTemplates.map((template) => (
+                    <button
+                      key={template.id}
+                      type='button'
+                      aria-current={
+                        pickedTemplate === template.id ? 'true' : undefined
+                      }
+                      onClick={() => pickTemplate(template)}
+                      className='flex w-full flex-col items-start gap-0.5 border-b px-3 py-2 text-left last:border-b-0 hover:bg-accent aria-[current=true]:bg-accent'
+                    >
+                      <span className='text-sm font-medium'>
+                        {template.label}
+                      </span>
+                      <span className='text-xs text-muted-foreground'>
+                        {template.baseUrl}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className='px-3 py-2 text-sm text-muted-foreground'>
+                    没有匹配的模板
+                  </p>
+                )}
+              </div>
+              <p className='text-xs text-muted-foreground'>
+                模板是捷径不是必经：选一条会填上 id、名字、地址，填完还能改；
+                不选模板直接手填也行
+              </p>
+            </div>
+          )}
+
           <div className='grid gap-2'>
             <Label htmlFor='platform-id'>平台 id</Label>
             <Input

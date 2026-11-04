@@ -1,0 +1,442 @@
+[
+  {
+    "id": "302-ai",
+    "label": "302.AI",
+    "baseUrl": "https://api.302.ai/v1"
+  },
+  {
+    "id": "a6api",
+    "label": "A6API",
+    "baseUrl": "https://api.a6api.vip/v1"
+  },
+  {
+    "id": "aicodewith",
+    "label": "AICodeWith",
+    "baseUrl": "https://api.aicodewith.ai/v1"
+  },
+  {
+    "id": "aihubmix",
+    "label": "AiHubMix",
+    "baseUrl": "https://aihubmix.com/v1"
+  },
+  {
+    "id": "alltokens",
+    "label": "AllTokens",
+    "baseUrl": "https://alltokens.cc/v1"
+  },
+  {
+    "id": "alltokens-si",
+    "label": "AllTokens SI",
+    "baseUrl": "https://alltokens.si/v1"
+  },
+  {
+    "id": "amux",
+    "label": "Amux",
+    "baseUrl": "https://api.amux.ai/v1"
+  },
+  {
+    "id": "api",
+    "label": "模力方舟",
+    "baseUrl": "https://api.moark.com/v1"
+  },
+  {
+    "id": "apinebula",
+    "label": "APINebula",
+    "baseUrl": "https://apinebula.ai/v1"
+  },
+  {
+    "id": "atlascloud",
+    "label": "AtlasCloud",
+    "baseUrl": "https://api.atlascloud.ai/v1"
+  },
+  {
+    "id": "baidu-qianfan",
+    "label": "Baidu Qianfan",
+    "baseUrl": "https://qianfan.baidubce.com/v2/tokenplan/personal"
+  },
+  {
+    "id": "bailian-token-plan",
+    "label": "Bailian Token Plan",
+    "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+  },
+  {
+    "id": "bailing",
+    "label": "BaiLing",
+    "baseUrl": "https://api.ant-ling.com/v1"
+  },
+  {
+    "id": "baseten",
+    "label": "Baseten",
+    "baseUrl": "https://inference.baseten.co/v1"
+  },
+  {
+    "id": "byteplus",
+    "label": "BytePlus",
+    "baseUrl": "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+  },
+  {
+    "id": "ccsub",
+    "label": "CCSub",
+    "baseUrl": "https://www.ccsub.net/v1"
+  },
+  {
+    "id": "cherryin",
+    "label": "CherryIN",
+    "baseUrl": "https://open.cherryin.ai/v1"
+  },
+  {
+    "id": "clinepass",
+    "label": "ClinePass",
+    "baseUrl": "https://api.cline.bot/api/v1"
+  },
+  {
+    "id": "cloudflare-ai-gateway",
+    "label": "Cloudflare AI Gateway",
+    "baseUrl": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1"
+  },
+  {
+    "id": "code0",
+    "label": "Code0",
+    "baseUrl": "https://code0.ai/v1"
+  },
+  {
+    "id": "command-code",
+    "label": "Command Code",
+    "baseUrl": "https://api.commandcode.ai/provider/v1"
+  },
+  {
+    "id": "deepinfra",
+    "label": "DeepInfra",
+    "baseUrl": "https://api.deepinfra.com/v1/openai"
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "baseUrl": "https://api.deepseek.com/v1"
+  },
+  {
+    "id": "digitalocean",
+    "label": "DigitalOcean",
+    "baseUrl": "https://inference.do-ai.run/v1"
+  },
+  {
+    "id": "e-flowcode",
+    "label": "E-FlowCode",
+    "baseUrl": "https://e-flowcode.cc/v1"
+  },
+  {
+    "id": "fennoai",
+    "label": "FennoAI",
+    "baseUrl": "https://api.fenno.ai/v1"
+  },
+  {
+    "id": "fireworks",
+    "label": "Fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1"
+  },
+  {
+    "id": "fluxa-token-plan",
+    "label": "FluxA Token Plan",
+    "baseUrl": "https://api.baiduqianfan.ai/v2/tokenplan/team"
+  },
+  {
+    "id": "google-gemini",
+    "label": "Google Gemini",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai"
+  },
+  {
+    "id": "groq",
+    "label": "Groq",
+    "baseUrl": "https://api.groq.com/openai/v1"
+  },
+  {
+    "id": "huawei-cloud-maas",
+    "label": "Huawei Cloud MaaS",
+    "baseUrl": "https://api.modelarts-maas.com/plan/v2"
+  },
+  {
+    "id": "hugging-face",
+    "label": "Hugging Face",
+    "baseUrl": "https://router.huggingface.co/v1"
+  },
+  {
+    "id": "jiekou-ai",
+    "label": "JieKou AI",
+    "baseUrl": "https://api.jiekou.ai/openai/v1"
+  },
+  {
+    "id": "kilo-gateway",
+    "label": "Kilo Gateway",
+    "baseUrl": "https://api.kilo.ai/api/openrouter"
+  },
+  {
+    "id": "kimi",
+    "label": "Kimi（api.moonshot.cn）",
+    "baseUrl": "https://api.moonshot.cn/v1"
+  },
+  {
+    "id": "kimi-2",
+    "label": "Kimi（api.moonshot.ai）",
+    "baseUrl": "https://api.moonshot.ai/v1"
+  },
+  {
+    "id": "kimi-code",
+    "label": "Kimi Code",
+    "baseUrl": "https://api.kimi.ai/coding/v1"
+  },
+  {
+    "id": "kimi-code-china",
+    "label": "Kimi Code (China)",
+    "baseUrl": "https://api.kimi.com/coding/v1"
+  },
+  {
+    "id": "longcat",
+    "label": "LongCat",
+    "baseUrl": "https://api.longcat.chat/openai/v1"
+  },
+  {
+    "id": "meta-model-api",
+    "label": "Meta Model API",
+    "baseUrl": "https://api.meta.ai/v1"
+  },
+  {
+    "id": "minimax",
+    "label": "MiniMax（api.minimax.cn）",
+    "baseUrl": "https://api.minimax.cn/v1"
+  },
+  {
+    "id": "minimax-2",
+    "label": "MiniMax（api.minimax.io）",
+    "baseUrl": "https://api.minimax.io/v1"
+  },
+  {
+    "id": "minimax-china",
+    "label": "MiniMax (China)",
+    "baseUrl": "https://api.minimaxi.com/v1"
+  },
+  {
+    "id": "mistral",
+    "label": "Mistral",
+    "baseUrl": "https://api.mistral.ai/v1"
+  },
+  {
+    "id": "modelflare",
+    "label": "Modelflare",
+    "baseUrl": "https://modelflare.dev/v1"
+  },
+  {
+    "id": "modelscope",
+    "label": "ModelScope",
+    "baseUrl": "https://api-inference.modelscope.cn/v1"
+  },
+  {
+    "id": "nebius-token-factory",
+    "label": "Nebius Token Factory",
+    "baseUrl": "https://api.tokenfactory.nebius.com/v1"
+  },
+  {
+    "id": "nous-portal",
+    "label": "Nous Portal",
+    "baseUrl": "https://inference-api.nousresearch.com/v1"
+  },
+  {
+    "id": "novita-ai",
+    "label": "Novita AI",
+    "baseUrl": "https://api.novita.ai/openai"
+  },
+  {
+    "id": "nvidia-nim",
+    "label": "NVIDIA NIM",
+    "baseUrl": "https://integrate.api.nvidia.com/v1"
+  },
+  {
+    "id": "ollama-cloud",
+    "label": "Ollama Cloud",
+    "baseUrl": "https://ollama.com/v1"
+  },
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "baseUrl": "https://api.openai.com/v1"
+  },
+  {
+    "id": "opencode-go",
+    "label": "OpenCode Go",
+    "baseUrl": "https://opencode.ai/zen/go/v1"
+  },
+  {
+    "id": "openrouter",
+    "label": "OpenRouter",
+    "baseUrl": "https://openrouter.ai/api/v1"
+  },
+  {
+    "id": "pipellm",
+    "label": "PipeLLM",
+    "baseUrl": "https://api.pipellm.ai/openai/v1"
+  },
+  {
+    "id": "ppio",
+    "label": "PPIO",
+    "baseUrl": "https://api.ppio.com/openai/v1"
+  },
+  {
+    "id": "qianwen-ai",
+    "label": "千问AI平台",
+    "baseUrl": "https://maas.qianwenaiapi.com/compatible-mode/v1"
+  },
+  {
+    "id": "qwen",
+    "label": "Qwen",
+    "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  },
+  {
+    "id": "qwen-china",
+    "label": "Qwen (China)",
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  },
+  {
+    "id": "qwen-cloud-token-plan",
+    "label": "Qwen Cloud Token Plan",
+    "baseUrl": "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1"
+  },
+  {
+    "id": "qwen-token-plan",
+    "label": "Qwen Token Plan",
+    "baseUrl": "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1"
+  },
+  {
+    "id": "qwencloud",
+    "label": "QwenCloud",
+    "baseUrl": "https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1"
+  },
+  {
+    "id": "rightcode",
+    "label": "RightCode",
+    "baseUrl": "https://www.rightapi.ai/codex/v1"
+  },
+  {
+    "id": "sambanova",
+    "label": "SambaNova",
+    "baseUrl": "https://api.sambanova.ai/v1"
+  },
+  {
+    "id": "siliconflow",
+    "label": "SiliconFlow",
+    "baseUrl": "https://api.siliconflow.cn/v1"
+  },
+  {
+    "id": "siliconflow-en",
+    "label": "SiliconFlow en",
+    "baseUrl": "https://api.siliconflow.com/v1"
+  },
+  {
+    "id": "stepfun",
+    "label": "StepFun（api.stepfun.com）",
+    "baseUrl": "https://api.stepfun.com/step_plan/v1"
+  },
+  {
+    "id": "stepfun-2",
+    "label": "StepFun（api.stepfun.ai）",
+    "baseUrl": "https://api.stepfun.ai/step_plan/v1"
+  },
+  {
+    "id": "streamlake",
+    "label": "StreamLake",
+    "baseUrl": "https://wanqing.streamlakeapi.com/api/gateway/v1/endpoints"
+  },
+  {
+    "id": "streamlake-en",
+    "label": "StreamLake en",
+    "baseUrl": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints"
+  },
+  {
+    "id": "subrouter",
+    "label": "SubRouter",
+    "baseUrl": "https://subrouter.ai/v1"
+  },
+  {
+    "id": "sudocode-chat",
+    "label": "SudoCode.chat",
+    "baseUrl": "https://api.sudocode.chat/v1"
+  },
+  {
+    "id": "sudocode-us",
+    "label": "SudoCode.us",
+    "baseUrl": "https://sudocode.us/v1"
+  },
+  {
+    "id": "teamorouter",
+    "label": "TeamoRouter",
+    "baseUrl": "https://api.teamorouter.cn/v1"
+  },
+  {
+    "id": "tencent-cloud",
+    "label": "Tencent Cloud",
+    "baseUrl": "https://tokenhub.tencentmaas.com/plan/v3"
+  },
+  {
+    "id": "tencent-token-plan",
+    "label": "Tencent Token Plan",
+    "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3"
+  },
+  {
+    "id": "therouter",
+    "label": "TheRouter",
+    "baseUrl": "https://api.therouter.ai/v1"
+  },
+  {
+    "id": "together-ai",
+    "label": "Together AI",
+    "baseUrl": "https://api.together.xyz/v1"
+  },
+  {
+    "id": "tokenfactory",
+    "label": "TokenFactory",
+    "baseUrl": "https://api.tokenfactory.cn/v1"
+  },
+  {
+    "id": "vercel-ai-gateway",
+    "label": "Vercel AI Gateway",
+    "baseUrl": "https://ai-gateway.vercel.sh/coding-agent/v1"
+  },
+  {
+    "id": "volcengine-ark",
+    "label": "Volcengine Ark",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+  },
+  {
+    "id": "xai",
+    "label": "xAI",
+    "baseUrl": "https://api.x.ai/v1"
+  },
+  {
+    "id": "xiaomi-mimo",
+    "label": "Xiaomi MiMo（api.xiaomimimo.com）",
+    "baseUrl": "https://api.xiaomimimo.com/v1"
+  },
+  {
+    "id": "xiaomi-mimo-2",
+    "label": "Xiaomi MiMo（token-plan-cn.xiaomimimo.com）",
+    "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1"
+  },
+  {
+    "id": "xycai",
+    "label": "XycAi",
+    "baseUrl": "https://apicdn.xycai.us/v1"
+  },
+  {
+    "id": "yylx",
+    "label": "YYLX",
+    "baseUrl": "https://app.yylx.io/v1"
+  },
+  {
+    "id": "z-ai",
+    "label": "Z.ai",
+    "baseUrl": "https://api.z.ai/api/coding/paas/v4"
+  },
+  {
+    "id": "zhipu-glm",
+    "label": "Zhipu GLM",
+    "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4"
+  }
+]
