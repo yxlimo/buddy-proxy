@@ -9,6 +9,7 @@
 // （lib/router/upstreams/open-platform.ts），方言转换在转发层里。
 
 import { tokenFingerprint } from "../credential.ts";
+import { catalogModelsFromRow } from "../catalog-models.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 import { openPlatformKeyOf } from "../open-platform-credentials.ts";
 import { openPlatformOf } from "../open-platforms.ts";
@@ -61,10 +62,10 @@ registerKind({
   // 问目录跟推理一个口径：这一类上游不认 Bearer，只认 x-api-key 加版本头。
   catalogAuth: (key) => ({ "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION }),
   credential: (provider) => fromUpstreamStatus(anthropicStatus(provider), "api_key"),
-  // 目录是平台的（表里那一行），不在这里写死。平台行上的那一份怎么播种是另一件
-  // 事 —— 这里返回空数组说的是「这一层没有额外的目录」，不是「这个平台没有模型」：
-  // 面板上发布的模型会作为声明补进目录（lib/admin/platform-state.ts）。
-  models: () => [],
+  // 目录是平台的（表里那一行）：行里的 id 与顺序就是公布的。这一类没有代码里的
+  // 目录表，所以只给名字（上游没报上下文与能力，猜一个等于对客户端撒谎）；
+  // 行读不到就是空数组 —— 这一层没有可退回的代码目录（不猜）。
+  models: (provider) => catalogModelsFromRow(provider, () => []),
   // 没有额度接口：问不到就是「不知道」，不是 0。
   quotas: () => [],
   outOfCredits: () => false,

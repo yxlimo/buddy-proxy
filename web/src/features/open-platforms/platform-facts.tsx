@@ -4,6 +4,10 @@ import type {
 } from '@/gen/buddy/admin/v1/admin_pb'
 import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
 import { hasQuota, quotaStateText, QuotaSummary } from '@/features/balance/quota'
+import {
+  platformKindReadout,
+  type PlatformKindList,
+} from '@/features/open-platforms/platform-kinds'
 import { formatLocalMoment } from '@/lib/format'
 
 /** 一次「刷新模型目录」的结果：服务端给的，面板照它显示。 */
@@ -28,10 +32,13 @@ export type RefreshOutcome = {
  */
 export function OpenPlatformFacts({
   upstream,
+  kinds,
   registry,
   refresh,
 }: {
   upstream: Upstream
+  /** 建平台时能选的类型清单：三档（加载中 / 取不到 / 到手）。 */
+  kinds: PlatformKindList
   /** 额度插件登记表：三档（加载中 / 取不到 / 到手）。 */
   registry: QuotaRegistry
   /** 上一次刷新模型目录的结果。 */
@@ -40,6 +47,7 @@ export function OpenPlatformFacts({
   return (
     <div className='grid gap-0.5 text-xs whitespace-normal text-muted-foreground'>
       <span className='font-mono break-all'>{upstream.baseUrl}</span>
+      {kindLine(upstream, kinds)}
       <span>{modelLine(upstream)}</span>
       <span>{pluginLine(upstream, registry)}</span>
       {quotaLine(upstream, registeredPlugin(upstream, registry))}
@@ -50,6 +58,19 @@ export function OpenPlatformFacts({
       ) : null}
     </div>
   )
+}
+
+/**
+ * 类型那一行。
+ *
+ * 清单没到手（还在加载 / 取不到）不显示这一行 —— 那种时候说不出名字，也不该
+ * 拿 raw 值顶上或者写「未知」。清单到手但没有这一条（服务端加了新方言）就摆
+ * raw 值：那是服务端说的，不是猜的。判据在 platform-kinds.ts，弹窗用的是同一个。
+ */
+function kindLine(upstream: Upstream, kinds: PlatformKindList) {
+  const kind = platformKindReadout(kinds, upstream.kind)
+  if (!kind) return null
+  return <span>{`类型：${kind}`}</span>
 }
 
 /**
@@ -102,7 +123,7 @@ function pluginLine(upstream: Upstream, registry: QuotaRegistry): string {
   if (!id) return '额度插件：未选'
   const plugin = registeredPlugin(upstream, registry)
   if (plugin) return `额度插件：${plugin.label}`
-  if (registry.status === 'pending') return `额度插件：${id}（列表还没加载）`
+  if (registry.status === 'pending') return `额度插件：${id}（列表还在加载）`
   if (registry.status === 'error') return `额度插件：${id}（列表取不到）`
   return `额度插件：未知插件 ${id}`
 }

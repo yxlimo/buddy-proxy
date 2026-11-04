@@ -3,7 +3,7 @@
 // The transport is shared with every other open platform (lib/router/openai-platform.ts);
 // what is left of "SenseNova" is its address, its key and its quota pools.
 
-import { senseNovaCatalogModels } from "../catalog-models.ts";
+import { catalogModelsFromRow, senseNovaCatalogModels } from "../catalog-models.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
@@ -28,7 +28,14 @@ export const senseNovaKind = registerCompatiblePlatform({
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => senseNovaInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
-  models: () => senseNovaCatalogModels(senseNovaCatalog()),
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的。元数据在上游缓存里
+  // （平台报的那一份），行里查不到的 id 只给名字。行读不到才退回缓存那一份 ——
+  // 那是兜底，不是常态。
+  models: (provider) => {
+    const rendered = senseNovaCatalogModels(senseNovaCatalog());
+    const byId = new Map(rendered.map((model) => [model.id, model]));
+    return catalogModelsFromRow(provider, () => rendered, (id) => byId.get(id));
+  },
   // 额度读的是插件问回来的那一份结论：平台行没指名插件、插件没登记、这一轮没
   // 问到 —— 三种都是「不知道」，不是 0。
   quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),

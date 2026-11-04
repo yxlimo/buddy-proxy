@@ -5,6 +5,7 @@
 // made — so the difference is passed in.
 
 import type Koa from "koa";
+import { randomUUID } from "node:crypto";
 import { AuthError } from "../../credential.ts";
 import { anthropicToOpenAI, openaiToAnthropic } from "../../dialect/request.ts";
 import { senseNovaChat } from "../../sensenova/transport.ts";
@@ -13,6 +14,48 @@ import { deliverAnthropicStream, deliverJson, deliverOpenAIStream, type Dialect 
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
 import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
+
+/**
+ * 归因头：这条上游请求是哪个账号发出的。
+ *
+ * 只给开放平台加。模拟客户端（Qoder、WorkBuddy、MiniMax Code、ZCode）的请求要
+ * 跟真桌面端逐字对齐 —— 多一个头就是在说「这条请求不是桌面端发的」。
+ *
+ * 两个头都不是凭据：request id 每次尝试新生成，账号 id 是内部的数字 id。
+ */
+export const REQUEST_ID_HEADER = "x-request-id";
+export const ACCOUNT_ID_HEADER = "x-account-id";
+
+/**
+ * 一次上游尝试带的头：客户端的会话头，加上归因的那两个。
+ *
+ * 归因头放在后面：客户端就算发了同名的头也顶不掉它们 —— 顶掉了，日志就认不出
+ * 这条请求是网关发的还是客户端自己编的。
+ *
+ * 导出：TokenRhythm 走自己的上游实现（同目录的 tokenrhythm.ts），归因头是同一
+ * 件事，不能那边写一份。
+ */
+export function attributionHeaders(
+  clientHeaders: Record<string, string>,
+  requestId: string,
+  accountId: string,
+): Record<string, string> {  return {
+    ...clientHeaders,
+    [REQUEST_ID_HEADER]: requestId,
+    [ACCOUNT_ID_HEADER]: accountId,
+  };
+}
+
+/**
+ * 每次上游尝试一行：这一条请求在上游那边是哪个 id。
+ *
+ * 跟着 ctx.logRoute 走：它只在排查时要对号，常开就是给流量最大的一类平台每次
+ * 请求多打一行。前缀用 [ATTRIB] 而不是 [ROUTE]：grep 的时候要能一眼分出「按
+ * 开关打的归因行」与「策略打的选路行」。也不打 key。
+ */
+function logAttempt(tag: string, accountId: string, requestId: string, model: string): void {
+  console.log(`[ATTRIB] ${tag} account=${accountId} request=${requestId} model=${model}`);
+}
 
 /**
  * 开放平台的推理（OpenAI 方言）。
@@ -55,7 +98,15 @@ export async function toOpenAiPlatform(
     route.platform,
     opts.log,
     async (account) => {
-      const res = await opts.chat(openaiBody, ctx.clientHeaders, account.id);
+      // 归因头在这里生成，不在函数开头：降级换了账号就是另一次尝试，上游那边是
+      // 另一条请求 —— 拿同一个 id 去问厂商会问出两件事。
+      const requestId = randomUUID();
+      if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
+      const res = await opts.chat(
+        openaiBody,
+        attributionHeaders(ctx.clientHeaders, requestId, account.id),
+        account.id,
+      );
       if (res.ok) return res;
       // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
       // 记（onAttempt），这里只负责把错误造出来。
@@ -248,7 +299,14 @@ export async function toAnthropicPlatform(
     route.platform,
     opts.log,
     async (account) => {
-      const res = await opts.chat(anthropicBody, ctx.clientHeaders, account.id);
+      // 同上：每次尝试一个新的 request id，账号 id 就是这次真正发请求的那个。
+      const requestId = randomUUID();
+      if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
+      const res = await opts.chat(
+        anthropicBody,
+        attributionHeaders(ctx.clientHeaders, requestId, account.id),
+        account.id,
+      );
       if (res.ok) return res;
       // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。错误在这里
       // 造出来，策略才看得到上游的状态与 retry-after。

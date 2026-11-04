@@ -188,6 +188,9 @@ export function catalogGroups(): CatalogGroup[] {
   for (const row of listProviders()) {
     if (!row.enabled) continue;
     if (seen.has(row.platform)) continue;
+    // 平台那一行没了（删了平台，账号行还在）：目录无处可归。不判这一下，已删
+    // 平台的模型会借孤儿账号回到面板的目录里 —— 平台都没了，模型不该还在。
+    if (!platformOfAny(row.platform)) continue;
     const kind = kindOf(row.kind);
     if (!kind) continue;
     const models = kind.models(row);

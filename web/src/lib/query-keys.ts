@@ -62,4 +62,8 @@ export const queryKeys = {
   quotaPlugins: {
     all: ['quota-plugins'] as const,
   },
+  /** 建平台时能选的类型（方言）：新增平台那一格选类型、平台卡片说类型用。 */
+  platformKinds: {
+    all: ['platform-kinds'] as const,
+  },
 } as const

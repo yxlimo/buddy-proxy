@@ -10,7 +10,7 @@
 // 反过来引就成环。模板的 id 名单在叶子模块 lib/platform-templates.ts 里，两边
 // 都直接引它：不用谁在求值期把名单交给别人。
 
-import { store } from "./store.ts";
+import { store, UPSTREAM_CATALOG_KINDS } from "./store.ts";
 import { PLATFORMS } from "./platform-templates.ts";
 // 能建的平台种类：建的时候要照着它校验，拒绝时要把可选的列出来。
 import { PLATFORM_KIND_OPTIONS, platformKindOptionOf } from "./platform-catalog.ts";
@@ -263,6 +263,47 @@ export function updateOpenPlatform(
       id,
     );
   return { ok: true, message: "改好了" };
+}
+
+/**
+ * 把上游刚拉到的目录写进平台那一行。
+ *
+ * 目录由行说了算（各 kind 的 models() 读它，见 lib/catalog-models.ts），而
+ * SenseNova 与书生·端砚的目录只落在 cache 表 —— 两处不一起走，「上游答了、
+ * 面板上还是空」就成了常态。
+ *
+ * 三道闸，缺一道就会把不该动的目录盖掉：
+ *
+ *   1. 只有目录归上游管的那两家（UPSTREAM_CATALOG_KINDS）。七牛云、讯飞星火、
+ *      TokenRhythm 的目录是代码挑过的一份，上游那份更宽（七牛报 78 个模型），
+ *      盖上来会出现被上游拒的模型；方言类（openai / anthropic）的目录由面板那条
+ *      路管。只判前两道而没有这一道，等于「谁接上 Cache 谁就被盖」。
+ *   2. 人写死的那一份不同步（source=manual）：那是明确的意思，含「我把目录清空
+ *      了」。
+ *   3. 面板上把「自动拉模型目录」关掉的那一行不同步：那一格就是那个开关，后台替
+ *      人把它打开，开关就成了摆设。
+ *
+ * 行不存在也不同步：没有行可写。
+ *
+ * `fetchedAt` 跟着写成现在：它是「上次拉取的时刻」，面板拿它显示「上次拉取」；
+ * 不写就等于说「从来没拉过」，而目录明明是刚拉回来的。`updated_at` 只在目录内容
+ * 变了的时候动 —— 面板上那个「最后修改」说的是目录改过，不是每次问上游都算改。
+ */
+export function syncPlatformModels(platform: string, items: readonly unknown[]): void {
+  const row = openPlatformOf(platform);
+  if (!row) return;
+  if (!UPSTREAM_CATALOG_KINDS.has(row.kind)) return;
+  if (row.models.source === "manual") return;
+  if (!row.models.auto) return;
+  const next = normalizeModels(items);
+  // 空的不写：把行清空会让人以为模型没了，而上游答一个空清单多半是没答好（与
+  // lib/router/catalog-cache.ts 拒收空清单同一件事）。
+  if (!next.length) return;
+  const same = next.length === row.models.items.length && next.every((id, i) => id === row.models.items[i]);
+  const now = Date.now();
+  store()
+    .prepare("UPDATE platform SET models = ?, updated_at = ? WHERE id = ?")
+    .run(modelsJson({ ...row.models, items: next, fetchedAt: now }), same ? row.updatedAt : now, platform);
 }
 
 /**

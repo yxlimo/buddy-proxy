@@ -33,8 +33,14 @@ export function senseNovaInferenceKey(providerId = "sensenova"): string {
 /**
  * 缓存的模型清单。落库一份：重启后手上就有目录，这个平台不会从模型列表里
  * 整组消失（目录空 = 平台不可见 = 路由不到）。
+ *
+ * platform 是这份清单要去的那一行：目录现在由平台行说了算（各 kind 的 models()
+ * 读它），上游这份到手时要同步过去，否则面板与路由里一直是空的。
  */
-const catalog = new CatalogCache<SenseNovaModel>(CATALOG_TTL_MS, { cacheId: "sensenova:catalog" });
+const catalog = new CatalogCache<SenseNovaModel>(CATALOG_TTL_MS, {
+  cacheId: "sensenova:catalog",
+  platform: "sensenova",
+});
 
 /** 现在这份清单。第一次问上游之前是空的。 */
 export function senseNovaCatalog(): SenseNovaModel[] {

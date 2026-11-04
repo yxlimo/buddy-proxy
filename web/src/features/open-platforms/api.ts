@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import {
   AddPlatformRequestSchema,
   DeletePlatformRequestSchema,
+  ListPlatformKindsRequestSchema,
   ListQuotaPluginsRequestSchema,
   RefreshPlatformModelsRequestSchema,
   UpdatePlatformRequestSchema,
@@ -32,6 +33,24 @@ export function useQuotaPlugins() {
   })
 }
 
+/** 平台类型的查询键。键本身在 `lib/query-keys.ts` 里。 */
+export const platformKindKeys = queryKeys.platformKinds
+
+/**
+ * 建平台时能选的类型（方言）。
+ *
+ * 清单是服务端登记的：面板不写死「openai / anthropic」这两条。服务端加一种
+ * 方言，下拉与卡片就跟着多一种；面板旧了、清单里有它不认识的 kind，就摆 raw
+ * 值（说不准的地方见 `platform-kinds.ts`）。
+ */
+export function useListPlatformKinds() {
+  const client = useAdminClient()
+  return useQuery({
+    queryKey: queryKeys.platformKinds.all,
+    queryFn: () => client.listPlatformKinds(create(ListPlatformKindsRequestSchema)),
+  })
+}
+
 /**
  * 加一个开放平台。
  *
@@ -49,12 +68,15 @@ export function useAddPlatform() {
       id: string
       label: string
       baseUrl: string
+      /** 用哪一类适配器：清单里的一个 kind。 */
+      kind: string
     }) => {
       const result = await client.addPlatform(
         create(AddPlatformRequestSchema, {
           id: input.id,
           label: input.label,
           baseUrl: input.baseUrl,
+          kind: input.kind,
         })
       )
       assertOk(result, '没加上这个平台')

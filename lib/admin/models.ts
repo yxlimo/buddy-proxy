@@ -466,6 +466,9 @@ export interface CatalogModelView {
   displayName: string;
   contextWindow: number;
   maxOutputTokens: number;
+  // 「不知道」在 CatalogModel 里是缺键（见 lib/catalog-models.ts）。面板这一格
+  // 走的契约（CatalogModelSchema）是 proto3 的 bool，没有 presence —— 表达不了
+  // 「不知道」，所以那里只能报 false。
   reasoning: boolean;
   toolCall: boolean;
   effortOptions: string[];
@@ -493,8 +496,8 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
         displayName: m.displayName,
         contextWindow: m.contextWindow ?? 0,
         maxOutputTokens: m.maxOutputTokens ?? 0,
-        reasoning: m.reasoning,
-        toolCall: m.toolCall,
+        reasoning: m.reasoning === true,
+        toolCall: m.toolCall === true,
         effortOptions: m.effortOptions ?? [],
         credits: m.credits ?? 0,
       });

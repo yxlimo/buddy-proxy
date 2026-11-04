@@ -22,6 +22,12 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { describeError } from '@/lib/errors'
 import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
+import {
+  platformKindHint,
+  platformKindPlaceholder,
+  platformKindReadout,
+  type PlatformKindList,
+} from './platform-kinds'
 import { PLATFORM_TEMPLATES, type PlatformTemplate } from './templates'
 
 /**
@@ -45,7 +51,7 @@ const NO_PLUGIN = '*none*'
 function storedPluginLabel(id: string, registry: QuotaRegistry): string {
   switch (registry.status) {
     case 'pending':
-      return `${id}（列表还没加载）`
+      return `${id}（列表还在加载）`
     case 'error':
       return `${id}（列表取不到）`
     default:
@@ -73,7 +79,28 @@ function pluginHint(registry: QuotaRegistry, unregistered: string): string {
   }
 }
 
-export type PlatformSubmit = {
+export type PlatformSubmit = AddPlatformSubmit | UpdatePlatformSubmit
+
+/**
+ * 新增那一单。
+ *
+ * 类型是建平台时选的一格：建完就改不了，所以只有这一单带它。
+ */
+export type AddPlatformSubmit = {
+  id: string
+  label: string
+  baseUrl: string
+  /** 用哪一类适配器（清单里的一个 kind）。 */
+  kind: string
+}
+
+/**
+ * 修改那一单。
+ *
+ * 契约里 UpdatePlatform 没有 kind 这一格：类型建完就改不了，所以这里不带它 ——
+ * 不是「带上但 hook 会挑掉」，是这一单本身就没有。
+ */
+export type UpdatePlatformSubmit = {
   id: string
   label: string
   baseUrl: string
@@ -86,6 +113,8 @@ type Draft = {
   id: string
   label: string
   baseUrl: string
+  /** 选中的类型（清单里的一个 kind）。 */
+  kind: string
   quotaPlugin: string
   modelsAuto: boolean
   /** 模型目录：一行一个模型名。 */
@@ -105,6 +134,7 @@ type Draft = {
 export function PlatformDialog({
   open,
   platform,
+  kinds,
   registry,
   pending,
   error,
@@ -114,11 +144,16 @@ export function PlatformDialog({
   open: boolean
   /** 要改的平台。新增的时候不给。 */
   platform?: Upstream
+  /** 建平台时能选的类型清单：三档（加载中 / 取不到 / 到手）。 */
+  kinds: PlatformKindList
   /** 额度插件登记表：三档（加载中 / 取不到 / 到手）。 */
   registry: QuotaRegistry
   pending: boolean
   /** 上一次提交的错误：服务端的话，原样显示。 */
   error?: unknown
+  /**
+   * 交上去。新增那一单带 kind，改那一单不带（`PlatformSubmit` 是两个类型）。
+   */
   onSubmit: (input: PlatformSubmit) => void
   onOpenChange: (open: boolean) => void
 }) {
@@ -154,6 +189,51 @@ export function PlatformDialog({
     setDraft((prev) => ({ ...prev, ...part }))
 
   const editing = platform !== undefined
+  // 清单到手了才有可选项；没到手、取不到的时候一个也没有。
+  const kindOptions = kinds.status === 'ready' ? kinds.kinds : []
+  const chosenKind = kindOptions.find((item) => item.kind === draft.kind)
+  // 清单现在怎么了：三档各一句（加载中 / 取不到 / 一条也没有）。有得选的时候
+  // 这一行不摆；占位符与这行从同一处取，两处说法一致。
+  const kindOptionHint = platformKindHint(kinds)
+  // 「类型：xxx」那一行（改的时候）：判据在 platform-kinds.ts，卡片用的是同一个。
+  const readonlyKind = platform ? platformKindReadout(kinds, platform.kind) : null
+
+  useEffect(() => {
+    // 新增：清单到手后默认选第一条（顺序照服务端给的）。改的时候没有这一格。
+    //
+    // 依赖里带上 open：弹窗每开一次都把草稿重置成空的，重置完得重新选一次。
+    // 只看 kinds 的话，清单早就到手了，打开弹窗时这条 effect 不会再跑，类型
+    // 就会一直空着（保存一直禁用）。
+    if (!open || editing || kinds.status !== 'ready') return
+    const first = kinds.kinds[0]
+    if (!first) return
+    setDraft((prev) =>
+      kinds.kinds.some((item) => item.kind === prev.kind)
+        ? prev
+        : {
+            ...prev,
+            kind: first.kind,
+            // 地址是空的才用这一类的默认地址占位；填过的不动。
+            baseUrl: prev.baseUrl.trim() ? prev.baseUrl : first.defaultBaseUrl,
+          }
+    )
+  }, [open, editing, kinds])
+
+  /**
+   * 换一种类型：地址是空的时候用这一类的默认地址占位。
+   *
+   * 默认地址可能是空串（现在两种都是）：那就照常留空，不给提示。
+   */
+  const chooseKind = (kind: string) => {
+    const option = kindOptions.find((item) => item.kind === kind)
+    setDraft((prev) => ({
+      ...prev,
+      kind,
+      baseUrl: prev.baseUrl.trim()
+        ? prev.baseUrl
+        : (option?.defaultBaseUrl ?? ''),
+    }))
+  }
   // 登记表到手了才有可选项；没到手、取不到的时候只有存着的那个 id。
   const plugins = registry.status === 'ready' ? registry.plugins : []
   // 选中的插件：登记表里有的那个。存着的 id 不在登记表里（或者登记表还没
@@ -178,14 +258,23 @@ export function PlatformDialog({
   }
 
   const submit = () => {
+    if (editing) {
+      onSubmit({
+        id: draft.id.trim(),
+        label: draft.label.trim(),
+        baseUrl: draft.baseUrl.trim(),
+        quotaPlugin: draft.quotaPlugin,
+        modelsAuto: draft.modelsAuto,
+        // 自动拉的时候不动现在那份目录（服务端的约定）：不带清单。
+        models: draft.modelsAuto ? [] : parseModels(draft.models),
+      })
+      return
+    }
     onSubmit({
       id: draft.id.trim(),
       label: draft.label.trim(),
       baseUrl: draft.baseUrl.trim(),
-      quotaPlugin: draft.quotaPlugin,
-      modelsAuto: draft.modelsAuto,
-      // 自动拉的时候不动现在那份目录（服务端的约定）：不带清单。
-      models: draft.modelsAuto ? [] : parseModels(draft.models),
+      kind: draft.kind,
     })
   }
 
@@ -204,6 +293,41 @@ export function PlatformDialog({
         </DialogHeader>
 
         <div className='grid gap-4'>
+          {editing ? (
+            // 类型改不了（契约里 UpdatePlatform 没有这一格），只摆一行只读的。
+            // kind 空着、清单没到手都说不准名字：那些时候整行不摆。
+            readonlyKind ? (
+              <p className='text-sm'>{`类型：${readonlyKind}`}</p>
+            ) : null
+          ) : (
+            <div className='grid gap-2'>
+              <Label htmlFor='platform-kind'>类型</Label>
+              <Select
+                value={chosenKind?.kind ?? ''}
+                disabled={kindOptions.length === 0}
+                onValueChange={chooseKind}
+              >
+                <SelectTrigger id='platform-kind' aria-label='类型'>
+                  <SelectValue placeholder={platformKindPlaceholder(kinds)} />
+                </SelectTrigger>
+                <SelectContent>
+                  {kindOptions.map((item) => (
+                    <SelectItem key={item.kind} value={item.kind}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* 清单取不到的时候补上原因。其余两档（还在加载 / 一条也没有）
+                  上面那一行占位已经把话说完了，不重复一遍。 */}
+              {kindOptionHint ? (
+                <p className='text-xs text-muted-foreground'>
+                  {kindOptionHint}
+                </p>
+              ) : null}
+            </div>
+          )}
+
           {editing ? null : (
             <div className='grid gap-2'>
               <Label htmlFor='platform-template-search'>搜模板</Label>
@@ -382,7 +506,10 @@ export function PlatformDialog({
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button disabled={pending} onClick={submit}>
+          <Button
+            disabled={pending || (!editing && !chosenKind)}
+            onClick={submit}
+          >
             {editing ? '保存' : '加上'}
           </Button>
         </DialogFooter>
@@ -411,6 +538,8 @@ function toDraft(platform?: Upstream): Draft {
       id: '',
       label: '',
       baseUrl: '',
+      // 空串：清单到手后由上面那个 effect 选第一条。
+      kind: '',
       quotaPlugin: '',
       modelsAuto: false,
       models: '',
@@ -420,6 +549,7 @@ function toDraft(platform?: Upstream): Draft {
     id: platform.id,
     label: platform.label,
     baseUrl: platform.baseUrl,
+    kind: platform.kind,
     quotaPlugin: platform.quotaPlugin,
     modelsAuto: platform.modelsAuto,
     models: platform.models.join('\n'),

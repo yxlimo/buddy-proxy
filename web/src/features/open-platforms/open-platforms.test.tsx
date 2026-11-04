@@ -1,4 +1,4 @@
-import { create, type MessageInitShape } from '@bufbuild/protobuf'
+import { create, type MessageInitShape, type MessageShape } from '@bufbuild/protobuf'
 import { Code, ConnectError } from '@connectrpc/connect'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
@@ -9,10 +9,12 @@ import {
   DeletePlatformResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListPlatformKindsResponseSchema,
   ListPublishedModelsResponseSchema,
   ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
   OpenPlatformSchema,
+  PlatformKindSchema,
   ProviderPolicy,
   QuotaPluginFieldSchema,
   QuotaPluginSchema,
@@ -44,6 +46,28 @@ vi.mock('sonner', () => ({
 
 /** 服务端报的上次拉取时刻。 */
 const FETCHED_AT = BigInt(Date.UTC(2026, 10, 3, 4, 0, 0))
+
+/**
+ * 服务端登记的两种方言：顺序与服务端那张表一样。
+ *
+ * 面板不写死这两条（清单是服务端给的），这里只是把服务端现在给的那两条摆上。
+ */
+function twoKinds() {
+  return [
+    create(PlatformKindSchema, {
+      kind: 'openai',
+      label: 'OpenAI 兼容',
+      defaultBaseUrl: '',
+      modelsFromUpstream: true,
+    }),
+    create(PlatformKindSchema, {
+      kind: 'anthropic',
+      label: 'Anthropic 兼容',
+      defaultBaseUrl: '',
+      modelsFromUpstream: true,
+    }),
+  ]
+}
 
 /** 代码里的模板平台：删不掉也改不了。 */
 function template(
@@ -105,6 +129,9 @@ function clientWith(
       create(ListCredentialsResponseSchema, { credentials: [] }),
     ListQuotaPlugins: () =>
       create(ListQuotaPluginsResponseSchema, { plugins: [] }),
+    // 建平台时能选的类型：服务端现在给的那两条。
+    ListPlatformKinds: () =>
+      create(ListPlatformKindsResponseSchema, { kinds: twoKinds() }),
     // 删平台之前要扫一遍主路由模型：没有模型指向它才是平常那条路。
     ListPublishedModels: () =>
       create(ListPublishedModelsResponseSchema, { models: [] }),
@@ -117,6 +144,17 @@ function rowOf(name: string): HTMLElement {
   const cell = screen.getByText(name).closest('tr')
   if (!cell) throw new Error(`找不到 ${name} 那一行`)
   return cell
+}
+
+/**
+ * 一个还没落定的 promise：把「清单还在加载」这一档摆稳，手后再放行。
+ */
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
 }
 
 /**
@@ -195,13 +233,14 @@ describe('面板上的开放平台', () => {
 
   it('「新增平台」入口：填 id、名字、地址，发的是 AddPlatform', async () => {
     const user = userEvent.setup({ delay: null })
-    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const sent: { id: string; label: string; baseUrl: string; kind: string }[] = []
     const client = clientWith([], {
       AddPlatform: (input) => {
         sent.push({
           id: input.id ?? '',
           label: input.label ?? '',
           baseUrl: input.baseUrl ?? '',
+          kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
           ok: true,
@@ -236,6 +275,7 @@ describe('面板上的开放平台', () => {
           id: 'my-gateway',
           label: '我的中转站',
           baseUrl: 'https://api.example.com/v1',
+          kind: 'openai',
         },
       ])
     })
@@ -475,6 +515,49 @@ describe('面板上的开放平台', () => {
         },
       ])
     })
+  })
+
+  it('改平台：请求里没有 kind（整份入参逐字段对）', async () => {
+    const user = userEvent.setup({ delay: null })
+    // 把 UpdatePlatform 的入参整份抄下来逐字段对：契约里没有 kind 这一格，
+    // 面板多带一格就是发错了。
+    const sent: Record<string, unknown>[] = []
+    const client = clientWith([openPlatform()], {
+      UpdatePlatform: (input) => {
+        const whole: Record<string, unknown> = {
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+          quotaPlugin: input.quotaPlugin ?? '',
+          modelsAuto: input.modelsAuto,
+          models: [...(input.models ?? [])],
+        }
+        // 弹窗那一单整个递下来的话，这里会多出这一格。
+        if ('kind' in (input as object)) {
+          whole.kind = (input as unknown as Record<string, unknown>).kind
+        }
+        sent.push(whole)
+        return create(UpdatePlatformResponseSchema, { ok: true, message: '改好了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toEqual({
+      id: 'my-gateway',
+      label: '我的中转站',
+      baseUrl: 'https://api.example.com/v1',
+      quotaPlugin: 'qiniu-portal',
+      // 这个平台开着自动拉：目录不动（不带清单）。
+      modelsAuto: true,
+      models: [],
+    })
+    // 多一格都不行。
+    expect(sent[0]).not.toHaveProperty('kind')
   })
 
   it('改平台失败：弹窗里显示服务端那句话，弹窗不关', async () => {
@@ -724,7 +807,7 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('插件列表还在加载：说还没加载，不说这个 id 不在已知插件里', async () => {
+  it('插件列表还在加载：说还在加载，不说这个 id 不在已知插件里', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
     const client = clientWith([openPlatform()], {
@@ -752,7 +835,7 @@ describe('面板上的开放平台', () => {
 
     await waitFor(() => {
       expect(within(dialog).getByRole('combobox')).toHaveTextContent(
-        'qiniu-portal（列表还没加载）'
+        'qiniu-portal（列表还在加载）'
       )
     })
     expect(
@@ -1011,13 +1094,14 @@ describe('面板上的开放平台', () => {
 
   it('选一条模板：id、名字、地址三格被填上，提交带的是这三格', async () => {
     const user = userEvent.setup({ delay: null })
-    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const sent: { id: string; label: string; baseUrl: string; kind: string }[] = []
     const client = clientWith([], {
       AddPlatform: (input) => {
         sent.push({
           id: input.id ?? '',
           label: input.label ?? '',
           baseUrl: input.baseUrl ?? '',
+          kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
           ok: true,
@@ -1058,6 +1142,7 @@ describe('面板上的开放平台', () => {
           id: 'deepseek',
           label: 'DeepSeek',
           baseUrl: 'https://api.deepseek.com/v1',
+          kind: 'openai',
         },
       ])
     })
@@ -1065,13 +1150,14 @@ describe('面板上的开放平台', () => {
 
   it('选完模板还能改那三格：改完提交的是改过的', async () => {
     const user = userEvent.setup({ delay: null })
-    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const sent: { id: string; label: string; baseUrl: string; kind: string }[] = []
     const client = clientWith([], {
       AddPlatform: (input) => {
         sent.push({
           id: input.id ?? '',
           label: input.label ?? '',
           baseUrl: input.baseUrl ?? '',
+          kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
           ok: true,
@@ -1107,6 +1193,7 @@ describe('面板上的开放平台', () => {
           id: 'my-deepseek',
           label: 'DeepSeek',
           baseUrl: 'https://api.deepseek.com/v1',
+          kind: 'openai',
         },
       ])
     })
@@ -1145,13 +1232,14 @@ describe('面板上的开放平台', () => {
 
   it('不选模板直接手填：也能加上', async () => {
     const user = userEvent.setup({ delay: null })
-    const sent: { id: string; label: string; baseUrl: string }[] = []
+    const sent: { id: string; label: string; baseUrl: string; kind: string }[] = []
     const client = clientWith([], {
       AddPlatform: (input) => {
         sent.push({
           id: input.id ?? '',
           label: input.label ?? '',
           baseUrl: input.baseUrl ?? '',
+          kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
           ok: true,
@@ -1186,6 +1274,7 @@ describe('面板上的开放平台', () => {
           id: 'my-gateway',
           label: '我的中转站',
           baseUrl: 'https://api.example.com/v1',
+          kind: 'openai',
         },
       ])
     })
@@ -1217,6 +1306,403 @@ describe('面板上的开放平台', () => {
     ).toBeInTheDocument()
     // 弹窗不关：还得改。
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+/**
+ * 建平台时能选的那一格：类型（方言）。
+ *
+ * 选项全部来自服务端（ListPlatformKinds）：面板不写死 openai / anthropic 这两条。
+ * 清单没到手就不放行提交 —— 不猜一个默认值发上去。
+ */
+describe('建平台时能选类型', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('默认选第一条；改成第二条后提交，kind 是第二条那一条', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: { id: string; label: string; baseUrl: string; kind: string }[] = []
+    const client = clientWith([], {
+      AddPlatform: (input) => {
+        sent.push({
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+          kind: input.kind ?? '',
+        })
+        return create(AddPlatformResponseSchema, { ok: true, message: '加上了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 清单到手后默认选第一条：显示的是它自己的名字，不是 id。
+    const kind = within(dialog).getByRole('combobox', { name: '类型' })
+    await waitFor(() => expect(kind).toHaveTextContent('OpenAI 兼容'))
+
+    // 改成第二条。
+    await user.click(kind)
+    await user.click(
+      await screen.findByRole('option', { name: 'Anthropic 兼容' })
+    )
+    expect(kind).toHaveTextContent('Anthropic 兼容')
+
+    await user.type(within(dialog).getByLabelText('平台 id'), 'my-gateway')
+    await user.type(within(dialog).getByLabelText('名字'), '我的中转站')
+    await user.type(
+      within(dialog).getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    // 逐格对：kind 是刚选的那一条，其余三格是填进去的。
+    await waitFor(() => {
+      expect(sent).toEqual([
+        {
+          id: 'my-gateway',
+          label: '我的中转站',
+          baseUrl: 'https://api.example.com/v1',
+          kind: 'anthropic',
+        },
+      ])
+    })
+  })
+
+  it('类型带默认地址：地址空着的时候用它占位，填过的不动', async () => {
+    const user = userEvent.setup({ delay: null })
+    const kinds = [
+      create(PlatformKindSchema, {
+        kind: 'openai',
+        label: 'OpenAI 兼容',
+        defaultBaseUrl: 'https://gw.example.com/v1',
+        modelsFromUpstream: true,
+      }),
+      create(PlatformKindSchema, {
+        kind: 'anthropic',
+        label: 'Anthropic 兼容',
+        defaultBaseUrl: '',
+        modelsFromUpstream: true,
+      }),
+    ]
+    const client = clientWith([], {
+      ListPlatformKinds: () =>
+        create(ListPlatformKindsResponseSchema, { kinds }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 默认选中第一条：它的默认地址填进地址那一格。
+    const address = within(dialog).getByLabelText('地址')
+    await waitFor(() =>
+      expect(address).toHaveValue('https://gw.example.com/v1')
+    )
+
+    // 换成没有默认地址的那一条：填过的地址不动。
+    await user.click(within(dialog).getByRole('combobox', { name: '类型' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Anthropic 兼容' })
+    )
+    expect(address).toHaveValue('https://gw.example.com/v1')
+  })
+
+  it('类型清单取不到：选择禁用、说原因，保存禁用，不发请求', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([], {
+      ListPlatformKinds: () => {
+        throw new ConnectError('问不到', Code.Unavailable)
+      },
+      AddPlatform: (input) => {
+        sent.push(input.kind ?? '')
+        return create(AddPlatformResponseSchema, { ok: true, message: '加上了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const kind = within(dialog).getByRole('combobox', { name: '类型' })
+    await waitFor(() => expect(kind).toBeDisabled())
+    // 取不到的原因照服务端/传输层那句话显示。
+    expect(within(dialog).getByText(/类型清单取不到：网关不可用/)).toBeInTheDocument()
+
+    // 填了别的格也不许提交：类型这一格没有值，发上去等于替用户选了一种。
+    await user.type(within(dialog).getByLabelText('平台 id'), 'my-gateway')
+    const save = within(dialog).getByRole('button', { name: '加上' })
+    expect(save).toBeDisabled()
+    await user.click(save)
+
+    expect(sent).toEqual([])
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('清单还没到手：编辑弹窗与卡片都不显示类型这一行', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([openPlatform({ kind: 'anthropic' })], {
+      // 一直不回来：清单就是「加载中」那一档。
+      ListPlatformKinds: () => new Promise(() => {}),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    // 同一份数据两处说法得一样：弹窗与卡片都不掘这一行，不把 raw kind 摆上去。
+    expect(within(dialog).queryByText(/类型：/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/类型：/)).not.toBeInTheDocument()
+  })
+
+  it('平台没有类型：编辑弹窗也不掘这一行', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([openPlatform({ kind: '', quotaPlugin: '' })])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    // 空串不是一种类型：没有可说的事。
+    expect(within(dialog).queryByText(/类型：/)).not.toBeInTheDocument()
+  })
+
+  it('清单到手但一条也没有：说没有能选的类型，不说还在加载', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([], {
+      ListPlatformKinds: () =>
+        create(ListPlatformKindsResponseSchema, { kinds: [] }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 清单已经到手了：不能再说「还在加载」。占位符与下面那句是同一处给的话。
+    expect(
+      await within(dialog).findByText('没有能选的类型')
+    ).toBeInTheDocument()
+    expect(within(dialog).queryByText(/还在加载/)).not.toBeInTheDocument()
+    // 一个都没得选：保存仍然禁用。
+    expect(within(dialog).getByRole('button', { name: '加上' })).toBeDisabled()
+  })
+
+  it('类型清单还在加载：选择与保存都禁用，不显示占位的类型名', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([], {
+      // 一直不回来：清单就是「加载中」那一档。
+      ListPlatformKinds: () => new Promise(() => {}),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const kind = within(dialog).getByRole('combobox', { name: '类型' })
+    expect(kind).toBeDisabled()
+    expect(within(dialog).getByText('类型清单还在加载')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '加上' })).toBeDisabled()
+    // 清单没到的时候不猜一种类型出来，也不写「未选」「未知」这种占位。
+    expect(within(dialog).queryByText(/未选|未知/)).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('option')).not.toBeInTheDocument()
+  })
+
+  it('填过的地址不被默认地址覆盖：清单到手也不动', async () => {
+    const user = userEvent.setup({ delay: null })
+    // 清单晚一点才回来：这样才能在清单没到手的时候先把地址填上。
+    const kindsGate = deferred<MessageShape<typeof ListPlatformKindsResponseSchema>>()
+    const client = clientWith([], {
+      ListPlatformKinds: () => kindsGate.promise,
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 清单还没到就先把地址填上。
+    const address = within(dialog).getByLabelText('地址')
+    await user.type(address, 'https://mine.example.com/v1')
+    expect(address).toHaveValue('https://mine.example.com/v1')
+
+    // 清单到手：只补没填过的那几格，用户填过的地址不许改。
+    kindsGate.resolve(
+      create(ListPlatformKindsResponseSchema, {
+        kinds: [
+          create(PlatformKindSchema, {
+            kind: 'openai',
+            label: 'OpenAI 兼容',
+            defaultBaseUrl: 'https://gw.example.com/v1',
+            modelsFromUpstream: true,
+          }),
+        ],
+      })
+    )
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('combobox', { name: '类型' })
+      ).toHaveTextContent('OpenAI 兼容')
+    )
+    expect(address).toHaveValue('https://mine.example.com/v1')
+  })
+
+  it('改平台：没有类型选择，只有一行只读的类型名', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([openPlatform({ kind: 'anthropic' })])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    const dialog = await openEdit(user, '我的中转站')
+
+    // 名字就用清单里的那一条。
+    expect(
+      await within(dialog).findByText('类型：Anthropic 兼容')
+    ).toBeInTheDocument()
+    // 改不了：契约里 UpdatePlatform 没有这一格。
+    expect(
+      within(dialog).queryByRole('combobox', { name: '类型' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('平台卡片：类型名按清单里的名字显示', async () => {
+    const client = clientWith([openPlatform({ kind: 'anthropic' })])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    expect(await screen.findByText('类型：Anthropic 兼容')).toBeInTheDocument()
+  })
+
+  it('清单里没有这一条：摆 raw 值，不说「未知」', async () => {
+    const client = clientWith([
+      openPlatform({ kind: 'newlang', quotaPlugin: '' }),
+    ])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    expect(await screen.findByText('类型：newlang')).toBeInTheDocument()
+    expect(screen.queryByText(/未知/)).not.toBeInTheDocument()
+  })
+
+  it('清单还没到手：卡片上不显示类型这一行', async () => {
+    const client = clientWith([openPlatform()], {
+      ListPlatformKinds: () => new Promise(() => {}),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    expect(screen.queryByText(/类型：/)).not.toBeInTheDocument()
+    // 也不因为清单没到就不显示别的格。
+    expect(screen.getByText('https://api.example.com/v1')).toBeInTheDocument()
+  })
+})
+
+describe('刷新模型目录按钮看类型', () => {
+  it('这一类不能从上游拉：不显示按钮，也不显示说明', async () => {
+    const kinds = [
+      create(PlatformKindSchema, {
+        kind: 'openai',
+        label: 'OpenAI 兼容',
+        modelsFromUpstream: false,
+      }),
+      create(PlatformKindSchema, {
+        kind: 'anthropic',
+        label: 'Anthropic 兼容',
+        modelsFromUpstream: true,
+      }),
+    ]
+    const client = clientWith(
+      [
+        openPlatform({
+          id: 'no-pull',
+          label: '拉不到目录的',
+          kind: 'openai',
+          quotaPlugin: '',
+        }),
+        openPlatform({
+          id: 'can-pull',
+          label: '能拉目录的',
+          kind: 'anthropic',
+          quotaPlugin: '',
+        }),
+      ],
+      {
+        ListPlatformKinds: () =>
+          create(ListPlatformKindsResponseSchema, { kinds }),
+      }
+    )
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('拉不到目录的')
+    // 能拉的那一行有按钮。
+    await waitFor(() => {
+      expect(
+        within(rowOf('能拉目录的')).getByRole('button', {
+          name: '刷新模型目录',
+        })
+      ).toBeInTheDocument()
+    })
+    expect(
+      within(rowOf('拉不到目录的')).queryByRole('button', {
+        name: '刷新模型目录',
+      })
+    ).not.toBeInTheDocument()
+    // 不解释为什么没有这个按钮。
+    expect(screen.queryByText(/不能刷新|不支持刷新/)).not.toBeInTheDocument()
+  })
+
+  it('清单还没到手：摆一个禁用的按钮，并说清单还在加载', async () => {
+    const client = clientWith([openPlatform()], {
+      ListPlatformKinds: () => new Promise(() => {}),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 按钮忽然消失再出现比一直禁着更让人困惑：这一档摆禁用的按钮。
+    const button = within(rowOf('我的中转站')).getByRole('button', {
+      name: '刷新模型目录',
+    })
+    expect(button).toBeDisabled()
+    // 为什么点不了：清单的事，不是这个平台不支持刷新。
+    expect(
+      within(rowOf('我的中转站')).getByText('类型清单还在加载')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/不支持刷新|不能刷新/)).not.toBeInTheDocument()
+  })
+
+  it('清单取不到：同样摆禁用的按钮，说的是取不到加原因', async () => {
+    const client = clientWith([openPlatform()], {
+      ListPlatformKinds: () => {
+        throw new ConnectError('问不到', Code.Unavailable)
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    const button = within(rowOf('我的中转站')).getByRole('button', {
+      name: '刷新模型目录',
+    })
+    expect(button).toBeDisabled()
+    expect(
+      await within(rowOf('我的中转站')).findByText(
+        /类型清单取不到：网关不可用/
+      )
+    ).toBeInTheDocument()
   })
 })
 

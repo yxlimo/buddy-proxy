@@ -56,6 +56,14 @@ interface Seen {
 
 const seen: Seen[] = [];
 
+/**
+ * 假上游要拒的那个账号（账号 id，空串表示不拒任何账号）。
+ *
+ * 按账号 id 分支，不按 key 的值：key 只是编造的样例，账号 id 才是网关这次真的
+ * 告诉上游「我是谁」的那一条。key 两个账号可以一样，账号 id 不能。
+ */
+let refusedAccount = "";
+
 /** 上游报的 usage：输入拆两处，跟 Anthropic 一样。 */
 const USAGE = { input_tokens: 7, cache_read_input_tokens: 197, output_tokens: 22 };
 
@@ -93,9 +101,10 @@ const upstream = http.createServer(async (req, res) => {
   }
   seen.push({ method: req.method ?? "", path: url.pathname, headers, body });
 
-  // 一把被上游拒的 key：401 是**账号**的失败，策略层该看得见（能降级的换下一个
-  // 账号，单一策略的把那个账号关一段时间）。
-  if (headers["x-api-key"] === "sk-anthropic-rejected") { // privacy:allow — 编造的样例：假上游按这个值回 401
+  // 这个账号被拒：401 是**账号**的失败，策略层该看得见（能降级的换下一个
+  // 账号，单一策略的把那个账号关一段时间）。判据是 x-account-id —— 网关真的
+  // 把「这次是哪个账号发的」写进了 HTTP 头。
+  if (refusedAccount && headers["x-account-id"] === refusedAccount) {
     res.writeHead(401, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -261,11 +270,11 @@ const added = addAccount({ platform: "aup" });
 const accountId = added.id ?? "";
 check("账号加得起来", added.ok === true && accountId !== "", added.message);
 
-const keyed = setProviderKeys(accountId, ["sk-anthropic-test"]);
+const keyed = setProviderKeys(accountId, ["test-key-a"]);
 check("一把推理 key 写得进去", keyed.ok === true && keyed.count === 1, keyed.message);
 check(
   "key 在账号名下",
-  openPlatformKeyOf(accountId)?.apiKey === "sk-anthropic-test",
+  openPlatformKeyOf(accountId)?.apiKey === "test-key-a",
   String(openPlatformKeyOf(accountId)?.apiKey),
 );
 check("平台是 ready", platformAvailability("aup").state === "ready", platformAvailability("aup").state);
@@ -384,7 +393,7 @@ section("4. 鉴权头");
 
 {
   const request = lastSeen();
-  check("带 x-api-key", request.headers["x-api-key"] === "sk-anthropic-test", String(request.headers["x-api-key"]));
+  check("带 x-api-key", request.headers["x-api-key"] === "test-key-a", String(request.headers["x-api-key"]));
   check("没有 authorization", request.headers["authorization"] === undefined, String(request.headers["authorization"]));
   check(
     "带 anthropic-version",
@@ -395,6 +404,37 @@ section("4. 鉴权头");
     "content-type 是 JSON",
     String(request.headers["content-type"] ?? "").startsWith("application/json"),
     String(request.headers["content-type"]),
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 4b. 归因头：这次请求是哪个账号发的
+ * ------------------------------------------------------------------ */
+
+section("4b. 归因头");
+
+{
+  const request = lastSeen();
+  check(
+    "带 x-account-id，值是这次用的那个账号",
+    request.headers["x-account-id"] === accountId,
+    `${String(request.headers["x-account-id"])} ≠ ${accountId}`,
+  );
+  check(
+    "带 x-request-id（非空）",
+    typeof request.headers["x-request-id"] === "string" && request.headers["x-request-id"] !== "",
+    String(request.headers["x-request-id"]),
+  );
+  check(
+    "x-request-id 是个 UUID 形状",
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(request.headers["x-request-id"])),
+    String(request.headers["x-request-id"]),
+  );
+  // 头里不许出现 key：归因头说的是哪个账号，不是凭什么进去的。
+  check(
+    "归因头里没有 key",
+    !JSON.stringify([request.headers["x-request-id"], request.headers["x-account-id"]]).includes("test-key-a"),
+    JSON.stringify([request.headers["x-request-id"], request.headers["x-account-id"]]),
   );
 }
 
@@ -432,7 +472,7 @@ section("基址带 /v1");
   });
   check("平台建得起来", created2.ok === true, created2.message);
   const account2 = addAccount({ platform: "aup-v1" });
-  setProviderKeys(account2.id ?? "", ["sk-anthropic-test"]);
+  setProviderKeys(account2.id ?? "", ["test-key-a"]);
   saveAggregateModel({
     id: "claude-fake-v1",
     displayName: "claude-fake-v1",
@@ -543,7 +583,7 @@ section("8. 401 带上游状态");
   const { listCooldowns } = await import("../lib/cooldown.ts");
   const messagesHits = () => seen.filter((s) => s.path === "/v1/messages");
 
-  // 降级：第一个账号的 key 被拒，换下一个账号接手。
+  // 降级：第一个账号被上游拒，换下一个账号接手。
   const fallbackCreated = createOpenPlatform({
     id: "aup-401-fb",
     label: "Aup 401 Fallback",
@@ -552,9 +592,11 @@ section("8. 401 带上游状态");
   });
   check("降级平台建得起来", fallbackCreated.ok === true, fallbackCreated.message);
   const badFirst = addAccount({ platform: "aup-401-fb" });
-  setProviderKeys(badFirst.id ?? "", ["sk-anthropic-rejected"]); // privacy:allow — 编造的样例
+  setProviderKeys(badFirst.id ?? "", ["test-key-a"]);
   const goodSecond = addAccount({ platform: "aup-401-fb" });
-  setProviderKeys(goodSecond.id ?? "", ["sk-anthropic-test"]); // privacy:allow — 编造的样例
+  // 两个账号的 key 一样：这样「谁被拒」只能靠 x-account-id 分出来 —— 靠 key 的
+  // 值分支的旧写法在这里根本不成立。
+  setProviderKeys(goodSecond.id ?? "", ["test-key-a"]);
   const policy = setPlatformPolicy("aup-401-fb", "fallback");
   check("策略改成降级", policy.ok === true, policy.message);
   saveAggregateModel({
@@ -565,22 +607,30 @@ section("8. 401 带上游状态");
   });
   reloadAggregate();
 
+  refusedAccount = badFirst.id ?? "";
   seen.length = 0;
   const answer = await call("/v1/chat/completions", {
     model: "claude-fake-401-fb",
     messages: [{ role: "user", content: "say ok" }],
   });
   check("降级：请求答 200", answer.status === 200, `HTTP ${answer.status} ${answer.text.slice(0, 300)}`);
-  check("降级：先打了第一个账号", messagesHits().length === 2, JSON.stringify(seen.map((s) => s.headers["x-api-key"])));
+  const attempts = messagesHits().map((s) => s.headers["x-account-id"]);
+  const ids = messagesHits().map((s) => s.headers["x-request-id"]);
+  check("降级：先打了第一个账号", messagesHits().length === 2, JSON.stringify(attempts));
   check(
-    "降级：第一个账号被拒（401 是账号的失败）",
-    messagesHits()[0]?.headers["x-api-key"] === "sk-anthropic-rejected", // privacy:allow — 编造的样例
-    JSON.stringify(messagesHits().map((s) => s.headers["x-api-key"])),
+    "降级：第一次试的是那个账号（x-account-id 说的）",
+    attempts[0] === badFirst.id,
+    JSON.stringify(attempts),
   );
   check(
     "降级：换到第二个账号接手",
-    messagesHits()[1]?.headers["x-api-key"] === "sk-anthropic-test",
-    JSON.stringify(messagesHits().map((s) => s.headers["x-api-key"])),
+    attempts[1] === goodSecond.id,
+    JSON.stringify(attempts),
+  );
+  check(
+    "降级：两次尝试的 request id 不一样，且都非空",
+    Boolean(ids[0]) && Boolean(ids[1]) && ids[0] !== ids[1],
+    JSON.stringify(ids),
   );
   check(
     "降级：答案来自第二个账号",
@@ -602,7 +652,7 @@ section("8. 401 带上游状态");
   });
   check("单一平台建得起来", singleCreated.ok === true, singleCreated.message);
   const solo = addAccount({ platform: "aup-401-single" });
-  setProviderKeys(solo.id ?? "", ["sk-anthropic-rejected"]); // privacy:allow — 编造的样例
+  setProviderKeys(solo.id ?? "", ["test-key-a"]);
   saveAggregateModel({
     id: "claude-fake-401-single",
     displayName: "claude-fake-401-single",
@@ -611,6 +661,8 @@ section("8. 401 带上游状态");
   });
   reloadAggregate();
 
+  // 换了平台，要拒的账号也得跟着换 —— 判据是账号 id，不是 key。
+  refusedAccount = solo.id ?? "";
   const refused = await call("/v1/chat/completions", {
     model: "claude-fake-401-single",
     messages: [{ role: "user", content: "say ok" }],

@@ -43,9 +43,13 @@ export function internAiInferenceKey(providerId = "intern-ai"): string {
 /**
  * 缓存的模型目录。落库一份：重启后手上就有目录，这个平台不会从模型列表里
  * 整组消失（目录空 = 平台不可见 = 路由不到）。
+ *
+ * platform 是这份目录要去的那一行：目录现在由平台行说了算（各 kind 的 models()
+ * 读它），上游这份到手时要同步过去，否则面板与路由里一直是空的。
  */
 const catalog = new CatalogCache<InternAiCatalogModel>(CATALOG_TTL_MS, {
   cacheId: "intern-ai:catalog",
+  platform: "intern-ai",
 });
 
 /** 现在这份目录。第一次问上游之前是空的。 */

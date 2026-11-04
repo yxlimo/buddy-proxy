@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import {
   CreditSummarySchema,
+  PlatformKindSchema,
   QuotaPluginSchema,
   UpstreamQuotaSchema,
   UpstreamSchema,
@@ -10,6 +11,7 @@ import {
 import type { MessageInitShape } from '@bufbuild/protobuf'
 import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
 import { OpenPlatformFacts } from '@/features/open-platforms/platform-facts'
+import type { PlatformKindList } from '@/features/open-platforms/platform-kinds'
 import { formatLocalMoment } from '@/lib/format'
 
 /**
@@ -35,6 +37,23 @@ const PLUGIN = create(QuotaPluginSchema, {
 /** 登记表到手：里面就是这个插件。 */
 const READY: QuotaRegistry = { status: 'ready', plugins: [PLUGIN] }
 
+/** 建平台时能选的类型：到手了的两条（服务端现在给的那两条）。 */
+const KINDS: PlatformKindList = {
+  status: 'ready',
+  kinds: [
+    create(PlatformKindSchema, {
+      kind: 'openai',
+      label: 'OpenAI 兼容',
+      modelsFromUpstream: true,
+    }),
+    create(PlatformKindSchema, {
+      kind: 'anthropic',
+      label: 'Anthropic 兼容',
+      modelsFromUpstream: true,
+    }),
+  ],
+}
+
 /** 一个开放平台的额度栏。 */
 function facts(
   quota: MessageInitShape<typeof UpstreamQuotaSchema>,
@@ -52,7 +71,9 @@ function facts(
     modelsFetchedAtMs: FETCHED_AT,
     quota: create(UpstreamQuotaSchema, quota),
   })
-  return <OpenPlatformFacts upstream={upstream} registry={registry} />
+  return (
+    <OpenPlatformFacts upstream={upstream} kinds={KINDS} registry={registry} />
+  )
 }
 
 /** 全页文字：断言「哪里都没有 0」时用它。 */
@@ -205,12 +226,12 @@ describe('额度那一栏按结论说', () => {
  * 一行则要说准是三档里的哪一档 —— 加载中、取不到都不能说成「没登记」。
  */
 describe('登记表没到手：额度结论照服务端说的显示', () => {
-  it('加载中：额度结论照显示，插件那一行只说还没加载', () => {
+  it('加载中：额度结论照显示，插件那一行只说还在加载', () => {
     render(facts({ quotaState: 'no_quota' }, { status: 'pending' }))
 
     expect(screen.getByText('额度用尽')).toBeInTheDocument()
     expect(
-      screen.getByText('额度插件：qiniu-portal（列表还没加载）')
+      screen.getByText('额度插件：qiniu-portal（列表还在加载）')
     ).toBeInTheDocument()
     expect(text()).not.toMatch(/没登记|未知插件/)
   })

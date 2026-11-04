@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ChevronRight, Plus } from 'lucide-react'
@@ -40,10 +40,15 @@ import {
 import { AddAccountDialog } from '@/features/upstreams/add-account-dialog'
 import {
   useAddPlatform,
+  useListPlatformKinds,
   useQuotaPlugins,
   useRefreshPlatformModels,
   useUpdatePlatform,
 } from '@/features/open-platforms/api'
+import {
+  platformKindsFrom,
+  refreshModelsControl,
+} from '@/features/open-platforms/platform-kinds'
 import { DeletePlatformButton } from '@/features/open-platforms/platform-delete'
 import {
   OpenPlatformFacts,
@@ -91,6 +96,7 @@ export function UpstreamsPage() {
   const login = useAccountLogin()
   // 开放平台：面板上加的那些平台（表里的行），跟代码里的模板不是一回事。
   const plugins = useQuotaPlugins()
+  const kindsQuery = useListPlatformKinds()
   const addPlatform = useAddPlatform()
   const updatePlatform = useUpdatePlatform()
   const refreshModels = useRefreshPlatformModels()
@@ -134,6 +140,25 @@ export function UpstreamsPage() {
   // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它变，
   // 免得先弹回旧值再跳到新值。
   const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
+  // 建平台时能选的类型：判据（卡片上的名字、刷新按钮的三档）都收在
+  // platform-kinds.ts，这里只照结果渲染。用 useMemo 稳住这一份：弹窗里那个
+  // 「清单到手了选第一条」的 effect 拿它当依赖，每次渲染新建一个就会白跑一次。
+  // 得摆在下面那两个提前 return 之前：hook 不能只在有数据的时候调。
+  const kinds = useMemo(
+    () =>
+      platformKindsFrom({
+        isPending: kindsQuery.isPending,
+        isError: kindsQuery.isError,
+        error: kindsQuery.error,
+        kinds: kindsQuery.data?.kinds,
+      }),
+    [
+      kindsQuery.isPending,
+      kindsQuery.isError,
+      kindsQuery.error,
+      kindsQuery.data,
+    ]
+  )
 
   if (upstreams.isPending) {
     return <LoadingState />
@@ -205,6 +230,12 @@ export function UpstreamsPage() {
               <TableBody>
                 {list.map((upstream) => {
                   const isExpanded = expanded === upstream.id
+                  // 刷新模型目录按钮的三档：清单没到手（加载中 / 取不到）是禁用
+                  // 加一句原因；这一类确实不拉才不摆；剩下来才是能点的。
+                  const refreshControl = refreshModelsControl(
+                    kinds,
+                    upstream.kind
+                  )
                   return (
                     <Fragment key={upstream.id}>
                       <TableRow
@@ -248,6 +279,7 @@ export function UpstreamsPage() {
                               {upstream.isOpenPlatform ? (
                                 <OpenPlatformFacts
                                   upstream={upstream}
+                                  kinds={kinds}
                                   registry={registry}
                                   refresh={refreshOutcomes[upstream.id]}
                                 />
@@ -307,29 +339,43 @@ export function UpstreamsPage() {
                                 >
                                   编辑
                                 </Button>
-                                <Button
-                                  size='sm'
-                                  variant='outline'
-                                  onClick={() =>
-                                    refreshModels.mutate(
-                                      { platformId: upstream.id },
-                                      {
-                                        onSuccess: (result) => {
-                                          setRefreshOutcomes((prev) => ({
-                                            ...prev,
-                                            [upstream.id]: {
-                                              ok: result.ok,
-                                              message: result.message,
-                                              models: [...result.models],
+                                {/* 刷新模型目录看两件事：清单到没到手、这一类拉不拉。
+                                    清单没到手摆一个禁用按钮加一句原因（按钮忽然
+                                    消失再出现比一直禁着更让人困惑）；这一类确实
+                                    不拉才不摆。 */}
+                                {refreshControl.show ? (
+                                  <div className='grid justify-items-end gap-0.5'>
+                                    <Button
+                                      size='sm'
+                                      variant='outline'
+                                      disabled={!refreshControl.enabled}
+                                      onClick={() =>
+                                        refreshModels.mutate(
+                                          { platformId: upstream.id },
+                                          {
+                                            onSuccess: (result) => {
+                                              setRefreshOutcomes((prev) => ({
+                                                ...prev,
+                                                [upstream.id]: {
+                                                  ok: result.ok,
+                                                  message: result.message,
+                                                  models: [...result.models],
+                                                },
+                                              }))
                                             },
-                                          }))
-                                        },
+                                          }
+                                        )
                                       }
-                                    )
-                                  }
-                                >
-                                  刷新模型目录
-                                </Button>
+                                    >
+                                      刷新模型目录
+                                    </Button>
+                                    {refreshControl.enabled ? null : (
+                                      <span className='text-xs text-muted-foreground'>
+                                        {refreshControl.reason}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : null}
                                 {/* 删平台之前要先扫主路由模型：指向它的那些
                                     模型会跟着一起删，这事得在弹框里说清楚。 */}
                                 <DeletePlatformButton platform={upstream} />
@@ -484,6 +530,7 @@ export function UpstreamsPage() {
       <PlatformDialog
         open={addingPlatform || editingPlatform !== null}
         platform={editingPlatform ?? undefined}
+        kinds={kinds}
         registry={registry}
         pending={addPlatform.isPending || updatePlatform.isPending}
         error={addPlatform.error ?? updatePlatform.error}
@@ -493,18 +540,17 @@ export function UpstreamsPage() {
           setEditingPlatform(null)
         }}
         onSubmit={(input) => {
-          if (editingPlatform) {
-            updatePlatform.mutate(input, {
-              onSuccess: () => setEditingPlatform(null),
+          // 新增那一单带 kind，改那一单不带 —— 看形状就分得清，不靠外面那个
+          // 状态碰巧对上。
+          if ('kind' in input) {
+            addPlatform.mutate(input, {
+              onSuccess: () => setAddingPlatform(false),
             })
             return
           }
-          addPlatform.mutate(
-            { id: input.id, label: input.label, baseUrl: input.baseUrl },
-            {
-              onSuccess: () => setAddingPlatform(false),
-            }
-          )
+          updatePlatform.mutate(input, {
+            onSuccess: () => setEditingPlatform(null),
+          })
         }}
       />
 

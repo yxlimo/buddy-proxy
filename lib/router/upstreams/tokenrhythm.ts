@@ -5,6 +5,7 @@
 // case is retried on the same account instead of moving on.
 
 import type Koa from "koa";
+import { randomUUID } from "node:crypto";
 import { AuthError } from "../../credential.ts";
 import { anthropicToOpenAI } from "../../dialect/request.ts";
 import {
@@ -28,6 +29,8 @@ import { platformOf, platformPolicy } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
 import { type UpstreamContext, upstreamStatusError, accountFailure } from "./policy.ts";
+// 归因头与开放平台同一份（它对我们就是第三方 API），不在这边另写一份。
+import { attributionHeaders } from "./open-platform.ts";
 
 /**
  * The accounts of a TokenRhythm platform, in the order the policy wants them.
@@ -100,6 +103,7 @@ export async function toTokenRhythm(
           openaiBody,
           ctx.tokenRhythmMaxAttempts,
           ctx.clientHeaders,
+          ctx.logRoute,
         );
         response = call.response;
       } catch (e) {
@@ -246,11 +250,24 @@ async function tokenRhythmChatWithRetry(
   accountId: string,
   body: Record<string, unknown>,
   maxAttempts: number,
-  extraHeaders: Record<string, string> = {},
+  clientHeaders: Record<string, string>,
+  logRoute: boolean,
 ): Promise<{ response: Response; key: string }> {
   for (let attempt = 1; ; attempt++) {
+    // 归因头每次尝试新生成：排队重试是另一次上游请求，上游那边是另一条回执。
+    // 这一行与开放平台的同形，排查时拿 request id 把网关日志与上游回执对上。
+    const requestId = randomUUID();
+    if (logRoute) {
+      console.log(
+        `[ATTRIB] tokenrhythm account=${accountId} request=${requestId} model=${String(body.model ?? "")}`,
+      );
+    }
     try {
-      return await tokenRhythmChat(accountId, body, extraHeaders);
+      return await tokenRhythmChat(
+        accountId,
+        body,
+        attributionHeaders(clientHeaders, requestId, accountId),
+      );
     } catch (e) {
       if (e instanceof TokenRhythmBusyError && attempt < maxAttempts) {
         console.log(

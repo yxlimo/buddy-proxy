@@ -22,7 +22,7 @@ import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
 import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
-import type { CatalogModel } from "../catalog-models.ts";
+import { catalogModelsFromRow, type CatalogModel } from "../catalog-models.ts";
 import type { ProviderRow } from "../providers.ts";
 
 /**
@@ -31,12 +31,12 @@ import type { ProviderRow } from "../providers.ts";
  * 目录是**平台**的，不是账号的：同一个平台下两个账号服务同一批模型。所以目录
  * 从平台那一行取，账号只决定谁来付钱。
  *
- * 目录只给名字：上游没报上下文长度与能力，那几项就不写 —— 填一个猜的数等于
- * 对客户端撒谎（客户端会拿它当承诺）。
+ * 这一类没有代码里的目录表，所以只给名字：上游没报上下文长度与能力，那几项就
+ * 不写 —— 填一个猜的数等于对客户端撒谎（客户端会拿它当承诺）。行读不到时就
+ * 是空数组：这一层本来就没有可退回的代码目录（不猜）。
  */
 function openPlatformCatalogModels(provider: ProviderRow): CatalogModel[] {
-  const items = openPlatformOf(provider.platform)?.models.items ?? [];
-  return items.map((id) => ({ id, displayName: id, reasoning: false, toolCall: false }));
+  return catalogModelsFromRow(provider, () => []);
 }
 
 /**

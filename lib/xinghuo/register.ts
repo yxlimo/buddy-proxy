@@ -8,12 +8,21 @@
 // quotas / outOfCredits / recoverAt。
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { catalogModelsFromRow } from "../catalog-models.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 import { declareNoQuotaPlugin } from "../quota-plugins.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { xinghuoInferenceKey, xinghuoStatus } from "./account.ts";
 import { XINGHUO_INFER_BASE } from "./config.ts";
 import { XINGHUO_MODELS, xinghuoCatalogModels } from "./models.ts";
+
+/**
+ * 代码里那一份目录：元数据表的出处，也是行读不到时的兜底。
+ *
+ * 星火没有可查的模型目录接口，能调的那个写在 lib/xinghuo/models.ts 里。
+ */
+const CODE_CATALOG = xinghuoCatalogModels(XINGHUO_MODELS);
+const CODE_BY_ID = new Map(CODE_CATALOG.map((model) => [model.id, model]));
 
 export const xinghuoKind = registerCompatiblePlatform({
   kind: "xinghuo",
@@ -26,8 +35,9 @@ export const xinghuoKind = registerCompatiblePlatform({
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),
-  // 目录写死：星火没有可查的模型目录接口。
-  models: () => xinghuoCatalogModels(XINGHUO_MODELS),
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查。
+  // 行读不到（模板行本该由迁移补出）才退回代码目录 —— 那是兜底，不是常态。
+  models: (provider) => catalogModelsFromRow(provider, () => [...CODE_CATALOG], (id) => CODE_BY_ID.get(id)),
 });
 
 // 只有一把 API Key：没有会话，也没有额度接口要登。

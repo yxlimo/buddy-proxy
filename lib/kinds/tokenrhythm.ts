@@ -4,7 +4,7 @@
 // that can pick by expiry (expiry_first): the periodic scan pins the account
 // whose credit expires first.
 
-import { tokenRhythmCatalogModels } from "../catalog-models.ts";
+import { catalogModelsFromRow, tokenRhythmCatalogModels } from "../catalog-models.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { TOKENRHYTHM_API_BASE, tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
 import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balance.ts";
@@ -14,6 +14,10 @@ import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balan
 import "../tokenrhythm/quota-plugin.ts";
 import { tokenRhythmStatus } from "../tokenrhythm/wallet.ts";
 import { fromUpstreamStatus, registerKind } from "./shared.ts";
+
+// 代码里那一份：元数据表的出处，也是行读不到时的兜底。
+const CODE_CATALOG = tokenRhythmCatalogModels();
+const CODE_BY_ID = new Map(CODE_CATALOG.map((model) => [model.id, model]));
 
 registerKind({
   kind: "tokenrhythm",
@@ -29,7 +33,9 @@ registerKind({
   // 明文 key：转发与「问上游要模型目录」要的是同一把，各自去取一遍就是两份知识。
   keyOf: (provider, accountId) => tokenRhythmCredentialOf(accountId ?? provider.id)?.apiKey ?? "",
   credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session"),
-  models: () => tokenRhythmCatalogModels(),
+  // 目录是平台那一行说了算（行里的 id 与顺序就是公布的），元数据去代码表里查。
+  // 行读不到才退回代码目录 —— 那是兜底，不是常态。
+  models: (provider) => catalogModelsFromRow(provider, () => [...CODE_CATALOG], (id) => CODE_BY_ID.get(id)),
   // 额度读的是插件问回来的那一份结论：钱包读不到是「不知道」，不是「没钱」——
   // 那一条由插件的状态说，这里不重判。
   quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),

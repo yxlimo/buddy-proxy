@@ -292,6 +292,18 @@ export function migratePlatforms(db: DatabaseSync): void {
 const OPEN_PLATFORM_KIND = "openai";
 
 /**
+ * 目录归上游管的 kind：它们的模型清单只有上游报得出来，缓存表是按平台存的那一份。
+ *
+ * 写在这一层：播种要按它决定 `models_auto`（见 seedPlatformModels），而拿上游那份
+ * 覆盖平台行的闸门（lib/open-platforms.ts 的 syncPlatformModels）也要问同一件事。
+ * 两处各写一份名单，早晚会漂成一个写死、一个还能被盖。
+ *
+ * 其余几家不在名单里：七牛云、讯飞星火、TokenRhythm 的目录是代码挑过的一份（上游
+ * 那份更宽，七牛报 78 个模型），方言类（openai / anthropic）的目录由面板那条路管。
+ */
+export const UPSTREAM_CATALOG_KINDS: ReadonlySet<string> = new Set(["sensenova", "intern-ai"]);
+
+/**
  * 播种用的目录：按 kind 分，与各 kind 的**代码目录**同一个来源。
  *
  * 不调 kindOf(kind).models()：注册表要靠各平台模块求值才登记，而这一层是最低
@@ -388,10 +400,15 @@ function isSeededCatalog(raw: unknown): boolean {
  * 写的不是从上游拉的那一份：`source` 记 auto、`fetchedAt` 留 0（没拉过）—— 0
  * 就是「没拉过」的意思，写成现在会让目录看起来刚拉过，半小时内不再去问上游。
  *
- * 厂商模板行（七牛云、讯飞星火、SenseNova、书生·端砚、TokenRhythm）写完把
- * `models_auto` 关掉：它们的目录是代码挑过的一份，上游那份更宽（七牛报 78 个
- * 模型），拿它盖上来会出现被上游拒的模型。方言类（openai / anthropic）不关，
- * 它们的目录本来就是上游说了算。
+ * `models_auto` 按「这一行的目录归谁管」写（见 UPSTREAM_CATALOG_KINDS）：
+ *
+ *   七牛云、讯飞星火、TokenRhythm  关掉。它们的目录是代码挑过的一份，上游那份
+ *     更宽（七牛报 78 个模型），拿它盖上来会出现被上游拒的模型。
+ *   SenseNova、书生·端砚           开着。这两家没有代码目录，目录只有上游报得
+ *     出来 —— 关掉就等于永远停在播种那一刻的那份。
+ *   方言类（openai / anthropic）    开着，它们的目录本来就是上游（或人）说了算。
+ *
+ * 那一格是**面板上那个开关**，写错就是开关说了不算：人关掉它，后台照写。
  *
  * 幂等：填过的行目录非空，再跑一次连 updated_at 都不动。返回填了几行。
  */
@@ -416,7 +433,7 @@ export function seedPlatformModels(db: DatabaseSync): number {
       // 例外是厂商模板行上**播种自己写进去的**那一份（source=auto、没拉过）：
       // 老库里那几行是播种改口径之前写进去的，models_auto 还是 1 —— 补上这一格，
       // 它们就不必等下一次「目录被上游那份盖掉」才被发现。
-      if (vendor && isSeededCatalog(row.models)) stopAuto.run(now, id);
+      if (vendor && !UPSTREAM_CATALOG_KINDS.has(kind) && isSeededCatalog(row.models)) stopAuto.run(now, id);
       continue;
     }
     // 通用开放平台：这一行背后是哪家厂商由地址说明（lib/model-catalog.ts）。
@@ -426,7 +443,8 @@ export function seedPlatformModels(db: DatabaseSync): number {
         ? normalizeSeedIds(knownCatalogForBaseUrl(String(row.base_url ?? ""))?.models.map((m) => m.id) ?? [])
         : (SEEDED_MODEL_IDS[kind]?.(db) ?? []);
     if (!items.length) continue;
-    fill.run(JSON.stringify({ items, fetchedAt: 0, source: "auto" }), vendor ? 0 : 1, now, id);
+    const auto = vendor && !UPSTREAM_CATALOG_KINDS.has(kind) ? 0 : 1;
+    fill.run(JSON.stringify({ items, fetchedAt: 0, source: "auto" }), auto, now, id);
     seeded++;
   }
   return seeded;

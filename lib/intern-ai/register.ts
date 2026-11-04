@@ -3,7 +3,7 @@
 // The transport is shared with every other open platform (lib/router/openai-platform.ts);
 // what is left of this one is its address, its key and its 墨点 balance.
 
-import { internAiCatalogModels } from "../catalog-models.ts";
+import { catalogModelsFromRow, internAiCatalogModels } from "../catalog-models.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
@@ -28,7 +28,14 @@ export const internAiKind = registerCompatiblePlatform({
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => internAiInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),
-  models: () => internAiCatalogModels(internAiCatalog()),
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的。元数据在上游缓存里
+  // （推理端那份清单 + 控制台补的能力与上下文），行里查不到的 id 只给名字。
+  // 行读不到才退回缓存那一份 —— 那是兜底，不是常态。
+  models: (provider) => {
+    const rendered = internAiCatalogModels(internAiCatalog());
+    const byId = new Map(rendered.map((model) => [model.id, model]));
+    return catalogModelsFromRow(provider, () => rendered, (id) => byId.get(id));
+  },
   // 额度读的是插件问回来的那一份结论：「平台说账号不能用」（blocked）与「墨点没了」
   // （no_quota）是插件分的，这里只照结论读 —— 两句话不一样，面板才分得清。
   quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),

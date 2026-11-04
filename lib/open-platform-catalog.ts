@@ -12,7 +12,10 @@
 //
 // 它不碰额度：额度是那个额度插件的事，还没接。
 
+import { randomUUID } from "node:crypto";
 import { openPlatformOf, updateOpenPlatform, type OpenPlatformRow } from "./open-platforms.ts";
+// 归因头跟推理那条路用同一个名字：两个地方各写一遍，改一处就会走样。
+import { REQUEST_ID_HEADER } from "./router/upstreams/open-platform.ts";
 // 模板的 id 名单住在叶子模块里（lib/platform-templates.ts）：这一层要判「表里
 // 那一行跟代码里的模板重名」，引 lib/platforms.ts 会绕成环（那一层引这一层）。
 import { PLATFORMS } from "./platform-templates.ts";
@@ -200,21 +203,26 @@ export async function fetchOpenPlatformModels(
     return null;
   }
   let payload: unknown;
+  // 这一次拉目录的 id：它没有账号上下文（目录是平台的），所以只带 request id。
+  // 上游对 /models 回 4xx/5xx 时，日志里那一行与这次请求能对上号。
+  const requestId = randomUUID();
   try {
     // 鉴权头跟着方言走：Anthropic 那一族只认 x-api-key 加版本头，发 Bearer
     // 回的是 401 —— 看着像 key 不对，其实是头不对。
     const auth = kindOf(row.kind)?.catalogAuth?.(apiKey) ?? { Authorization: `Bearer ${apiKey}` };
     const res = await fetch(url, {
-      headers: { accept: "application/json", ...auth },
+      headers: { accept: "application/json", ...auth, [REQUEST_ID_HEADER]: requestId },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
-      console.warn(`[OPEN-PLATFORM] ${row.id} 的模型目录拉不到：HTTP ${res.status}`);
+      console.warn(`[OPEN-PLATFORM] ${row.id} 的模型目录拉不到：HTTP ${res.status} (request=${requestId})`);
       return null;
     }
     payload = await res.json();
   } catch (e) {
-    console.warn(`[OPEN-PLATFORM] ${row.id} 的模型目录拉不到：${(e as Error)?.message ?? e}`);
+    console.warn(
+      `[OPEN-PLATFORM] ${row.id} 的模型目录拉不到：${(e as Error)?.message ?? e} (request=${requestId})`,
+    );
     return null;
   }
   const models = parseModelList(payload);

@@ -104,6 +104,11 @@ await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resol
 const upstreamPort = (upstream.address() as { port: number }).port;
 const upstreamBase = `http://127.0.0.1:${upstreamPort}/v1`;
 
+// 13 那一节要看 SenseNova 的目录落到平台行上（目录是问上游要来的）。把它的推理
+// 端点指到假上游：一个字都不出机器。必须在 import 各平台模块之前 —— 那几个
+// 地址常量是模块求值时读的。
+process.env.SENSENOVA_BASE = upstreamBase;
+
 /* ------------------------------------------------------------------ *
  * 网关（本进程里）
  * ------------------------------------------------------------------ */
@@ -282,8 +287,9 @@ check("再跑一次目录没变", before.join("|") === after.join("|"), after.jo
 
 // 厂商模板行的目录是代码挑过的一份（lib/qiniu/models.ts 这些常量表），不是
 // 「上游报什么就收什么」：上游那份更宽（七牛报 78 个模型），盖上来会出现被上游
-// 拒的模型。所以播种同时把「自动拉」那一格关掉。
-for (const id of FIVE) {
+// 拒的模型。所以播种同时把「自动拉」那一格关掉 —— 那一格是面板上那个开关，同步
+// 的闸门也看它（lib/open-platforms.ts 的 syncPlatformModels）。
+for (const id of ["qiniu", "xinghuo", "tokenrhythm"]) {
   check(
     `${id}：播种后不自动拉（目录是代码挑的）`,
     openPlatformOf(id)?.models.auto === false,
@@ -294,6 +300,24 @@ for (const id of FIVE) {
     `${id}：说不用去拉目录`,
     openPlatformCatalogRefreshable(row) === false,
     String(openPlatformCatalogRefreshable(row)),
+  );
+}
+
+// SenseNova 与书生·端砚相反：它们没有代码目录，目录只有上游报得出来。播种把
+// 自动拉开着，否则同步的闸门（models_auto === 1）会把它们自己那条路堵死。
+for (const id of ["sensenova", "intern-ai"]) {
+  check(
+    `${id}：播种后允许自动拉（目录归上游管）`,
+    openPlatformOf(id)?.models.auto === true,
+    JSON.stringify(openPlatformOf(id)?.models),
+  );
+  // 面板上那个「刷新模型目录」按钮走的是另一条路（lib/open-platform-catalog.ts）：
+  // 它按厂商模板一律拒，因为那一条会把上游那份更宽的目录直接盖上来。两家不是
+  // 同一道闸：同步走的是缓存里已经按平台分好的那一份。
+  check(
+    `${id}：面板手刷仍被拒（厂商行那条路不变）`,
+    openPlatformCatalogRefreshable(openPlatformOf(id)!) === false,
+    String(openPlatformCatalogRefreshable(openPlatformOf(id)!)),
   );
 }
 
@@ -1223,6 +1247,332 @@ check(
   "方言行：目录换成了上游那份",
   openPlatformOf("auto-cat")?.models.items.join(",") === "m-9,m-10",
   JSON.stringify(openPlatformOf("auto-cat")?.models),
+);
+
+/* ------------------------------------------------------------------ *
+ * 13. 行是权威：kind 的目录读平台那一行
+ * ------------------------------------------------------------------ */
+
+section("13. 行是权威");
+
+// 目录现在由平台行说了算（各 kind 的 models() 读它），代码里的表降成「按 id 查
+// 元数据」。这一节查的就是那个次序：行说有哪些、什么顺序；表说它们是什么。
+
+const { syncPlatformModels } = await import("../lib/open-platforms.ts");
+
+/** 直接写行里的目录（不经面板那条路：这一节要的是行本身的样子）。 */
+function putRowModels(platform: string, items: string[], source: "auto" | "manual" = "auto"): void {
+  store()
+    .prepare("UPDATE platform SET models = ?, updated_at = ? WHERE id = ?")
+    .run(JSON.stringify({ items, fetchedAt: 0, source }), Date.now(), platform);
+}
+
+/** 行里的目录。 */
+function rowItems(platform: string): string[] {
+  return openPlatformOf(platform)?.models.items ?? [];
+}
+
+/** 一个不在表里的平台 id：模板行本该由迁移补出，这是「意料之外」的那一种。 */
+const orphanRow = { ...bareRow("qiniu"), platform: "no-such-platform" };
+
+// 一、行是权威。
+putRowModels("qiniu", ["only-this-one"]);
+const onlyRow = kindOf("qiniu")!.models(bareRow("qiniu"));
+check(
+  "qiniu：只返回行里的那一条",
+  onlyRow.length === 1 && onlyRow[0]?.id === "only-this-one",
+  JSON.stringify(onlyRow.map((m) => m.id)),
+);
+check(
+  "qiniu：displayName 就是 id（元数据表里没有它，不猜一个名字）",
+  onlyRow[0]?.displayName === "only-this-one",
+  String(onlyRow[0]?.displayName),
+);
+check(
+  "qiniu：代码目录里的模型一个都没混进来",
+  !onlyRow.some((m) => QINIU_MODELS.some((known) => known.id === m.id)),
+  JSON.stringify(onlyRow.map((m) => m.id)),
+);
+check(
+  "qiniu：元数据表里没有的 id 只给最小形状（能力不编：缺键，不是 false）",
+  onlyRow[0]?.contextWindow === undefined &&
+    onlyRow[0]?.maxOutputTokens === undefined &&
+    !("reasoning" in (onlyRow[0] ?? {})) &&
+    !("toolCall" in (onlyRow[0] ?? {})),
+  JSON.stringify(onlyRow[0]),
+);
+
+// 二、行空即没有。这是本单的判据：空退回代码目录，这一条立刻红。
+putRowModels("tokenrhythm", []);
+check(
+  "tokenrhythm：行空就是没有（不退回代码目录）",
+  kindOf("tokenrhythm")!.models(bareRow("tokenrhythm")).length === 0,
+  JSON.stringify(kindOf("tokenrhythm")!.models(bareRow("tokenrhythm")).map((m) => m.id)),
+);
+// 行空且 source=auto：同样是空。它会在上游目录到手后被填上（见下面第八条），
+// 不是永久没有 —— 但「现在没有」就是没有，不从代码目录借。
+check(
+  "tokenrhythm：行空且来源是自动时也是空（不是靠退回代码目录蒙上去的）",
+  openPlatformOf("tokenrhythm")?.models.source === "auto" &&
+    kindOf("tokenrhythm")!.models(bareRow("tokenrhythm")).length === 0,
+  JSON.stringify(openPlatformOf("tokenrhythm")?.models),
+);
+
+// 三、元数据仍在：行里的 id 在代码表里 -> 逐字段相等。
+const TOKENRHYTHM_ONE = TOKENRHYTHM_MODELS[0]!;
+putRowModels("tokenrhythm", [TOKENRHYTHM_ONE.id]);
+const tokenFromRow = kindOf("tokenrhythm")!.models(bareRow("tokenrhythm"));
+check(
+  "tokenrhythm：id 是表里那个",
+  tokenFromRow[0]?.id === TOKENRHYTHM_ONE.id,
+  String(tokenFromRow[0]?.id),
+);
+check(
+  "tokenrhythm：名字是表里的",
+  tokenFromRow[0]?.displayName === TOKENRHYTHM_ONE.name,
+  String(tokenFromRow[0]?.displayName),
+);
+check(
+  "tokenrhythm：上下文窗口是表里的",
+  tokenFromRow[0]?.contextWindow === TOKENRHYTHM_ONE.context,
+  `${tokenFromRow[0]?.contextWindow} / ${TOKENRHYTHM_ONE.context}`,
+);
+check(
+  "tokenrhythm：输出上限是表里的",
+  tokenFromRow[0]?.maxOutputTokens === TOKENRHYTHM_ONE.maxOutput,
+  `${tokenFromRow[0]?.maxOutputTokens} / ${TOKENRHYTHM_ONE.maxOutput}`,
+);
+check(
+  "tokenrhythm：思考档位是表里的",
+  (tokenFromRow[0]?.effortOptions ?? []).join(",") === TOKENRHYTHM_ONE.efforts.join(","),
+  (tokenFromRow[0]?.effortOptions ?? []).join(","),
+);
+check(
+  "tokenrhythm：能不能思考、能不能调工具是表里的",
+  tokenFromRow[0]?.reasoning === TOKENRHYTHM_ONE.reasoning &&
+    tokenFromRow[0]?.toolCall === TOKENRHYTHM_ONE.toolCall,
+  JSON.stringify(tokenFromRow[0]),
+);
+
+// 四、顺序跟着行（不是跟着元数据表）。
+putRowModels("qiniu", [QINIU_MODELS[2]!.id, QINIU_MODELS[0]!.id]);
+const orderFromRow = kindOf("qiniu")!
+  .models(bareRow("qiniu"))
+  .map((m) => m.id);
+check(
+  "qiniu：顺序跟着行",
+  orderFromRow.join(",") === `${QINIU_MODELS[2]!.id},${QINIU_MODELS[0]!.id}`,
+  orderFromRow.join(","),
+);
+check(
+  "qiniu：与代码表的顺序不一样（这条不是拿表顺序蒙对的）",
+  orderFromRow.join(",") !== QINIU_MODELS.map((m) => m.id).join(","),
+  orderFromRow.join(","),
+);
+
+// 五、模拟客户端那几家不动：它们的模型口径是逆推加实测来的，以代码为准。
+//
+// 造一行同名的平台（目录里写着别的），它们的 models() 也不许读它。
+insertPlatform("qoder", "qoder", "http://127.0.0.1:1/v1");
+putRowModels("qoder", ["row-should-be-ignored"]);
+const { qoderCatalogModels } = await import("../lib/catalog-models.ts");
+const { qoderModelsForRegion } = await import("../lib/qoder/models.ts");
+const { regionOf: qoderRegionOf } = await import("../lib/qoder/auth.ts");
+const qoderRow = { ...bareRow("qoder"), id: "qoder" };
+const qoderIds = kindOf("qoder")!
+  .models(qoderRow)
+  .map((m) => m.id);
+const codeQoderIds = qoderCatalogModels(qoderModelsForRegion(qoderRegionOf("qoder"))).map(
+  (m) => m.id,
+);
+check(
+  "qoder：目录还是代码那一份（与改动前逐条一致）",
+  qoderIds.join(",") === codeQoderIds.join(","),
+  `${qoderIds.join(",")} / ${codeQoderIds.join(",")}`,
+);
+check(
+  "qoder：行里的目录没被读（多一个模型都不行）",
+  !qoderIds.includes("row-should-be-ignored"),
+  qoderIds.join(","),
+);
+
+// 六、兜底：行读不到时退回代码目录（不是空）。
+const orphanIds = kindOf("qiniu")!
+  .models(orphanRow)
+  .map((m) => m.id);
+check(
+  "行读不到：退回代码目录",
+  orphanIds.join(",") === QINIU_MODELS.map((m) => m.id).join(","),
+  orphanIds.join(","),
+);
+check(
+  "行读不到：不是空目录（空会让一个在服务的平台整组消失）",
+  orphanIds.length === QINIU_MODELS.length,
+  String(orphanIds.length),
+);
+
+// 七、同步的闸门、拉取时刻与幂等。
+//
+// 上游目录到手以后写平台行的那条路（lib/router/catalog-cache.ts）只在「目录归
+// 上游管」的两家、人没写死（source=manual）、且面板上自动拉开着的时候写。三道闸
+// 少一道就会把不该动的目录盖掉。
+const { UPSTREAM_CATALOG_KINDS } = await import("../lib/store.ts");
+check(
+  "目录归上游管的只有 SenseNova 与书生·端砚",
+  [...UPSTREAM_CATALOG_KINDS].join(",") === "sensenova,intern-ai",
+  [...UPSTREAM_CATALOG_KINDS].join(","),
+);
+
+/** 把一行的「自动拉」翻成开或关：那一格就是面板上那个开关。 */
+function setRowAuto(platform: string, auto: boolean): void {
+  store().prepare("UPDATE platform SET models_auto = ? WHERE id = ?").run(auto ? 1 : 0, platform);
+}
+
+// 人清空的不会被填回来：manual 是明确的意思，含「我把目录清空了」。
+putRowModels("sensenova", [], "manual");
+setRowAuto("sensenova", true);
+check(
+  "人清空的目录：kind 报空",
+  kindOf("sensenova")!.models(bareRow("sensenova")).length === 0,
+  String(kindOf("sensenova")!.models(bareRow("sensenova")).length),
+);
+syncPlatformModels("sensenova", ["sense-new"]);
+check(
+  "人清空的目录：同步也填不回来（manual 是明确的意思）",
+  rowItems("sensenova").length === 0,
+  JSON.stringify(openPlatformOf("sensenova")?.models),
+);
+
+// 控制组：同一个同步函数，换成自动来源且自动拉开着的那一行就写得进去 —— 上面
+// 那条不是「同步什么都不写」蒙过去的。
+putRowModels("intern-ai", [], "auto");
+setRowAuto("intern-ai", true);
+syncPlatformModels("intern-ai", ["intern-new"]);
+check(
+  "自动来源的目录：同步写进去了",
+  rowItems("intern-ai").join(",") === "intern-new",
+  JSON.stringify(openPlatformOf("intern-ai")?.models),
+);
+
+// 同步也要记「上次拉取的时刻」：0 是「没拉过」，面板照它显示「上次拉取」。
+// 刚拉回来的目录不能还说没拉过。
+const syncedAt = openPlatformOf("intern-ai")?.models.fetchedAt ?? 0;
+check(
+  "同步之后 fetchedAt 是刚才（不是 0）",
+  syncedAt > 0 && Date.now() - syncedAt < 60_000,
+  `${syncedAt} / ${Date.now()}`,
+);
+
+// 幂等：目录没变不动 updated_at（那是「最后修改」），但「上次拉取」还是要跟着
+// 往前挪 —— 两件事。
+const internUpdatedAt = openPlatformOf("intern-ai")?.updatedAt ?? 0;
+await new Promise((resolve) => setTimeout(resolve, 5));
+syncPlatformModels("intern-ai", ["intern-new"]);
+check(
+  "同步是幂等的：目录没变就不动 updated_at",
+  (openPlatformOf("intern-ai")?.updatedAt ?? 0) === internUpdatedAt,
+  `${openPlatformOf("intern-ai")?.updatedAt} / ${internUpdatedAt}`,
+);
+check(
+  "同步是幂等的：拉取时刻仍然跟着往前挪",
+  (openPlatformOf("intern-ai")?.models.fetchedAt ?? 0) > syncedAt,
+  `${openPlatformOf("intern-ai")?.models.fetchedAt} / ${syncedAt}`,
+);
+
+// 面板上把「自动拉模型目录」关掉的那一行：后台不许替人打开。把闸门退回「只看
+// source」，这一条立刻红。
+setRowAuto("intern-ai", false);
+syncPlatformModels("intern-ai", ["intern-should-not-land"]);
+check(
+  "自动拉关掉的那一行：同步不写（开关说了算）",
+  rowItems("intern-ai").join(",") === "intern-new",
+  JSON.stringify(openPlatformOf("intern-ai")?.models),
+);
+setRowAuto("intern-ai", true);
+
+// 厂商行的护标（七牛）：就算以后给它接上 CatalogCache，上游那份 78 个模型也不
+// 许盖掉代码挑过的这一份。
+putRowModels("qiniu", [], "auto");
+setRowAuto("qiniu", true);
+syncPlatformModels("qiniu", ["qiniu-upstream-1"]);
+check(
+  "厂商行（七牛）：即使自动拉开着，同步也不写",
+  rowItems("qiniu").length === 0,
+  JSON.stringify(openPlatformOf("qiniu")?.models),
+);
+setRowAuto("qiniu", false);
+
+// 方言行的目录归面板那条路（lib/open-platform-catalog.ts）管，缓存同步不碰它。
+putRowModels("auto-cat", [], "auto");
+setRowAuto("auto-cat", true);
+syncPlatformModels("auto-cat", ["dialect-should-not-land"]);
+check(
+  "方言行：同步不写（目录由面板那条路管）",
+  rowItems("auto-cat").length === 0,
+  JSON.stringify(openPlatformOf("auto-cat")?.models),
+);
+
+// 八、端到端：上游答了目录 -> 落到 cache -> 行跟着出现 -> kind 读得到元数据。
+// 这一条是这一单的主线：行说了算，而行的内容确实是上游那一份。
+const { refreshSenseNovaCatalog, senseNovaCatalog } = await import(
+  "../lib/sensenova/transport.ts"
+);
+
+const senseAccount = addAccount({ platform: "sensenova" });
+const senseAccountId = String(senseAccount.id ?? "");
+check("SenseNova：账号加得起来", senseAccount.ok === true && senseAccountId !== "", senseAccount.message);
+const senseKey = setProviderKeys(senseAccountId, ["sk-sense-test"]);
+check("SenseNova：推理 key 写进去了", senseKey.ok === true && senseKey.count === 1, senseKey.message);
+
+// 播种早就把 cache 里那一份搬进过行（见第 0 节）。先把行清成空的自动来源，
+// 才看得出后续那一步是「上游答了 → 行被填上」。
+putRowModels("sensenova", []);
+check(
+  "SenseNova：动手之前行里是空的",
+  rowItems("sensenova").length === 0,
+  JSON.stringify(openPlatformOf("sensenova")?.models),
+);
+check(
+  "SenseNova：行空的时候 kind 也报空（不从 cache 借）",
+  kindOf("sensenova")!.models(bareRow("sensenova")).length === 0,
+  JSON.stringify(kindOf("sensenova")!.models(bareRow("sensenova")).map((m) => m.id)),
+);
+modelsPayload = {
+  data: [
+    {
+      id: "sense-from-upstream",
+      name: "Sense From Upstream",
+      context_length: 65536,
+      max_output_length: 4096,
+      supported_features: ["tools", "reasoning"],
+    },
+  ],
+};
+await refreshSenseNovaCatalog(true, senseAccountId);
+check(
+  "SenseNova：上游答的目录落在 cache 里",
+  senseNovaCatalog().some((m) => m.id === "sense-from-upstream"),
+  JSON.stringify(senseNovaCatalog().map((m) => m.id)),
+);
+check(
+  "SenseNova：行跟着变成了上游那一份",
+  rowItems("sensenova").join(",") === "sense-from-upstream",
+  JSON.stringify(openPlatformOf("sensenova")?.models),
+);
+const senseFromRow = kindOf("sensenova")!.models(bareRow("sensenova"));
+check(
+  "SenseNova：kind 读得到行里的那一份",
+  senseFromRow.length === 1 && senseFromRow[0]?.id === "sense-from-upstream",
+  JSON.stringify(senseFromRow.map((m) => m.id)),
+);
+check(
+  "SenseNova：元数据是 cache 里那一份（名字、上下文、输出、能力）",
+  senseFromRow[0]?.displayName === "Sense From Upstream" &&
+    senseFromRow[0]?.contextWindow === 65536 &&
+    senseFromRow[0]?.maxOutputTokens === 4096 &&
+    senseFromRow[0]?.reasoning === true &&
+    senseFromRow[0]?.toolCall === true,
+  JSON.stringify(senseFromRow[0]),
 );
 
 /* ------------------------------------------------------------------ *
