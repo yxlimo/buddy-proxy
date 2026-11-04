@@ -238,8 +238,7 @@ export function ModelDialog({
             {model ? '改主路由模型' : '新建一个主路由模型'}
           </DialogTitle>
           <DialogDescription>
-            对外公布一个 id，背后挂几个上游模型。single 是只走一个目标，
-            fallback 是它挂了再换下一个（按权重从大到小）。
+            对外公布一个 id，背后挂一个或多个上游模型。
           </DialogDescription>
         </DialogHeader>
 
@@ -250,7 +249,7 @@ export function ModelDialog({
               {basicMissing ? <RequiredDot /> : null}
             </TabsTrigger>
             <TabsTrigger value='targets'>
-              Provider 目标
+              平台目标
               {targetsMissing ? <RequiredDot /> : null}
             </TabsTrigger>
           </TabsList>
@@ -268,7 +267,7 @@ export function ModelDialog({
               />
               {basicMissing ? (
                 <p className='text-xs text-destructive'>
-                  对外 id 是必填的：客户端只认这个 id。
+                  对外 id 是必填的。
                 </p>
               ) : null}
             </div>
@@ -422,7 +421,7 @@ export function ModelDialog({
           <TabsContent value='targets' className='grid gap-3'>
             {targetsMissing ? (
               <p className='text-xs text-destructive'>
-                至少要有一个填全的目标：Provider 组和上游模型 id 都要填。
+                至少要有一个填全的目标：平台组和上游模型 id 都要填。
               </p>
             ) : null}
             {draft.targets.map((target, index) => (
@@ -431,7 +430,7 @@ export function ModelDialog({
                 className='grid gap-2 rounded-lg border p-3 sm:grid-cols-2'
               >
                 <div className='grid gap-2'>
-                  <Label htmlFor={`target-group-${index}`}>Provider 组</Label>
+                  <Label htmlFor={`target-group-${index}`}>平台组</Label>
                   <GroupPicker
                     id={`target-group-${index}`}
                     value={target.groupName}
@@ -475,7 +474,7 @@ export function ModelDialog({
                 ) : null}
                 {!targetFilled(target) ? (
                   <p className='text-xs text-destructive sm:col-span-2'>
-                    这一行还没填全：Provider 组和上游模型 id 都要填。
+                    这一行还没填全：平台组和上游模型 id 都要填。
                   </p>
                 ) : null}
                 <div className='flex items-center justify-between gap-2 sm:col-span-2'>

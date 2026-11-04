@@ -54,10 +54,7 @@ export function ProviderKeysDialog({
             <KeyRound className='size-4' />
             {layout.title}
           </DialogTitle>
-          <DialogDescription>
-            每格是什么写在格子上。保存时按从上到下的顺序写下去；留空的格子表示清掉
-            那一段
-          </DialogDescription>
+          <DialogDescription>留空的格子表示清掉那一段。</DialogDescription>
         </DialogHeader>
         <div className='grid gap-3'>
           {layout.fields.map((field, index) => (

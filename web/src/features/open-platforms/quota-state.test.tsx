@@ -205,12 +205,12 @@ describe('额度那一栏按结论说', () => {
  * 一行则要说准是三档里的哪一档 —— 加载中、取不到都不能说成「没登记」。
  */
 describe('登记表没到手：额度结论照服务端说的显示', () => {
-  it('加载中：额度结论照显示，插件那一行只说还没到手', () => {
+  it('加载中：额度结论照显示，插件那一行只说还没加载', () => {
     render(facts({ quotaState: 'no_quota' }, { status: 'pending' }))
 
     expect(screen.getByText('额度用尽')).toBeInTheDocument()
     expect(
-      screen.getByText('额度插件：qiniu-portal（登记表还没到手）')
+      screen.getByText('额度插件：qiniu-portal（列表还没加载）')
     ).toBeInTheDocument()
     expect(text()).not.toMatch(/没登记|未知插件/)
   })
@@ -228,7 +228,7 @@ describe('登记表没到手：额度结论照服务端说的显示', () => {
       screen.getByText(`平台说这个账号不能用 · ${when} 恢复`)
     ).toBeInTheDocument()
     expect(
-      screen.getByText('额度插件：qiniu-portal（登记表取不到）')
+      screen.getByText('额度插件：qiniu-portal（列表取不到）')
     ).toBeInTheDocument()
     expect(text()).not.toMatch(/没登记|未知插件/)
   })

@@ -1050,7 +1050,7 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
     )
   }
 
-  it('登记表还在加载：凭据入口是禁用的，弹窗开不了', async () => {
+  it('插件列表还在加载：凭据入口是禁用的，弹窗开不了', async () => {
     const user = userEvent.setup({ delay: null })
 
     renderWithClient({
@@ -1069,13 +1069,13 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
     // 不能点：点下去就少几段。
     expect(button).toBeDisabled()
     // 也看得见为什么点不了。
-    expect(screen.getByText('还在加载额度插件登记表')).toBeInTheDocument()
+    expect(screen.getByText('凭据格子还在加载')).toBeInTheDocument()
 
     await user.click(button)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('登记表取不到：显示错误，凭据入口是禁用的', async () => {
+  it('插件列表取不到：显示错误，凭据入口是禁用的', async () => {
     const user = userEvent.setup({ delay: null })
 
     renderWithClient({
@@ -1095,7 +1095,7 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
     })
     // 错误照出来：不让格子数悄悄变少。
     expect(
-      await screen.findByText(/额度插件登记表取不到/)
+      await screen.findByText(/插件列表取不到/)
     ).toBeInTheDocument()
 
     await user.click(button)

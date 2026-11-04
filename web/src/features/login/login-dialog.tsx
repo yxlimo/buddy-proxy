@@ -97,13 +97,13 @@ export function LoginDialog({
             <LogIn className='size-4' />
             {title}
           </DialogTitle>
-          <DialogDescription>
-            {/* 还在进行中时，这句话是「下一步该干什么」；结束了的话，结果块
-                里已经有一句结果了，这里别重复。 */}
-            {session && session.status === 'pending'
-              ? humanMessage(session.message)
-              : '本次登录的状态。'}
-          </DialogDescription>
+          {/* 还在进行中时，这句话是「下一步该干什么」；结束了的话，结果块
+              里已经有一句结果了，这里就不说。 */}
+          {session && session.status === 'pending' ? (
+            <DialogDescription>
+              {humanMessage(session.message)}
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
 
         {!session && status.isPending ? (
@@ -416,7 +416,7 @@ function PasswordForm({
             checked={remember}
             onCheckedChange={(checked) => setRemember(checked === true)}
           />
-          记住密码吗（记住的话密码会存进网关的 secrets）
+          记住密码吗（密码会保存在网关上）
         </label>
       ) : null}
       <Button type='submit' disabled={login.isPending} className='w-fit'>
@@ -477,7 +477,7 @@ function TokenForm({
             2. 登录完成后，在同一浏览器中按 F12 打开开发者工具 → Application
             （或 Storage）→ Cookies，找到 uaa-token 并复制其值。
           </li>
-          <li>3. 将该值粘贴到下方，点击「导入」。</li>
+          <li>3. 将该值粘贴到下方，点击「导入 token」。</li>
         </ol>
       </div>
 
@@ -497,7 +497,7 @@ function TokenForm({
         ) : (
           <KeyRound />
         )}
-        导入
+        导入 token
       </Button>
     </form>
   )
@@ -555,7 +555,7 @@ function CodeForm({
         ) : (
           <KeyRound />
         )}
-        换凭据
+        登录
       </Button>
     </form>
   )

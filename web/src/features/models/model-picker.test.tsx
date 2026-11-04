@@ -71,7 +71,7 @@ describe('上游模型 id 的目录', () => {
     })
 
     expect(
-      await screen.findByText('先选 Provider 组，才有模型目录可选。')
+      await screen.findByText('先选平台组，才有模型目录可选。')
     ).toBeInTheDocument()
   })
 

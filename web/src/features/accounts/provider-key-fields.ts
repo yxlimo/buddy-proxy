@@ -83,7 +83,7 @@ const LAYOUTS: Record<string, ProviderKeyLayout> = {
       {
         id: 'qiniu-portal-cookie',
         label: '门户 Cookie',
-        hint: '只用来查资源包额度，可以留空；留空表示清掉这一段',
+        hint: '只用来查资源包额度，可以留空',
         placeholder: 'c=…',
       },
     ],
@@ -202,7 +202,7 @@ export function providerKeyAccess(input: {
     if (input.registry.status === 'error') {
       return {
         status: 'failed',
-        message: `额度插件登记表取不到，格子数说不准：${input.registry.message}`,
+        message: `插件列表取不到，凭据格子数还说不准：${input.registry.message}`,
       }
     }
     const plugin = input.registry.plugins.find(
@@ -222,9 +222,7 @@ export function providerKeyAccess(input: {
         id: `open-platform-plugin-${field.name}`,
         // label 是给人看的名字；name 是库里的后缀，不给人看。
         label: field.label || field.name,
-        hint: `额度插件「${plugin?.label || plugin?.id || ''}」要的一段凭据${
-          field.secret ? '（遮起来显示）' : ''
-        }`,
+        hint: `额度插件「${plugin?.label || plugin?.id || ''}」要的一段凭据`,
       })
     }
     return {

@@ -47,6 +47,8 @@ import {
   ListModelsResponseSchema,
   ListPublishedModelsResponseSchema,
   ListQuotaPluginsResponseSchema,
+  ListPlatformKindsResponseSchema,
+  PlatformKindSchema,
   ListUpstreamsResponseSchema,
   ListUsageEventsResponseSchema,
   LoginSessionSchema,
@@ -141,6 +143,7 @@ import {
   type OpenPlatformRow,
 } from "../open-platforms.ts";
 import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
+import { PLATFORM_KIND_OPTIONS } from "../platform-catalog.ts";
 import { allQuotaPlugins } from "../quota-plugins.ts";
 import { quotaConclusionOf, quotaPluginIdOf, type QuotaConclusion } from "../quota-state.ts";
 import { peekHealthSnapshot } from "../health-cache.ts";
@@ -597,6 +600,9 @@ function openPlatformMessage(row: OpenPlatformRow) {
     modelsAuto: row.models.auto,
     modelsFetchedAtMs: BigInt(row.models.fetchedAt),
     modelsSource: row.models.source,
+    // 建的时候定下的那一类：面板靠它决定这一排平台能用哪些凭据格子、要不要
+    // 显示「刷新模型目录」。
+    kind: row.kind,
   });
 }
 
@@ -722,11 +728,13 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async addPlatform(request) {
     const id = String(request.id ?? "");
-    // 校验与归一都在那一层（id 的规矩、地址的归一、模板与账号的重名）。
+    // 校验与归一都在那一层（id 的规矩、地址的归一、模板与账号的重名，还有
+    // kind 在不在能建的那张表里）。
     const result = createOpenPlatform({
       id,
       label: String(request.label ?? ""),
       baseUrl: String(request.baseUrl ?? ""),
+      kind: String(request.kind ?? ""),
     });
     if (!result.ok) {
       return create(AddPlatformResponseSchema, { ok: false, message: result.message });
@@ -847,6 +855,20 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
               secret: field.secret,
             }),
           ),
+        }),
+      ),
+    });
+  },
+
+  async listPlatformKinds() {
+    // 顺序照表里的顺序：面板按答复渲染下拉，不自己排。
+    return create(ListPlatformKindsResponseSchema, {
+      kinds: PLATFORM_KIND_OPTIONS.map((option) =>
+        create(PlatformKindSchema, {
+          kind: option.kind,
+          label: option.label,
+          defaultBaseUrl: option.defaultBaseUrl,
+          modelsFromUpstream: option.modelsFromUpstream,
         }),
       ),
     });

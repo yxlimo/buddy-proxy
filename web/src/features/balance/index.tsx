@@ -264,7 +264,7 @@ function QuotaCard({
   quota: UpstreamQuota
   refreshing?: boolean
 }) {
-  const title = quota.accountId || quota.upstreamId || '未知 Provider'
+  const title = quota.accountId || quota.upstreamId || '未知账号'
   const subtitle = quota.upstreamId === title ? '' : quota.upstreamId
   return (
     <div>
@@ -371,7 +371,7 @@ function EmptyQuotaCard() {
   return (
     <Card>
       <CardContent className='py-12 text-center text-sm text-muted-foreground'>
-        Provider 没有报额度。
+        平台没有报额度。
       </CardContent>
     </Card>
   )

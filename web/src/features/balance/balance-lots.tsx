@@ -22,10 +22,7 @@ import { formatCny, formatDate, isFarFuture, remainingDays } from '@/lib/format'
 export function BalanceLotsTable({ lots }: { lots: BalanceLot[] }) {
   if (lots.length === 0) {
     return (
-      <EmptyState
-        title='没有余额批次'
-        description='平台未返回余额明细。'
-      />
+      <EmptyState title='没有余额批次' />
     )
   }
 

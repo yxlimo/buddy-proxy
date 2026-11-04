@@ -695,7 +695,7 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('存着的插件不在登记表里：显示「未知插件 <id>」并提示，提交原样带上', async () => {
+  it('存着的插件不在已知插件里：显示「未知插件 <id>」并提示，提交原样带上', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
     const client = editingClient(
@@ -714,7 +714,7 @@ describe('面板上的开放平台', () => {
       )
     })
     expect(
-      within(dialog).getByText(/不在额度插件登记表里/)
+      within(dialog).getByText(/不在已知插件里/)
     ).toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
@@ -724,7 +724,7 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('登记表还在加载：说还没到手，不说这个 id 不在登记表里', async () => {
+  it('插件列表还在加载：说还没加载，不说这个 id 不在已知插件里', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
     const client = clientWith([openPlatform()], {
@@ -752,15 +752,15 @@ describe('面板上的开放平台', () => {
 
     await waitFor(() => {
       expect(within(dialog).getByRole('combobox')).toHaveTextContent(
-        'qiniu-portal（登记表还没到手）'
+        'qiniu-portal（列表还没加载）'
       )
     })
     expect(
-      within(dialog).getByText(/^额度插件登记表还没到手/)
+      within(dialog).getByText(/^插件列表还在加载/)
     ).toBeInTheDocument()
-    // 没到手的时候「不在登记表里」这个判断不成立：不能把登记过的说成填错了。
+    // 列表没到手的时候「不在已知插件里」这个判断不成立：不能把登记过的说成填错了。
     expect(
-      within(dialog).queryByText(/不在额度插件登记表里/)
+      within(dialog).queryByText(/不在已知插件里/)
     ).not.toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
@@ -770,7 +770,7 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('登记表取不到：已登记的 id 不说成「未知插件」', async () => {
+  it('插件列表取不到：已登记的 id 不说成「未知插件」', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
     const client = clientWith([openPlatform()], {
@@ -799,11 +799,11 @@ describe('面板上的开放平台', () => {
 
     await waitFor(() => {
       expect(within(dialog).getByRole('combobox')).toHaveTextContent(
-        'qiniu-portal（登记表取不到）'
+        'qiniu-portal（列表取不到）'
       )
     })
     expect(
-      within(dialog).getByText(/额度插件登记表取不到/)
+      within(dialog).getByText(/插件列表取不到/)
     ).toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('button', { name: '保存' }))

@@ -56,8 +56,7 @@ export function AddAccountDialog({
             新增账号
           </DialogTitle>
           <DialogDescription>
-            在「{platformLabel}」下加一个账号。账号各自有自己的凭据、自己的额度；
-            客户端走的地址不变（/{platform}/v1），换的是这个平台下选了哪个账号
+            在「{platformLabel}」下加一个账号。客户端地址不变。
           </DialogDescription>
         </DialogHeader>
         <div className='grid gap-2'>
@@ -74,7 +73,7 @@ export function AddAccountDialog({
             }}
           />
           <p className='text-xs text-muted-foreground'>
-            别名只给面板看：同一个平台下两个账号靠它分辨。不填的话服务端起一个
+            同一个平台下多个账号靠它分辨，不填会自动命名
           </p>
         </div>
         <DialogFooter>

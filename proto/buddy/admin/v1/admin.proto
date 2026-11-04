@@ -548,6 +548,9 @@ message OpenPlatform {
   int64 models_fetched_at_ms = 7;
   // 这份目录是哪来的：auto（自动拉的）/ manual（人写的）。
   string models_source = 8;
+  // 这个平台用哪一类适配器（kind 注册表里的那一个）：openai / qiniu / xinghuo /
+  // sensenova / intern-ai / tokenrhythm。建平台时定下，之后不能改。
+  string kind = 9;
 }
 
 // 加一个开放平台。先建空平台，再加账号 —— 这里不接 key、不接模型清单。
@@ -555,6 +558,8 @@ message AddPlatformRequest {
   string id = 1;
   string label = 2;
   string base_url = 3;
+  // 用哪一类适配器。空串 = openai（OpenAI 兼容的通用平台）。
+  string kind = 4;
 }
 
 message AddPlatformResponse {
@@ -627,6 +632,24 @@ message QuotaPlugin {
 
 message ListQuotaPluginsResponse {
   repeated QuotaPlugin plugins = 1;
+}
+
+// 建平台时能选的一类适配器。
+message PlatformKind {
+  // kind 注册表里的那一类（写进 OpenPlatform.kind）。
+  string kind = 1;
+  // 面板上显示的名字。
+  string label = 2;
+  // 建平台时给这个地址占位；用户可以改。
+  string default_base_url = 3;
+  // 这一类的模型目录能不能从上游拉（不能的话面板不显示「刷新模型目录」）。
+  bool models_from_upstream = 4;
+}
+
+message ListPlatformKindsRequest {}
+
+message ListPlatformKindsResponse {
+  repeated PlatformKind kinds = 1;
 }
 
 // ── 余额 ──────────────────────────────────────────────────────────────────
@@ -1039,6 +1062,8 @@ service AdminService {
   rpc DeletePlatform(DeletePlatformRequest) returns (DeletePlatformResponse);
   rpc RefreshPlatformModels(RefreshPlatformModelsRequest) returns (RefreshPlatformModelsResponse);
   rpc ListQuotaPlugins(ListQuotaPluginsRequest) returns (ListQuotaPluginsResponse);
+  // 建平台时的「用哪一类适配器」下拉。
+  rpc ListPlatformKinds(ListPlatformKindsRequest) returns (ListPlatformKindsResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
 

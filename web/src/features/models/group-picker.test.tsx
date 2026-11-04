@@ -216,7 +216,7 @@ describe('上游组下拉', () => {
     })
 
     expect(
-      await screen.findByText(/先在 Provider 页登录并打开一个 Provider/)
+      await screen.findByText(/还没有可用的平台，先在平台页添加并登录/)
     ).toBeInTheDocument()
     expect(screen.getByRole('combobox')).toBeDisabled()
   })

@@ -41,9 +41,9 @@ describe('配置页：被环境变量挡着的设置', () => {
     await screen.findByText('是否开启 API KEY 验证')
     // 生效的是环境变量的值。
     expect(screen.getByText('true')).toBeInTheDocument()
-    // 面板写的那份也在，并且说清了它在等。
+    // 面板写的那份也在，并且说清了生效的是环境变量。
     expect(screen.getByText(/面板里的值 false/)).toBeInTheDocument()
-    expect(screen.getByText(/等它撤了才轮到这个/)).toBeInTheDocument()
+    expect(screen.getByText(/环境变量在用/)).toBeInTheDocument()
     // 库里那份能清掉。
     expect(screen.getByRole('button', { name: /清回默认/ })).toBeInTheDocument()
   })

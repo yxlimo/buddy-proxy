@@ -317,7 +317,7 @@ async function raw(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 
 console.log("");
-console.log("契约：三十八个方法");
+console.log("契约：三十九个方法");
 
 // 每个方法配一个像样的请求。
 // 登录那六个：挑不会碰到网络的上游（密码流与回填流），不真的登录。
@@ -357,16 +357,17 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "SetPlatformPolicy", request: { platform: "qoder", policy: "PROVIDER_POLICY_SINGLE" } },
   { method: "DeleteAccount", request: { id: "no-such-account" } },
   { method: "LogoutAccount", request: { accountId: "no-such-account" } },
-  // 开放平台：建、改、删、拉目录、额度插件。
+  // 开放平台：建、改、删、拉目录、额度插件、建平台时能选的那几类。
   // 拉目录放在删掉之后：平台没了就不会去问上游（本测试不发请求）。
   { method: "AddPlatform", request: { id: "contract-open", label: "契约开放平台", baseUrl: "https://api.contract-open.test/v1" } },
   { method: "UpdatePlatform", request: { id: "contract-open", label: "契约开放平台改", baseUrl: "https://api.contract-open.test/v1", quotaPlugin: "", modelsAuto: false, models: ["m-1"] } },
   { method: "DeletePlatform", request: { id: "contract-open" } },
   { method: "RefreshPlatformModels", request: { platformId: "contract-open" } },
   { method: "ListQuotaPlugins", request: {} },
+  { method: "ListPlatformKinds", request: {} },
 ];
 
-check("契约里有三十八个方法", contract.methods.size === 38, String(contract.methods.size));
+check("契约里有三十九个方法", contract.methods.size === 39, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",

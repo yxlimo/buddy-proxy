@@ -85,11 +85,11 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
         disabled={all.length === 0}
       >
         <SelectTrigger id={id} className='w-full'>
-          <SelectValue placeholder='选一个 Provider' />
+          <SelectValue placeholder='选一个平台' />
         </SelectTrigger>
         <SelectContent>
           {missing ? (
-            <SelectItem value={value}>{value}（没有这个 Provider）</SelectItem>
+            <SelectItem value={value}>{value}（没有这个平台）</SelectItem>
           ) : null}
           {ordered.map((upstream) => (
             <SelectItem
@@ -109,7 +109,7 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
 
       {all.length === 0 ? (
         <p className='text-xs text-muted-foreground'>
-          {'网关里一个上游都没有，先在 Provider 页登录并打开一个 Provider，才有组可以选。'}
+          {'还没有可用的平台，先在平台页添加并登录。'}
         </p>
       ) : null}
       {missing ? (

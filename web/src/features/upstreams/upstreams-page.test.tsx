@@ -262,7 +262,7 @@ describe('上游页的平台列表', () => {
     const dialog = await screen.findByRole('dialog')
     // 弹窗说清楚是在哪个平台下加，客户端地址不变。
     expect(within(dialog).getByText(/MiniMax Code/)).toBeInTheDocument()
-    expect(within(dialog).getByText(/\/minimax\/v1/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/客户端地址不变/)).toBeInTheDocument()
 
     await user.type(within(dialog).getByLabelText('别名（可以不填）'), 'M plan')
     await user.click(within(dialog).getByRole('button', { name: '加上' }))

@@ -174,7 +174,7 @@ export function UpstreamsPage() {
   return (
     <PageShell
       title='上游'
-      description='平台分两种：代码里的模板（固定的九个，删不掉）与你面板上加的开放平台（可改可删）。账号是数据：一个平台下可以有一个或多个账号，凭据挂在账号上'
+      description='平台分两种：内置的模板平台，和自己在面板上加的开放平台。每个平台下可以有多个账号。'
       actions={
         <Button onClick={openAddPlatform}>
           <Plus />
@@ -188,7 +188,7 @@ export function UpstreamsPage() {
           {list.length === 0 ? (
             <EmptyState
               title='网关没有返回任何平台'
-              description='平台是代码里的模板，正常时一定有九个'
+              description='正常情况下会有九个内置平台'
             />
           ) : (
             <Table>
@@ -367,7 +367,6 @@ export function UpstreamsPage() {
                                 onRetry={() => void benefits.refetch()}
                               />
                               <ProviderAccounts
-                                platform={upstream.id}
                                 access={accessOf(upstream)}
                                 accounts={upstream.accounts}
                                 loggingIn={login.pending}

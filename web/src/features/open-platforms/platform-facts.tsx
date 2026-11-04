@@ -99,11 +99,11 @@ function registeredPlugin(
  */
 function pluginLine(upstream: Upstream, registry: QuotaRegistry): string {
   const id = upstream.quotaPlugin
-  if (!id) return '额度插件：未选插件'
+  if (!id) return '额度插件：未选'
   const plugin = registeredPlugin(upstream, registry)
   if (plugin) return `额度插件：${plugin.label}`
-  if (registry.status === 'pending') return `额度插件：${id}（登记表还没到手）`
-  if (registry.status === 'error') return `额度插件：${id}（登记表取不到）`
+  if (registry.status === 'pending') return `额度插件：${id}（列表还没加载）`
+  if (registry.status === 'error') return `额度插件：${id}（列表取不到）`
   return `额度插件：未知插件 ${id}`
 }
 

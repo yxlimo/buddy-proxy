@@ -539,7 +539,7 @@ describe('登录对话框', () => {
     })
 
     await user.type(await screen.findByLabelText('uaa-token'), 'uaa-abc')
-    await user.click(screen.getByRole('button', { name: '导入' }))
+    await user.click(screen.getByRole('button', { name: '导入 token' }))
 
     await waitFor(() => {
       expect(imported).toEqual(['uaa-abc'])

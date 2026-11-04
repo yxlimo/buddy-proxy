@@ -45,9 +45,9 @@ const NO_PLUGIN = '*none*'
 function storedPluginLabel(id: string, registry: QuotaRegistry): string {
   switch (registry.status) {
     case 'pending':
-      return `${id}（登记表还没到手）`
+      return `${id}（列表还没加载）`
     case 'error':
-      return `${id}（登记表取不到）`
+      return `${id}（列表取不到）`
     default:
       return `未知插件 ${id}`
   }
@@ -63,13 +63,13 @@ function storedPluginLabel(id: string, registry: QuotaRegistry): string {
 function pluginHint(registry: QuotaRegistry, unregistered: string): string {
   switch (registry.status) {
     case 'pending':
-      return '额度插件登记表还没到手：现在只看得见存着的那个 id'
+      return '插件列表还在加载，暂时只能看到原来那个 id'
     case 'error':
-      return `额度插件登记表取不到：${registry.message}`
+      return `插件列表取不到：${registry.message}`
     default:
       return unregistered
-        ? '这个 id 不在额度插件登记表里：可能填错了，或者那个插件下线了。存下去原样保留'
-        : '插件决定这个平台的额度怎么问、怎么读'
+        ? '这个 id 不在已知插件里，仍会原样保存。'
+        : '决定这个平台怎么查额度'
   }
 }
 
@@ -198,8 +198,8 @@ export function PlatformDialog({
           </DialogTitle>
           <DialogDescription>
             {editing
-              ? '这一单是整单提交的：改一处也要把现在的值一起带上。地址改了以后客户端要换地址'
-              : '先建一个空平台：不接 key、不接模型清单，那些是后面的事。id 是客户端地址里的一段。上面选一条模板能少填几格'}
+              ? '地址改了以后客户端要换地址。'
+              : '先建一个空平台。id 是客户端地址里的一段。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -243,10 +243,6 @@ export function PlatformDialog({
                   </p>
                 )}
               </div>
-              <p className='text-xs text-muted-foreground'>
-                模板是捷径不是必经：选一条会填上 id、名字、地址，填完还能改；
-                不选模板直接手填也行
-              </p>
             </div>
           )}
 
@@ -262,7 +258,7 @@ export function PlatformDialog({
             <p className='text-xs text-muted-foreground'>
               {editing
                 ? 'id 是这个平台在客户端地址里的一段，改不了'
-                : '客户端走的是 /{id}/v1。id 的规则由服务端定，填错它会说明'}
+                : '客户端走的是 /{id}/v1。'}
             </p>
           </div>
 
@@ -328,10 +324,7 @@ export function PlatformDialog({
                   {selected.fields.length ? (
                     <ul className='list-disc ps-5 text-xs text-muted-foreground'>
                       {selected.fields.map((field) => (
-                        <li key={field.name}>
-                          {field.label}
-                          {field.secret ? '（面板上遮起来显示）' : ''}
-                        </li>
+                        <li key={field.name}>{field.label}</li>
                       ))}
                     </ul>
                   ) : (
@@ -340,7 +333,7 @@ export function PlatformDialog({
                     </p>
                   )}
                   <p className='text-xs text-muted-foreground'>
-                    这几段凭据在账号那一行的「凭据」里填：推理用的 API key 在前，这几段按上面的顺序在后
+                    这几段凭据在账号那一行的「凭据」里填
                   </p>
                 </div>
               ) : null}
@@ -372,7 +365,7 @@ export function PlatformDialog({
                 <p className='text-xs text-muted-foreground'>
                   {draft.modelsAuto
                     ? '自动拉的时候这份目录由上游给，这里改不了'
-                    : '一行一个模型名。留空表示保留现在这份目录'}
+                    : '留空表示保留现在这份目录'}
                 </p>
               </div>
             </>

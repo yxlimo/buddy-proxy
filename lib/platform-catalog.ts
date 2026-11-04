@@ -1,5 +1,8 @@
 // lib/platform-catalog.ts — 平台模板表：还没迁进开放平台表的那几个。
 //
+// 另有一张「能建的平台种类」表（PLATFORM_KIND_OPTIONS）在后面：面板新增平台时
+// 的下拉，说的是能建哪几种，不是预置了哪几行。
+//
 // 这一层是叶子：不引任何模块。面板与迁移都要引它（引了 store 就成环）。
 //
 // 地址写的是字面量，不引各平台的 config 那些常量：config 走
@@ -86,4 +89,78 @@ export const PLATFORM_TEMPLATES: PlatformTemplate[] = [
 /** 模板表里那一个。认不出就是 null。 */
 export function platformTemplateOf(key: string): PlatformTemplate | null {
   return PLATFORM_TEMPLATES.find((t) => t.key === key) ?? null;
+}
+
+/**
+ * 用户能自己建的一类平台：面板上「新增平台」的那个下拉，一格一条。
+ *
+ * 与模板表的分工：模板表说的是「代码里预置了哪些平台行」，这一张说的是
+ * 「用户能建哪几种」。两者有重叠（那五家迁成库行之后既能预置、也能再建一个
+ * 同类的账号），但不是一件事 —— 面板要的是 kind 与它的默认值，不是某个 id。
+ */
+export interface PlatformKindOption {
+  kind: string;
+  label: string;
+  defaultBaseUrl: string;
+  /** 这一类能不能从上游拉模型目录。 */
+  modelsFromUpstream: boolean;
+}
+
+/**
+ * 能建的平台种类，顺序就是面板上下拉的顺序。
+ *
+ * 模拟客户端那五家（minimax / qoder / qoder-cn / workbuddy-cn /
+ * workbuddy-global）**不在这里**：它们是一个客户端一份会话，靠登录拿到凭据，
+ * 不属于「用户自己加一个」的那一类 —— 建出来的空平台没有模拟端可用，也拉不
+ * 到会话。它们照着代码里的模板走（lib/platform-templates.ts）。
+ *
+ * 地址与名字跟模板表逐字一致（同一个服务，两处说法不该有两样）。这里写成字面
+ * 量而不是从模板表算：模板表里可能有一天不再有某一家（迁走了、下线了），而它
+ * 仍然是用户能建的一类；反过来也一样。两处走样由 test/open-platforms-check.ts
+ * 对着模板表比。
+ */
+export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
+  {
+    kind: "openai",
+    label: "OpenAI 兼容",
+    // 通用平台没有默认地址：哪家中转站、哪个自建服务，只有用户知道。
+    defaultBaseUrl: "",
+    modelsFromUpstream: true,
+  },
+  {
+    kind: "qiniu",
+    label: "七牛云",
+    defaultBaseUrl: "https://api.qnaigc.com/v1",
+    modelsFromUpstream: true,
+  },
+  {
+    kind: "xinghuo",
+    label: "讯飞星火",
+    defaultBaseUrl: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+    // 它没有模型清单接口：目录只能人写。
+    modelsFromUpstream: false,
+  },
+  {
+    kind: "sensenova",
+    label: "SenseNova",
+    defaultBaseUrl: "https://token.sensenova.cn/v1",
+    modelsFromUpstream: true,
+  },
+  {
+    kind: "intern-ai",
+    label: "书生·端砚",
+    defaultBaseUrl: "https://discovery-api.intern-ai.org.cn/v1",
+    modelsFromUpstream: true,
+  },
+  {
+    kind: "tokenrhythm",
+    label: "TokenRhythm",
+    defaultBaseUrl: "https://tokenrhythm.studio/v1",
+    modelsFromUpstream: true,
+  },
+];
+
+/** 能建的这一类平台。认不出就是 null（不能建的那种）。 */
+export function platformKindOptionOf(kind: string): PlatformKindOption | null {
+  return PLATFORM_KIND_OPTIONS.find((option) => option.kind === kind) ?? null;
 }

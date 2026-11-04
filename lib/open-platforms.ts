@@ -12,6 +12,8 @@
 
 import { store } from "./store.ts";
 import { PLATFORMS } from "./platform-templates.ts";
+// 能建的平台种类：建的时候要照着它校验，拒绝时要把可选的列出来。
+import { PLATFORM_KIND_OPTIONS, platformKindOptionOf } from "./platform-catalog.ts";
 // 额度插件的登记表（lib/quota-plugins.ts）反过来要读这一层的平台表，所以这两
 // 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
 // 那里也不在求值期读这边的东西。
@@ -132,6 +134,8 @@ export function createOpenPlatform(input: {
   label: string;
   baseUrl: string;
   quotaPlugin?: string;
+  /** 哪一类适配器。空串 = openai（OpenAI 兼容的通用平台）。 */
+  kind?: string;
 }): { ok: boolean; message: string } {
   const id = String(input.id ?? "").trim();
   const problem = checkId(id);
@@ -142,15 +146,22 @@ export function createOpenPlatform(input: {
   const baseUrl = String(input.baseUrl ?? "").trim();
   const urlProblem = checkBaseUrl(baseUrl);
   if (urlProblem) return { ok: false, message: urlProblem };
+  // 空串 = 通用那一类：契约里 AddPlatformRequest.kind 就是这么约定的（老面板
+  // 不带这一格，建出来还是原来那个东西）。
+  const kind = String(input.kind ?? "").trim() || OPEN_PLATFORM_KIND_NAME;
+  const kindProblem = checkKind(kind);
+  if (kindProblem) return { ok: false, message: kindProblem };
   const now = Date.now();
   const models: OpenPlatformModels = { items: [], auto: true, fetchedAt: 0, source: "auto" };
   const quotaPlugin = String(input.quotaPlugin ?? "").trim();
   const pluginProblem = checkQuotaPlugin(quotaPlugin);
   if (pluginProblem) return { ok: false, message: pluginProblem };
+  // kind 显式写：列的默认值是 openai，靠默认值就变成「谁都没说，反正建出来是
+  // openai」—— 这一格现在由调用方定，写进去的必须是校验过的那一个。
   store()
     .prepare(
-      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, kind, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .run(
       id,
@@ -159,6 +170,7 @@ export function createOpenPlatform(input: {
       modelsJson(models),
       models.auto ? 1 : 0,
       quotaPlugin,
+      kind,
       now,
       now,
     );
@@ -186,12 +198,27 @@ export function updateOpenPlatform(
     source?: "auto" | "manual";
     /** 上次拉目录的时刻（毫秒）。0 = 没拉过。 */
     fetchedAt?: number;
+    /**
+     * 想改类型。只收「跟现在一样」与空串，别的都拒。
+     *
+     * 线路上没有这一格（UpdatePlatformRequest 不含它，只有 AddPlatformRequest
+     * 有）。写在这里是防内部调用方 —— 比如将来的迁移或脚本 —— 误以为能改。
+     * 想换类型只能删了重建。
+     */
+    kind?: string;
   },
 ): { ok: boolean; message: string } {
   // 代码里的平台改不了：它们不在表里，改了也是改一份没人看的东西。
   if (isTemplateId(id)) return { ok: false, message: "这个 id 是代码里的平台，改不了" };
   const row = openPlatformOf(id);
   if (!row) return { ok: false, message: `没有这个平台：${id}` };
+  // 类型建完就定下：换类型不是改一个字段，它名下的凭据、地址、目录都得跟着
+  // 重算（七牛云要两段凭据、书生·端砚要两段，通用平台只要一段）—— 那是另一件
+  // 事，不在「改平台」里做。同一类与空串当没传。
+  const askedKind = String(patch.kind ?? "").trim();
+  if (askedKind && askedKind !== row.kind) {
+    return { ok: false, message: `平台建好之后不能换类型（现在是 ${row.kind}，要换只能删了重建）` };
+  }
   const label = patch.label === undefined ? row.label : String(patch.label).trim();
   if (!label) return { ok: false, message: "得有个名字" };
   const baseUrl = patch.baseUrl === undefined ? row.baseUrl : String(patch.baseUrl).trim();
@@ -299,6 +326,19 @@ function checkQuotaPlugin(pluginId: string): string | null {
   const known = allQuotaPlugins().map((plugin) => `${plugin.label}（${plugin.id}）`);
   const hint = known.length ? `登记过的有：${known.join("、")}` : "现在一个额度插件都没登记";
   return `没有这个额度插件：${pluginId}。${hint}`;
+}
+
+/**
+ * 这一类平台建不建得了。建不了的话给一句人话，并把能建的列出来。
+ *
+ * 收下去的 kind 一旦是注册表里没有的那一个，这个平台就彻底接不了请求（路由
+ * 按 kind 分派，认不出就无路可走），而面板上看得见它 —— 所以拦在写库之前。
+ * 只报「不行」，调用方不知道能选什么，所以列 label。
+ */
+function checkKind(kind: string): string | null {
+  if (platformKindOptionOf(kind)) return null;
+  const known = PLATFORM_KIND_OPTIONS.map((option) => `${option.label}（${option.kind}）`);
+  return `没有这一类平台：${kind}。能建的有：${known.join("、")}`;
 }
 
 /** 地址能不能用。不能的话给一句人话。 */

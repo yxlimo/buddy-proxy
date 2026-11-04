@@ -66,7 +66,7 @@ function accessLabel(access: ProviderKeyAccess): string {
  */
 function accessHint(access: ProviderKeyAccess): string | undefined {
   if (access.status === 'loading') {
-    return '额度插件登记表还在加载，凭据格子数还说不准'
+    return '凭据格子还在加载，稍后再试'
   }
   if (access.status === 'failed') {
     return access.message
@@ -82,7 +82,6 @@ function accessHint(access: ProviderKeyAccess): string | undefined {
  * 次账号列表。
  */
 export function ProviderAccounts({
-  platform,
   access,
   accounts,
   loggingIn,
@@ -95,8 +94,6 @@ export function ProviderAccounts({
   onRename,
   onWeightChange,
 }: {
-  /** 这个平台的 id（路径里那一段）。 */
-  platform: string
   /** 这一类平台的凭据入口：能不能填、不能填的时候为什么（判据在 provider-key-fields 那一层）。 */
   access: ProviderKeyAccess
   /** 这个平台名下的账号，按创建先后排（也就是权重次序）。 */
@@ -292,7 +289,7 @@ export function ProviderAccounts({
                       </Button>
                       {access.status === 'loading' ? (
                         <span className='text-xs text-muted-foreground'>
-                          还在加载额度插件登记表
+                          凭据格子还在加载
                         </span>
                       ) : null}
                       {access.status === 'failed' ? (
@@ -332,8 +329,8 @@ export function ProviderAccounts({
         <p className='text-sm font-medium'>凭据</p>
         <p className='text-xs text-muted-foreground'>
           {active
-            ? `${active.alias || active.id} 名下的凭据，只显示掩码和指纹，不给全文`
-            : `在 ${platform} 下选一个账号，这里列出它名下的凭据`}
+            ? `${active.alias || active.id} 名下的凭据（只显示掩码和指纹）`
+            : '选一个账号，这里列出它名下的凭据'}
         </p>
       </div>
 
