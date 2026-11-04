@@ -10,8 +10,8 @@ import {
   LoginWithPasswordRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-import { accountKeys } from '@/features/accounts/api'
 import { assertOk, describeError, humanMessage } from '@/lib/errors'
+import { invalidateServerData } from '@/lib/server-data'
 
 /**
  * 错误怎么给人看。
@@ -144,7 +144,11 @@ export function useLoginWithPassword() {
     },
     onSuccess: (result) => {
       toast.success(result.message || '登录好了')
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+    },
+    onSettled: () => {
+      // 登录写成了一份凭据：账号那一行（状态、凭据条数）、平台那份答复、总览、
+      // 额度都变了。失败也重取一次，界面不会停在旧的「没登录」上。
+      invalidateServerData(queryClient, 'credentials')
     },
   })
 }
@@ -174,7 +178,10 @@ export function useExchangeLoginCode() {
     },
     onSuccess: (result) => {
       toast.success(result.message || '换好了')
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+    },
+    onSettled: () => {
+      // 换码换回来的是凭据，跟账号密码登录写的是同一处。
+      invalidateServerData(queryClient, 'credentials')
     },
   })
 }
@@ -204,7 +211,10 @@ export function useImportLoginToken() {
     },
     onSuccess: (result) => {
       toast.success(result.message || '导入好了')
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+    },
+    onSettled: () => {
+      // 贴回来的 token 也是一份凭据。
+      invalidateServerData(queryClient, 'credentials')
     },
   })
 }

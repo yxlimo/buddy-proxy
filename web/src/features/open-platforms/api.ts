@@ -9,12 +9,12 @@ import {
   UpdatePlatformRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-import { upstreamKeys } from '@/features/upstreams/api'
 import { assertOk, describeError } from '@/lib/errors'
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
-export const quotaPluginKeys = {
-  all: ['quota-plugins'] as const,
-}
+/** 额度插件登记表的查询键。键本身在 `lib/query-keys.ts` 里。 */
+export const quotaPluginKeys = queryKeys.quotaPlugins
 
 /**
  * 面板能选的额度插件。
@@ -26,7 +26,7 @@ export const quotaPluginKeys = {
 export function useQuotaPlugins() {
   const client = useAdminClient()
   return useQuery({
-    queryKey: quotaPluginKeys.all,
+    queryKey: queryKeys.quotaPlugins.all,
     queryFn: () =>
       client.listQuotaPlugins(create(ListQuotaPluginsRequestSchema)),
   })
@@ -64,7 +64,8 @@ export function useAddPlatform() {
       toast.success(result.message || '加上了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 平台表多了一行。
+      invalidateServerData(queryClient, 'platforms')
     },
   })
 }
@@ -105,7 +106,8 @@ export function useUpdatePlatform() {
       toast.success(result.message || '改好了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 名字、地址、额度插件、模型目录都是平台那一行上的字段。
+      invalidateServerData(queryClient, 'platforms')
     },
   })
 }
@@ -134,7 +136,9 @@ export function useDeletePlatform() {
       toast.success(result.message || '删掉了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 服务端连它名下的账号、凭据、额度一起删了。失败也可能是删了一半
+      // （先删指着它的主路由模型），所以同样让这几摊失效。
+      invalidateServerData(queryClient, 'platforms', 'accounts')
     },
   })
 }
@@ -163,7 +167,8 @@ export function useRefreshPlatformModels() {
       toast.error(describeError(error))
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 目录与上次拉取时刻在平台那一行上；ok=false 时服务端也记了这次问过。
+      invalidateServerData(queryClient, 'platforms')
     },
   })
 }

@@ -741,7 +741,10 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async refreshPlatformModels(request) {
     const id = String(request.platformId ?? "").trim();
     // 拉不到不是错误：原来那份目录留着（答复里说的就是现在这份）。
-    const outcome = await refreshOpenPlatformCatalog(id).catch((e) => ({
+    //
+    // force：这是人手动点的刷新，要穿透失败退避（退避只该拦后台与请求路径上
+    // 那些没人看着的调用）。
+    const outcome = await refreshOpenPlatformCatalog(id, { force: true }).catch((e) => ({
       ok: false,
       message: `拉不到模型目录：${(e as Error)?.message ?? String(e)}`,
     }));

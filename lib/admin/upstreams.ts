@@ -486,15 +486,21 @@ function applyPluginPartial(
 export async function refreshHealthSnapshot(): Promise<void> {
   const groups = groupByPlatform(listProviders());
   const partials = new Map<string, HealthSnapshot>();
-  await Promise.allSettled(
-    [...groups.entries()].map(async ([platform, rows]) => {
-      try {
-        partials.set(platform, await refreshPlatform(platform, rows));
-      } catch (e) {
-        console.warn(`[HEALTH] ${platform} 的额度没问到：${(e as Error)?.message}`);
-      }
-    }),
-  );
+  // 每家一个任务，平台之间并发。用 for 攒 promise 而不是 map：map 的回调里
+  // 没有返回值，读的人会以为它在产出什么。
+  const work: Promise<void>[] = [];
+  for (const [platform, rows] of groups) {
+    work.push(
+      (async () => {
+        try {
+          partials.set(platform, await refreshPlatform(platform, rows));
+        } catch (e) {
+          console.warn(`[HEALTH] ${platform} 的额度没问到：${(e as Error)?.message}`);
+        }
+      })(),
+    );
+  }
+  await Promise.allSettled(work);
   const snapshot: HealthSnapshot = emptySnapshot();
   for (const [platform, rows] of groups) {
     const partial = partials.get(platform);
@@ -608,15 +614,20 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
  */
 async function refreshPlatformRows(rows: ProviderRow[]): Promise<HealthSnapshot> {
   const partial = emptySnapshot();
-  await Promise.allSettled(
-    rows.map(async (row) => {
-      try {
-        await refreshOne(partial, row);
-      } catch (e) {
-        console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
-      }
-    }),
-  );
+  // 同上：用 for 攒 promise，不用 map 做副作用。
+  const work: Promise<void>[] = [];
+  for (const row of rows) {
+    work.push(
+      (async () => {
+        try {
+          await refreshOne(partial, row);
+        } catch (e) {
+          console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
+        }
+      })(),
+    );
+  }
+  await Promise.allSettled(work);
   return partial;
 }
 

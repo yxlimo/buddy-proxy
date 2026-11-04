@@ -29,9 +29,9 @@ import {
   useLoginStatus,
   useLoginWithPassword,
 } from '@/features/login/api'
-import { accountKeys } from '@/features/accounts/api'
-import { upstreamKeys, useUpstreams } from '@/features/upstreams/api'
+import { useUpstreams } from '@/features/upstreams/api'
 import { humanMessage } from '@/lib/errors'
+import { invalidateServerData } from '@/lib/server-data'
 import { formatCountdown } from '@/lib/format'
 
 type LoginDialogProps = {
@@ -70,7 +70,7 @@ export function LoginDialog({
   // 登录成功只说一次。
   const announced = useRef('')
 
-  // 成了：关掉对话框，说一声，刷新账号列表。
+  // 成了：关掉对话框，说一声，把凭据那几摊重新取一遍。
   useEffect(() => {
     if (session?.status !== 'approved') return
     // 「说一声」只说一次；关对话框每次都要做（同一个会话可能被重新打开）。
@@ -78,9 +78,8 @@ export function LoginDialog({
       announced.current = session.loginId
       toast.success(humanMessage(session.message) || '登录完成。')
     }
-    void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-    // 登录好了，上游的状态就变了（从「没登录」变成「就绪」），重取一下。
-    void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+    // 登录好了，账号那一行与平台的状态都变了（从「没登录」变成「就绪」）。
+    invalidateServerData(queryClient, 'credentials')
     onOpenChange(false)
   }, [session?.status, session?.loginId, session?.message, onOpenChange, queryClient])
 

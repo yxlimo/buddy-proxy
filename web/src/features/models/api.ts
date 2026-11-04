@@ -10,15 +10,13 @@ import {
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { assertOk, describeError } from '@/lib/errors'
-
-const publishedModelKeys = {
-  all: ['published-models'] as const,
-}
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
 export function usePublishedModels() {
   const client = useAdminClient()
   return useQuery({
-    queryKey: publishedModelKeys.all,
+    queryKey: queryKeys.publishedModels.all,
     queryFn: () =>
       client.listPublishedModels(create(ListPublishedModelsRequestSchema)),
   })
@@ -50,7 +48,8 @@ export function useSavePublishedModel() {
       toast.success(result.message || '已保存')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: publishedModelKeys.all })
+      // 主路由模型是一份答复：发布与改都是那一份里的东西。
+      invalidateServerData(queryClient, 'publishedModels')
     },
   })
 }
@@ -74,7 +73,8 @@ export function useDeletePublishedModel() {
       toast.success(result.message || '已删掉')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: publishedModelKeys.all })
+      // 主路由模型是一份答复：发布与改都是那一份里的东西。
+      invalidateServerData(queryClient, 'publishedModels')
     },
   })
 }

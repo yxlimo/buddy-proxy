@@ -999,3 +999,119 @@ describe('平台模板表', () => {
     }
   })
 })
+
+/**
+ * 提交完不能只改本地缓存，要真的再问服务端一次。
+ *
+ * 这里让假客户端的答复跟着变（加进去了 / 改名了 / 删掉了）：只有提交之后
+ * 重新请求过 ListUpstreams，界面才会变成新样子。少了那一步，断言里看到的
+ * 就还是提交前那一份 —— 也就是「改完看不见，得手动刷页面」。
+ */
+describe('改完平台，列表当场重取', () => {
+  it('加平台成功：重取列表，新的那一行出现', async () => {
+    const user = userEvent.setup({ delay: null })
+    const rows: Upstream[] = []
+    let listCalls = 0
+    const client = clientWith([], {
+      ListUpstreams: () => {
+        listCalls += 1
+        return create(ListUpstreamsResponseSchema, { upstreams: [...rows] })
+      },
+      AddPlatform: (input) => {
+        rows.push(
+          openPlatform({
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+          })
+        )
+        return create(AddPlatformResponseSchema, { ok: true, message: '加上了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(
+      await screen.findByRole('button', { name: '新增平台' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('平台 id'), 'my-gateway')
+    await user.type(within(dialog).getByLabelText('名字'), '我的中转站')
+    await user.type(
+      within(dialog).getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    // 第一次是进页面时取的，第二次是提交完之后重新取的。
+    await waitFor(() => {
+      expect(listCalls).toBe(2)
+    })
+    expect(await screen.findByText('我的中转站')).toBeInTheDocument()
+  })
+
+  it('改平台成功：重取列表，那一行换成新名字', async () => {
+    const user = userEvent.setup({ delay: null })
+    const rows: Upstream[] = [openPlatform()]
+    let listCalls = 0
+    const client = clientWith(rows, {
+      ListUpstreams: () => {
+        listCalls += 1
+        return create(ListUpstreamsResponseSchema, { upstreams: [...rows] })
+      },
+      UpdatePlatform: (input) => {
+        rows[0] = openPlatform({ label: input.label ?? '' })
+        return create(UpdatePlatformResponseSchema, { ok: true, message: '改好了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    await user.click(
+      within(rowOf('我的中转站')).getByRole('button', { name: '编辑' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    await user.clear(within(dialog).getByLabelText('名字'))
+    await user.type(within(dialog).getByLabelText('名字'), '新的名字')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(listCalls).toBe(2)
+    })
+    expect(await screen.findByText('新的名字')).toBeInTheDocument()
+    expect(screen.queryByText('我的中转站')).not.toBeInTheDocument()
+  })
+
+  it('删平台成功：重取列表，那一行消失', async () => {
+    const user = userEvent.setup({ delay: null })
+    const rows: Upstream[] = [openPlatform()]
+    let listCalls = 0
+    const client = clientWith(rows, {
+      ListUpstreams: () => {
+        listCalls += 1
+        return create(ListUpstreamsResponseSchema, { upstreams: [...rows] })
+      },
+      DeletePlatform: () => {
+        rows.length = 0
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    await waitFor(() => expect(del).toBeEnabled())
+    await user.click(del)
+    const confirm = await screen.findByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    await waitFor(() => {
+      expect(listCalls).toBe(2)
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('我的中转站')).not.toBeInTheDocument()
+    })
+  })
+})

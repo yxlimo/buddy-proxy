@@ -196,6 +196,21 @@ export async function fetchOpenPlatformModels(
   return models;
 }
 
+/** 拉一次目录的选项。 */
+export interface RefreshCatalogOptions {
+  /**
+   * 人手动点的那一次：跳过失败退避，直接去问上游。
+   *
+   * 退避是给「没人看着的调用」用的 —— 定时器、启动、`/v1/models` 上顺手拉，
+   * 那些调用失败了再来一次只会把失败变成一条稳定的外部请求流。人点「刷新模型
+   * 目录」是明确的意思：他要的是现在就去问一次，退避说的「刚问过」在这个语境
+   * 里不是答案。
+   *
+   * 去重仍然生效：同一时刻只拉一轮，后来的跟着这一轮走 —— 点两下不该发两份。
+   */
+  force?: boolean;
+}
+
 /**
  * 拉一次这个平台的目录，写回表里。
  *
@@ -209,10 +224,13 @@ export async function fetchOpenPlatformModels(
  * reject 出去就是一次没人接的 promise —— Node 把未处理的 rejection 当致命错误，
  * 网关就退了。调用点仍然各带一个 .catch：那是第二道防线，不是冗余。
  */
-export function refreshOpenPlatformCatalog(id: string): Promise<CatalogOutcome> {
+export function refreshOpenPlatformCatalog(
+  id: string,
+  options?: RefreshCatalogOptions,
+): Promise<CatalogOutcome> {
   const running = inFlight.get(id);
   if (running) return running;
-  const promise = runRefresh(id).finally(() => {
+  const promise = runRefresh(id, options?.force === true).finally(() => {
     inFlight.delete(id);
   });
   inFlight.set(id, promise);
@@ -220,7 +238,7 @@ export function refreshOpenPlatformCatalog(id: string): Promise<CatalogOutcome> 
 }
 
 /** 真去拉的那一轮。抛出来的东西都在这里归一成 { ok: false }。 */
-async function runRefresh(id: string): Promise<CatalogOutcome> {
+async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
   try {
     const row = openPlatformOf(id);
     if (!row) return { ok: false, message: `没有这个平台：${id}` };
@@ -233,8 +251,11 @@ async function runRefresh(id: string): Promise<CatalogOutcome> {
     }
     // 退避：上次成功之后失败过就先不再问。退避期内不告警 —— 同一个失败反复
     // 告警就是刷屏（请求路径上每个 /v1/models 都会走到这里）。
+    //
+    // force 跳过它：手动点的那一次是明确的意思，见 RefreshCatalogOptions。
     const before = catalogState.get(id);
     if (
+      !force &&
       before &&
       before.lastAttempt > before.lastSuccess &&
       Date.now() - before.at < FAILURE_BACKOFF_MS

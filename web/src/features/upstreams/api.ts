@@ -11,13 +11,12 @@ import {
 } from '@/gen/buddy/admin/v1/admin_pb'
 import type { ProviderPolicy } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-import { accountKeys } from '@/features/accounts/keys'
-import { systemKeys } from '@/features/overview/api'
 import { assertOk, describeError } from '@/lib/errors'
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
-export const upstreamKeys = {
-  all: ['upstreams'] as const,
-}
+/** 平台列表的查询键。键本身在 `lib/query-keys.ts` 里，见那份的说明。 */
+export const upstreamKeys = queryKeys.upstreams
 
 /**
  * 平台列表。
@@ -31,7 +30,7 @@ export const upstreamKeys = {
 export function useUpstreams(options?: { refetchOnMount?: boolean }) {
   const client = useAdminClient()
   return useQuery({
-    queryKey: upstreamKeys.all,
+    queryKey: queryKeys.upstreams.all,
     queryFn: () => client.listUpstreams(create(ListUpstreamsRequestSchema)),
     ...options,
   })
@@ -64,9 +63,8 @@ export function useSetAccountEnabled() {
       toast.success(result.message || '已保存，已经生效')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-      void queryClient.invalidateQueries({ queryKey: systemKeys.status })
+      // 一个账号的开关：账号那份答复、平台那份（带账号）、总览、额度都变了。
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }
@@ -97,8 +95,7 @@ export function useAddAccount() {
       toast.success(result.message || '加上了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }
@@ -126,8 +123,7 @@ export function useDeleteAccount() {
       toast.success(result.message || '删掉了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }
@@ -162,7 +158,8 @@ export function useSetPlatformPolicy() {
       toast.success(result.message || '策略改好了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 策略是平台那一行上的字段：平台那份答复变了。
+      invalidateServerData(queryClient, 'platforms')
     },
   })
 }
@@ -196,8 +193,7 @@ export function useUpdateProvider() {
       toast.success(result.message || '改好了')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }

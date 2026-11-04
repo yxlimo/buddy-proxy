@@ -9,10 +9,10 @@ import { toast } from 'sonner'
 import { GetBalanceRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { describeError } from '@/lib/errors'
+import { queryKeys } from '@/lib/query-keys'
 
-export const balanceKeys = {
-  all: (upstreamId: string) => ['balance', upstreamId] as const,
-}
+/** 额度那一份的查询键。键本身在 `lib/query-keys.ts` 里。 */
+export const balanceKeys = queryKeys.balances
 
 /**
  * 额度。upstreamId 为空表示所有上游。
@@ -23,7 +23,7 @@ export const balanceKeys = {
 export function useBalance(upstreamId: string) {
   const client = useAdminClient()
   return useQuery({
-    queryKey: balanceKeys.all(upstreamId),
+    queryKey: queryKeys.balances.all(upstreamId),
     queryFn: () =>
       client.getBalance(create(GetBalanceRequestSchema, { upstreamId })),
   })
@@ -42,7 +42,7 @@ export function useBalances(upstreamIds: string[]) {
   const client = useAdminClient()
   return useQueries({
     queries: upstreamIds.map((upstreamId) => ({
-      queryKey: balanceKeys.all(upstreamId),
+      queryKey: queryKeys.balances.all(upstreamId),
       queryFn: () =>
         client.getBalance(create(GetBalanceRequestSchema, { upstreamId })),
     })),
@@ -67,7 +67,7 @@ export function useRefreshBalance(upstreamId: string) {
         create(GetBalanceRequestSchema, { upstreamId, force: true })
       ),
     onSuccess: (data) => {
-      queryClient.setQueryData(balanceKeys.all(upstreamId), data)
+      queryClient.setQueryData(queryKeys.balances.all(upstreamId), data)
       toast.success('额度已刷新')
     },
     onError: (error) => {

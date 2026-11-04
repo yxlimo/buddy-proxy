@@ -4,7 +4,7 @@
 //
 // 离线：临时数据目录 + 本进程里的假上游，不发真请求，不碰真凭据。
 //
-// 查的是七件事：
+// 查的是八件事：
 //
 //   1. kind 登记了：kindOf("openai") 不是 null，平台的状态是 ready
 //   2. 目录公布：/v1/models（根路由）与 /<平台>/v1/models 都列得出目录里的模型
@@ -13,6 +13,7 @@
 //   5. 自动拉目录：上游的 /models 答了，目录就被换成上游答的那一份（source=auto）
 //   6. 人写死的目录（auto=false）不会被自动拉覆盖
 //   7. 拉目录的退避与去重：拉不到之后不再问上游，成功之后失败也不再问，并发只拉一轮
+//   8. 手动刷新（force）穿透退避，但不穿透去重
 //
 // 假上游在本进程里（node:http）：它只答两种路 —— /v1/models 与
 // /v1/chat/completions —— 并把自己收到过的请求记下来。
@@ -461,6 +462,78 @@ check(
 );
 
 modelsStatus = 200;
+
+// 手动点「刷新模型目录」：那一次要穿透退避。
+//
+// 退避是给没人看着的调用用的（定时器、启动、/v1/models 上顺手拉）；人点一次是
+// 明确的意思，答复「刚问过上游，先不再问」等于让他点了个寂寞。
+const forceCreated = createOpenPlatform({
+  id: "cat-force",
+  label: "Cat Force",
+  baseUrl: upstreamBase,
+});
+check("平台建得起来", forceCreated.ok === true, forceCreated.message);
+const forceAccount = addAccount({ platform: "cat-force" });
+setProviderKeys(forceAccount.id ?? "", ["sk-force-1"]);
+
+modelsStatus = 500;
+seen.length = 0;
+const forceFail = await refreshOpenPlatformCatalog("cat-force");
+check("第一次拉不到", forceFail.ok === false, forceFail.message);
+check("问过一次上游", modelsHits() === 1, String(modelsHits()));
+
+// 不带 force：退避拦下来（后台与请求路径上的调用仍然吃这一层）。
+const forceBackoff = await refreshOpenPlatformCatalog("cat-force");
+check("不带 force 的第二次不问上游", modelsHits() === 1, String(modelsHits()));
+check(
+  "不带 force 说的是先不再问",
+  forceBackoff.ok === false && forceBackoff.message.includes("先不再问"),
+  forceBackoff.message,
+);
+
+// 带 force：穿透退避，真去问第二次。
+const forceRetry = await refreshOpenPlatformCatalog("cat-force", { force: true });
+check("手动刷新穿透退避", modelsHits() === 2, String(modelsHits()));
+check("手动刷新拉不到时也报失败", forceRetry.ok === false, forceRetry.message);
+
+// 手动刷新拉到了：照旧记成功并清掉失败状态 —— 之后不带 force 也不被退避拦。
+modelsStatus = 200;
+modelsPayload = { data: [{ id: "f-1" }] };
+const forceOk = await refreshOpenPlatformCatalog("cat-force", { force: true });
+check("手动刷新拉到了", forceOk.ok === true, forceOk.message);
+check("手动刷新问了上游", modelsHits() === 3, String(modelsHits()));
+check(
+  "目录换成上游答的那一份",
+  openPlatformOf("cat-force")?.models.items.join(",") === "f-1",
+  JSON.stringify(openPlatformOf("cat-force")?.models.items),
+);
+const forceAfterSuccess = await refreshOpenPlatformCatalog("cat-force");
+check("成功之后不吃退避", forceAfterSuccess.ok === true, forceAfterSuccess.message);
+check("成功之后问上游", modelsHits() === 4, String(modelsHits()));
+
+// 带 force 的并发也只拉一轮：去重不能被 force 改坏。
+const forceRaceCreated = createOpenPlatform({
+  id: "cat-force-race",
+  label: "Cat Force Race",
+  baseUrl: upstreamBase,
+});
+check("平台建得起来", forceRaceCreated.ok === true, forceRaceCreated.message);
+const forceRaceAccount = addAccount({ platform: "cat-force-race" });
+setProviderKeys(forceRaceAccount.id ?? "", ["sk-force-race-1"]);
+
+modelsStatus = 200;
+modelsPayload = { data: [{ id: "fr-1" }] };
+seen.length = 0;
+const [forceRaceFirst, forceRaceSecond] = await Promise.all([
+  refreshOpenPlatformCatalog("cat-force-race", { force: true }),
+  refreshOpenPlatformCatalog("cat-force-race", { force: true }),
+]);
+check("并发两次 force 只问上游一次", modelsHits() === 1, String(modelsHits()));
+check(
+  "两个都答了",
+  forceRaceFirst.ok === true && forceRaceSecond.ok === true,
+  `${forceRaceFirst.message} / ${forceRaceSecond.message}`,
+);
 
 // 并发：同一个平台只拉一轮。
 const raceCreated = createOpenPlatform({

@@ -6,17 +6,14 @@ import {
   SetConfigRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-import { systemKeys } from '@/features/overview/api'
 import { assertOk, describeError } from '@/lib/errors'
-
-const configKeys = {
-  all: ['config'] as const,
-}
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
 export function useConfig() {
   const client = useAdminClient()
   return useQuery({
-    queryKey: configKeys.all,
+    queryKey: queryKeys.config.all,
     queryFn: () => client.listConfig(create(ListConfigRequestSchema)),
   })
 }
@@ -52,8 +49,8 @@ export function useSetConfig() {
       toast.success(result.message || '已保存，已经生效')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: configKeys.all })
-      void queryClient.invalidateQueries({ queryKey: systemKeys.status })
+      // 配置项那一页，和总览里那几个跟配置有关的数。
+      invalidateServerData(queryClient, 'config')
     },
   })
 }
