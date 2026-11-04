@@ -8,6 +8,7 @@ import {
   DeletePlatformResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListPublishedModelsResponseSchema,
   ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
   OpenPlatformSchema,
@@ -102,6 +103,9 @@ function clientWith(
       create(ListCredentialsResponseSchema, { credentials: [] }),
     ListQuotaPlugins: () =>
       create(ListQuotaPluginsResponseSchema, { plugins: [] }),
+    // 删平台之前要扫一遍主路由模型：没有模型指向它才是平常那条路。
+    ListPublishedModels: () =>
+      create(ListPublishedModelsResponseSchema, { models: [] }),
     ...extra,
   })
 }
@@ -643,9 +647,10 @@ describe('面板上的开放平台', () => {
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
-    await user.click(
-      within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
-    )
+    // 删之前要先扫主路由引用：扫完了删除入口才开。
+    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    await waitFor(() => expect(del).toBeEnabled())
+    await user.click(del)
 
     // 先确认：确认框里说的是这个平台。
     const confirm = await screen.findByRole('alertdialog')
@@ -670,9 +675,9 @@ describe('面板上的开放平台', () => {
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
-    await user.click(
-      within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
-    )
+    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    await waitFor(() => expect(del).toBeEnabled())
+    await user.click(del)
     const confirm = await screen.findByRole('alertdialog')
     await user.click(within(confirm).getByRole('button', { name: '删掉' }))
 

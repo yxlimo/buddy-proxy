@@ -7,6 +7,7 @@ import {
   AccountSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListPublishedModelsResponseSchema,
   ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
   ProviderPolicy,
@@ -637,6 +638,9 @@ describe('凭据弹窗按平台渲染格子', () => {
         create(ListCredentialsResponseSchema, { credentials: [] }),
       ListQuotaPlugins: () =>
         create(ListQuotaPluginsResponseSchema, { plugins }),
+      // 删平台之前要扫一遍主路由模型。
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, { models: [] }),
       SetProviderKeys: (input) => {
         const keys = [...(input.keys ?? [])]
         sent.push(keys)
@@ -958,8 +962,10 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () =>
         create(ListCredentialsResponseSchema, { credentials: [] }),
-      ListQuotaPlugins: listPlugins,
-      SetProviderKeys: () => create(SetProviderKeysResponseSchema, { ok: true }),
+    ListQuotaPlugins: listPlugins,
+    ListPublishedModels: () =>
+      create(ListPublishedModelsResponseSchema, { models: [] }),
+    SetProviderKeys: () => create(SetProviderKeysResponseSchema, { ok: true }),
     })
   }
 

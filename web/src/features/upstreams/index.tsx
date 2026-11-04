@@ -40,11 +40,11 @@ import {
 import { AddAccountDialog } from '@/features/upstreams/add-account-dialog'
 import {
   useAddPlatform,
-  useDeletePlatform,
   useQuotaPlugins,
   useRefreshPlatformModels,
   useUpdatePlatform,
 } from '@/features/open-platforms/api'
+import { DeletePlatformButton } from '@/features/open-platforms/platform-delete'
 import {
   OpenPlatformFacts,
   type RefreshOutcome,
@@ -93,7 +93,6 @@ export function UpstreamsPage() {
   const plugins = useQuotaPlugins()
   const addPlatform = useAddPlatform()
   const updatePlatform = useUpdatePlatform()
-  const deletePlatform = useDeletePlatform()
   const refreshModels = useRefreshPlatformModels()
   /** 展开着的那个平台：点一行看它名下的账号与凭据。 */
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -107,8 +106,6 @@ export function UpstreamsPage() {
   const [addingPlatform, setAddingPlatform] = useState(false)
   /** 正在改的平台。 */
   const [editingPlatform, setEditingPlatform] = useState<Upstream | null>(null)
-  /** 待删的平台：删它连它名下的账号、凭据一起删。 */
-  const [deletePlatformTarget, setDeletePlatformTarget] = useState<Upstream | null>(null)
   /** 上一次刷新模型目录的结果：按平台记着，照服务端的话显示。 */
   const [refreshOutcomes, setRefreshOutcomes] = useState<Record<string, RefreshOutcome>>({})
 
@@ -333,16 +330,9 @@ export function UpstreamsPage() {
                                 >
                                   刷新模型目录
                                 </Button>
-                                <Button
-                                  size='sm'
-                                  variant='outline'
-                                  className='text-destructive'
-                                  onClick={() =>
-                                    setDeletePlatformTarget(upstream)
-                                  }
-                                >
-                                  删掉
-                                </Button>
+                                {/* 删平台之前要先扫主路由模型：指向它的那些
+                                    模型会跟着一起删，这事得在弹框里说清楚。 */}
+                                <DeletePlatformButton platform={upstream} />
                               </>
                             ) : null}
                             <Button
@@ -518,42 +508,6 @@ export function UpstreamsPage() {
           )
         }}
       />
-
-      {/* 删平台要确认：它名下的账号、凭据、额度、冷却一起没了。 */}
-      <AlertDialog
-        open={deletePlatformTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeletePlatformTarget(null)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              删掉{' '}
-              {deletePlatformTarget
-                ? deletePlatformTarget.label || deletePlatformTarget.id
-                : ''}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              这个平台会删掉，名下的账号、凭据、额度、冷却一起清掉，删完回不来。客户端走这个平台的地址也就不通了
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              variant='destructive'
-              onClick={() => {
-                const target = deletePlatformTarget
-                setDeletePlatformTarget(null)
-                if (!target) return
-                deletePlatform.mutate({ id: target.id })
-              }}
-            >
-              删掉
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {/* 注销要确认：这一行删掉就没了，凭据也跟着删。 */}
       <AlertDialog

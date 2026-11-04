@@ -5,10 +5,15 @@ import userEvent from '@testing-library/user-event'
 import {
   AccountSchema,
   AddAccountResponseSchema,
+  DeletePlatformResponseSchema,
+  DeletePublishedModelResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListPublishedModelsResponseSchema,
   ListUpstreamsResponseSchema,
   ProviderPolicy,
+  PublishedModelSchema,
+  PublishedTargetSchema,
   UpstreamSchema,
   UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
@@ -58,6 +63,49 @@ function platform(
   return create(UpstreamSchema, Object.assign(base, overrides))
 }
 
+/** 一个开放平台（面板上加的那一行）：能改能删。 */
+function openPlatform(
+  overrides: Partial<MessageInitShape<typeof UpstreamSchema>> = {}
+) {
+  const base: MessageInitShape<typeof UpstreamSchema> = {
+    id: 'my-gateway',
+    kind: 'openai',
+    label: '我的中转站',
+    region: '',
+    state: UpstreamState.READY,
+    policy: ProviderPolicy.SINGLE,
+    policies: [ProviderPolicy.SINGLE],
+    accountCount: 0,
+    hasEnabledAccount: false,
+    baseUrl: 'https://api.example.com/v1',
+    isOpenPlatform: true,
+    accounts: [],
+  }
+  return create(UpstreamSchema, Object.assign(base, overrides))
+}
+
+/** 一个主路由模型，它的目标指向某个平台。 */
+function publishedModel(
+  id: string,
+  groupName: string,
+  displayName = ''
+) {
+  return create(PublishedModelSchema, {
+    id,
+    displayName,
+    enabled: true,
+    published: true,
+    targets: [
+      create(PublishedTargetSchema, {
+        groupName,
+        upstreamModel: 'gpt-4o',
+        weight: 1,
+        enabled: true,
+      }),
+    ],
+  })
+}
+
 /** 一个只有平台列表的假客户端：账号相关的请求按空答复。 */
 function clientWith(
   upstreams: Upstream[],
@@ -69,6 +117,8 @@ function clientWith(
     ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
     ListCredentials: () =>
       create(ListCredentialsResponseSchema, { credentials: [] }),
+    ListPublishedModels: () =>
+      create(ListPublishedModelsResponseSchema, { models: [] }),
     ...extra,
   })
 }
@@ -257,5 +307,422 @@ describe('上游页的平台列表', () => {
 
     expect(await screen.findByText(/网关炸了/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /重试/ })).toBeInTheDocument()
+  })
+})
+
+describe('删平台之前先扫主路由引用', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  /** 开放平台那一行。 */
+  function rowOf(name: string): HTMLElement {
+    const cell = screen.getByText(name).closest('tr')
+    if (!cell) throw new Error(`找不到 ${name} 那一行`)
+    return cell
+  }
+
+  /** 删平台那一行的「删掉」按钮。 */
+  function deleteButton(): HTMLElement {
+    return within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+  }
+
+  it('没有模型指向它：确认后只发 DeletePlatform', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        return create(DeletePublishedModelResponseSchema, {
+          ok: true,
+          message: '删掉了',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 扫描还没回来之前删除入口是禁用的：等它开。
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    const confirm = await screen.findByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual(['platform:my-gateway'])
+    })
+  })
+
+  it('有模型指向它：弹框里列出来，确认后先删模型再删平台', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [publishedModel('gpt-4o', 'my-gateway', 'GPT-4o')],
+        }),
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        return create(DeletePublishedModelResponseSchema, {
+          ok: true,
+          message: '删掉了',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 扫描还没回来之前删除入口是禁用的：等它开。
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    // 弹框里把那个模型列出来：id 与显示名。
+    const confirm = await screen.findByRole('alertdialog')
+    expect(within(confirm).getByText('gpt-4o')).toBeInTheDocument()
+    expect(within(confirm).getByText(/GPT-4o/)).toBeInTheDocument()
+    expect(
+      within(confirm).getByText(/这些主路由模型会一起删掉/)
+    ).toBeInTheDocument()
+
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    await waitFor(() => {
+      // 顺序：先删模型，再删平台。
+      expect(sent).toEqual(['model:gpt-4o', 'platform:my-gateway'])
+    })
+  })
+
+  it('有两个模型指向它：两个都删掉，再删平台', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [
+            publishedModel('gpt-4o', 'my-gateway', 'GPT-4o'),
+            publishedModel('claude-3', 'my-gateway', 'Claude 3'),
+          ],
+        }),
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        return create(DeletePublishedModelResponseSchema, {
+          ok: true,
+          message: '删掉了',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 扫描还没回来之前删除入口是禁用的：等它开。
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    const confirm = await screen.findByRole('alertdialog')
+    expect(within(confirm).getByText('gpt-4o')).toBeInTheDocument()
+    expect(within(confirm).getByText('claude-3')).toBeInTheDocument()
+
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([
+        'model:gpt-4o',
+        'model:claude-3',
+        'platform:my-gateway',
+      ])
+    })
+  })
+
+  it('取消：一个都不发', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [publishedModel('gpt-4o', 'my-gateway', 'GPT-4o')],
+        }),
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        return create(DeletePublishedModelResponseSchema, {
+          ok: true,
+          message: '删掉了',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 扫描还没回来之前删除入口是禁用的：等它开。
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    const confirm = await screen.findByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: '取消' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+    expect(sent).toEqual([])
+  })
+
+  it('模型删失败：停在半路，不删平台，失败显示出来', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [publishedModel('gpt-4o', 'my-gateway', 'GPT-4o')],
+        }),
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        return create(DeletePublishedModelResponseSchema, {
+          ok: false,
+          message: '这个模型正被别的路由用着',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 扫描还没回来之前删除入口是禁用的：等它开。
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    const confirm = await screen.findByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    // 失败显示出来。
+    expect(
+      await within(confirm).findByText(/这个模型正被别的路由用着/)
+    ).toBeInTheDocument()
+    // 平台没删。
+    expect(sent).toEqual(['model:gpt-4o'])
+  })
+
+  it('删到一半失败：已经删掉的不再重试，剩下的是下一个', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    // claude-3 第一次删不掉，gpt-4o 删得掉。
+    let claudeFails = true
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [
+            publishedModel('gpt-4o', 'my-gateway', 'GPT-4o'),
+            publishedModel('claude-3', 'my-gateway', 'Claude 3'),
+          ],
+        }),
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        if ((input.id ?? '') === 'claude-3' && claudeFails) {
+          claudeFails = false
+          return create(DeletePublishedModelResponseSchema, {
+            ok: false,
+            message: '这个模型正被别的路由用着',
+          })
+        }
+        return create(DeletePublishedModelResponseSchema, {
+          ok: true,
+          message: '删掉了',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    const confirm = await screen.findByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    // 第一个删掉了，第二个失败：平台没删。
+    await waitFor(() => {
+      expect(sent).toEqual(['model:gpt-4o', 'model:claude-3'])
+    })
+    expect(
+      await within(confirm).findByText(/这个模型正被别的路由用着/)
+    ).toBeInTheDocument()
+
+    // 再试一次：只删还没删掉的那一个（gpt-4o 已经没了，不再动它）。
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([
+        'model:gpt-4o',
+        'model:claude-3',
+        'model:claude-3',
+        'platform:my-gateway',
+      ])
+    })
+  })
+
+  it('删到一半失败：取消后重开，只删还没删掉的那个', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    // claude-3 第一次删不掉（第二次能删掉），gpt-4o 删得掉。
+    let claudeFails = true
+    const client = clientWith([openPlatform()], {
+      // 名单一直带着 gpt-4o：模拟模型删掉之后、重取回来之前的那段时间
+      // （面板手上还是旧名单）。
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, {
+          models: [
+            publishedModel('gpt-4o', 'my-gateway', 'GPT-4o'),
+            publishedModel('claude-3', 'my-gateway', 'Claude 3'),
+          ],
+        }),
+      DeletePublishedModel: (input) => {
+        sent.push(`model:${input.id ?? ''}`)
+        if ((input.id ?? '') === 'claude-3' && claudeFails) {
+          claudeFails = false
+          return create(DeletePublishedModelResponseSchema, {
+            ok: false,
+            message: '这个模型正被别的路由用着',
+          })
+        }
+        return create(DeletePublishedModelResponseSchema, {
+          ok: true,
+          message: '删掉了',
+        })
+      },
+      DeletePlatform: (input) => {
+        sent.push(`platform:${input.id ?? ''}`)
+        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
+    await user.click(deleteButton())
+
+    const confirm = await screen.findByRole('alertdialog')
+    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+
+    // 第一个删掉了，第二个失败：弹框留着。
+    await waitFor(() => {
+      expect(sent).toEqual(['model:gpt-4o', 'model:claude-3'])
+    })
+    expect(
+      await within(confirm).findByText(/这个模型正被别的路由用着/)
+    ).toBeInTheDocument()
+
+    // 取消，再点开：已经删掉的那个不该再回到队列里。
+    await user.click(within(confirm).getByRole('button', { name: '取消' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+    await user.click(deleteButton())
+
+    const again = await screen.findByRole('alertdialog')
+    // 弹框里列的应该只有还没删掉的那几个（确认之后弹框就关了，先记下来）。
+    const listed = within(again)
+      .queryAllByText(/^(gpt-4o|claude-3)$/)
+      .map((node) => node.textContent)
+
+    await user.click(within(again).getByRole('button', { name: '删掉' }))
+
+    // 只发还没删掉的那个：gpt-4o 不再发一遍。
+    await waitFor(() => {
+      expect(sent).toEqual([
+        'model:gpt-4o',
+        'model:claude-3',
+        'model:claude-3',
+        'platform:my-gateway',
+      ])
+    })
+    expect(listed).toEqual(['claude-3'])
+  })
+
+  it('主路由模型列表还在查：删除入口不可用', async () => {
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () => new Promise<never>(() => {}),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    expect(deleteButton()).toBeDisabled()
+    expect(
+      screen.getByText(/还在查哪些主路由模型指向它/)
+    ).toBeInTheDocument()
+  })
+
+  it('主路由模型列表取不到：删除入口不可用，显示出原因', async () => {
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () => {
+        throw new Error('网关炸了')
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    expect(await screen.findByText(/查不到主路由模型/)).toBeInTheDocument()
+    expect(deleteButton()).toBeDisabled()
+  })
+
+  it('主路由模型列表取不到：可以重扫一次', async () => {
+    const user = userEvent.setup({ delay: null })
+    let scans = 0
+    const client = clientWith([openPlatform()], {
+      ListPublishedModels: () => {
+        scans += 1
+        if (scans === 1) throw new Error('网关炸了')
+        return create(ListPublishedModelsResponseSchema, { models: [] })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    expect(await screen.findByText(/查不到主路由模型/)).toBeInTheDocument()
+    expect(scans).toBe(1)
+
+    // 重试入口：点它重扫一次。
+    await user.click(
+      within(rowOf('我的中转站')).getByRole('button', { name: '重试' })
+    )
+
+    await waitFor(() => {
+      expect(scans).toBe(2)
+    })
+    // 扫回来了：删除入口开了。
+    await waitFor(() => expect(deleteButton()).toBeEnabled())
   })
 })
