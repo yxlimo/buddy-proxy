@@ -22,6 +22,10 @@ import type { Route } from "./router/routes.ts";
 import type { QuotaProbe } from "./quota-plugins.ts";
 // 只为 `dispatch` 的参数类型：upstreams/tokenrhythm.ts 从这边取 kindOf，值上不互相引用。
 import type { UpstreamContext } from "./router/upstreams/index.ts";
+// 人工元数据那一层：注册表是它唯一的调用方（见 registerKind）。这一条引用只
+// 引 lib/store.ts 与叶子模块，不会再绕回这里 —— 否则注册表求值期的顺序就成了
+// 隐患。
+import { applyModelOverrides } from "./model-overrides.ts";
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code" | "api_key";
 
@@ -364,9 +368,19 @@ function credentialStateOf(status: string): CredentialState {
 
 const REGISTRY = new Map<string, ProviderKind>();
 
-/** 登记一个种类。 */
+/**
+ * 登记一个种类。
+ *
+ * 目录多加一层：人写的元数据是发布目录的最后一道覆盖（lib/model-overrides.ts）。
+ * 包在这里而不是各家 models() 里，是因为登记只有一个入口，目录出口却有好几个
+ * —— 五家从 lib/kinds/shared.ts 转登记，anthropic 与 registerCompatiblePlatform
+ * 直接从这一层登记；按家接，迟早漏掉一个（qoder / minimax / zcode 那次就漏了）。
+ */
 export function registerKind(kind: ProviderKind): void {
-  REGISTRY.set(kind.kind, kind);
+  REGISTRY.set(kind.kind, {
+    ...kind,
+    models: (provider) => applyModelOverrides(provider.platform, kind.models(provider)),
+  });
 }
 
 /** 一个种类。 */

@@ -14,7 +14,7 @@ import {
 import { regionFrom, workbuddyStatus } from "../workbuddy/auth.ts";
 import { refreshSession as refreshWorkBuddySession } from "../workbuddy/auth.ts";
 import { runWorkBuddyBenefits } from "../workbuddy/benefits.ts";
-import { workbuddyModelList } from "../workbuddy/models.ts";
+import { workbuddyPublishList } from "../workbuddy/models.ts";
 import { ENDPOINTS as WORKBUDDY_ENDPOINTS } from "../workbuddy/auth.ts";
 import type { WorkBuddyResources, WorkBuddySnapshotEntry } from "../workbuddy/resources.ts";
 
@@ -88,8 +88,9 @@ registerKind({
   // 推理用的就是登录会话：access token 本身是推理凭据。
   inferWith: "session",
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
-  // 目录是区域的：cn 和 global 各自发布一份，不能共用。
-  models: (provider) => workbuddyCatalogModels(workbuddyModelList(regionFrom(provider.region))),
+  // 目录是区域的：cn 和 global 各自发布一份，不能共用。发布的那一份不是抓回来的
+  // 那一份：cn 以代码表为准，上游只补字段（见 workbuddyPublishList）。
+  models: (provider) => workbuddyCatalogModels(workbuddyPublishList(regionFrom(provider.region))),
   quotas: (provider, snapshot) => workbuddyQuotas(provider, snapshot),
   benefits: (provider) => runWorkBuddyBenefits(provider.id),
   // 客户端自己按时间表换令牌，网关也这样（见 lib/periodic.ts）。

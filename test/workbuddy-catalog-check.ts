@@ -17,7 +17,8 @@
 //   6. an empty list is not a catalogue
 //   7. a broken row is not a crash
 //   8. the effort levels the upstream declares survive the mapping: a list is
-//      the list, and a bare `effort` is a fixed level — not a one-item list
+//      the list, a bare `effort` is a fixed level — not a one-item list, and not
+//      an empty one that erases the levels the table lists
 //   9. the bundled China table carries what the client product config carries
 //      (the multiplier and the levels the upstream never sends), and an upstream
 //      answer that leaves a field out does not overwrite it
@@ -38,7 +39,7 @@ process.env.BUDDY_DATA_DIR = tmp;
 const { catalogId, catalogTtlMs, readStoredCatalog, writeStoredCatalog, initWorkBuddyCatalog } =
   await import("../lib/workbuddy/catalog-store.ts");
 const { store, listCached, closeStore } = await import("../lib/store.ts");
-const { workbuddyModelList, setWorkbuddyModelList, parseRemoteCatalog, curateCatalog, workbuddyModel, mergeWorkBuddyCatalog, workBuddyFallbackModels } =
+const { workbuddyModelList, setWorkbuddyModelList, workbuddyPublishList, parseRemoteCatalog, curateCatalog, workbuddyModel, mergeWorkBuddyCatalog, workBuddyFallbackModels } =
   await import("../lib/workbuddy/models.ts");
 
 let pass = 0;
@@ -294,7 +295,8 @@ console.log("the effort levels the upstream declares");
 // pick from; a bare `effort` is a model that always thinks at that one level.
 // The single-item list is what a fixed level must not become: the client renders
 // its picker on `supportedEfforts?.length`, so `["high"]` shows a dropdown with
-// one choice in it.
+// one choice in it. An empty list is the other trap: it is a value, so the merge
+// takes it over the table's list — the model then loses the levels it can pick.
 const catalogueOf = (entries: any[]): WorkBuddyModel[] => {
   const remote = parseRemoteCatalog({ data: { agents: [{ models: entries.map((e) => e.id) }], models: entries } });
   if (!remote) throw new Error("the payload has no catalogue in it");
@@ -307,7 +309,9 @@ const defaultEffortOf = (models: WorkBuddyModel[], id: string): string =>
 
 const fixed = catalogueOf([{ id: "tm-fixed", reasoning: { effort: "high", summary: "auto" } }]);
 check(
-  "a fixed effort is not a selectable level",
+  // Nobody lists this model's levels, so there is nothing to pick — only the
+  // level it always runs at.
+  "a fixed effort on a model nobody lists is no pickable level",
   effortsOf(fixed, "tm-fixed") === "[]" && defaultEffortOf(fixed, "tm-fixed") === '"high"',
   `${effortsOf(fixed, "tm-fixed")} / ${defaultEffortOf(fixed, "tm-fixed")}`,
 );
@@ -334,22 +338,35 @@ const recordedPayload = JSON.parse(recorded.body);
 const recordedRemote = parseRemoteCatalog(recordedPayload);
 check("the recorded catalogue parses", recordedRemote !== null);
 // `deepseek-v4-flash` rides only in the metadata array, not in the picker list,
-// so it is read from the metadata the mapping builds.
+// so it is read from the metadata the mapping builds. A fixed level must not
+// turn into `[]`: an empty list is a value, and the merge takes it over the
+// table's — the mapping has to say nothing about the levels instead.
+const fixedEntry = recordedRemote?.meta["deepseek-v4-flash"] ?? {};
 check(
-  "a recorded fixed effort is a fixed level, not a level to pick",
-  JSON.stringify(recordedRemote?.meta["deepseek-v4-flash"]?.efforts ?? null) === "[]" &&
-    recordedRemote?.meta["deepseek-v4-flash"]?.defaultEffort === "high",
+  "a recorded fixed effort says the level and not the levels",
+  !("efforts" in fixedEntry) && fixedEntry.defaultEffort === "high",
   JSON.stringify(recordedRemote?.meta["deepseek-v4-flash"] ?? null),
 );
 const recordedModels = curateCatalog(recordedRemote!);
+// What the gateway publishes for cn: the transport hands the bundled table's ids
+// in as extras (lib/workbuddy/transport.ts), so `deepseek-v4-flash` is in the
+// catalogue and this is the list an agent sees.
+const publishedCn = curateCatalog(recordedRemote!, workBuddyFallbackModels().map((m) => m.id));
+check(
+  "a recorded fixed effort keeps the levels the table lists",
+  effortsOf(publishedCn, "deepseek-v4-flash") === '["high","xhigh"]' &&
+    defaultEffortOf(publishedCn, "deepseek-v4-flash") === '"high"',
+  `${effortsOf(publishedCn, "deepseek-v4-flash")} / ${defaultEffortOf(publishedCn, "deepseek-v4-flash")}`,
+);
 check(
   "a recorded list of levels is the list",
   effortsOf(recordedModels, "deepseek-v4.1-flash") === '["low","high","max"]',
   effortsOf(recordedModels, "deepseek-v4.1-flash"),
 );
 check(
-  "a recorded medium is a fixed level",
-  effortsOf(recordedModels, "glm-5.2") === "[]" && defaultEffortOf(recordedModels, "glm-5.2") === '"medium"',
+  "a recorded medium sets the default level and keeps the table's levels",
+  effortsOf(recordedModels, "glm-5.2") === '["high","xhigh"]' &&
+    defaultEffortOf(recordedModels, "glm-5.2") === '"medium"',
   `${effortsOf(recordedModels, "glm-5.2")} / ${defaultEffortOf(recordedModels, "glm-5.2")}`,
 );
 
@@ -413,20 +430,23 @@ check(
   JSON.stringify(keptEfforts ?? null),
 );
 
-// A bare `effort` is the upstream saying "this level, and it is not a choice":
-// the levels become empty and the level itself is the default.
-const fixedOnATableModel = curateCatalog(
+// The other direction has to keep working: when the upstream does list the
+// levels, that list is the one published, whatever the table says.
+const listedOnATableModel = curateCatalog(
   parseRemoteCatalog({
     data: {
-      agents: [{ models: ["deepseek-v4-pro"] }],
-      models: [{ id: "deepseek-v4-pro", reasoning: { effort: "high", summary: "auto" } }],
+      agents: [{ models: ["deepseek-v4.1-flash"] }],
+      models: [
+        { id: "deepseek-v4.1-flash", reasoning: { supportedEfforts: ["minimal", "low"], defaultEffort: "low" } },
+      ],
     },
   })!,
-).find((m) => m.id === "deepseek-v4-pro");
+).find((m) => m.id === "deepseek-v4.1-flash");
 check(
-  "a fixed effort on a table model is one fixed level, not a one-item picker",
-  JSON.stringify(fixedOnATableModel?.efforts) === "[]" && fixedOnATableModel?.defaultEffort === "high",
-  JSON.stringify(fixedOnATableModel ?? null),
+  "the upstream's list of levels wins over the table's",
+  JSON.stringify(listedOnATableModel?.efforts) === '["minimal","low"]' &&
+    listedOnATableModel?.defaultEffort === "low",
+  JSON.stringify(listedOnATableModel ?? null),
 );
 
 // The other region: workbuddy.ai is not covered by the bundled table, so its
@@ -455,6 +475,43 @@ check(
 // says nothing about the price rather than claiming it is free.
 const unknown = mergeWorkBuddyCatalog(["tm-unknown"], { "tm-unknown": { display_name: "Unknown", context: 4096 } })[0];
 check("a model nobody prices is null, not free", unknown?.credits === null, JSON.stringify(unknown ?? null));
+
+console.log("");
+console.log("cn 公布的是代码表，不是上游那一份");
+
+// What was fetched is the record of what the upstream said, and it keeps every
+// model the answer named. What a cn agent is offered is the bundled table: a
+// model the upstream added and the table does not have is not published — that
+// is the whole point of this region being code-side. The two lists are therefore
+// different on purpose, and both are checked here so neither can drift silently.
+const fetchedCn = curateCatalog(recordedRemote!, workBuddyFallbackModels().map((m) => m.id));
+setWorkbuddyModelList(fetchedCn, "cn");
+check(
+  "库里的那份比代码表宽（上游多出来的模型留在记录里）",
+  workbuddyModelList("cn").length === fetchedCn.length && fetchedCn.length > workBuddyFallbackModels().length,
+  `${workbuddyModelList("cn").length} / ${workBuddyFallbackModels().length}`,
+);
+check(
+  "库里那份带着上游独有、代码表没有的模型",
+  ids(workbuddyModelList("cn")).includes("glm-5v-turbo") && ids(workbuddyModelList("cn")).includes("kimi-k2.6"),
+  ids(workbuddyModelList("cn")).join(","),
+);
+const shownCn = workbuddyPublishList("cn");
+check(
+  "公布的正好是代码表那几条（id 与顺序）",
+  ids(shownCn).join(",") === workBuddyFallbackModels().map((m) => m.id).join(","),
+  `${ids(shownCn).length} / ${workBuddyFallbackModels().length}`,
+);
+check("glm-5v-turbo 不公布", !ids(shownCn).includes("glm-5v-turbo"));
+check("kimi-k2.6 不公布", !ids(shownCn).includes("kimi-k2.6"));
+check(
+  "代码表里那一条的元数据仍是上游补过的那份",
+  shownCn.find((m) => m.id === "deepseek-v4-flash")?.credits === 0.17,
+  JSON.stringify(shownCn.find((m) => m.id === "deepseek-v4-flash") ?? null),
+);
+// 另一个区不受这条规矩管：那边没有代码表，上游给全了就是全部。
+setWorkbuddyModelList(globalModels, "global");
+check("global 公布的仍是上游那一份", ids(workbuddyPublishList("global")).join(",") === "glm-5.2", ids(workbuddyPublishList("global")).join(","));
 
 // Close the database before removing its directory: on Windows an open handle
 // makes the removal fail with EPERM. On Linux it makes no difference.

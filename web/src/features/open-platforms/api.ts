@@ -4,11 +4,15 @@ import { toast } from 'sonner'
 import {
   AddPlatformRequestSchema,
   DeletePlatformRequestSchema,
+  ListModelOverridesRequestSchema,
   ListPlatformKindsRequestSchema,
   ListQuotaPluginsRequestSchema,
+  ModelOverrideSchema,
   RefreshPlatformModelsRequestSchema,
+  SetModelOverridesRequestSchema,
   UpdatePlatformRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
+import type { OverrideInput } from '@/features/open-platforms/model-overrides'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { assertOk, describeError } from '@/lib/errors'
 import { queryKeys } from '@/lib/query-keys'
@@ -191,6 +195,60 @@ export function useRefreshPlatformModels() {
     onSettled: () => {
       // 目录与上次拉取时刻在平台那一行上；ok=false 时服务端也记了这次问过。
       invalidateServerData(queryClient, 'platforms')
+    },
+  })
+}
+
+/**
+ * 某个平台「人给模型写的元数据」。
+ *
+ * 目录本身来自 `ListModels`（`useCatalogModels`），这里只管人工那部分：哪些模型
+ * 是人工补进来的、各自写了哪几格。模板平台与开放平台都有这一份。
+ */
+export function useModelOverrides(platformId: string) {
+  const client = useAdminClient()
+  return useQuery({
+    queryKey: queryKeys.modelOverrides.of(platformId),
+    queryFn: () =>
+      client.listModelOverrides(
+        create(ListModelOverridesRequestSchema, { platformId })
+      ),
+    enabled: platformId.trim() !== '',
+    retry: false,
+  })
+}
+
+/**
+ * 存某个平台的自定义模型。
+ *
+ * SetModelOverrides 是整体替换：没发来的条目等于删掉，所以发上去的就是那一整份
+ * 人工条目 —— 空列表也照发，那就是「把人工那部分清空」。
+ *
+ * 错误不在这里弹 toast：弹窗不关、把服务端那句话摆在弹窗里更显眼（它会说清是
+ * 哪一格不合法）。成功也不弹：弹窗关掉本身就是「存上了」。
+ */
+export function useSetModelOverrides() {
+  const client = useAdminClient()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: {
+      platformId: string
+      overrides: OverrideInput[]
+    }) => {
+      const result = await client.setModelOverrides(
+        create(SetModelOverridesRequestSchema, {
+          platformId: input.platformId,
+          overrides: input.overrides.map((item) =>
+            create(ModelOverrideSchema, item)
+          ),
+        })
+      )
+      assertOk(result, '没存上')
+      return result
+    },
+    onSettled: () => {
+      // 目录、平台那行、人工那一份都是这一笔改的。失败里服务端也可能只写了一部分。
+      invalidateServerData(queryClient, 'modelOverrides')
     },
   })
 }

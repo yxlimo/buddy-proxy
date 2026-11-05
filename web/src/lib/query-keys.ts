@@ -48,6 +48,15 @@ export const queryKeys = {
     models: (upstreamId: string, state: number) =>
       ['catalog', upstreamId, state] as const,
   },
+  /**
+   * 平台一级「人给模型写的元数据」：自定义模型那一份。
+   *
+   * 一个平台一份（平台 id 在键里）：模板平台与开放平台共用同一份。
+   */
+  modelOverrides: {
+    root: ['model-overrides'] as const,
+    of: (platformId: string) => ['model-overrides', platformId] as const,
+  },
   /** 总览那份状态：网关概况、各平台的可用情况与额度概况。 */
   system: {
     status: ['system', 'status'] as const,

@@ -23,6 +23,8 @@ export type ServerData =
   | 'publishedModels'
   /** 配置项。 */
   | 'config'
+  /** 人给模型写的元数据：自定义模型那一份。 */
+  | 'modelOverrides'
 
 /**
  * 账号那一行牵着的查询。
@@ -60,6 +62,15 @@ const readers: Record<ServerData, readonly (readonly unknown[])[]> = {
     queryKeys.balances.root,
     queryKeys.system.status,
     queryKeys.upstreams.all,
+  ],
+  // 自定义模型那一份是平台一级的：改完平台答复（Upstream.modelOverrides）变了、
+  // 目录（ListModels 按它算）变了、人工那一份自己也变了。发布模型页的「继承后
+  // 的值」也是按目录现算的，所以那一份也要重取。
+  modelOverrides: [
+    queryKeys.upstreams.all,
+    queryKeys.catalog.all,
+    queryKeys.modelOverrides.root,
+    queryKeys.publishedModels.all,
   ],
   benefits: [queryKeys.benefits.all],
   publishedModels: [queryKeys.publishedModels.all],

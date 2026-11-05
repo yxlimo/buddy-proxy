@@ -317,7 +317,7 @@ async function raw(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 
 console.log("");
-console.log("契约：三十九个方法");
+console.log("契约：四十一个方法");
 
 // 每个方法配一个像样的请求。
 // 登录那六个：挑不会碰到网络的上游（密码流与回填流），不真的登录。
@@ -365,9 +365,13 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "RefreshPlatformModels", request: { platformId: "contract-open" } },
   { method: "ListQuotaPlugins", request: {} },
   { method: "ListPlatformKinds", request: {} },
+  // 人工模型元数据：qoder 是模板平台，本来就一条人工条目也没有，发空列表
+  // 等于把「本来就没有」再写一遍 —— 库里不留行，后面的断言读不到变化。
+  { method: "ListModelOverrides", request: { platformId: "qoder" } },
+  { method: "SetModelOverrides", request: { platformId: "qoder", overrides: [] } },
 ];
 
-check("契约里有三十九个方法", contract.methods.size === 39, String(contract.methods.size));
+check("契约里有四十一个方法", contract.methods.size === 41, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",
@@ -389,6 +393,27 @@ for (const { method, request } of CALLS) {
   const err = messageError(contract.messages.get(spec.response)!, res.body, method);
   check(`${method} 的答复跟契约一致`, err === null, err ?? "");
 }
+
+// 模型的元数据：倍率是 optional（没报价与免费是两件事），默认档那一格没有了
+// （目录里没有它，写了也到不了路由，存下来只会骗人）。
+const overrideFields = contract.messages.get("ModelOverride")!.fields;
+check(
+  "ModelOverride 没有「默认档」这一格",
+  overrideFields.every((f) => f.json !== "defaultEffort"),
+  JSON.stringify(overrideFields.map((f) => f.json)),
+);
+const overrideCredits = overrideFields.find((f) => f.json === "credits");
+check(
+  "ModelOverride 的倍率是 optional double",
+  overrideCredits?.optional === true && overrideCredits?.type === "double",
+  JSON.stringify(overrideCredits),
+);
+const catalogCredits = contract.messages.get("CatalogModel")!.fields.find((f) => f.json === "credits");
+check(
+  "CatalogModel 的倍率是 optional double（缺格 ≠ 0）",
+  catalogCredits?.optional === true && catalogCredits?.type === "double",
+  JSON.stringify(catalogCredits),
+);
 
 // 请求的字段名：契约里没有的名字要被拒（或者至少不能被当成值）。
 const specListCred = contract.methods.get("ListCredentials")!;

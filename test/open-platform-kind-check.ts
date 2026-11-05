@@ -1576,6 +1576,61 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
+ * 人工元数据：发布目录的最后一道覆盖
+ * ------------------------------------------------------------------ */
+
+// 开放平台的目录从平台那一行来（catalogModelsFromRow），模板平台的从代码表来；
+// 人工写的那一层两者都不是 —— 它是注册表在目录出口上加的一层，两条出口都得走
+// 得到它。这一节查的正是「表里那一行说了算」这条出口。
+const OVER = "override-probe";
+insertPlatform(OVER, "openai", "https://probe.example");
+putRowModels(OVER, ["row-one", "row-two"], "manual");
+const { replaceModelOverrides } = await import("../lib/model-overrides.ts");
+const rowBefore = kindOf("openai")!.models(bareRow(OVER));
+check(
+  "开放平台：行里的目录就是发布的目录",
+  rowBefore.map((m) => m.id).join(",") === "row-one,row-two",
+  rowBefore.map((m) => m.id).join(","),
+);
+
+replaceModelOverrides(OVER, [{ id: "row-one", displayName: "改过的名字", contextWindow: 32768 }]);
+const rowAfter = kindOf("openai")!.models(bareRow(OVER));
+check("开放平台：人工写的名字盖上了", rowAfter[0]?.displayName === "改过的名字", JSON.stringify(rowAfter[0]));
+check("开放平台：人工写的上下文盖上了", rowAfter[0]?.contextWindow === 32768, JSON.stringify(rowAfter[0]));
+check(
+  "开放平台：没写的那几格不凭空长出来",
+  JSON.stringify(rowAfter[0]) === JSON.stringify({ id: "row-one", displayName: "改过的名字", contextWindow: 32768 }),
+  JSON.stringify(rowAfter[0]),
+);
+check("开放平台：没被写的那一条一动不动", JSON.stringify(rowAfter[1]) === JSON.stringify(rowBefore[1]), JSON.stringify(rowAfter[1]));
+
+replaceModelOverrides(OVER, [{ id: "row-three", displayName: "人工加的" }]);
+check(
+  "开放平台：人工加的模型在末尾",
+  kindOf("openai")!
+    .models(bareRow(OVER))
+    .map((m) => m.id)
+    .join(",") === "row-one,row-two,row-three",
+  kindOf("openai")!
+    .models(bareRow(OVER))
+    .map((m) => m.id)
+    .join(","),
+);
+check(
+  "开放平台：人工条目不在时不会出现在别的平台上",
+  kindOf("sensenova")!
+    .models(bareRow("sensenova"))
+    .every((m) => m.id !== "row-three"),
+);
+
+replaceModelOverrides(OVER, []);
+check(
+  "开放平台：清空之后逐字段回到行里的目录",
+  JSON.stringify(kindOf("openai")!.models(bareRow(OVER))) === JSON.stringify(rowBefore),
+  JSON.stringify(kindOf("openai")!.models(bareRow(OVER))),
+);
+
+/* ------------------------------------------------------------------ *
  * 收尾
  * ------------------------------------------------------------------ */
 server.close();

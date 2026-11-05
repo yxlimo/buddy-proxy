@@ -472,15 +472,20 @@ export interface CatalogModelView {
   reasoning: boolean;
   toolCall: boolean;
   effortOptions: string[];
-  /** 计费倍率，0 是免费。 */
-  credits: number;
+  /**
+   * 计费倍率，0 是免费。
+   *
+   * 没人在这个模型上报价时是 undefined（「不知道」，见 lib/catalog-models.ts 的
+   * CatalogModel.credits）。以前这里写 `?? 0`，把「不知道」当成了免费。
+   */
+  credits?: number;
 }
 
 /**
  * 各上游的模型目录。
  *
- * 不给上游就是全部。倍率只有 WorkBuddy 与 Qoder 有 —— MiniMax 与
- * TokenRhythm 的模型都是免费的（倍率记 0）。
+ * 不给上游就是全部。倍率只有 WorkBuddy 与 Qoder 有 —— 没人在模型上报价时这一
+ * 格不存在，**不是 0**：0 是「免费」，两件事不能在面板上糊成一个。
  *
  * 目录取自 `catalogGroups()`：那是唯一看开关的地方（关着的上游不公布模型）。
  * 以前这里各读各的目录，WorkBuddy 与 TokenRhythm 忘了看开关 —— 上游关了
@@ -499,7 +504,9 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
         reasoning: m.reasoning === true,
         toolCall: m.toolCall === true,
         effortOptions: m.effortOptions ?? [],
-        credits: m.credits ?? 0,
+        // 只有真的报了价才写：契约那一头的 credits 是 optional，缺键是「不
+        // 知道」，0 是「免费」。这里要是写 `?? 0`，两个意思就糊成一个了。
+        ...(m.credits === undefined ? {} : { credits: m.credits }),
       });
     }
   }

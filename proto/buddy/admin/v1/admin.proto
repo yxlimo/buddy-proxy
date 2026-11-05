@@ -100,6 +100,8 @@ message Upstream {
   string models_source = 26;
   // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。模板平台没有这一格，0。
   int64 models_fetched_at_ms = 27;
+  // 人给这些模型写的元数据（见 ModelOverride）。open 平台与模板平台都可能有。
+  repeated ModelOverride model_overrides = 28;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -899,12 +901,65 @@ message CatalogModel {
   bool reasoning = 5;
   bool tool_call = 6;
   repeated string effort_options = 7;
-  // 计费倍率，0 是免费。
-  double credits = 8;
+  // 计费倍率。没给 = 不知道（面板不显示倍率）；给了 0 = 免费。
+  optional double credits = 8;
 }
 
 message ListModelsResponse {
   repeated CatalogModel models = 1;
+}
+
+// 可选档位。给了这个字段 = 人写了档位；列表为空 = 这个模型不能选档
+// （固定一档，或者不能思考）。
+//
+// 单独包一层是为了拿到 presence：repeated 没有 presence，而这里要把「没写」与
+// 「写了、一个档都没有」分开 —— 消息字段在不在正好能表达这件事。
+message EffortList {
+  repeated string levels = 1;
+}
+
+// 人给某个模型写的元数据。同 id 的那一条按这里说的来；没给的字段（optional
+// 没写）沿用原来的来源：代码里的那张表、上游拉回来的那份，或者最小形状。
+//
+// 只写 id 就是「把这个模型加进目录，元数据仍按原来的来源取」。
+message ModelOverride {
+  string id = 1;
+  optional string display_name = 2;
+  optional int32 context_window = 3;
+  optional int32 max_output_tokens = 4;
+  optional bool reasoning = 5;
+  optional bool tool_call = 6;
+  // 可选档位。没给 = 没写（沿用原来的档位）；给了空列表 = 明确不能选档。
+  optional EffortList effort_options = 7;
+  // 这里原来是「默认选哪一档」。目录里没有这一格（CatalogModel 没有），写了
+  // 也到不了路由 —— 存下来只是骗人，删掉。
+  reserved 8;
+  // 计费倍率。没给 = 不知道（面板不显示倍率）；给了 0 = 免费。
+  optional double credits = 9;
+}
+
+// 看某个平台当前「人写的」那部分：哪些模型是人工加的、各自写了哪些字段。
+message ListModelOverridesRequest {
+  // 平台 id，开放平台与模板平台都行。
+  string platform_id = 1;
+}
+
+message ListModelOverridesResponse {
+  repeated ModelOverride overrides = 1;
+}
+
+// 整体替换某个平台「人写的」那部分：发来的就是全部，没发来的视为删掉。
+//
+// 只写 id 的条目 = 把该模型加进目录（或保持它在目录里），元数据仍按原来的来源取；
+// 给了字段就覆盖对应字段。空列表 = 清空人工那部分。
+message SetModelOverridesRequest {
+  string platform_id = 1;
+  repeated ModelOverride overrides = 2;
+}
+
+message SetModelOverridesResponse {
+  bool ok = 1;
+  string message = 2;
 }
 
 message TailLogRequest {
@@ -1064,6 +1119,9 @@ service AdminService {
   rpc ListQuotaPlugins(ListQuotaPluginsRequest) returns (ListQuotaPluginsResponse);
   // 建平台时的「用哪一类适配器」下拉。
   rpc ListPlatformKinds(ListPlatformKindsRequest) returns (ListPlatformKindsResponse);
+  // 人给模型写的元数据。平台一级一份，模板平台与开放平台共用。
+  rpc ListModelOverrides(ListModelOverridesRequest) returns (ListModelOverridesResponse);
+  rpc SetModelOverrides(SetModelOverridesRequest) returns (SetModelOverridesResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
 

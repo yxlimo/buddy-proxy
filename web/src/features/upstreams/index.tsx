@@ -55,6 +55,7 @@ import {
   type RefreshOutcome,
 } from '@/features/open-platforms/platform-facts'
 import { PlatformDialog } from '@/features/open-platforms/platform-dialog'
+import { PlatformModelsButton } from '@/features/open-platforms/models-dialog'
 import { useBenefitStatus, useRunBenefitNow } from '@/features/upstreams/benefits'
 import { BenefitsPanel } from '@/features/upstreams/benefits-panel'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
@@ -328,6 +329,9 @@ export function UpstreamsPage() {
                             className='flex items-center justify-end gap-2'
                             onClick={(event) => event.stopPropagation()}
                           >
+                            {/* 自定义模型：所有平台都有这一份 —— 模板平台的目录在代
+                                码里，人写的元数据一样能覆盖它。 */}
+                            <PlatformModelsButton platform={upstream} />
                             {/* 开放平台能改能删；模板平台只能开关（在账号上），
                                 那套不动。 */}
                             {upstream.isOpenPlatform ? (

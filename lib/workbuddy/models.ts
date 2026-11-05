@@ -176,10 +176,15 @@ export function workBuddyFallbackModels(): WorkBuddyModel[] {
  *
  * Two shapes come back. A model whose thinking level the user can pick lists
  * `supportedEfforts`; a model that always thinks at one fixed level carries a
- * bare `effort` and no list at all. The second is not "a list with one item":
- * the client renders its level picker only when the list has something in it, so
- * a single-element list shows a dropdown with one choice in it. A fixed level is
- * therefore `[]` — not selectable — plus the level itself.
+ * bare `effort` and no list at all.
+ *
+ * A bare `effort` names the level the model runs at. It says nothing about
+ * which levels are selectable, so it sets `defaultEffort` and leaves `efforts`
+ * undefined. Writing `[]` there claimed "not one level" — and an empty list is
+ * a value, so the merge threw away the levels the table has for the model
+ * (`deepseek-v4-flash` lost `high`/`xhigh` that way). A model nobody lists
+ * levels for still ends up with none, because the merge fills an absent list
+ * with `[]`.
  *
  * A field the upstream does not mention is left out of the answer (undefined),
  * so the merge keeps what the table says. That is what separates "this model has
@@ -195,7 +200,6 @@ function parseReasoning(reasoning: any): {
   const listed = reasoning.supportedEfforts;
   const fixed = reasoning.effort;
   if (Array.isArray(listed) && listed.length) out.efforts = listed.map(String);
-  else if (typeof fixed === "string" && fixed.trim()) out.efforts = [];
   const chosen = reasoning.defaultEffort ?? fixed;
   if (typeof chosen === "string" && chosen.trim()) out.defaultEffort = chosen.trim();
   if (typeof reasoning.canDisableThinking === "boolean") {
@@ -428,4 +432,38 @@ export function workbuddyModelList(region: string = "cn"): WorkBuddyModel[] {
 /** Replace one region's catalogue (the upstream reported a new one, or the database had one). */
 export function setWorkbuddyModelList(models: WorkBuddyModel[], region: string = "cn"): void {
   workbuddyModelsByRegion.set(region, models);
+}
+
+/**
+ * The catalogue a region **publishes** — which is not the same list as the one
+ * that was fetched, and that difference is deliberate.
+ *
+ * What is fetched is the record of what the upstream said: every model it named,
+ * kept as it came. What is published is what an agent is offered, and that is a
+ * product decision:
+ *
+ *   cn       the bundled China table (lib/workbuddy/cn-catalog.json) is the base:
+ *            it is what the official picker is built from for this region, it is
+ *            filtered once (see `workBuddyFallbackModels`), and it carries the
+ *            multiplier and the levels the upstream does not send. The fetched
+ *            catalogue only corrects the fields of the models the table names
+ *            (`mergeWorkBuddyCatalog` already did that when it was stored). A
+ *            model the upstream added and the table does not have is **not**
+ *            published — a hand-written override can add it back
+ *            (lib/model-overrides.ts), which is the deliberate way to do it.
+ *
+ *   global   nothing in the table is about this region, so the upstream's own
+ *            list is published as it is.
+ *
+ * The fetched list stays untouched in the database either way: it is the record
+ * of what the upstream said, and dropping entries on the way in would make that
+ * record impossible to read back.
+ */
+export function workbuddyPublishList(region: string = "cn"): WorkBuddyModel[] {
+  const fetched = workbuddyModelList(region);
+  if (region !== "cn") return fetched;
+  // The table's order is the order an agent sees; a model the fetched answer knew
+  // keeps every field it corrected.
+  const fetchedById = new Map(fetched.map((model) => [model.id, model]));
+  return workBuddyFallbackModels().map((model) => fetchedById.get(model.id) ?? model);
 }

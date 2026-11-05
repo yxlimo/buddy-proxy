@@ -48,10 +48,13 @@ import {
   ListPublishedModelsResponseSchema,
   ListQuotaPluginsResponseSchema,
   ListPlatformKindsResponseSchema,
+  ListModelOverridesResponseSchema,
+  EffortListSchema,
+  SetModelOverridesResponseSchema,
+  ModelOverrideSchema,
   PlatformKindSchema,
   ListUpstreamsResponseSchema,
-  ListUsageEventsResponseSchema,
-  LoginSessionSchema,
+  ListUsageEventsResponseSchema,  LoginSessionSchema,
   LoginWithPasswordResponseSchema,
   PublishedModelSchema,
   ModelMetadataSchema,
@@ -78,6 +81,7 @@ import {
   UpstreamQuotaSchema,
   UpstreamSchema,
   type UpstreamQuota,
+  type ModelOverride,
   UsageBucketSchema,
   UsageEventSchema,
   UsageSummarySchema,
@@ -126,6 +130,11 @@ import {
   type StoredLogin,
 } from "./login.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
+import {
+  listModelOverrides,
+  replaceModelOverrides,
+  type ModelOverrideRow,
+} from "../model-overrides.ts";
 import {
   accountsOfPlatform,
   addAccount,
@@ -427,6 +436,9 @@ function platformMessage(
     models: open?.models.items ?? [],
     modelsSource: open?.models.source ?? "",
     modelsFetchedAtMs: BigInt(open?.models.fetchedAt ?? 0),
+    // 人给这些模型写的元数据：模板平台也有（目录是代码的，人写的那一层同样是
+    // 人写的那一层），所以不跟着 open 走。
+    modelOverrides: listModelOverrides(id).map(modelOverrideMessage),
     // 这是不是一个开放平台：表里的那一行，不是代码里的模板。
     isOpenPlatform: open !== null,
     // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
@@ -604,6 +616,46 @@ function openPlatformMessage(row: OpenPlatformRow) {
     // 显示「刷新模型目录」。
     kind: row.kind,
   });
+}
+
+/** 一个模型的人工元数据，面板看的形状。 */
+function modelOverrideMessage(row: ModelOverrideRow) {
+  return create(ModelOverrideSchema, {
+    id: row.id,
+    displayName: row.displayName,
+    contextWindow: row.contextWindow,
+    maxOutputTokens: row.maxOutputTokens,
+    reasoning: row.reasoning,
+    toolCall: row.toolCall,
+    // 这一格有 presence：写了空列表 = 不能选档，这时也要回一个空的 EffortList；
+    // 没写就不给这一格 —— 反过来读（空 = 没写）的话，面板把读到的原样存回来
+    // 会把代码表里的档位抹掉。
+    effortOptions:
+      row.effortOptions === undefined ? undefined : create(EffortListSchema, { levels: [...row.effortOptions] }),
+    credits: row.credits,
+  });
+}
+
+/**
+ * 面板发过来的那一条，按「写了的字段」读。
+ *
+ * `effortOptions` 裹在 EffortList 里就是为了 presence：没给 = 没写（沿用原来的
+ * 档位），给了空列表 = 明确不能选档。
+ */
+function modelOverrideRow(message: ModelOverride): ModelOverrideRow {
+  // 读不懂的档位当作没写（跟 readRow 里「类型不对的字段当作没写」同一条）：从解码
+  // 过的请求过来时，这一格一定是个 EffortList。
+  const levels = Array.isArray(message.effortOptions?.levels) ? message.effortOptions.levels : undefined;
+  return {
+    id: String(message.id ?? ""),
+    ...(message.displayName !== undefined ? { displayName: message.displayName } : {}),
+    ...(message.contextWindow !== undefined ? { contextWindow: message.contextWindow } : {}),
+    ...(message.maxOutputTokens !== undefined ? { maxOutputTokens: message.maxOutputTokens } : {}),
+    ...(message.reasoning !== undefined ? { reasoning: message.reasoning } : {}),
+    ...(message.toolCall !== undefined ? { toolCall: message.toolCall } : {}),
+    ...(levels === undefined ? {} : { effortOptions: [...levels] }),
+    ...(message.credits !== undefined ? { credits: message.credits } : {}),
+  };
 }
 
 /** 管理接口的实现。 */
@@ -872,6 +924,31 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         }),
       ),
     });
+  },
+
+  /* ---------------- 模型的人工元数据 ---------------- */
+
+  async listModelOverrides(request) {
+    // 平台不存在就是空列表，不报错：面板刚删完一个平台时还会问一下。
+    return create(ListModelOverridesResponseSchema, {
+      overrides: listModelOverrides(String(request.platformId ?? "")).map(modelOverrideMessage),
+    });
+  },
+
+  async setModelOverrides(request) {
+    // 走契约解码时这一格一定是列表；别处（脚本、手写的请求）不一定 —— 不是列表
+    // 就说到这里，别让 `.map` 的 TypeError 冒成 500。
+    const sent: unknown = request.overrides;
+    if (!Array.isArray(sent)) {
+      return create(SetModelOverridesResponseSchema, { ok: false, message: "overrides 要是一个列表" });
+    }
+    // 发来的就是全部：「没发来的」就是删掉，所以是整体替换，不是逐条合并。
+    const result = replaceModelOverrides(
+      String(request.platformId ?? ""),
+      sent.map((one) => modelOverrideRow(one as ModelOverride)),
+    );
+    if (result.ok) console.log(`[ADMIN] ${request.platformId} 的人工模型元数据：${result.message}`);
+    return create(SetModelOverridesResponseSchema, { ok: result.ok, message: result.message });
   },
 
   /* ---------------- 配置 ---------------- */
@@ -1258,7 +1335,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           reasoning: model.reasoning,
           toolCall: model.toolCall,
           effortOptions: model.effortOptions,
-          credits: model.credits,
+          // 没人报价就不写这一格：契约里它是 optional，缺键是「不知道」，0 是
+          // 「免费」—— 两件事不能在答复里糊成一个。
+          ...(model.credits === undefined ? {} : { credits: model.credits }),
         }),
       ),
     });

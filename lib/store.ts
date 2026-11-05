@@ -164,6 +164,22 @@ export function store(): DatabaseSync {
       updated_at   INTEGER NOT NULL
     )`,
   );
+  // 人给某个模型的元数据：一行一个模型，只放**写了的**那些字段（JSON）。
+  //
+  // 平台一级一份：模板平台与开放平台共用这一张表 —— 目录的来源是两回事（有的
+  // 是代码里的表，有的是上游拉回来的），人写的那一层是同一个意思。
+  //
+  // 主键是（平台, 模型 id）：同一个模型在一个平台下只能有一条，重复写就是覆盖
+  // 自己；没有序号列，所以读出来的顺序是 model_id 的顺序 —— 稳定比「保存的先后」
+  // 重要（发布出去的目录每次都得一样）。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS platform_model_override (
+      platform_id TEXT NOT NULL,
+      model_id    TEXT NOT NULL,
+      data        TEXT NOT NULL,
+      PRIMARY KEY (platform_id, model_id)
+    )`,
+  );
   // 账号的冷却：失败之后一段时间不再路由到那个账号。
   //
   // 落库：网关重启以后它还在 —— 一个刚被限流的账号不该因为重启又被试一次。
