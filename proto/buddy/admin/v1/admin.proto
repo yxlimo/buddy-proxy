@@ -102,6 +102,9 @@ message Upstream {
   int64 models_fetched_at_ms = 27;
   // 人给这些模型写的元数据（见 ModelOverride）。open 平台与模板平台都可能有。
   repeated ModelOverride model_overrides = 28;
+  // 这个平台在数据库里有没有属于它的那一行（模拟客户端与自建平台都有；
+  // 只存在于代码里的那一族没有）。有行的平台才能在面板上改与删。
+  bool from_row = 29;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -578,15 +581,20 @@ message AddPlatformResponse {
 
 // 改一个开放平台。
 //
-// proto3 的 string 没有 presence 位，所以约定：空串 = 清空该字段。但 label 与
-// base_url 空串要 ok=false（平台必须有名字与地址）；quota_plugin 空串 = 不选
-// 插件；models_auto=false 且 models 非空 = 改成手工目录；models_auto=true 时
-// 不动现有清单（让它自动拉）；models 为空时不动清单，只翻自动那一格。
+// base_url 与 quota_plugin 带 presence：没给 = 别动这一格，给了空串 = 清空。
+// 没有 presence 时这两件事在线上是同一份字节，只改一部分字段的调用方（只改名字
+// 的面板、对模拟客户端平台故意不发这两格的面板）就会把没送的格清掉。
+//
+// label 与 base_url 空串要 ok=false（平台必须有名字与地址）；quota_plugin 空串
+// = 不选插件；models_auto=false 且 models 非空 = 改成手工目录；models_auto=true
+// 时不动现有清单（让它自动拉）；models 为空时不动清单，只翻自动那一格。
 message UpdatePlatformRequest {
   string id = 1;
   string label = 2;
-  string base_url = 3;
-  string quota_plugin = 4;
+  // 没给 = 别动这一格；给了空串 = 清空（空串会被地址校验拦下：平台得有地址）。
+  optional string base_url = 3;
+  // 没给 = 别动这一格；给了空串 = 清空（= 不选插件）。
+  optional string quota_plugin = 4;
   bool models_auto = 5;
   repeated string models = 6;
 }

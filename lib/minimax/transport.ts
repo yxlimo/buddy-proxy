@@ -107,10 +107,14 @@ export function classify(status: number, code?: number): string {
  * mode we own the session, so refresh once and retry; in file mode we only
  * re-read, because the desktop app owns that refresh. One attempt each, then
  * give up.
+ *
+ * `signal` 是「客户端走了」那个信号：给了就交给 fetch，客户端走了就把这条
+ * 上游请求停掉（上游还在算就是在计费）。
  */
 export async function minimaxChat(
   body: Json,
   providerId = "minimax",
+  signal?: AbortSignal,
 ): Promise<Response> {
   let cred;
   try {
@@ -121,7 +125,7 @@ export async function minimaxChat(
 
   const bodyText = JSON.stringify(body);
   const send = (token: string) =>
-    fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText });
+    fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText, signal });
 
   const r = await send(cred.accessToken);
 

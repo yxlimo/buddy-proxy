@@ -418,6 +418,21 @@ check("名字改了", afterEdit?.label === "Acme Cloud", String(afterEdit?.label
 check("地址改了", afterEdit?.baseUrl === "https://api.acme.test/v2", String(afterEdit?.baseUrl));
 check("没给的字段没动", afterEdit?.quotaPlugin === "qiniu", String(afterEdit?.quotaPlugin));
 
+// 没给 base_url 时地址不能变成空串：这一格的「没给」靠 undefined，写成
+// String(x ?? "") 就等于「把地址清空」，只改名字的单会被地址校验挡掉。
+const renamedOnly = updateOpenPlatform("acme", { label: "Acme Cloud 改名" });
+check("只改名也改得掉", renamedOnly.ok === true, renamedOnly.message);
+check(
+  "没给的地址没被清成空串",
+  openPlatformOf("acme")?.baseUrl === "https://api.acme.test/v2",
+  String(openPlatformOf("acme")?.baseUrl),
+);
+check(
+  "名字跟着改了",
+  openPlatformOf("acme")?.label === "Acme Cloud 改名",
+  String(openPlatformOf("acme")?.label),
+);
+
 // 没登记的插件 id：拒收，库里那一格原地不动 —— 存下去之后这个平台一条额度结论
 // 都不会有，而面板上看着「已选插件」。
 const badPluginId = updateOpenPlatform("acme", { quotaPlugin: "no-such-plugin" });

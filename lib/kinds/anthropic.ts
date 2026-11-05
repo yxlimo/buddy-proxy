@@ -73,7 +73,7 @@ registerKind({
     toAnthropicPlatform(ctx, body, route, dialect, stream, out, {
       log: ANTHROPIC_PLATFORM_KIND_NAME,
       what: "Anthropic 兼容平台",
-      chat: (anthropicBody, headers, accountId) =>
+      chat: (anthropicBody, headers, accountId, signal) =>
         anthropicPlatformChat(
           {
             id: ANTHROPIC_PLATFORM_KIND_NAME,
@@ -83,6 +83,7 @@ registerKind({
           },
           anthropicBody,
           headers,
+          signal,
         ),
     }),
 });

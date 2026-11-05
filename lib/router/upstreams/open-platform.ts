@@ -10,9 +10,10 @@ import { AuthError } from "../../credential.ts";
 import { anthropicToOpenAI, openaiToAnthropic } from "../../dialect/request.ts";
 import { senseNovaChat } from "../../sensenova/transport.ts";
 import { internAiChat } from "../../intern-ai/transport.ts";
-import { deliverAnthropicStream, deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
+import { ClientGoneError, deliverAnthropicStream, deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
+import { runUnderClientGone } from "./client-gone.ts";
 import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
 
 /**
@@ -76,11 +77,13 @@ export async function toOpenAiPlatform(
     log: string;
     /** 错误提示里怎么称呼它（后面接「上游返回 …」）。 */
     what: string;
-    /** 推理怎么发；第二个参数是这个账号的 id（凭据按账号取）。 */
+    /** 推理怎么发；第二个参数是这个账号的 id（凭据按账号取），后面的
+     * 信号是「客户端走了」那个（交给 fetch）。 */
     chat: (
       openaiBody: Record<string, unknown>,
       headers: Record<string, string>,
       accountId: string,
+      signal?: AbortSignal,
     ) => Promise<Response>;
   },
 ): Promise<void> {
@@ -94,56 +97,85 @@ export async function toOpenAiPlatform(
 
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
   const settle = settlement();
-  const response = await underPolicy(
-    route.platform,
-    opts.log,
-    async (account) => {
-      // 归因头在这里生成，不在函数开头：降级换了账号就是另一次尝试，上游那边是
-      // 另一条请求 —— 拿同一个 id 去问厂商会问出两件事。
-      const requestId = randomUUID();
-      if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
-      const res = await opts.chat(
-        openaiBody,
-        attributionHeaders(ctx.clientHeaders, requestId, account.id),
-        account.id,
-      );
-      if (res.ok) return res;
-      // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
-      // 记（onAttempt），这里只负责把错误造出来。
-      //
-      // 错误在这里造（而不是等 underPolicy 回来再造）：策略才知道这个失败等不
-      // 等得起 —— TPM 类限流等得起就自己等，重试同一个账号（见
-      // lib/router/upstreams/policy.ts 的 runWithRateWait）。上游说的
-      // retry-after 也在这里读出来挂到错误上。
-      const text = await res.text().catch(() => "");
-      throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
-    },
-    settle,
-    ctx.availability,
-  );
-
-  if (!stream) {
-    const json = await response.json();
-    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
-    settle.success();
-    return;
-  }
-
-  try {
-    await deliverOpenAIStream(
-      out,
-      response.body!,
-      dialect,
-      route.label ?? model,
-      undefined,
-      ctx.onUsage,
-      (e) => settle.failure(e),
+  // 客户端走了就把上游停掉：上游还在算就是在计费，账号还占着。非流式那条路
+  // 尤其要紧 —— 答复要等整个上游的答复读完才发出去，客户端正好在这中间走。
+  await runUnderClientGone(out, async (guard) => {
+    const response = await underPolicy(
+      route.platform,
+      opts.log,
+      async (account) => {
+        // 归因头在这里生成，不在函数开头：降级换了账号就是另一次尝试，上游那边是
+        // 另一条请求 —— 拿同一个 id 去问厂商会问出两件事。
+        const requestId = randomUUID();
+        if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
+        let res: Response;
+        try {
+          res = await opts.chat(
+            openaiBody,
+            attributionHeaders(ctx.clientHeaders, requestId, account.id),
+            account.id,
+            guard.signal,
+          );
+        } catch (e) {
+          // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却、
+          // 也不会换下一个账号再打一次
+          throw guard.fail(e) ?? e;
+        }
+        if (res.ok) return res;
+        // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
+        // 记（onAttempt），这里只负责把错误造出来。
+        //
+        // 错误在这里造（而不是等 underPolicy 回来再造）：策略才知道这个失败等不
+        // 等得起 —— TPM 类限流等得起就自己等，重试同一个账号（见
+        // lib/router/upstreams/policy.ts 的 runWithRateWait）。上游说的
+        // retry-after 也在这里读出来挂到错误上。
+        const text = await res.text().catch(() => "");
+        // 客户端已经走了：这一次上游答的什么都不要了，也不能拿它给账号记一笔
+        // （读正文的这会儿正断也不罕见）
+        if (guard.gone()) throw new ClientGoneError();
+        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
+      },
+      settle,
+      ctx.availability,
     );
-    settle.success();
-  } catch (e) {
-    settle.failure(e);
-    throw e;
-  }
+
+    if (!stream) {
+      let json: any;
+      try {
+        json = await response.json();
+      } catch (e) {
+        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
+        const gone = guard.fail(e);
+        if (gone) {
+          settle.failure(gone);
+          throw gone;
+        }
+        throw e;
+      }
+      deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+      settle.success();
+      return;
+    }
+    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
+    // lib/router/deliver.ts 的 replyState）。这里的看不盯了。
+    guard.done();
+
+    try {
+      await deliverOpenAIStream(
+        out,
+        response.body!,
+        dialect,
+        route.label ?? model,
+        undefined,
+        ctx.onUsage,
+        (e) => settle.failure(e),
+      );
+      settle.success();
+    } catch (e) {
+      settle.failure(e);
+      throw e;
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -210,11 +242,15 @@ function anthropicMessagesUrl(base: string): string {
  * 鉴权按 Anthropic 的约定：`x-api-key` 加上 `anthropic-version`，**不是**
  * `Authorization: Bearer`。发错了上游回的是鉴权失败，看着像 key 不对，其实
  * 是头不对。
+ *
+ * `signal` 是「客户端走了」那个信号：给了就交给 fetch，客户端走了就把这条
+ * 上游请求停掉（上游还在算就是在计费）。
  */
 export async function anthropicPlatformChat(
   platform: { id: string; label: string; base: string; key: string },
   body: Record<string, unknown>,
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Response> {
   if (!platform.key) {
     throw new AuthError(
@@ -237,6 +273,7 @@ export async function anthropicPlatformChat(
       "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
     },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok && response.status === 401) {
     // 401 是**这个账号**接不了：必须带上上游的状态码，策略层才看得见（能降级
@@ -245,6 +282,9 @@ export async function anthropicPlatformChat(
     // 不带上就会读成「上游 502」（AuthError 的 status 是给客户端看的那个数），
     // 而 5xx 不算账号的错：冷却不记，面板上这个账号一直写着可用。
     const text = await response.text().catch(() => "");
+    // 客户端已经走了：这一次答的是 401 也不再重要 —— 拿它报出去会变成一笔
+    // 凭据被拒的账，而客户端连这个答复都没要
+    if (signal?.aborted) throw new ClientGoneError();
     throw upstreamStatusError(401, text, `${platform.label} `);
   }
   return response;
@@ -272,11 +312,13 @@ export async function toAnthropicPlatform(
     log: string;
     /** 错误提示里怎么称呼它（后面接「上游返回 …」）。 */
     what: string;
-    /** 推理怎么发；第三个参数是这个账号的 id（凭据按账号取）。 */
+    /** 推理怎么发；第三个参数是这个账号的 id（凭据按账号取），后面的
+     * 信号是「客户端走了」那个（交给 fetch）。 */
     chat: (
       anthropicBody: Record<string, unknown>,
       headers: Record<string, string>,
       accountId: string,
+      signal?: AbortSignal,
     ) => Promise<Response>;
   },
 ): Promise<void> {
@@ -295,51 +337,80 @@ export async function toAnthropicPlatform(
 
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
   const settle = settlement();
-  const response = await underPolicy(
-    route.platform,
-    opts.log,
-    async (account) => {
-      // 同上：每次尝试一个新的 request id，账号 id 就是这次真正发请求的那个。
-      const requestId = randomUUID();
-      if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
-      const res = await opts.chat(
-        anthropicBody,
-        attributionHeaders(ctx.clientHeaders, requestId, account.id),
-        account.id,
-      );
-      if (res.ok) return res;
-      // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。错误在这里
-      // 造出来，策略才看得到上游的状态与 retry-after。
-      const text = await res.text().catch(() => "");
-      throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
-    },
-    settle,
-    ctx.availability,
-  );
-
-  if (!stream) {
-    const json = await response.json();
-    deliverJson(out, dialect, "anthropic", json, route.label ?? model, ctx.onUsage);
-    settle.success();
-    return;
-  }
-
-  try {
-    await deliverAnthropicStream(
-      out,
-      response.body!,
-      dialect,
-      route.label ?? model,
-      PING_MS,
-      ctx.onUsage,
-      (e) => settle.failure(e),
+  // 客户端走了就把上游停掉：上游还在算就是在计费，账号还占着。非流式那条路
+  // 尤其要紧 —— 答复要等整个上游的答复读完才发出去，客户端正好在这中间走。
+  await runUnderClientGone(out, async (guard) => {
+    const response = await underPolicy(
+      route.platform,
+      opts.log,
+      async (account) => {
+        // 同上：每次尝试一个新的 request id，账号 id 就是这次真正发请求的那个。
+        const requestId = randomUUID();
+        if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
+        let res: Response;
+        try {
+          res = await opts.chat(
+            anthropicBody,
+            attributionHeaders(ctx.clientHeaders, requestId, account.id),
+            account.id,
+            guard.signal,
+          );
+        } catch (e) {
+          // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却、
+          // 也不会换下一个账号再打一次
+          throw guard.fail(e) ?? e;
+        }
+        if (res.ok) return res;
+        // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。错误在这里
+        // 造出来，策略才看得到上游的状态与 retry-after。
+        const text = await res.text().catch(() => "");
+        // 客户端已经走了：这一次上游答的什么都不要了，也不能拿它给账号记一笔
+        // （读正文的这会儿正断也不罕见）
+        if (guard.gone()) throw new ClientGoneError();
+        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
+      },
+      settle,
+      ctx.availability,
     );
-    settle.success();
-  } catch (e) {
-    // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
-    settle.failure(e);
-    throw e;
-  }
+
+    if (!stream) {
+      let json: any;
+      try {
+        json = await response.json();
+      } catch (e) {
+        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
+        const gone = guard.fail(e);
+        if (gone) {
+          settle.failure(gone);
+          throw gone;
+        }
+        throw e;
+      }
+      deliverJson(out, dialect, "anthropic", json, route.label ?? model, ctx.onUsage);
+      settle.success();
+      return;
+    }
+    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
+    // lib/router/deliver.ts 的 replyState）。这里的看不盯了。
+    guard.done();
+
+    try {
+      await deliverAnthropicStream(
+        out,
+        response.body!,
+        dialect,
+        route.label ?? model,
+        PING_MS,
+        ctx.onUsage,
+        (e) => settle.failure(e),
+      );
+      settle.success();
+    } catch (e) {
+      // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
+      settle.failure(e);
+      throw e;
+    }
+  });
 }
 
 /**
@@ -362,7 +433,7 @@ export async function toSenseNova(
   await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
     log: "sensenova",
     what: "SenseNova ",
-    chat: (openaiBody, headers, accountId) => senseNovaChat(openaiBody, accountId, headers),
+    chat: (openaiBody, headers, accountId, signal) => senseNovaChat(openaiBody, accountId, headers, signal),
   });
 }
 
@@ -382,6 +453,6 @@ export async function toInternAi(
   await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
     log: "intern-ai",
     what: "书生·端砚",
-    chat: (openaiBody, headers, accountId) => internAiChat(openaiBody, accountId, headers),
+    chat: (openaiBody, headers, accountId, signal) => internAiChat(openaiBody, accountId, headers, signal),
   });
 }

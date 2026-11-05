@@ -229,6 +229,17 @@ function wholeMs(value: unknown): number {
 }
 
 /**
+ * 面板送来的可选一格：没给与给了空串是两件事。
+ *
+ * 契约里带 presence 的格没给时是 undefined，往下那一层拿 undefined 当「别动」、
+ * 拿空串当「清空」。收成 String(value ?? "") 会把两件事糊成一件，只改一部分
+ * 字段的调用方就把没送的格清掉了。
+ */
+function givenText(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : value;
+}
+
+/**
  * 一个额度摘要。
  *
  * 三格结论（状态、恢复时刻、一句话）与数字一起走：面板靠它们回答「为什么这里
@@ -369,6 +380,10 @@ function balanceScope(wanted: string): ProviderRow[] {
  * 平台的样子（名字、kind）由调用方给：它一次问齐了所有平台的样子，免得每个
  * 平台再查一遍库。判定也是一次算齐的：面板与路由看的必须是同一个答案
  * （lib/admin/platform-state.ts）。
+ *
+ * `fromRow` 是「表里有没有属于它的那一行」：有行的平台面板才能改与删。它与
+ * `isOpenPlatform` 不是同一件事 —— 模拟客户端那一族有行，但地址与目录归代码，
+ * 那几格在这一条上仍然是空的。
  */
 function platformMessage(
   id: string,
@@ -376,6 +391,7 @@ function platformMessage(
   availability: PlatformAvailability | null,
   accounts: Map<string, AccountView>,
   open: OpenPlatformRow | null,
+  fromRow: boolean,
 ) {
   const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
   // 名下的账号行：判定那一份已经读过表了，没判定就现读。额度与账号两处都要它。
@@ -440,6 +456,10 @@ function platformMessage(
     modelOverrides: listModelOverrides(id).map(modelOverrideMessage),
     // 这是不是一个开放平台：表里的那一行，不是代码里的模板。
     isOpenPlatform: open !== null,
+    // 表里有没有属于它的那一行：有行的平台面板才能改与删。模拟客户端那一族
+    // 有行（isOpenPlatform 是 false，地址与目录归代码），所以它与上面那格
+    // 分开报 —— 面板拿 isOpenPlatform 当判据时，入口就少了一整族。
+    fromRow,
     // 冷却：名下最早到期的那个账号、最早能再接的时刻、一句话。
     cooldownUntilMs: BigInt(cooling.cooldownUntilMs),
     cooldownReason: cooling.cooldownReason,
@@ -580,10 +600,13 @@ function platformMessages() {
   // 平台行：那几格（额度插件、自动拉、目录）只有开放平台有。模拟客户端那一族
   // 的行长得一样，但它们不是开放平台 —— 判别按 kind，不按「在不在代码模板里」
   // （模板名单已经空了）。
+  //
+  // 全部行另存一份：openRows 已经把模拟客户端滤掉了，而「有没有行」（fromRow）
+  // 问的是表里有没有那一行，不分族。两件事一张 map 说不完。
+  const allRows = listOpenPlatforms();
+  const rowExists = new Set(allRows.map((row) => row.id));
   const openRows = new Map(
-    listOpenPlatforms()
-      .filter((row) => !isSimulatedClientKind(row.kind))
-      .map((row) => [row.id, row]),
+    allRows.filter((row) => !isSimulatedClientKind(row.kind)).map((row) => [row.id, row]),
   );
   return platforms.flatMap((platform) => {
     const message = platformMessage(
@@ -592,6 +615,7 @@ function platformMessages() {
       availabilities.get(platform.id) ?? null,
       accounts,
       openRows.get(platform.id) ?? null,
+      rowExists.has(platform.id),
     );
     return message ? [message] : [];
   });
@@ -802,8 +826,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async updatePlatform(request) {
     const id = String(request.id ?? "").trim();
-    // 契约的约定：空串 = 清空那一格。名字与地址除外（平台得有名字与地址，
-    // 空串是错，不是清空）。
+    // base_url 与 quota_plugin 带 presence：没给 = 别动那一格，给了空串 = 清空。
+    // 名字也照这条走（没给 = 别动；显式空串 = 错，平台得有名字），不这么写的话
+    // “只改额度插件”那一单会先撞在“得有个名字”上。
     const models = (request.models ?? []).map((m) => String(m).trim()).filter(Boolean);
     const patch: {
       label?: string;
@@ -813,10 +838,10 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       modelsAuto?: boolean;
       source?: "auto" | "manual";
     } = {
-      label: String(request.label ?? ""),
-      baseUrl: String(request.baseUrl ?? ""),
-      // 空串 = 不选插件。
-      quotaPlugin: String(request.quotaPlugin ?? ""),
+      label: givenText(request.label),
+      baseUrl: givenText(request.baseUrl),
+      // 没给 = 别动这一格；空串 = 不选插件。
+      quotaPlugin: givenText(request.quotaPlugin),
     };
     if (!request.modelsAuto && models.length) {
       // 手工目录：写死的那一份，自动拉不许覆盖它。

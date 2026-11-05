@@ -12,6 +12,8 @@
 //      SQL 英文）
 //   3. UpdatePlatform：改名生效、地址空串被拒且库没变、额度插件写进去、
 //      手工目录（models_auto=false + 清单）写进去
+//   3b. base_url / quota_plugin 带 presence：没给的格不动（只改名不会把额度插件
+//      抹掉），显式空串才清空
 //   4. DeletePlatform：平台行、账号、凭据都清掉，ListUpstreams 里不再出现；
 //      模板平台删不掉
 //   5. RefreshPlatformModels：假上游答了目录就是它；上游答 500 时保留原来那份
@@ -28,6 +30,9 @@
 //      模拟客户端那几条的 preset_id / region 与目录一致、zcode 不在答复里
 //  13. AddPlatform / UpdatePlatform 对预置的模拟客户端：id 由预置定死、
 //      hidden 的不给建（答复不指向空列表）、改名不用送地址
+//  14. ListUpstreams 的 from_row：表里有那一行的平台（模拟客户端与自建平台）
+//      都是 true，而模拟客户端那几格（地址 / 额度插件 / 自动拉）照旧是空的
+//      —— 两个判据不是同一个问题
 //
 // 断言里不写死平台的个数：一律跟表里的行数比。
 
@@ -49,6 +54,7 @@ const { PLATFORM_KIND_OPTIONS, SIMULATED_CLIENTS, platformKindChoices } = await 
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { upstreamBaseUrl } = await import("../lib/admin/upstreams.ts");
+const { PLATFORMS } = await import("../lib/platform-templates.ts");
 const { saveAggregateModel, reloadAggregate } = await import("../lib/aggregate.ts");
 const {
   ProviderPolicy,
@@ -200,6 +206,8 @@ const upstreams = await listUpstreams();
 const acme = upstreams.find((u) => u.id === "acme");
 check("ListUpstreams 里有它", Boolean(acme), show(upstreams.map((u) => u.id)));
 check("它是一个开放平台", acme?.isOpenPlatform === true, show(acme?.isOpenPlatform));
+// 自建平台是表里的一行：面板要能改它、删它。
+check("自建平台的 from_row 是 true", acme?.fromRow === true, show(acme?.fromRow));
 check("ListUpstreams 里的 kind 是 openai", acme?.kind === "openai", show(acme?.kind));
 check("没有账号时状态是没有凭据", acme?.state === UpstreamState.NO_CREDENTIAL, String(acme?.state));
 check("额度插件那一格是空的", acme?.quotaPlugin === "", show(acme?.quotaPlugin));
@@ -446,6 +454,113 @@ check(
   "ListUpstreams 报的是没拉过目录",
   manualListed?.modelsFetchedAtMs === 0n,
   show(manualListed?.modelsFetchedAtMs),
+);
+
+/* ------------------------------------------------------------------ *
+ * 3b. 没给的格不动：base_url / quota_plugin 带 presence
+ * ------------------------------------------------------------------ */
+
+section("没给的格不动");
+
+// 面板对模拟客户端那一族故意不发这两格（地址由预置定死）。没有 presence 时
+// 「没给」与「给空串」是同一份字节，改一次名字就把库里的额度插件抹掉。
+const presenced = await addPlatform({
+  id: "presence-demo",
+  label: "Presence Demo",
+  baseUrl: "https://api.presence.test/v1",
+});
+check("平台建得起来", presenced.ok === true, presenced.message);
+// 模拟客户端那一行的额度插件先改成 qiniu：改名字之后必须还在。
+const pluginOnSimulated = await updatePlatform({ id: "minimax", quotaPlugin: "qiniu" });
+check("模拟客户端那一行也写得进插件", pluginOnSimulated.ok === true, show(pluginOnSimulated));
+check(
+  "库里那一格是 qiniu",
+  openPlatformOf("minimax")?.quotaPlugin === "qiniu",
+  String(openPlatformOf("minimax")?.quotaPlugin),
+);
+
+// 只送名字（面板对模拟客户端就是这样）：两格都不发。
+const renameOnly = await updatePlatform({ id: "minimax", label: "只改个名" });
+check("只送名字：ok", renameOnly.ok === true, show(renameOnly));
+const renamedSimulatedRow = openPlatformOf("minimax");
+check("名字改了", renamedSimulatedRow?.label === "只改个名", String(renamedSimulatedRow?.label));
+check(
+  "没给的额度插件没被抹掉",
+  renamedSimulatedRow?.quotaPlugin === "qiniu",
+  String(renamedSimulatedRow?.quotaPlugin),
+);
+check("没给的地址没被改", renamedSimulatedRow?.baseUrl === "", show(renamedSimulatedRow?.baseUrl));
+
+// 开放平台也一样：只送名字，地址与额度插件都留着。
+const labelOnly = await updatePlatform({ id: "presence-demo", label: "Presence Demo 改" });
+check("开放平台只送名字：ok", labelOnly.ok === true, show(labelOnly));
+check(
+  "名字改了",
+  openPlatformOf("presence-demo")?.label === "Presence Demo 改",
+  String(openPlatformOf("presence-demo")?.label),
+);
+check(
+  "没给的地址没被清掉",
+  openPlatformOf("presence-demo")?.baseUrl === "https://api.presence.test/v1",
+  String(openPlatformOf("presence-demo")?.baseUrl),
+);
+
+// 只改额度插件：地址与名字都不动。
+const pluginOnly = await updatePlatform({ id: "presence-demo", quotaPlugin: "sensenova-pools" });
+check("只送插件：ok", pluginOnly.ok === true, show(pluginOnly));
+const pluginOnlyRow = openPlatformOf("presence-demo");
+check("插件写进去了", pluginOnlyRow?.quotaPlugin === "sensenova-pools", String(pluginOnlyRow?.quotaPlugin));
+check(
+  "名字与地址没被顺手改掉",
+  pluginOnlyRow?.label === "Presence Demo 改" && pluginOnlyRow?.baseUrl === "https://api.presence.test/v1",
+  show([pluginOnlyRow?.label, pluginOnlyRow?.baseUrl]),
+);
+// 名字没给是「别动它」，显式空串还是错（平台得有名字）：两件事不能糊成一件。
+const emptyLabel = await updatePlatform({ id: "presence-demo", label: "" });
+check(
+  "名字显式空串还是被拒",
+  emptyLabel.ok === false && String(emptyLabel.message ?? "").includes("得有个名字"),
+  show(emptyLabel),
+);
+check(
+  "被拒时名字还在",
+  openPlatformOf("presence-demo")?.label === "Presence Demo 改",
+  String(openPlatformOf("presence-demo")?.label),
+);
+
+// 显式空串 = 清空。地址空串还是被地址校验拦下（平台得有地址），所以拆开断言：
+// 先看拦不拦，再看插件那一格清得掉。
+const explicitEmpty = await updatePlatform({
+  id: "presence-demo",
+  label: "Presence Demo 改",
+  baseUrl: "",
+  quotaPlugin: "",
+});
+check("地址显式空串被拒", explicitEmpty.ok === false, show(explicitEmpty));
+check("被拒时库里的地址没变", openPlatformOf("presence-demo")?.baseUrl === "https://api.presence.test/v1", String(openPlatformOf("presence-demo")?.baseUrl));
+check("被拒时库里的插件也没变", openPlatformOf("presence-demo")?.quotaPlugin === "sensenova-pools", String(openPlatformOf("presence-demo")?.quotaPlugin));
+const clearPlugin = await updatePlatform({ id: "presence-demo", quotaPlugin: "" });
+check("插件显式空串收得下", clearPlugin.ok === true, show(clearPlugin));
+check("插件那一格清掉了", openPlatformOf("presence-demo")?.quotaPlugin === "", String(openPlatformOf("presence-demo")?.quotaPlugin));
+check(
+  "清插件没顺手把地址清掉",
+  openPlatformOf("presence-demo")?.baseUrl === "https://api.presence.test/v1",
+  String(openPlatformOf("presence-demo")?.baseUrl),
+);
+
+// 收尾：删掉这个平台、把模拟客户端那一行还原（后面几节拿它当模板平台的对照）。
+const droppedPresence = await deletePlatform({ id: "presence-demo" });
+check("为这一节建的平台删得掉", droppedPresence.ok === true, droppedPresence.message);
+const restoredSimulated = await updatePlatform({
+  id: "minimax",
+  label: SIMULATED_CLIENTS[0].label,
+  quotaPlugin: "",
+});
+check("模拟客户端那一行还原得掉", restoredSimulated.ok === true, show(restoredSimulated));
+check(
+  "还原之后插件是空串",
+  openPlatformOf("minimax")?.quotaPlugin === "",
+  String(openPlatformOf("minimax")?.quotaPlugin),
 );
 
 /* ------------------------------------------------------------------ *
@@ -772,6 +887,13 @@ section("建预置的模拟客户端");
 const platformsBeforeSimulated = countPlatforms();
 const removedMinimax = await deletePlatform({ id: "minimax" });
 check("先删掉播种进来的那一条", removedMinimax.ok === true, show(removedMinimax));
+// 删了就不在列表里：那一行没了，from_row 与整个平台一起消失（不是变成 false 的
+// 一条残骸）。重启后仍不出现由墓碑那一段断言（workbuddy-global）。
+check(
+  "删掉之后列表里没有它",
+  !(await listUpstreams()).some((u) => u.id === "minimax"),
+  show((await listUpstreams()).map((u) => u.id)),
+);
 
 const builtMinimax = await addPlatform({ kind: "minimax", id: "minimax", label: "MiniMax Code" });
 check("预置的模拟客户端建得起来", builtMinimax.ok === true, show(builtMinimax));
@@ -919,7 +1041,7 @@ check(
 );
 
 /* ------------------------------------------------------------------ *
- * 8. 模板平台上的三个新字段
+ * 8. 模板平台上的三个新字段 + from_row
  * ------------------------------------------------------------------ */
 
 section("模板平台");
@@ -928,6 +1050,34 @@ const templateUpstream = (await listUpstreams()).find((u) => u.id === SIMULATED_
 check("模板平台的额度插件是空串", templateUpstream?.quotaPlugin === "", show(templateUpstream?.quotaPlugin));
 check("模板平台的自动拉是 false", templateUpstream?.modelsAuto === false, show(templateUpstream?.modelsAuto));
 check("模板平台不是开放平台", templateUpstream?.isOpenPlatform === false, show(templateUpstream?.isOpenPlatform));
+// 但它有表里的那一行（播种补的）：面板要能改名字、删它。isOpenPlatform 说的是
+// 「地址与额度插件归用户填」—— 两件事分开报，否则拿 isOpenPlatform 当判据的
+// 面板上，模拟客户端那一族没有编辑与删除入口。
+check("模拟客户端的 from_row 是 true", templateUpstream?.fromRow === true, show(templateUpstream?.fromRow));
+check("模拟客户端的地址是空串", templateUpstream?.baseUrl === "", show(templateUpstream?.baseUrl));
+
+/* ------------------------------------------------------------------ *
+ * 8b. from_row：列出来的平台都有表里那一行
+ * ------------------------------------------------------------------ */
+
+section("from_row");
+
+// 代码里的模板名单已经空了（平台全在表里），所以列出来的每一个平台都能在表里
+// 找到自己那一行 —— 「只有代码、没有行」那一族现在一个都没有。哪天代码里再
+// 出现只存在于代码的模板，这一条会红：那时要改的是这一条断言（那族按设计
+// 删不掉），不是把 from_row 报成 true 把它们描过去。
+check("代码里的模板名单是空的", PLATFORMS.length === 0, show(PLATFORMS.map((p) => p.id)));
+const listed = await listUpstreams();
+check(
+  "列出来的每个平台都有表里那一行",
+  listed.every((u) => u.fromRow === true),
+  show(listed.filter((u) => u.fromRow !== true).map((u) => u.id)),
+);
+check(
+  "它们也是表里有的",
+  listed.every((u) => openPlatformOf(u.id) !== null),
+  show(listed.filter((u) => openPlatformOf(u.id) === null).map((u) => u.id)),
+);
 
 /* ------------------------------------------------------------------ *
  * 9. 模型目录三格：开放平台报的是平台行里的那份，模板平台是空
