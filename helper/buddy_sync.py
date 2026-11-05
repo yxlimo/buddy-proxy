@@ -99,6 +99,15 @@ GATEWAY = ""
 API_KEY = DEFAULT_API_KEY
 
 
+def sort_efforts(efforts: list) -> list:
+    """档位按强弱排，不按字母（字母序会把 high 排到 low 前面）。
+
+    比对两边都过一遍这个排序：网关报的先后与配置里写的先后不该算差异。
+    """
+    rank = {level: i for i, level in enumerate(PI_LEVELS)}
+    return sorted(efforts, key=lambda e: (rank.get(e, len(PI_LEVELS)), e))
+
+
 def level_map(efforts: list) -> dict:
     """把 pi 的思考档位映到上游有的档位上。"""
     if not efforts:
@@ -158,9 +167,12 @@ def fetch_providers(gateway: str) -> tuple:
 def fetch_models(gateway: str, base_path: str) -> tuple:
     """问网关某个路径现在有哪些模型。
 
-    返回 (模型表, 错误信息)。模型表是 (id, 显示名, 档位, 上下文, 输出上限) 的列表。
+        返回 (模型表, 错误信息)。模型表是 (id, 显示名, 档位, 上下文, 输出上限) 的列表。
     拉不到就返回 (None, 错误信息) —— 不用内置表兜底，写进去的是旧清单，
     比写空更麻烦。
+
+    档位那一格：网关没给 `effort_options` 就是 None（= 这套模型没有档位），
+    不是空列表。比对时要分清「没有这一格」和「有几个档位」，写配置时两者一样。
     """
     url = f"{gateway}{base_path}/v1/models"
     data, err = common.http_get_json(url)
@@ -174,11 +186,14 @@ def fetch_models(gateway: str, base_path: str) -> tuple:
         mid = m.get("id") or ""
         if not mid:
             continue
+        efforts = m.get("effort_options")
+        if not isinstance(efforts, list) or not efforts:
+            efforts = None
         out.append(
             (
                 mid,
                 m.get("display_name") or mid,
-                list(m.get("effort_options") or []),
+                efforts,
                 int(m.get("context_window") or DEFAULT_CONTEXT),
                 int(m.get("max_output_tokens") or DEFAULT_OUTPUT),
             )
@@ -550,13 +565,19 @@ def report(result: dict, dry_run: bool) -> None:
 
 
 def canonical_gateway_models(models: list) -> dict:
-    """网关的模型表 → {模型 id: {字段: 值}}（字段名用网关那套）。"""
+    """网关的模型表 → {模型 id: {字段: 值}}（字段名用网关那套）。
+
+    档位排过序：网关给的顺序不该算差异（opencode 与 pi 侧都排过）。
+    没有档位是 None，不是 [] —— 「本地没有这一格」也是 None，两边都空
+    不该报差异。
+    """
     out = {}
-    for mid, display, _efforts, context, output in models:
+    for mid, display, efforts, context, output in models:
         out[mid] = {
             "display_name": display,
             "context_window": context,
             "max_output_tokens": output,
+            "efforts": sort_efforts(efforts) if efforts else None,
         }
     return out
 
@@ -571,10 +592,14 @@ def canonical_opencode_models(cfg: dict, provider: str) -> dict:
         return out
     for mid, model in models.items():
         limit = (model or {}).get("limit") or {}
+        reasoning = ((model or {}).get("capabilities") or {}).get("reasoning") or {}
+        effort = reasoning.get("effort")
         out[mid] = {
             "display_name": (model or {}).get("name"),
             "context_window": limit.get("context"),
             "max_output_tokens": limit.get("output"),
+            # 写进去的是模型自己的档位，没写这一格就是没有档位。
+            "efforts": sort_efforts(effort) if isinstance(effort, list) and effort else None,
         }
     return out
 
@@ -597,14 +622,28 @@ def canonical_pi_models(cfg: dict, provider: str) -> dict:
             "display_name": model.get("name"),
             "context_window": model.get("contextWindow"),
             "max_output_tokens": model.get("maxTokens"),
+            # pi 没有「档位表」，只有一张「请求档位 → 上游档位」的映射。
+            # 能问到的档位就是映射值里出现过的那些（去重排序）；全是 None
+            # 的映射（固定档/不能调）等于没有档位。
+            "efforts": _pi_efforts(model.get("thinkingLevelMap")),
         }
     return out
+
+
+def _pi_efforts(levels):
+    # 同一档位会被好几个 pi 档位指到（high、xhigh 都映到 high），映射值去重
+    # 之后剩下的才是「这套模型能用的档位」。
+    if not isinstance(levels, dict):
+        return None
+    offered = [v for v in dict.fromkeys(levels.values()) if isinstance(v, str) and v]
+    return sort_efforts(offered) or None
 
 
 def compare_models(gateway_models: dict, local_models: dict) -> list:
     """网关的模型和本地的比一遍。返回差异的文案列表。
 
     文案：`模型 字段: 网关 X / 本地 Y`（字段不同时），另有缺模型/多模型两行。
+    档位按排序后的清单比，文案里用逗号连起来（`网关 low,high,max / 本地 high`）。
     """
     diffs = []
     for mid in sorted(gateway_models):
@@ -613,11 +652,14 @@ def compare_models(gateway_models: dict, local_models: dict) -> list:
         if local is None:
             diffs.append(f"{mid} model: 网关有 / 本地没有")
             continue
-        for field in ("display_name", "context_window", "max_output_tokens"):
+        for field in ("display_name", "context_window", "max_output_tokens", "efforts"):
             want = gw.get(field)
             have = local.get(field)
             if want == have:
                 continue
+            if field == "efforts":
+                want = ",".join(want) if want else None
+                have = ",".join(have) if have else None
             diffs.append(f"{mid} {field}: 网关 {want} / 本地 {have}")
     for mid in sorted(local_models):
         if mid not in gateway_models:
@@ -625,17 +667,41 @@ def compare_models(gateway_models: dict, local_models: dict) -> list:
     return diffs
 
 
+def pi_expectations(gateway_models: dict) -> dict:
+    """把网关的档位换成 pi 那边「应该写成什么样」。
+
+    pi 没有档位表，只有一张 6 槽到上游档位的映射，而这张映射是有损的：
+    五档（low/medium/high/xhigh/max）压成三个值，三档与五档写出去可能
+    一模一样。所以 pi 侧要比的是「按现在的 level_map 算出来该是什么」，
+    不是网关的原始档位 —— 否则「映射有损」会一直显示成「配置过期」，
+    而那种差异无从修。
+
+    报什么、不报什么：
+      - 网关档位变了、映射后也跟着变 → 报（真漂移）
+      - 网关档位变了、映射后一样 → 不报（pi 表达不出这个差别）
+      - level_map 自己改了规则 → 报（配置相对新代码过期了）
+    """
+    out = {}
+    for mid, fields in gateway_models.items():
+        mapped = [v for v in dict.fromkeys(level_map(fields.get("efforts") or []).values()) if v]
+        out[mid] = {**fields, "efforts": sort_efforts(mapped) or None}
+    return out
+
+
 def check_target(label: str, path: pathlib.Path, is_jsonc: bool, models: list) -> list:
     """比对一个目标文件。返回这个文件上的差异文案。"""
     if not path.exists():
         return []
+    gateway = canonical_gateway_models(models)
     if is_jsonc:
         cfg, _comments, _trailing = load_jsonc(path)
         local = canonical_opencode_models(cfg, ROOT_NAME)
     else:
         cfg = json.loads(path.read_text(encoding="utf-8"))
         local = canonical_pi_models(cfg, ROOT_NAME)
-    return compare_models(canonical_gateway_models(models), local)
+        # pi 是透传不了的那一侧：比映射后的预期，不比原始档位。
+        gateway = pi_expectations(gateway)
+    return compare_models(gateway, local)
 
 
 def run_check(gateway: str, models: list) -> int:

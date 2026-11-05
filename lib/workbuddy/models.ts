@@ -355,6 +355,26 @@ export function workBuddyFallbackModels(): WorkBuddyModel[] {
   return WORKBUDDY_CN_MODELS.filter((m) => isChatModel(m.id) && !BROKEN_MODELS.has(m.id));
 }
 
+/**
+ * The effort levels a /v3/config model entry declares.
+ *
+ * Two shapes come back. A model whose thinking level the user can pick lists
+ * `supportedEfforts`; a model that always thinks at one fixed level carries a
+ * bare `effort` and no list at all. The second shape is the level — dropping
+ * it to "no levels" would publish the model as one the client cannot turn
+ * thinking on for. A single level says exactly that: thinking is on, and this
+ * is the level. The empty array in the bootstrap table only stands for "no
+ * levels" when the upstream said nothing; when the upstream named an effort,
+ * that is the answer.
+ */
+function parseEfforts(reasoning: any): string[] | undefined {
+  const listed = reasoning?.supportedEfforts;
+  if (Array.isArray(listed) && listed.length) return listed;
+  const fixed = reasoning?.effort;
+  if (typeof fixed === "string" && fixed.trim()) return [fixed.trim()];
+  return undefined;
+}
+
 /** "x0.51 credits" → 0.51 */
 function parseCredits(raw: unknown): number {
   const text = String(raw ?? "").trim().toLowerCase();
@@ -410,9 +430,7 @@ export function parseRemoteCatalog(payload: any): RemoteCatalog | null {
           tools: item.supportsToolCall ?? meta[id]?.tools,
           reasoning: item.supportsReasoning ?? meta[id]?.reasoning,
           onlyReasoning: item.onlyReasoning ?? meta[id]?.onlyReasoning,
-          efforts: Array.isArray(item.reasoning?.supportedEfforts)
-            ? item.reasoning.supportedEfforts
-            : (meta[id]?.efforts ?? []),
+          efforts: parseEfforts(item.reasoning) ?? (meta[id]?.efforts ?? []),
           temperature: typeof item.temperature === "number" ? item.temperature : meta[id]?.temperature,
           topP: typeof (item.topP ?? item.top_p) === "number" ? (item.topP ?? item.top_p) : meta[id]?.topP,
         };

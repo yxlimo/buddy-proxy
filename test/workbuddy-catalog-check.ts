@@ -16,6 +16,8 @@
 //      "nothing to serve"
 //   6. an empty list is not a catalogue
 //   7. a broken row is not a crash
+//   8. the effort levels the upstream declares survive the mapping: a fixed
+//      `effort` is one level, not zero
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -33,7 +35,9 @@ process.env.BUDDY_DATA_DIR = tmp;
 const { catalogId, catalogTtlMs, readStoredCatalog, writeStoredCatalog, initWorkBuddyCatalog } =
   await import("../lib/workbuddy/catalog-store.ts");
 const { store, listCached, closeStore } = await import("../lib/store.ts");
-const { workbuddyModelList, setWorkbuddyModelList } = await import("../lib/workbuddy/models.ts");
+const { workbuddyModelList, setWorkbuddyModelList, parseRemoteCatalog, curateCatalog } = await import(
+  "../lib/workbuddy/models.ts"
+);
 
 let pass = 0;
 let fail = 0;
@@ -280,6 +284,63 @@ store()
   .prepare("UPDATE cache SET data = ? WHERE id = ?")
   .run(JSON.stringify({ models: [] }), catalogId());
 check("an empty list in the row reads as nothing", readStoredCatalog() === null, JSON.stringify(readStoredCatalog()));
+
+console.log("");
+console.log("the effort levels the upstream declares");
+
+// The upstream answers two shapes. `supportedEfforts` is the list the user can
+// pick from; a bare `effort` is a model that always thinks at that one level.
+// Reading only the list published the fixed-effort models with no levels at
+// all, so the clients could not turn thinking on for them.
+const catalogueOf = (entries: any[]): WorkBuddyModel[] => {
+  const remote = parseRemoteCatalog({ data: { agents: [{ models: entries.map((e) => e.id) }], models: entries } });
+  if (!remote) throw new Error("the payload has no catalogue in it");
+  return curateCatalog(remote);
+};
+const effortsOf = (models: WorkBuddyModel[], id: string): string =>
+  JSON.stringify(models.find((m) => m.id === id)?.efforts ?? null);
+
+const fixed = catalogueOf([{ id: "tm-fixed", reasoning: { effort: "high", summary: "auto" } }]);
+check("a fixed effort is one level", effortsOf(fixed, "tm-fixed") === '["high"]', effortsOf(fixed, "tm-fixed"));
+
+const listed = catalogueOf([
+  { id: "tm-listed", reasoning: { supportedEfforts: ["low", "high", "max"], defaultEffort: "high", effort: "low" } },
+]);
+check(
+  "a list of levels is the list, not the single effort beside it",
+  effortsOf(listed, "tm-listed") === '["low","high","max"]',
+  effortsOf(listed, "tm-listed"),
+);
+
+const silent = catalogueOf([{ id: "tm-silent", reasoning: {} }, { id: "tm-nothing" }]);
+check("no reasoning at all is no levels", effortsOf(silent, "tm-silent") === "[]", effortsOf(silent, "tm-silent"));
+check("an absent reasoning is no levels", effortsOf(silent, "tm-nothing") === "[]", effortsOf(silent, "tm-nothing"));
+
+// The recorded answer from workbuddy.cn, through the same mapping the gateway
+// uses. This is the shape that made the bug visible: a model whose level is
+// fixed at `high` came out with nothing.
+const recorded = JSON.parse(fs.readFileSync(path.join(ROOT, "test/fixtures/get-workbuddy-v3-config.json"), "utf8"));
+const recordedPayload = JSON.parse(recorded.body);
+const recordedRemote = parseRemoteCatalog(recordedPayload);
+check("the recorded catalogue parses", recordedRemote !== null);
+// `deepseek-v4-flash` rides only in the metadata array, not in the picker list,
+// so it is read from the metadata the mapping builds.
+check(
+  "a recorded fixed effort is one level",
+  JSON.stringify(recordedRemote?.meta["deepseek-v4-flash"]?.efforts ?? null) === '["high"]',
+  JSON.stringify(recordedRemote?.meta["deepseek-v4-flash"]?.efforts ?? null),
+);
+const recordedModels = curateCatalog(recordedRemote!);
+check(
+  "a recorded list of levels is the list",
+  effortsOf(recordedModels, "deepseek-v4.1-flash") === '["low","high","max"]',
+  effortsOf(recordedModels, "deepseek-v4.1-flash"),
+);
+check(
+  "a recorded medium is one level",
+  effortsOf(recordedModels, "glm-5.2") === '["medium"]',
+  effortsOf(recordedModels, "glm-5.2"),
+);
 
 // Close the database before removing its directory: on Windows an open handle
 // makes the removal fail with EPERM. On Linux it makes no difference.

@@ -640,6 +640,166 @@ class SyncCheckTest(unittest.TestCase):
             [],
         )
 
+    def test_effort_levels_are_compared(self):
+        gateway = buddy_sync.canonical_gateway_models(
+            [("random-work", "随机，能用就行", ["low", "high", "max"], 1, 2)]
+        )
+        local = {
+            "random-work": {
+                "display_name": "随机，能用就行",
+                "context_window": 1,
+                "max_output_tokens": 2,
+                "efforts": ["high"],
+            }
+        }
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, local),
+            ["random-work efforts: 网关 low,high,max / 本地 high"],
+        )
+
+    def test_the_same_levels_in_another_order_are_no_difference(self):
+        # 网关报的先后与配置里写的先后不是一回事，两边都排过就不该报差异。
+        gateway = buddy_sync.canonical_gateway_models(
+            [("random-work", "随机，能用就行", ["max", "low", "high"], 1, 2)]
+        )
+        opencode_cfg = {
+            "providers": {
+                "buddy": {
+                    "models": {
+                        "random-work": {
+                            "name": "随机，能用就行",
+                            "limit": {"context": 1, "output": 2},
+                            "capabilities": {"reasoning": {"effort": ["high", "low", "max"]}},
+                        }
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_opencode_models(opencode_cfg, "buddy")),
+            [],
+        )
+
+    def test_pi_without_levels_matches_a_gateway_without_levels(self):
+        # 固定档的模型在 pi 里写的是「六个档位全员 None」，网关那边是没有
+        # 档位 —— 两边都是「没有」，不该报差异。
+        pi_cfg = {
+            "providers": {
+                "buddy": {
+                    "models": [
+                        {
+                            "id": "random-work",
+                            "name": "随机，能用就行",
+                            "contextWindow": 1,
+                            "maxTokens": 2,
+                            "thinkingLevelMap": dict.fromkeys(buddy_sync.PI_LEVELS),
+                        }
+                    ]
+                }
+            }
+        }
+        gateway = buddy_sync.canonical_gateway_models([("random-work", "随机，能用就行", None, 1, 2)])
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_pi_models(pi_cfg, "buddy")),
+            [],
+        )
+
+    def test_what_the_sync_writes_passes_its_own_check(self):
+        # 写出去的那两份配置原样读回来，应当和网关一致 —— 否则 --check 每
+        # 次都会报它自己刚写的东西。
+        models = [
+            ("fixed", "固定档", ["high"], 1000, 100),
+            ("listed", "可选档", ["low", "high", "max"], 2000, 200),
+            ("quiet", "没有档位", None, 3000, 300),
+        ]
+        gateway = buddy_sync.canonical_gateway_models(models)
+        opencode_cfg = {"providers": {"buddy": buddy_sync.opencode_provider(models, "buddy", "Buddy")}}
+        pi_cfg = {"providers": {"buddy": buddy_sync.pi_provider(models, "buddy", "Buddy")}}
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_opencode_models(opencode_cfg, "buddy")),
+            [],
+        )
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_pi_models(pi_cfg, "buddy")),
+            [],
+        )
+    def test_a_five_level_model_is_checked_against_what_pi_would_write(self):
+        # pi 的六槽映射是有损的：五档会压成三个值。配置就是按这个映射写
+        # 出去的，所以不能把「映射有损」报成「配置过期」—— 那两个模型每次
+        # --check 都报，报的还不是能修的东西。
+        five = ["low", "medium", "high", "xhigh", "max"]
+        models = [("space-bunny", "太空兔", five, 1000, 100)]
+        # 走 check_target，不走 compare_models：要验的就是真实 --check 那条路
+        # （pi 侧先把网关档位换成映射后的预期，再比）。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "settings.json"
+            path.write_text(
+                json.dumps({"providers": {"buddy": buddy_sync.pi_provider(models, "buddy", "Buddy")}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(buddy_sync.check_target("pi", path, False, models), [])
+
+    def test_a_change_the_mapping_cannot_express_is_not_reported(self):
+        # 五档和三档写进 pi 是同一张映射，所以「五档变三档」在 pi 这边没有
+        # 可修的东西。
+        five = [("space-bunny", "太空兔", ["low", "medium", "high", "xhigh", "max"], 1000, 100)]
+        three = [("space-bunny", "太空兔", ["low", "high", "max"], 1000, 100)]
+        pi_cfg = {"providers": {"buddy": buddy_sync.pi_provider(five, "buddy", "Buddy")}}
+        local = buddy_sync.canonical_pi_models(pi_cfg, "buddy")
+        self.assertEqual(
+            buddy_sync.compare_models(buddy_sync.pi_expectations(buddy_sync.canonical_gateway_models(three)), local),
+            [],
+        )
+
+    def test_a_stale_pi_map_is_reported(self):
+        # 2026-11 那次就是这样：pi 里 deepseek-v4-pro 的映射还停在旧规则上，
+        # 网关那边只剩 high。以前不比档位，--check 报平安。
+        stale = {
+            "minimal": "high",
+            "low": "high",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "high",
+        }
+        pi_cfg = {
+            "providers": {
+                "buddy": {
+                    "models": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "name": "DeepSeek V4 Pro",
+                            "contextWindow": 1000,
+                            "maxTokens": 100,
+                            "thinkingLevelMap": stale,
+                        }
+                    ]
+                }
+            }
+        }
+        gateway = buddy_sync.pi_expectations(
+            buddy_sync.canonical_gateway_models(
+                [("deepseek-v4-pro", "DeepSeek V4 Pro", ["high"], 1000, 100)]
+            )
+        )
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_pi_models(pi_cfg, "buddy")),
+            ["deepseek-v4-pro efforts: 网关 high / 本地 high,xhigh"],
+        )
+
+    def test_the_pi_expectation_moves_when_the_gateway_levels_move(self):
+        # 反证：预期是从网关档位算出来的，不是恒等于配置。
+        five = [("space-bunny", "太空兔", ["low", "medium", "high", "xhigh", "max"], 1000, 100)]
+        pi_cfg = {"providers": {"buddy": buddy_sync.pi_provider(five, "buddy", "Buddy")}}
+        local = buddy_sync.canonical_pi_models(pi_cfg, "buddy")
+        moved = buddy_sync.pi_expectations(
+            buddy_sync.canonical_gateway_models([("space-bunny", "太空兔", ["high"], 1000, 100)])
+        )
+        self.assertEqual(
+            buddy_sync.compare_models(moved, local),
+            ["space-bunny efforts: 网关 high / 本地 low,high,max"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
