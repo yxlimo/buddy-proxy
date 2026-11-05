@@ -35,6 +35,7 @@
 provider 清空）。别的 provider 一个都不动。
 """
 import argparse
+import copy
 import json
 import os
 import pathlib
@@ -364,6 +365,14 @@ def _key_of(stripped: str) -> str:
     return parts[1]
 
 
+def parse_json(text: str, where: str) -> dict:
+    """解析 JSON；坏了就说清是哪一份，不要让 traceback 淹掉重点。"""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{where} 不是合法 JSON：{exc}") from None
+
+
 def load_jsonc(path: pathlib.Path) -> tuple:
     """读 JSONC：整行的注释摘出来，记住它们属于哪个键。
 
@@ -393,7 +402,7 @@ def load_jsonc(path: pathlib.Path) -> tuple:
             trail_comments[idx] = comment
             code_lines.append(code)
 
-    cfg = json.loads("\n".join(code_lines))
+    cfg = parse_json("\n".join(code_lines), str(path))
 
     # 每行属于哪个顶层键 —— 注释按这个归属。
     owners = []
@@ -504,10 +513,10 @@ def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, 
         old_text = path.read_text(encoding="utf-8")
     else:
         old_text = path.read_text(encoding="utf-8")
-        cfg = json.loads(old_text)
+        cfg = parse_json(old_text, str(path))
         comments, trailing = [], {}
     providers = cfg.setdefault("providers", {})
-    before = json.loads(json.dumps(providers))
+    before = copy.deepcopy(providers)
 
     if is_jsonc:
         removed = _apply(providers, sources, opencode_provider, keep_legacy)
@@ -697,7 +706,7 @@ def check_target(label: str, path: pathlib.Path, is_jsonc: bool, models: list) -
         cfg, _comments, _trailing = load_jsonc(path)
         local = canonical_opencode_models(cfg, ROOT_NAME)
     else:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg = parse_json(path.read_text(encoding="utf-8"), str(path))
         local = canonical_pi_models(cfg, ROOT_NAME)
         # pi 是透传不了的那一侧：比映射后的预期，不比原始档位。
         gateway = pi_expectations(gateway)

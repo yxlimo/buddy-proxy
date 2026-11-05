@@ -1,0 +1,513 @@
+{
+  "source": "WorkBuddy desktop client product config (genie 5.9.3)",
+  "note": "cn 区的权威目录：cn 账号的上游 /v3/config 不带倍率与档位（已实测，换请求头无效），所以这份以客户端 product config 为准，上游只在真有某个字段时才覆盖。由 scripts/workbuddy-catalog.ts 生成，不要手改。",
+  "models": [
+    {
+      "id": "balanced-model",
+      "name": "均衡",
+      "credits": 0.5,
+      "contextWindow": 300000,
+      "maxOutputTokens": 48000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "deep-model",
+      "name": "极致",
+      "credits": 1,
+      "contextWindow": 300000,
+      "maxOutputTokens": 48000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "deepseek-r1-0528",
+      "name": "deepseek-r1",
+      "credits": null,
+      "contextWindow": 96000,
+      "maxOutputTokens": 8192,
+      "vision": false,
+      "tools": false,
+      "reasoning": false,
+      "onlyReasoning": false,
+      "efforts": [],
+      "defaultEffort": "",
+      "canDisableThinking": null
+    },
+    {
+      "id": "deepseek-v3-0324",
+      "name": "deepseek-v3",
+      "credits": null,
+      "contextWindow": 96000,
+      "maxOutputTokens": 8192,
+      "vision": false,
+      "tools": false,
+      "reasoning": false,
+      "onlyReasoning": false,
+      "efforts": [],
+      "defaultEffort": "",
+      "canDisableThinking": null
+    },
+    {
+      "id": "deepseek-v3-1",
+      "name": "DeepSeek-V3.1",
+      "credits": 0.52,
+      "contextWindow": 96000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": false,
+      "onlyReasoning": false,
+      "efforts": [],
+      "defaultEffort": "",
+      "canDisableThinking": null
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "Deepseek-V4-Flash",
+      "credits": 0.17,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 50000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": false,
+      "efforts": [
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "DeepSeek-V4-Pro",
+      "credits": 0.51,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": false,
+      "efforts": [
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek-V4.1-Flash",
+      "credits": 0.11,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    {
+      "id": "fast-model",
+      "name": "快速",
+      "credits": 0.15,
+      "contextWindow": 300000,
+      "maxOutputTokens": 48000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "glm-4.6",
+      "name": "GLM-4.6",
+      "credits": 0.23,
+      "contextWindow": 168000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": false,
+      "efforts": [],
+      "defaultEffort": "",
+      "canDisableThinking": null
+    },
+    {
+      "id": "glm-4.6v",
+      "name": "GLM-4.6V",
+      "credits": 0.11,
+      "contextWindow": 128000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "glm-5.0-turbo",
+      "name": "GLM-5.0-Turbo",
+      "credits": 0.95,
+      "contextWindow": 200000,
+      "maxOutputTokens": 48000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "glm-5.2",
+      "name": "GLM-5.2",
+      "credits": 0.79,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    {
+      "id": "glm-5.3",
+      "name": "GLM-5.3",
+      "credits": 0.69,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "glm-5.3-flash",
+      "name": "GLM-5.3-Flash",
+      "credits": 0.08,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "hunyuan-2.0-instruct",
+      "name": "Hunyuan-2.0-Instruct",
+      "credits": null,
+      "contextWindow": 128000,
+      "maxOutputTokens": 16000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "hunyuan-chat",
+      "name": "Hunyuan-Turbos",
+      "credits": null,
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
+      "vision": true,
+      "tools": true,
+      "reasoning": false,
+      "onlyReasoning": false,
+      "efforts": [],
+      "defaultEffort": "",
+      "canDisableThinking": null
+    },
+    {
+      "id": "hy3",
+      "name": "Hy3",
+      "credits": 0,
+      "contextWindow": 192000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "hy3-x",
+      "name": "Hy3",
+      "credits": 0.05,
+      "contextWindow": 192000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "hy4free",
+      "name": "Hy4",
+      "credits": 0,
+      "contextWindow": 960000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "hy4std",
+      "name": "Hy4",
+      "credits": 0.29,
+      "contextWindow": 960000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "kimi-k2-thinking",
+      "name": "Kimi-K2-Thinking",
+      "credits": 0.54,
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "Kimi-K2.5",
+      "credits": 0.45,
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "kimi-k2.8-preview",
+      "name": "Kimi-K2.8-Preview",
+      "credits": 0.77,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    {
+      "id": "kimi-k3-1",
+      "name": "Kimi-K3",
+      "credits": 1.62,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": true
+    },
+    {
+      "id": "kimi-k3.1-pro",
+      "name": "Kimi-K3.1-Pro",
+      "credits": 0.97,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 32000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    },
+    {
+      "id": "mimo-v2.6-pro",
+      "name": "Xiaomi MiMo-V2.6-Pro",
+      "credits": 0.13,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "high",
+      "canDisableThinking": null
+    },
+    {
+      "id": "minimax-m2.5",
+      "name": "MiniMax-M2.5",
+      "credits": 0.18,
+      "contextWindow": 200000,
+      "maxOutputTokens": 48000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "minimax-m2.7",
+      "name": "MiniMax-M2.7",
+      "credits": 0.26,
+      "contextWindow": 200000,
+      "maxOutputTokens": 48000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [],
+      "defaultEffort": "medium",
+      "canDisableThinking": null
+    },
+    {
+      "id": "minimax-m3.1-flash",
+      "name": "MiniMax-M3.1-Flash",
+      "credits": 0.08,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "max",
+      "canDisableThinking": false
+    },
+    {
+      "id": "space-bunny",
+      "name": "Space-Bunny",
+      "credits": 0.08,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "max",
+      "canDisableThinking": false
+    },
+    {
+      "id": "step-5-preview",
+      "name": "Step-5-Preview",
+      "credits": 0.33,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "tools": true,
+      "reasoning": true,
+      "onlyReasoning": true,
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "defaultEffort": "high",
+      "canDisableThinking": false
+    }
+  ]
+}

@@ -61,7 +61,9 @@ export function workbuddyCatalogModels(models: WorkBuddyModel[]): CatalogModel[]
     contextWindow: m.context,
     maxOutputTokens: m.maxOutput,
     ...(m.efforts.length ? { effortOptions: [...m.efforts] } : {}),
-    credits: m.credits,
+    // A null multiplier means the client config states none, which is not the
+    // same as free: the list says nothing about the price.
+    ...(m.credits === null ? {} : { credits: m.credits }),
   }));
 }
 
