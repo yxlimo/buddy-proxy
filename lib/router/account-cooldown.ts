@@ -1,6 +1,6 @@
 // lib/router/account-cooldown.ts — 一次失败值多少冷却。
 //
-// 四类失败，四种冷却：
+// 各类失败各记什么：
 //
 //   限流（rate-limit：超了 RPM/TPM）
 //       固定 1 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来。
@@ -20,17 +20,44 @@
 //       额度是一次性的（等窗口），限流是分钟级的（等一分钟）—— 两者的等待
 //       不是一回事，所以分开算。
 //
-//   连接与超时（connection、timeout）
+//   连接（connection）
 //       固定 1 分钟。连接断掉不是账号的错 —— 一个只有单个账号的平台会被
-//       自己的超时下线好几分钟。上游自己说了「过多久再来」（retry-after），
+//       自己断掉的连接下线好几分钟。上游自己说了「过多久再来」（retry-after），
 //       就照它说的来。
 //
-//   别的可降级失败（server、credential、no-balance）
-//       固定 5 分钟；但上游自己说了「过多久再来」（retry-after），就照它说的
-//       来 —— 那时候一个短的等待是对的，套餐窗口跟服务挂了没关系。
+//   超时不记账（timeout）
+//       超时说的是「这一条请求等太久了」，不是「这个账号不能用了」。记冷却会
+//       把一个好好的账号挡在门外好几分钟，而这一条请求慢，换哪个账号都可能
+//       一样慢。答复照旧是那条超时错误，客户端自己决定要不要重发。
+//
+//   等过了自己的限流窗口（rateWaited 标记）
+//       也不记账：它接不了不是因为坏了，等好了就能接；记冷却反而把它（和别的
+//       请求）一起挡在门外。标记只贴在「最终那个错误本身还是限流」的错误上
+//       （见 policy.ts 的 stop）：它的语义是「这个限流是我们替它等过的」，不是
+//       「这个账号这一轮里等过什么」—— 贴在被拒（401）、额度见底（402）上，
+//       下面这条就变成「坏凭据永不冷却」。
+//
+//   凭据被拒与额度见底（credential、no-balance）
+//       固定 5 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来
+//       —— 那时候一个短的等待是对的。套餐窗口说的是额度，跟这两类没关系，
+//       不参与。
+//
+//   上游 5xx（server）不记账
+//       —— 它说的是「这个请求这次没成事」，不是「这个账号不能用了」。算到账号
+//       头上，同一个平台上别的模型会跟着下线五分钟，fallback 的第二个目标也
+//       会被跳过（2026-10-28 实测：一个模型回 500，整个平台 503、第二个目标
+//       没被试）。换下一个目标、下一个账号就够了。
 //
 // 只有可降级的失败才记冷却：请求本身的问题（400/404/413）不记 —— 一个坏请求
 // 不该把账号封掉，换一个账号也是一样的结果。
+//
+// 上面这几条判据都住在**这一层**，不挂在某个调用点上：派发失败（policy.ts 的
+// onAttempt）与流式答复的结算（Settlement.failure）问的是同一个问题 ——「这次
+// 失败值多少冷却」。判据留在调用点的话，同一个超时在两条路上会有两种待遇
+// （一条记冷却、一条不记），排查时看到的账也对不上。
+//
+// 因此这个函数是纯记账：读快照、算时刻、返回 decision 或 null，没有副作用。
+// 写不写、写多少由调用方按 decision 做。
 
 import {
   MAX_COOLDOWN_MS,
@@ -68,10 +95,32 @@ export interface CooldownDecision {
 }
 
 /**
+ * 一个带标记的错误：它这一次等过了自己的限流窗口。
+ *
+ * 标记挂在错误对象上，跟着错误走到结算那一层：只记在这个模块里看不到，因为
+ * 谁等过是重试循环（policy.ts 的 runWithRetries）说了算。
+ */
+export interface RateWaited {
+  rateWaited?: boolean;
+}
+
+/** 记一笔：这个失败等过了自己的限流窗口。 */
+export function withRateWaited<T extends object>(error: T): T {
+  (error as T & RateWaited).rateWaited = true;
+  return error;
+}
+
+/** 这个失败等过了吗。 */
+export function rateWaitedOf(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as RateWaited).rateWaited === true;
+}
+
+/**
  * 这次失败要让那个账号冷却多久。
  *
  * 不可降级的失败没有冷却：换一个账号也是一样的结果，把账号放下去只会让可用
- * 的账号更少。
+ * 的账号更少；超时与等过限流的也不记（理由见文件顶上）。
  */
 export function cooldownForFailure(
   accountId: string,
@@ -80,6 +129,10 @@ export function cooldownForFailure(
 ): CooldownDecision | null {
   if (!isDegradableUpstreamError(error)) return null;
   const failure = classifyUpstreamError(error);
+  // 超时不记账：这一条请求等得太久了，不是这个账号不能用了（见文件顶上的分类）。
+  if (failure.kind === "timeout") return null;
+  // 等过了限流的账号正在等自己的窗口恢复：它接不了不是因为坏了。
+  if (rateWaitedOf(error)) return null;
   // 上游 5xx 不是账号的错。
   //
   // 它说的是「这个请求这次没成事」：可能就那一个模型挂了，也可能是上游抽了
@@ -127,13 +180,10 @@ export function cooldownForFailure(
       };
     }
   }
-  // 没有上游给的恢复时间：用固定值。连接与超时是 1 分钟 —— 那不是账号的错，
-  // 按 5 分钟算的话一个只有单个账号的平台会被自己的超时下线好几分钟。
+  // 没有上游给的恢复时间：用固定值。连接是 1 分钟 —— 那不是账号的错，按 5 分钟
+  // 算的话一个只有单个账号的平台会被自己断掉的连接下线好几分钟。
   // 额度用完也是固定值：额度是真的用完了，等窗口（5 分钟）。
-  const fixed =
-    failure.kind === "connection" || failure.kind === "timeout"
-      ? networkCooldownMs()
-      : unavailableCooldownMs();
+  const fixed = failure.kind === "connection" ? networkCooldownMs() : unavailableCooldownMs();
   return { untilMs: now + fixed, reason: failure.kind, source: "fixed" };
 }
 

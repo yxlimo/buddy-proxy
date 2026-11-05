@@ -19,9 +19,8 @@ import {
   withUpstreamStatus,
 } from "../../upstream-status.ts";
 import { clearCooldown, setCooldown } from "../../cooldown.ts";
-import { listCooldowns } from "../../cooldown.ts";
 import { scrubForLog } from "../../log-scrub.ts";
-import { cooldownForFailure, cooldownStamp, errorTextOf } from "../account-cooldown.ts";
+import { cooldownForFailure, cooldownStamp, errorTextOf, rateWaitedOf, withRateWaited } from "../account-cooldown.ts";
 import { type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { credentialFaultError, platformWithoutAccount } from "../routes.ts";
@@ -159,28 +158,41 @@ const DEFAULT_RATE_WAIT_MS = 30_000;
 const MAX_RATE_WAIT_MS = 60_000;
 
 /**
- * 一个请求里总共最多等多久（毫秒）。
+ * 一个账号上这一轮总共最多花多久（毫秒）。
  *
- * 「等得起」说的是一分钟以内，不是「随便多久」。
+ * 等的（限流窗口、重试间隔）与上游自己算的时间都算在里面。超过就停手：客户端
+ * 等不了更久，再等下去只是把它挂在那里。
  */
-const RATE_WAIT_BUDGET_MS = 60_000;
+const ATTEMPT_BUDGET_MS = 60_000;
 
-/** 一个等过了的错误：冷却不写它（见 underPolicy 的 onAttempt）。 */
-export interface RateWaited {
-  rateWaited?: boolean;
-}
+/**
+ * 瞬时重试的间隔（毫秒）：第 1 档 300ms，第 2 档 900ms。
+ *
+ * 300ms 之后再来，是等上游那一下抖动过去（回滚、单实例重启、某个节点抽了）。
+ * 再失败就 900ms —— 还没好就是真有事，第三次之后交给策略。
+ */
+const TRANSIENT_RETRY_DELAYS_MS = [300, 900];
 
-/** 记一笔：这个失败等过了。 */
-export function withRateWaited<T extends object>(error: T): T {
-  (error as T & RateWaited).rateWaited = true;
-  return error;
-}
+/**
+ * 一个账号上最多打几次上游：首次 + 每一档退避各一次。
+ *
+ * 「等限流窗口再来」与「隔一会儿再试」是同一件事的两种说法 —— 都是一次上游
+ * 调用，都从这一格预算里出。两套计数各数各的话，最坏是五次（等两次 + 试
+ * 两次）：客户端在那一分钟里等，上游那边被打了五遍。
+ *
+ * 次数上限由间隔档数算出来：间隔档数 = 次数上限 - 1。不另写一个数字 —— 两个
+ * 数字各改各的时候会出现「上限 4 而间隔只有两档」，第 4 档静默复用 900ms，那
+ * 正是以前 `.at(-1)` 兜底把配置错误藏起来的地方。
+ */
+const MAX_ATTEMPTS_PER_ACCOUNT = TRANSIENT_RETRY_DELAYS_MS.length + 1;
 
-/** 这个失败等过了吗。 */
-export function rateWaitedOf(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  return (error as RateWaited).rateWaited === true;
-}
+/**
+ * 一个等过了的错误：冷却不写它（见 lib/router/account-cooldown.ts）。
+ *
+ * 标记与「读标记」住在那一个文件里：写不写冷却的判据在那边，它要用这个标记。
+ * 这里转出去，调用方的 import 不用改。
+ */
+export { rateWaitedOf, withRateWaited, type RateWaited } from "../account-cooldown.ts";
 
 /**
  * 这个失败是「每分钟 token 超限」吗。
@@ -212,36 +224,213 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * 跑一次调用；遇到「等得起」的限流就等，然后重试**同一个**账号。
+ * 瞬时重试的下一次间隔（毫秒）。
  *
- * 等的是上游说的那个窗口（一分钟以内）。客户端这时候只是在等答复，不该看到
- * 429/503 —— 所以等发生在拿到答复之前，连接一直开着，不会写出半截答复。
- *
- * 等过了的错误带一个标记：冷却不写它（见 underPolicy 的 onAttempt）。那个
- * 账号正在等自己的窗口恢复，写了冷却反而把它挡在门外。
+ * 越界不做兜底：档数是从次数上限那边算出来的，正常路径上取不到 undefined。
+ * 取到了就是有人把次数上限抬到阶梯之外（opts.maxAttempts 是测试用的口子）——
+ * 那就报出来，而不是静默复用最后一档：静默复用把配置错误藏起来，而 0 毫秒
+ * （`sleep(undefined)`）是连打上游的紧圈。
  */
-async function runWithRateWait<T>(
-  account: ProviderRow,
+function retryDelayMs(retries: number): number {
+  const delay = TRANSIENT_RETRY_DELAYS_MS[retries];
+  if (delay === undefined) {
+    throw new Error(
+      `transient retry ${retries + 1} has no delay: the schedule has ` +
+        `${TRANSIENT_RETRY_DELAYS_MS.length} step(s), so the attempt cap is ${MAX_ATTEMPTS_PER_ACCOUNT}`,
+    );
+  }
+  return delay;
+}
+
+/**
+ * 退避阶梯与次数上限：给测试核对「间隔档数 = 次数上限 - 1」。
+ *
+ * 两个数字绑在一个不变量里之后，配置错误写不出来 —— 这条访问器就是那个不变
+ * 量本身，测试照着它断言，不照着两个数各断言一遍。
+ */
+export function transientRetryPlan(): { maxAttempts: number; delaysMs: readonly number[] } {
+  return { maxAttempts: MAX_ATTEMPTS_PER_ACCOUNT, delaysMs: TRANSIENT_RETRY_DELAYS_MS };
+}
+
+/**
+ * 这些失败值得在**同一个账号**上再试一次。
+ *
+ * 用现成的分类，不另判一遍：5xx（server）与连接断掉（connection）说的是
+ * 「这一次没成事」，隔几百毫秒多半就好了。
+ *
+ * 不在这里的：
+ *   - timeout：这一次等得太久了，再等一次只是再久一次。超时直接交回客户端，
+ *     让它自己决定要不要重试（见 underPolicy 里不写冷却那一条）。
+ *   - rate-limit 走等窗口那条路（等的是分钟级的窗口，不是几十毫秒）；
+ *     quota / no-balance / credential 是账号真的接不了，再试一次也是一样的答复；
+ *     request 是请求本身的问题，换谁都一样；unknown 说不清是什么，不猜。
+ */
+const TRANSIENT_KINDS = new Set(["server", "connection"]);
+
+/** 这个失败在同一账号上再试一次有没有意义。 */
+function isTransientFailure(error: unknown): boolean {
+  // 客户端已经走了：再打一次上游只是白花钱，答复也没人要，而且那次尝试的
+  // 失败还会被记成账号的账（见 onAttempt 里 ClientGoneError 那一条）。
+  if (error instanceof ClientGoneError) return false;
+  return TRANSIENT_KINDS.has(classifyUpstreamError(error).kind);
+}
+
+/** 这个失败是「等太久了」吗。 */
+function isTimeoutFailure(error: unknown): boolean {
+  return classifyUpstreamError(error).kind === "timeout";
+}
+
+/**
+ * 这个失败的日志怎么说：不记冷却的两种原因分开写。
+ *
+ * 记不记账由 cooldownForFailure 定，这里只管把它的答案说成人话 —— 两处各判
+ * 一遍就是同一个错两种待遇的来源。
+ */
+function whyNotCooling(error: unknown): string {
+  if (isTimeoutFailure(error)) return ", timed out, not cooling down";
+  if (rateWaitedOf(error)) return ", waited for the rate limit, not cooling down";
+  return ", not cooling down";
+}
+
+/**
+ * 跑一次调用：等得起就等，瞬时失败就再试 —— 都在**同一个**账号上。
+ *
+ * 两种重试共用一个 attempt 循环与一格预算，因为它们是同一个问题的两种答法：
+ * 「这一次没成事，过一会儿再来」。分成两层的话，一个 TPM 限流过的账号会先等
+ * 完窗口、再把瞬时重试的次数从头数一遍，最坏打到五次，日志也会出现两套说法。
+ *
+ *   - TPM 限流：等上游说的那个窗口（一分钟以内）再来一次。客户端这时候只是在
+ *     等答复，不该看到 429/503 —— 等发生在拿到答复之前，连接一直开着，不会写
+ *     出半截答复。等过的这个账号带一个标记：但只贴在「最终抛出的那个错误本身
+ *     还是限流」时 —— 那样冷却不写它（见 cooldownForFailure），它只是在等自己
+ *     的窗口恢复。等过窗口之后又失败于凭据被拒/额度见底/连接断，那个失败仍照
+ *     旧记账。
+ *   - 瞬时失败（5xx、连接）：隔 300ms、900ms 各再试一次，同一个账号。换账号
+ *     没有用 —— 上游自己抽了一下，换谁都可能抽。
+ *   - 超时：不在这里重试。它说的是这一条请求等太久了，再等一次只是再久一次；
+ *     答复就是那条超时错误，客户端自己决定要不要重发。
+ *
+ * 重试只包住「拿到 Response」这一步，不包读答复：`run` 返回之后就不再重试。
+ * 答复已经开始写给客户端了再试一次，会把已经发出去的内容重复一遍，SSE 的帧结构
+ * 也跟着碎掉 —— 而且那时候早就没有降级的余地。所以所有调用方传进来的 `run`
+ * 都是「发请求、拿到答复的头」为止（老协议的 chunks 也是拿到迭代器就返回），
+ * 读正文、转发给客户端都是 `run` 返回之后的事。
+ *
+ * 次数与时间各有一格预算：一个账号最多打 MAX_ATTEMPTS_PER_ACCOUNT 次上游
+ * （等窗口之后那一次也算），整轮加起来不超过 budgetMs。用完了就停手，把最后
+ * 一个错误原样抛出去：记冷却、换不换账号都由策略（onAttempt）照旧决定 ——
+ * 重试成功那条路走的是返回值，onAttempt 看到的是成功。
+ *
+ * 预算要算上上游自己花的时间，不然它只是「等待时间」的预算：一次 30s 的超时
+ * 不算账，三次就能花掉 90s。所以每轮尝试**开始前**先看还剩多少，没了就不打了。
+ *
+ * `opts` 只为测试：次数、时限与钟都能单独看出来，不然验一次预算要真等一分钟。
+ */
+export interface RetryBudget {
+  /** 这一轮的总时限（毫秒）。 */
+  budgetMs?: number;
+  /** 一个账号上最多打几次上游。 */
+  maxAttempts?: number;
+  /** 时间从哪儿来。 */
+  now?: () => number;
+  /** 等待。 */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export async function runWithRetries<A extends { id: string }, T>(
+  account: A,
   what: string,
-  run: (account: ProviderRow) => Promise<T>,
+  run: (account: A) => Promise<T>,
+  opts: RetryBudget = {},
 ): Promise<T> {
-  const deadline = Date.now() + RATE_WAIT_BUDGET_MS;
-  for (let attempt = 0; ; attempt += 1) {
+  const budgetMs = opts.budgetMs ?? ATTEMPT_BUDGET_MS;
+  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS_PER_ACCOUNT;
+  const clock = opts.now ?? Date.now;
+  const nap = opts.sleep ?? sleep;
+  // 时限从第一次上游调用之前算起：等的、试的、上游自己算的都算在里面。
+  const deadline = clock() + budgetMs;
+  // 打了几次上游：等完窗口之后的那一次也算一次。
+  let attempts = 0;
+  // 瞬时重试的间隔用第几个（等窗口不占这个阶梯）。
+  let retries = 0;
+  // 这个账号这一轮替上游的限流等过窗口。整轮只算一次，最终抛错时由 stop 决定
+  // 贴不贴：只有**最终那个错误本身还是限流**时才贴。
+  let rateWaited = false;
+  // 上一次尝试的那个错：预算用完时抛的是它（客户端要看到的是最后一次真的发生了
+  // 什么，不是一句新造的「超时了」）。
+  let lastFailure: unknown = null;
+  /**
+   * 停手：最终这个错误还是限流、而且我们替它等过窗口，就把标记附上，再原样抛。
+   *
+   * 标记的语义是「这个限流是我们替它等过的」，不是「这个账号这一轮里等过什
+   * 么」。它只对限流有意义：记账那一层（cooldownForFailure）见到它就当「它在等
+   * 自己的窗口」，提前 return null 不写冷却。贴在凭据被拒（401）、额度见底
+   * （402）、连接断上，坏凭据的账号就永不冷却、一直被选中重试。
+   */
+  const stop = (error: unknown): never => {
+    if (
+      rateWaited &&
+      error &&
+      typeof error === "object" &&
+      classifyUpstreamError(error).kind === "rate-limit"
+    ) {
+      withRateWaited(error as Record<string, unknown>);
+    }
+    throw error;
+  };
+  for (;;) {
+    // 预算要算上上游花掉的时间：上一次尝试可能已经吃掉了大头，这时候再打一次
+    // 只会在客户端已经等不下去之后才回。第一次尝试前剩余必然为正，不用判。
+    if (attempts > 0 && deadline - clock() <= 0) {
+      console.log(
+        `[ROUTE] ${what} account=${account.id} out of time (${Math.round(budgetMs / 1000)}s), not trying again`,
+      );
+      stop(lastFailure);
+    }
+    attempts += 1;
     try {
       return await run(account);
     } catch (e) {
+      lastFailure = e;
       const wait = rateLimitWaitMs(e);
-      // 等不起的（不是 TPM，或者上游说了「过两分钟再来」）：照旧报错。
-      if (wait === null) throw e;
-      if (e && typeof e === "object") withRateWaited(e as Record<string, unknown>);
-      // 等过两次还是不行：照旧报错（但不写冷却）。
-      if (attempt >= 2) throw e;
-      // 这个请求的等待预算用完了：照旧报错。
-      if (Date.now() + wait > deadline) throw e;
+      const transient = wait === null && isTransientFailure(e);
+      // 这一次不值得再试：请求本身的问题、账号接不了、客户端走了、说不清的错。
+      if (wait === null && !transient) stop(e);
+      // 次数用完了：不再等也不再试，交给策略。
+      if (attempts >= maxAttempts) {
+        console.log(
+          `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no attempt left (${attempts}/${maxAttempts})`,
+        );
+        stop(e);
+      }
+      if (wait !== null) {
+        rateWaited = true;
+        // 等到手也过了这一轮的总时限：不再等，也不再试。
+        if (clock() + wait > deadline) {
+          console.log(
+            `[ROUTE] ${what} account=${account.id} is rate limited on tokens, no time left for a ${Math.ceil(wait / 1000)}s wait, not waiting`,
+          );
+          stop(e);
+        }
+        console.log(
+          `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying`,
+        );
+        await nap(wait);
+        continue;
+      }
+      // 瞬时失败：同一个账号再试。隔完这一段也过了这一轮的总时限就不等了。
+      const delay = retryDelayMs(retries);
+      if (clock() + delay > deadline) {
+        console.log(
+          `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no time left for a ${delay}ms retry`,
+        );
+        stop(e);
+      }
+      retries += 1;
       console.log(
-        `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying`,
+        `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, retry ${retries}/${maxAttempts - 1} in ${delay}ms`,
       );
-      await sleep(wait);
+      await nap(delay);
     }
   }
 }
@@ -440,7 +629,9 @@ export function settlement(): Settlement {
         console.log(`[ROUTE] ${what} account=${accountId}: the client went away, the answer was cut short`);
         return;
       }
-      // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
+      // 这次失败值多少冷却：判据在 cooldownForFailure（记账那一层）里，这里
+      // 只按它的答案记账。超时与等过的限流在那里就已经答了 null —— 派发那条路
+      // （onAttempt）问的是同一个函数，同一种失败不会两边两种待遇。
       const decision = cooldownForFailure(accountId, error);
       if (decision) {
         try {
@@ -597,12 +788,12 @@ export async function underPolicy<T>(
   }
 
   const candidates = byOrder(
-    // 每个候选跑之前先过一遍「等得起就等」：限流的窗口是一分钟级的，等得起
-    // 就自己等，重试的还是同一个账号（客户端不该看到这个错）。
+    // 每个候选跑之前先过一遍「等得起就等 / 瞬时失败再试」：两者重试的都是同一
+    // 个账号（客户端不该看到这些错），策略只在全部尝试失败之后才轮到换人。
     usable.map((account) => ({
       id: account.id,
       weight: account.weight,
-      run: () => runWithRateWait(account, what, run),
+      run: () => runWithRetries(account, what, run),
     })),
   );
   return selectProvider(policy, candidates, {
@@ -629,12 +820,10 @@ export async function underPolicy<T>(
         console.log(`[ROUTE] ${what} account=${candidate.id}: the client went away, the answer was cut short`);
         return;
       }
-      // 这次失败值多少冷却：可降级的失败才记，请求本身的问题不记。
-      //
-      // 等过了的限流不记：那个账号正在等自己的窗口恢复，记了冷却反而把它
-      // （和别的请求）挡在门外 —— 它等好了就能接。
-      const waited = rateWaitedOf(error);
-      const decision = waited ? null : cooldownForFailure(candidate.id, error);
+      // 这次失败值多少冷却：判据在 cooldownForFailure（记账那一层）里，这里
+      // 只按它的答案记账 —— 流式答复的结算（Settlement.failure）问的是同一个
+      // 函数，两边不会给同一个错两种待遇。
+      const decision = cooldownForFailure(candidate.id, error);
       if (decision) {
         try {
           setCooldown(candidate.id, decision.untilMs, decision.reason);
@@ -649,11 +838,7 @@ export async function underPolicy<T>(
       console.log(
         `[ROUTE] ${what} account=${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
           (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching") +
-          (waited
-            ? ", waited for the rate limit, not cooling down"
-            : decision
-              ? `, cooling down until ${cooldownStamp(decision.untilMs)}`
-              : ""),
+          (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : whyNotCooling(error)),
       );
     },
     // The caller sees the error the upstream produced, not a new one.

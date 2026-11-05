@@ -16,7 +16,8 @@
 //   1. 短冷却不能盖掉长冷却；
 //   2. 额度见底的窗口说了算（周额度见底就等周窗口，不等 5 小时那个）；
 //   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个；
-//   4. 连接与超时只冷却 1 分钟（不是 5 分钟），但上游自己说了就照它说的来。
+//   4. 连接只冷却 1 分钟（不是 5 分钟），但上游自己说了就照它说的来；
+//      超时相反，一个也不记（而凭据被拒照旧记 5 分钟）。
 
 import fs from "node:fs";
 import http from "node:http";
@@ -697,7 +698,8 @@ console.log("算法：冷却的四条规矩");
   // 冷却的话，同一平台上别的模型会跟着下线，fallback 的第二个目标也被跳过。
   check("上游 5xx → 不冷却账号（哪怕它给了 retry-after）", serverDecision === null, JSON.stringify(serverDecision));
 
-  // 4. 连接与超时不是账号的错：只冷却 1 分钟；上游自己说了就照它说的来。
+  // 4. 连接不是账号的错：只冷却 1 分钟（不是 5 分钟）；上游自己说了就照它说的来。
+  //    超时相反 —— 它一个也不记，见下面那段。
   const connectionError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
   const connectionDecision = cooldownForFailure("acct-connection", connectionError, now);
   check(
@@ -708,14 +710,22 @@ console.log("算法：冷却的四条规矩");
     JSON.stringify(connectionDecision),
   );
 
+  // 超时不记账：超时说的是「这一条请求等得太久」，不是「这个账号不能用了」。
+  // 记冷却会把一个好账号挡在门外好几分钟，而答复照旧是那条超时错误 —— 客户端
+  // 自己会重试。
   const timeoutError = Object.assign(new Error("timeout"), { name: "TimeoutError" });
   const timeoutDecision = cooldownForFailure("acct-timeout", timeoutError, now);
+  check("超时类失败 → 不记账（没有冷却）", timeoutDecision === null, JSON.stringify(timeoutDecision));
+
+  // 对照组一：凭据被拒照旧记 5 分钟 —— 别把「超时不记」做成了一律不记。
+  const refusedError = withUpstreamStatus(new AuthError("凭据被拒", "", 502), 401);
+  const refusedDecision = cooldownForFailure("acct-refused", refusedError, now);
   check(
-    "超时类失败 → 固定 1 分钟（不是 5 分钟）",
-    timeoutDecision !== null &&
-      timeoutDecision.source === "fixed" &&
-      Math.abs(timeoutDecision.untilMs - (now + 60_000)) <= 1000,
-    JSON.stringify(timeoutDecision),
+    "凭据被拒 → 照旧记 5 分钟（对照组：不是一律不记）",
+    refusedDecision !== null &&
+      refusedDecision.reason === "credential" &&
+      Math.abs(refusedDecision.untilMs - (now + 5 * 60_000)) <= 1000,
+    JSON.stringify(refusedDecision),
   );
 
   // 上游 5xx（没给 retry-after）同样不冷却账号：账号本身没毛病。
