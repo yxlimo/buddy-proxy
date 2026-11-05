@@ -6,6 +6,7 @@ import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
 import { hasQuota, quotaStateText, QuotaSummary } from '@/features/balance/quota'
 import {
   platformKindReadout,
+  simulatedPresetOf,
   type PlatformKindList,
 } from '@/features/open-platforms/platform-kinds'
 import { formatLocalMoment } from '@/lib/format'
@@ -26,6 +27,9 @@ export type RefreshOutcome = {
  *   额度插件叫什么                                      额度插件登记表（ListQuotaPlugins）
  *   额度现在的结论                                       Upstream.quota.quotaState
  *
+ * 模拟客户端（预置的那几条）不摆地址与额度插件：两格都是空串，摆出来只会让人
+ * 以为要填。它们靠 id 与 kind 从清单里认出来（两个 Qoder 的 kind 相同）。
+ *
  * 额度按服务端给的结论说：`ok` 给数字，其余各说一句（额度用尽、平台说这个账号
  * 不能用、凭据被拒、被限流、还没填凭据、未知），没有结论就不说这一栏。
  * 这些结论都不是 0：0 说的是「一点不剩」，那是替上游说它没说过的话。
@@ -44,12 +48,15 @@ export function OpenPlatformFacts({
   /** 上一次刷新模型目录的结果。 */
   refresh?: RefreshOutcome
 }) {
+  const simulated = simulatedPresetOf(kinds, upstream) !== undefined
   return (
     <div className='grid gap-0.5 text-xs whitespace-normal text-muted-foreground'>
-      <span className='font-mono break-all'>{upstream.baseUrl}</span>
+      {simulated ? null : (
+        <span className='font-mono break-all'>{upstream.baseUrl}</span>
+      )}
       {kindLine(upstream, kinds)}
       <span>{modelLine(upstream)}</span>
-      <span>{pluginLine(upstream, registry)}</span>
+      {simulated ? null : <span>{pluginLine(upstream, registry)}</span>}
       {quotaLine(upstream, registeredPlugin(upstream, registry))}
       {refresh ? (
         <span className={refresh.ok ? undefined : 'text-destructive'}>
@@ -68,7 +75,7 @@ export function OpenPlatformFacts({
  * raw 值：那是服务端说的，不是猜的。判据在 platform-kinds.ts，弹窗用的是同一个。
  */
 function kindLine(upstream: Upstream, kinds: PlatformKindList) {
-  const kind = platformKindReadout(kinds, upstream.kind)
+  const kind = platformKindReadout(kinds, upstream)
   if (!kind) return null
   return <span>{`类型：${kind}`}</span>
 }

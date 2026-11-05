@@ -291,3 +291,80 @@ describe('认不出的状态', () => {
     })
   }
 })
+
+/**
+ * 预置的模拟客户端：地址与额度插件两格不摆。
+ *
+ * 那两格在库里都是空串（地址由模拟端定，额度不走平台这一行）。摆出来就是一个
+ * 空的行、一句「额度插件：未选」—— 看着像漏填了什么。
+ *
+ * 两族的 kind 会重名（Qoder 的全球区与中国区都是 `qoder`），所以认的是 id 与
+ * kind 两样。
+ */
+describe('模拟客户端那一行', () => {
+  /** 清单里那五条预置：这里只用到 MiniMax 与两个 Qoder。 */
+  const SIMULATED: PlatformKindList = {
+    status: 'ready',
+    kinds: [
+      create(PlatformKindSchema, {
+        kind: 'openai',
+        label: 'OpenAI 兼容',
+        category: 'dialect',
+        modelsFromUpstream: true,
+      }),
+      create(PlatformKindSchema, {
+        kind: 'minimax',
+        label: 'MiniMax Code',
+        category: 'simulated',
+        presetId: 'minimax',
+        region: 'cn',
+      }),
+      create(PlatformKindSchema, {
+        kind: 'qoder',
+        label: 'Qoder（全球区）',
+        category: 'simulated',
+        presetId: 'qoder',
+        region: 'global',
+      }),
+      create(PlatformKindSchema, {
+        kind: 'qoder',
+        label: 'Qoder（中国区）',
+        category: 'simulated',
+        presetId: 'qoder-cn',
+        region: 'cn',
+      }),
+    ],
+  }
+
+  /** 一条模拟客户端平台：地址与额度插件都是空串。 */
+  function simulated(id: string, kind: string) {
+    const upstream = create(UpstreamSchema, {
+      id,
+      kind,
+      label: id,
+      baseUrl: '',
+      quotaPlugin: '',
+      isOpenPlatform: true,
+      models: ['MiniMax-M2'],
+      modelsSource: 'manual',
+    })
+    return <OpenPlatformFacts upstream={upstream} kinds={SIMULATED} registry={READY} />
+  }
+
+  it('类型说预置名，地址与额度插件两行都不摆', () => {
+    render(simulated('minimax', 'minimax'))
+
+    expect(screen.getByText('类型：MiniMax Code')).toBeInTheDocument()
+    expect(screen.queryByText(/额度插件/)).not.toBeInTheDocument()
+    // 地址那一行是空串：整行不摆，也不留一个空白行。
+    expect(text()).not.toMatch(/^\s*$/m)
+    expect(screen.queryByText(/^https?:/)).not.toBeInTheDocument()
+  })
+
+  it('两个 Qoder 靠 id 认：中国区那个说中国区的名字', () => {
+    render(simulated('qoder-cn', 'qoder'))
+
+    expect(screen.getByText('类型：Qoder（中国区）')).toBeInTheDocument()
+    expect(screen.queryByText('类型：Qoder（全球区）')).not.toBeInTheDocument()
+  })
+})

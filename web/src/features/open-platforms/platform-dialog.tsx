@@ -14,7 +14,9 @@ import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -22,10 +24,14 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { describeError } from '@/lib/errors'
 import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
+import type { PlatformKind } from '@/gen/buddy/admin/v1/admin_pb'
 import {
+  isSimulatedKind,
   platformKindHint,
   platformKindPlaceholder,
   platformKindReadout,
+  platformKindValue,
+  simulatedPresetOf,
   type PlatformKindList,
 } from './platform-kinds'
 import { PLATFORM_TEMPLATES, type PlatformTemplate } from './templates'
@@ -112,13 +118,42 @@ export type UpdatePlatformSubmit = {
 type Draft = {
   id: string
   label: string
+  /**
+   * 名字是不是用户自己敲的。
+   *
+   * 面板填的名字（预置的名字、模板的名字）不是用户的值：换一条类型时该跟着换。
+   * 靠「现在这个名字是不是上一条的名字」猜是不行的 —— 两条类型同名的时
+   * 候猜不出来，而且上一条名字本身也是面板填的。只有名字那一格的 onChange
+   * 置这个标志。
+   */
+  labelEdited: boolean
   baseUrl: string
-  /** 选中的类型（清单里的一个 kind）。 */
-  kind: string
+  /**
+   * 选中的那一条（见 `platformKindValue`：方言看 kind，模拟客户端看 presetId）。
+   * 改平台时没有这一格 —— 类型建完就改不了。
+   */
+  choice: string
   quotaPlugin: string
   modelsAuto: boolean
   /** 模型目录：一行一个模型名。 */
   models: string
+}
+
+/**
+ * 下拉里的两组：模拟客户端在前（能建的多半是这一类，条目也多），方言在后。
+ *
+ * 分组的判据只有 `category`；看不出类别的（老服务端不带这一格）算方言 —— 那种
+ * 时候它也只有方言可给。
+ */
+function kindGroups(
+  options: PlatformKind[]
+): { title: string; items: PlatformKind[] }[] {
+  const simulated = options.filter(isSimulatedKind)
+  const dialect = options.filter((item) => !isSimulatedKind(item))
+  const groups: { title: string; items: PlatformKind[] }[] = []
+  if (simulated.length) groups.push({ title: '模拟客户端', items: simulated })
+  if (dialect.length) groups.push({ title: '开放平台', items: dialect })
+  return groups
 }
 
 /**
@@ -127,6 +162,9 @@ type Draft = {
  * 新增只有三格（id、名字、地址）：服务端建的就是一个空平台，不接 key、不接
  * 模型清单。修改是整单提交 —— 名字、地址、额度插件、模型目录一起发过去，
  * 空串表示清空。
+ *
+ * 选到模拟客户端时只有名字一格是能填的：id、地址、区域都是那个客户端的身份
+ * （改了会话就接不上），面板不摆那几格，提交时按预置填。
  *
  * 面板不自己定 id 的规则（哪些字符、跟谁重名）：填了什么样由服务端说了算，
  * 它说不行就不行，那句话原样显示。
@@ -191,12 +229,23 @@ export function PlatformDialog({
   const editing = platform !== undefined
   // 清单到手了才有可选项；没到手、取不到的时候一个也没有。
   const kindOptions = kinds.status === 'ready' ? kinds.kinds : []
-  const chosenKind = kindOptions.find((item) => item.kind === draft.kind)
+  const chosenKind = kindOptions.find(
+    (item) => platformKindValue(item) === draft.choice
+  )
+  // 选中的那一条是模拟客户端时的预置；是方言就是 undefined。
+  const chosenPreset =
+    chosenKind && isSimulatedKind(chosenKind) ? chosenKind : undefined
+  // 改的是不是一个模拟客户端：按 id 与 kind 认出是哪一条预置（两个 Qoder 的
+  // kind 相同，拿 kind 认不出来）。认不出来就照方言那套摆。
+  const preset = platform ? simulatedPresetOf(kinds, platform) : chosenPreset
+  const simulated = preset !== undefined
+  // 模拟客户端的 id 由预置定死：请求路径里那一段，也是调用方 base_url 的那一段。
+  const fixedId = simulated ? (preset?.presetId || platform?.id || '') : ''
   // 清单现在怎么了：三档各一句（加载中 / 取不到 / 一条也没有）。有得选的时候
   // 这一行不摆；占位符与这行从同一处取，两处说法一致。
   const kindOptionHint = platformKindHint(kinds)
   // 「类型：xxx」那一行（改的时候）：判据在 platform-kinds.ts，卡片用的是同一个。
-  const readonlyKind = platform ? platformKindReadout(kinds, platform.kind) : null
+  const readonlyKind = platform ? platformKindReadout(kinds, platform) : null
 
   useEffect(() => {
     // 新增：清单到手后默认选第一条（顺序照服务端给的）。改的时候没有这一格。
@@ -208,31 +257,64 @@ export function PlatformDialog({
     const first = kinds.kinds[0]
     if (!first) return
     setDraft((prev) =>
-      kinds.kinds.some((item) => item.kind === prev.kind)
+      kinds.kinds.some((item) => platformKindValue(item) === prev.choice)
         ? prev
         : {
             ...prev,
-            kind: first.kind,
+            choice: platformKindValue(first),
             // 地址是空的才用这一类的默认地址占位；填过的不动。
-            baseUrl: prev.baseUrl.trim() ? prev.baseUrl : first.defaultBaseUrl,
+            baseUrl: isSimulatedKind(first)
+              ? ''
+              : prev.baseUrl.trim()
+                ? prev.baseUrl
+                : first.defaultBaseUrl,
+            // 名字空着、选中的又是预置：填它的名字（能改）。
+            label:
+              isSimulatedKind(first) && !prev.labelEdited && !prev.label.trim()
+                ? first.label
+                : prev.label,
           }
     )
   }, [open, editing, kinds])
 
   /**
-   * 换一种类型：地址是空的时候用这一类的默认地址占位。
+   * 换一条类型。
    *
-   * 默认地址可能是空串（现在两种都是）：那就照常留空，不给提示。
+   * 地址是空的时候用这一类的默认地址占位（模拟客户端的地址由模拟端定，留空）。
+   * 名字没被用户改过时跟着换成这一条的名字：换一条预置却留着上一条的名字，
+   * 建出来就是一个名字对不上的平台。
+   *
+   * 离开预置那一族（模拟客户端 → 方言）时 id 与额度插件都清掉：那两格在预置
+   * 那边是不摆的，草稿里留着的东西跟现在选中的类型没关系 —— 提交上去就成了
+   * 一个用户没填过的 id、一个不相干的插件。
    */
-  const chooseKind = (kind: string) => {
-    const option = kindOptions.find((item) => item.kind === kind)
-    setDraft((prev) => ({
-      ...prev,
-      kind,
-      baseUrl: prev.baseUrl.trim()
-        ? prev.baseUrl
-        : (option?.defaultBaseUrl ?? ''),
-    }))
+  const chooseKind = (value: string) => {
+    const option = kindOptions.find((item) => platformKindValue(item) === value)
+    setDraft((prev) => {
+      const previous = kindOptions.find(
+        (item) => platformKindValue(item) === prev.choice
+      )
+      const simulated = option ? isSimulatedKind(option) : false
+      const leavingPreset =
+        !simulated && (previous ? isSimulatedKind(previous) : false)
+      return {
+        ...prev,
+        choice: value,
+        id: leavingPreset ? '' : prev.id,
+        baseUrl: simulated
+          ? ''
+          : prev.baseUrl.trim()
+            ? prev.baseUrl
+            : (option?.defaultBaseUrl ?? ''),
+        // 模拟客户端的额度不走平台这一行：草稿里那个插件 id 跟它无关。
+        quotaPlugin: simulated ? '' : prev.quotaPlugin,
+        label: prev.labelEdited
+          ? prev.label
+          : simulated
+            ? (option?.label ?? '')
+            : '',
+      }
+    })
   }
   // 登记表到手了才有可选项；没到手、取不到的时候只有存着的那个 id。
   const plugins = registry.status === 'ready' ? registry.plugins : []
@@ -253,6 +335,8 @@ export function PlatformDialog({
     patch({
       id: template.id,
       label: template.label,
+      // 模板给的名字是面板填的，不是用户敲的：换一条类型时该跟着换。
+      labelEdited: false,
       baseUrl: template.baseUrl,
     })
   }
@@ -262,8 +346,9 @@ export function PlatformDialog({
       onSubmit({
         id: draft.id.trim(),
         label: draft.label.trim(),
-        baseUrl: draft.baseUrl.trim(),
-        quotaPlugin: draft.quotaPlugin,
+        // 模拟客户端的地址是空的（模拟端定地址），不把草稿里的空串当成人填的。
+        baseUrl: simulated ? '' : draft.baseUrl.trim(),
+        quotaPlugin: simulated ? '' : draft.quotaPlugin,
         modelsAuto: draft.modelsAuto,
         // 自动拉的时候不动现在那份目录（服务端的约定）：不带清单。
         models: draft.modelsAuto ? [] : parseModels(draft.models),
@@ -271,10 +356,12 @@ export function PlatformDialog({
       return
     }
     onSubmit({
-      id: draft.id.trim(),
+      // 模拟客户端：id 是预置定的那一个，不是下拉里那个值本身（方言的
+      // 下拉值是 kind，不是 id）。
+      id: simulated ? fixedId : draft.id.trim(),
       label: draft.label.trim(),
-      baseUrl: draft.baseUrl.trim(),
-      kind: draft.kind,
+      baseUrl: simulated ? '' : draft.baseUrl.trim(),
+      kind: chosenKind?.kind ?? '',
     })
   }
 
@@ -286,9 +373,11 @@ export function PlatformDialog({
             {editing ? `改平台 ${platform.label || platform.id}` : '新增平台'}
           </DialogTitle>
           <DialogDescription>
-            {editing
-              ? '地址改了以后客户端要换地址。'
-              : '先建一个空平台。id 是客户端地址里的一段。'}
+            {simulated
+              ? '模拟客户端的 id 与地址是固定的，改不了'
+              : editing
+                ? '地址改了以后客户端要换地址。'
+                : '先建一个空平台。id 是客户端地址里的一段。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -303,7 +392,7 @@ export function PlatformDialog({
             <div className='grid gap-2'>
               <Label htmlFor='platform-kind'>类型</Label>
               <Select
-                value={chosenKind?.kind ?? ''}
+                value={chosenKind ? platformKindValue(chosenKind) : ''}
                 disabled={kindOptions.length === 0}
                 onValueChange={chooseKind}
               >
@@ -311,10 +400,18 @@ export function PlatformDialog({
                   <SelectValue placeholder={platformKindPlaceholder(kinds)} />
                 </SelectTrigger>
                 <SelectContent>
-                  {kindOptions.map((item) => (
-                    <SelectItem key={item.kind} value={item.kind}>
-                      {item.label}
-                    </SelectItem>
+                  {kindGroups(kindOptions).map((group) => (
+                    <SelectGroup key={group.title}>
+                      <SelectLabel>{group.title}</SelectLabel>
+                      {group.items.map((item) => (
+                        <SelectItem
+                          key={platformKindValue(item)}
+                          value={platformKindValue(item)}
+                        >
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
@@ -328,7 +425,9 @@ export function PlatformDialog({
             </div>
           )}
 
-          {editing ? null : (
+          {/* 模板表里是第三方厂商的地址与名字：先填三格再改。模拟客户端的
+              id 与地址由预置定，用不上这一块。 */}
+          {editing || simulated ? null : (
             <div className='grid gap-2'>
               <Label htmlFor='platform-template-search'>搜模板</Label>
               <Input
@@ -370,21 +469,33 @@ export function PlatformDialog({
             </div>
           )}
 
-          <div className='grid gap-2'>
-            <Label htmlFor='platform-id'>平台 id</Label>
-            <Input
-              id='platform-id'
-              value={draft.id}
-              disabled={editing}
-              placeholder='比如 my-gateway'
-              onChange={(event) => patch({ id: event.target.value })}
-            />
-            <p className='text-xs text-muted-foreground'>
-              {editing
-                ? 'id 是这个平台在客户端地址里的一段，改不了'
-                : '客户端走的是 /{id}/v1。'}
-            </p>
-          </div>
+          {simulated ? (
+            // 模拟客户端的 id 是它自己的身份（客户端路径里那一段）：只摆出来，
+            // 不给改 —— 改了就认不出是哪一个客户端了。
+            <div className='grid gap-2'>
+              <p className='text-sm font-medium'>平台 id</p>
+              <p className='font-mono text-sm'>{fixedId}</p>
+              <p className='text-xs text-muted-foreground'>
+                {`客户端走的是 /${fixedId}/v1`}
+              </p>
+            </div>
+          ) : (
+            <div className='grid gap-2'>
+              <Label htmlFor='platform-id'>平台 id</Label>
+              <Input
+                id='platform-id'
+                value={draft.id}
+                disabled={editing}
+                placeholder='比如 my-gateway'
+                onChange={(event) => patch({ id: event.target.value })}
+              />
+              <p className='text-xs text-muted-foreground'>
+                {editing
+                  ? 'id 是这个平台在客户端地址里的一段，改不了'
+                  : '客户端走的是 /{id}/v1。'}
+              </p>
+            </div>
+          )}
 
           <div className='grid gap-2'>
             <Label htmlFor='platform-label'>名字</Label>
@@ -392,55 +503,67 @@ export function PlatformDialog({
               id='platform-label'
               value={draft.label}
               placeholder='比如 我的中转站'
-              onChange={(event) => patch({ label: event.target.value })}
+              onChange={(event) =>
+                // 用户敲过的名字不再跟着类型走。
+                patch({ label: event.target.value, labelEdited: true })
+              }
             />
           </div>
 
-          <div className='grid gap-2'>
-            <Label htmlFor='platform-base-url'>地址</Label>
-            <Input
-              id='platform-base-url'
-              value={draft.baseUrl}
-              placeholder='https://api.example.com/v1'
-              onChange={(event) => patch({ baseUrl: event.target.value })}
-            />
-          </div>
+          {/* 地址：模拟客户端的发到哪由模拟端定（库里那个是空串），不摆这一格。 */}
+          {simulated ? null : (
+            <div className='grid gap-2'>
+              <Label htmlFor='platform-base-url'>地址</Label>
+              <Input
+                id='platform-base-url'
+                value={draft.baseUrl}
+                placeholder='https://api.example.com/v1'
+                onChange={(event) => patch({ baseUrl: event.target.value })}
+              />
+            </div>
+          )}
 
           {editing ? (
             <>
-              <div className='grid gap-2'>
-                <Label htmlFor='platform-quota-plugin'>额度插件</Label>
-                <Select
-                  value={draft.quotaPlugin === '' ? NO_PLUGIN : draft.quotaPlugin}
-                  onValueChange={(value) =>
-                    patch({ quotaPlugin: value === NO_PLUGIN ? '' : value })
-                  }
-                >
-                  <SelectTrigger id='platform-quota-plugin'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_PLUGIN}>不用插件</SelectItem>
-                    {plugins.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                    {/* 存着的 id 不在可选项里：摆出来，别让它变成一个空下拉框，
+              {/* 模拟客户端的额度不走平台这一行（库里的插件 id 是空串）：摆一
+                  个选不了东西的下拉只会让人以为要填。 */}
+              {simulated ? null : (
+                <div className='grid gap-2'>
+                  <Label htmlFor='platform-quota-plugin'>额度插件</Label>
+                  <Select
+                    value={
+                      draft.quotaPlugin === '' ? NO_PLUGIN : draft.quotaPlugin
+                    }
+                    onValueChange={(value) =>
+                      patch({ quotaPlugin: value === NO_PLUGIN ? '' : value })
+                    }
+                  >
+                    <SelectTrigger id='platform-quota-plugin'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NO_PLUGIN}>不用插件</SelectItem>
+                      {plugins.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                      {/* 存着的 id 不在可选项里：摆出来，别让它变成一个空下拉框，
                         也别把它静默改写回第一项。 */}
-                    {unregistered ? (
-                      <SelectItem value={unregistered}>
-                        {storedPluginLabel(unregistered, registry)}
-                      </SelectItem>
-                    ) : null}
-                  </SelectContent>
-                </Select>
-                <p className='text-xs text-muted-foreground'>
-                  {pluginHint(registry, unregistered)}
-                </p>
-              </div>
+                      {unregistered ? (
+                        <SelectItem value={unregistered}>
+                          {storedPluginLabel(unregistered, registry)}
+                        </SelectItem>
+                      ) : null}
+                    </SelectContent>
+                  </Select>
+                  <p className='text-xs text-muted-foreground'>
+                    {pluginHint(registry, unregistered)}
+                  </p>
+                </div>
+              )}
 
-              {selected ? (
+              {selected && !simulated ? (
                 <div className='grid gap-1 rounded-md border p-3'>
                   <p className='text-sm font-medium'>
                     这个插件要这几段凭据
@@ -537,9 +660,10 @@ function toDraft(platform?: Upstream): Draft {
     return {
       id: '',
       label: '',
+      labelEdited: false,
       baseUrl: '',
       // 空串：清单到手后由上面那个 effect 选第一条。
-      kind: '',
+      choice: '',
       quotaPlugin: '',
       modelsAuto: false,
       models: '',
@@ -548,8 +672,11 @@ function toDraft(platform?: Upstream): Draft {
   return {
     id: platform.id,
     label: platform.label,
+    // 平台上的名字是用户的值（改平台没有类型这一格，也没人换它）。
+    labelEdited: true,
     baseUrl: platform.baseUrl,
-    kind: platform.kind,
+    // 改平台没有类型这一格（契约里 UpdatePlatform 没有它）。
+    choice: '',
     quotaPlugin: platform.quotaPlugin,
     modelsAuto: platform.modelsAuto,
     models: platform.models.join('\n'),

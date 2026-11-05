@@ -33,6 +33,47 @@ export function platformKindsFrom(query: {
   return { status: 'ready', kinds: query.kinds ?? [] }
 }
 
+/**
+ * 这一条是不是预置的模拟客户端。
+ *
+ * 判据是服务端给的 `category`，不是 id 或 kind 的形状：两族的 kind 会重名
+ * （`qoder` 是模拟客户端，将来也可能是别的），面板不按名字猜。
+ */
+export function isSimulatedKind(item: PlatformKind): boolean {
+  return item.category === 'simulated'
+}
+
+/**
+ * 下拉里这一条的身份。
+ *
+ * 方言用 kind：它是「往上讲谁的格式」，一个 kind 一条。模拟客户端用 presetId：
+ * 一个 kind 名下可能有好几个平台（Qoder 的全球区与中国区 kind 都是 `qoder`），
+ * 拿 kind 当身份两个 Qoder 就分不开、下拉里只能剩一个。
+ */
+export function platformKindValue(item: PlatformKind): string {
+  return isSimulatedKind(item) && item.presetId ? item.presetId : item.kind
+}
+
+/**
+ * 这个平台是哪一条预置（模拟客户端）。对不上就是 undefined。
+ *
+ * 认的是 id 与 kind 两样：id 是客户端路径里那一段，也是预置的身份；kind 再核
+ * 一遍 —— 用户可以把预置平台删掉、再用同一个 id 建一个方言平台，那时这个 id
+ * 已经不是模拟客户端了。清单没到手就说不准，一律 undefined。
+ */
+export function simulatedPresetOf(
+  list: PlatformKindList,
+  platform: { id: string; kind: string }
+): PlatformKind | undefined {
+  if (list.status !== 'ready') return undefined
+  return list.kinds.find(
+    (item) =>
+      isSimulatedKind(item) &&
+      item.presetId === platform.id &&
+      item.kind === platform.kind
+  )
+}
+
 /** 清单里这一条类型。清单没到手、或者没有这一条，都是 undefined。 */
 function findKind(
   list: PlatformKindList,
@@ -49,16 +90,20 @@ function findKind(
  * 同一份数据不能两套说法：
  *
  *   清单还在加载 / 取不到   null：说不出名字，raw 值也不摆
+ *   命中一条预置的模拟客户端 它给的名字（同一个 kind 下可能有好几个平台，靠 id 认）
  *   清单到手、登记了这一条  它给的 label
  *   清单到手、没登记        raw kind：服务端加了这个方言、面板旧了，摆出来
  *   kind 本身是空串         null：没有类型可说
  */
 export function platformKindReadout(
   list: PlatformKindList,
-  kind: string
+  platform: { id: string; kind: string }
 ): string | null {
+  const kind = platform.kind
   if (!kind) return null
   if (list.status !== 'ready') return null
+  const preset = simulatedPresetOf(list, platform)
+  if (preset) return preset.label
   return findKind(list, kind)?.label || kind
 }
 
