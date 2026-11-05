@@ -2837,7 +2837,7 @@ export const ListPublishedModelsResponseSchema: GenMessage<ListPublishedModelsRe
  */
 export type SavePublishedModelRequest = Message<"buddy.admin.v1.SavePublishedModelRequest"> & {
   /**
-   * model.id 为空表示新建，非空表示改那一条。
+   * model.id 必填：新建时先起一个对外的 id，保存的是那一条（同 id 覆盖）。
    *
    * @generated from field: buddy.admin.v1.PublishedModel model = 1;
    */

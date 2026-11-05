@@ -335,6 +335,10 @@ run = "node --experimental-strip-types test/xinghuo-check.ts"
 description = "Check the root route end to end (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/route-e2e-check.ts"
 
+[tasks."test:e2e:matrix"]
+description = "Run the end-to-end matrix (platforms, logins, catalogue, weights, restart) against a fake upstream — slow, so not part of `test`"
+run = "node --experimental-strip-types test/matrix-e2e-check.ts"
+
 [tasks."test:qoder:benefits"]
 description = "Check which Qoder campaigns are worth claiming"
 run = "node --experimental-strip-types test/qoder-benefits-check.ts"

@@ -856,7 +856,7 @@ message ListPublishedModelsResponse {
 }
 
 message SavePublishedModelRequest {
-  // model.id 为空表示新建，非空表示改那一条。
+  // model.id 必填：新建时先起一个对外的 id，保存的是那一条（同 id 覆盖）。
   PublishedModel model = 1;
 }
 

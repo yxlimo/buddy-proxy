@@ -23,7 +23,7 @@ export function usePublishedModels() {
 }
 
 /**
- * 新建或者改一个主路由模型。model.id 为空表示新建。
+ * 保存一个主路由模型。model.id 必填：新建时先起一个对外的 id，保存的是那一条（同 id 覆盖）。
  *
  * 服务端用 ok:false 表达「模型至少要有一个上游」这类失败，这里翻成异常，
  * 页面拿到的是 reject，不会把失败当成功报出去。
