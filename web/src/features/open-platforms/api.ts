@@ -1,4 +1,4 @@
-import { create } from '@bufbuild/protobuf'
+import { create, type MessageInitShape } from '@bufbuild/protobuf'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -99,9 +99,11 @@ export function useAddPlatform() {
 /**
  * 改一个开放平台。
  *
- * UpdatePlatform 是整单提交：改一个字段也要把现在的值一起带上，空串表示清空。
- * 所以这里带的永远是那一整单（名字、地址、插件、模型目录），不是只发改动的
- * 那几格。
+ * 整单提交：名字、地址、额度插件、模型目录一起发。
+ *
+ * 模拟客户端的地址与额度插件两格归代码：那种平台调用方整格不给（`undefined`）
+ * —— 给空串在这条 RPC 上就是「清空那一格」（合同里 string 没有 presence 位，
+ * 约定写在 `UpdatePlatformRequest` 的注释里）。不给的两格这里不往消息里放。
  */
 export function useUpdatePlatform() {
   const client = useAdminClient()
@@ -110,20 +112,21 @@ export function useUpdatePlatform() {
     mutationFn: async (input: {
       id: string
       label: string
-      baseUrl: string
-      quotaPlugin: string
+      baseUrl?: string
+      quotaPlugin?: string
       modelsAuto: boolean
       models: string[]
     }) => {
+      const init: MessageInitShape<typeof UpdatePlatformRequestSchema> = {
+        id: input.id,
+        label: input.label,
+        modelsAuto: input.modelsAuto,
+        models: input.models,
+      }
+      if (input.baseUrl !== undefined) init.baseUrl = input.baseUrl
+      if (input.quotaPlugin !== undefined) init.quotaPlugin = input.quotaPlugin
       const result = await client.updatePlatform(
-        create(UpdatePlatformRequestSchema, {
-          id: input.id,
-          label: input.label,
-          baseUrl: input.baseUrl,
-          quotaPlugin: input.quotaPlugin,
-          modelsAuto: input.modelsAuto,
-          models: input.models,
-        })
+        create(UpdatePlatformRequestSchema, init)
       )
       assertOk(result, '没改成')
       return result

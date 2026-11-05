@@ -105,12 +105,18 @@ export type AddPlatformSubmit = {
  *
  * 契约里 UpdatePlatform 没有 kind 这一格：类型建完就改不了，所以这里不带它 ——
  * 不是「带上但 hook 会挑掉」，是这一单本身就没有。
+ *
+ * 地址与额度插件对模拟客户端是不适用的两格（归代码）：那一族提交时这两格
+ * **不出现**，不是出现但为空串。合同里 `quota_plugin` 的约定是「空串 = 清空
+ * 这一格」，所以发空串就是抹掉库里那份用户以后可能填的值。
  */
 export type UpdatePlatformSubmit = {
   id: string
   label: string
-  baseUrl: string
-  quotaPlugin: string
+  /** 模拟客户端不带这一格（地址归代码）。 */
+  baseUrl?: string
+  /** 模拟客户端不带这一格（额度插件归代码）。 */
+  quotaPlugin?: string
   modelsAuto: boolean
   models: string[]
 }
@@ -202,15 +208,19 @@ export function PlatformDialog({
   const [pickedTemplate, setPickedTemplate] = useState<string>('')
 
   useEffect(() => {
-    // 只看 open：弹窗开着的时候服务端那边变了（刚刷新过目录），不该把用户
-    // 已经填的东西抹掉。换个平台改的时候弹窗是关着开的，open 变一次就够。
+    // 打开的时候按这一单重铺草稿。
+    //
+    // 依赖里也盯平台 id：弹窗开着的时候父组件换了平台（列表刷新、或者从别处
+    // 点进来），只盯 open 的话表单留着上一个平台的旧值、标题是新名字，提交
+    // 就写错了行。服务端那边只是同一个平台的值变了，不重铺 —— 那会把用户已经
+    // 填的东西抹掉。
     if (open) {
       setDraft(toDraft(platform))
       setTemplateQuery('')
       setPickedTemplate('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, platform?.id])
 
   /** 模板列表：按名字或 id 过滤（大小写不管）。 */
   const shownTemplates = useMemo(() => {
@@ -238,7 +248,20 @@ export function PlatformDialog({
   // 改的是不是一个模拟客户端：按 id 与 kind 认出是哪一条预置（两个 Qoder 的
   // kind 相同，拿 kind 认不出来）。认不出来就照方言那套摆。
   const preset = platform ? simulatedPresetOf(kinds, platform) : chosenPreset
-  const simulated = preset !== undefined
+  // 改的时候清单可能还没到手（加载中 / 取不到），那时认不出是哪一条预置；但
+  // 是不是模拟客户端平台那一条自己说得出来：服务端没把它明确算作开放平台的，
+  // 就是那一族。地址与额度插件两格归代码，不摆也不往上送。
+  //
+  // 判据只看族（服务端那一格说的是这个），不看「表里有没有这一行」：有没有行、
+  // 能不能改删是另一件事，掺进来就会多出一条「模拟客户端被当成开放平台 → 发
+  // 空串 → 抹掉库里那份插件 id」的路。
+  //
+  // 判据写成「不为 true」而不是「等于 false」：这一格缺失（老服务端 / 形状里
+  // 没有它）时不能当成「不是模拟客户端」—— 那样会给模拟客户端露出地址格，
+  // 用户一填就写进那一行。真开放平台这一格一定是 true。
+  const simulated =
+    preset !== undefined ||
+    (platform !== undefined && platform.isOpenPlatform !== true)
   // 模拟客户端的 id 由预置定死：请求路径里那一段，也是调用方 base_url 的那一段。
   const fixedId = simulated ? (preset?.presetId || platform?.id || '') : ''
   // 清单现在怎么了：三档各一句（加载中 / 取不到 / 一条也没有）。有得选的时候
@@ -343,16 +366,24 @@ export function PlatformDialog({
 
   const submit = () => {
     if (editing) {
-      onSubmit({
+      const shared = {
         id: draft.id.trim(),
         label: draft.label.trim(),
-        // 模拟客户端的地址是空的（模拟端定地址），不把草稿里的空串当成人填的。
-        baseUrl: simulated ? '' : draft.baseUrl.trim(),
-        quotaPlugin: simulated ? '' : draft.quotaPlugin,
         modelsAuto: draft.modelsAuto,
         // 自动拉的时候不动现在那份目录（服务端的约定）：不带清单。
         models: draft.modelsAuto ? [] : parseModels(draft.models),
-      })
+      }
+      // 模拟客户端的地址与额度插件归代码：这两格整格不出现。发空串是「清空
+      // 那一格」的意思，会把库里原来那份抹掉。
+      onSubmit(
+        simulated
+          ? shared
+          : {
+              ...shared,
+              baseUrl: draft.baseUrl.trim(),
+              quotaPlugin: draft.quotaPlugin,
+            }
+      )
       return
     }
     onSubmit({

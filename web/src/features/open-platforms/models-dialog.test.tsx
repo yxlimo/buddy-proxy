@@ -795,6 +795,8 @@ describe('自定义模型弹窗', () => {
               kind: 'workbuddy',
               label: 'WorkBuddy 中国区',
               state: UpstreamState.READY,
+              // 播种出来的平台都有行：人工元数据写在那一行上。
+              fromRow: true,
               accounts: [],
             }),
             create(UpstreamSchema, {
@@ -802,6 +804,7 @@ describe('自定义模型弹窗', () => {
               kind: 'workbuddy',
               label: 'WorkBuddy 海外',
               state: UpstreamState.READY,
+              fromRow: true,
               accounts: [],
             }),
           ],

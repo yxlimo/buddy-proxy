@@ -5,15 +5,19 @@ import userEvent from '@testing-library/user-event'
 import {
   AccountSchema,
   AddAccountResponseSchema,
+  AddPlatformResponseSchema,
   DeletePlatformResponseSchema,
   DeletePublishedModelResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
+  ListPlatformKindsResponseSchema,
   ListPublishedModelsResponseSchema,
   ListUpstreamsResponseSchema,
+  PlatformKindSchema,
   ProviderPolicy,
   PublishedModelSchema,
   PublishedTargetSchema,
+  UpdatePlatformResponseSchema,
   UpstreamSchema,
   UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
@@ -35,7 +39,7 @@ vi.mock('sonner', () => ({
   Toaster: () => null,
 }))
 
-/** 一个平台，带着它的账号。 */
+/** 一个模拟客户端平台：表里有行，地址与目录归代码。 */
 function platform(
   overrides: Partial<MessageInitShape<typeof UpstreamSchema>> = {}
 ) {
@@ -49,6 +53,8 @@ function platform(
     policies: [ProviderPolicy.SINGLE],
     accountCount: 1,
     hasEnabledAccount: true,
+    // 播种出来的平台，表里有它这一行：能改能删，但不算开放平台。
+    fromRow: true,
     accounts: [
       create(AccountSchema, {
         id: 'minimax',
@@ -79,9 +85,58 @@ function openPlatform(
     hasEnabledAccount: false,
     baseUrl: 'https://api.example.com/v1',
     isOpenPlatform: true,
+    // 表里的那一行：能改能删。
+    fromRow: true,
     accounts: [],
   }
   return create(UpstreamSchema, Object.assign(base, overrides))
+}
+
+/**
+ * 只有代码里有、表里没有行的平台。
+ *
+ * 现在播种的平台全在表里（每一族都有行），这一种只是形了那个分支：没有行就
+ * 没有可改可删的东西。
+ */
+function codeOnly(
+  overrides: Partial<MessageInitShape<typeof UpstreamSchema>> = {}
+) {
+  return platform({
+    id: 'ghost',
+    kind: 'ghost',
+    label: '只有代码的平台',
+    fromRow: false,
+    accountCount: 0,
+    hasEnabledAccount: false,
+    accounts: [],
+    ...overrides,
+  })
+}
+
+/**
+ * 建平台时能选的类型（服务端登记的那一张）：
+ *
+ *   开放平台（openai）         从上游拉目录
+ *   模拟客户端（minimax）      不拉（目录归代码）
+ *
+ * 两族都得在：卡片上摆不摆「刷新模型目录」看的就是这一类拉不拉。
+ */
+function platformKinds() {
+  return [
+    create(PlatformKindSchema, {
+      kind: 'minimax',
+      label: 'MiniMax Code',
+      presetId: 'minimax',
+      category: 'simulated',
+      modelsFromUpstream: false,
+    }),
+    create(PlatformKindSchema, {
+      kind: 'openai',
+      label: 'OpenAI 兼容',
+      category: 'open',
+      modelsFromUpstream: true,
+    }),
+  ]
 }
 
 /** 一个主路由模型，它的目标指向某个平台。 */
@@ -119,6 +174,8 @@ function clientWith(
       create(ListCredentialsResponseSchema, { credentials: [] }),
     ListPublishedModels: () =>
       create(ListPublishedModelsResponseSchema, { models: [] }),
+    ListPlatformKinds: () =>
+      create(ListPlatformKindsResponseSchema, { kinds: platformKinds() }),
     ...extra,
   })
 }
@@ -155,18 +212,23 @@ describe('上游页的平台列表', () => {
     expect(screen.getByText('2')).toBeInTheDocument()
   })
 
-  it('平台行没有开关，也没有删除：平台是模板，关不掉也删不掉', async () => {
-    const client = clientWith([platform()])
+  it('只有代码没有行的平台：没有编辑、没有删掉', async () => {
+    const client = clientWith([codeOnly()])
 
     renderWithClient({ client, children: <UpstreamsPage /> })
 
-    await screen.findByText('MiniMax Code')
+    await screen.findByText('只有代码的平台')
 
     // 没展开的时候一个开关都没有（开关在账号上）。
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
-    // 也没有删平台的按钮。
+    // 表里没有它这一行：没有可改可删的东西。
+    const row = screen.getByText('只有代码的平台').closest('tr')
+    if (!row) throw new Error('找不到那一行')
     expect(
-      screen.queryByRole('button', { name: /删掉 minimax/ })
+      within(row).queryByRole('button', { name: '编辑' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(row).queryByRole('button', { name: '删掉' })
     ).not.toBeInTheDocument()
   })
 
@@ -310,8 +372,321 @@ describe('上游页的平台列表', () => {
   })
 })
 
-describe('删平台之前先扫主路由引用', () => {
+/** 某一行的单元格：按平台名字找那一行。 */
+function rowOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('tr')
+  if (!row) throw new Error(`找不到 ${name} 那一行`)
+  return row
+}
+
+describe('平台的编辑与删除入口', () => {
   beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('模拟客户端平台：能改能删，没有刷新模型目录，也没有地址与额度插件', async () => {
+    const client = clientWith([platform()])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('MiniMax Code')
+    const row = rowOf('MiniMax Code')
+
+    // 表里有它这一行，所以能改能删。
+    expect(within(row).getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '删掉' })).toBeInTheDocument()
+    // 目录归代码，不从上游拉：没有刷新那一格。
+    expect(
+      within(row).queryByRole('button', { name: '刷新模型目录' })
+    ).not.toBeInTheDocument()
+    // 地址与额度插件两格不摆。
+    expect(within(row).queryByText(/https?:\/\//)).not.toBeInTheDocument()
+    expect(within(row).queryByText(/额度插件/)).not.toBeInTheDocument()
+  })
+
+  it('自建的开放平台：编辑、刷新模型目录、删掉都在', async () => {
+    const client = clientWith([openPlatform()])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    const row = rowOf('我的中转站')
+
+    expect(within(row).getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    // 这一类从上游拉目录：清单到手就能点。
+    await waitFor(() =>
+      expect(
+        within(row).getByRole('button', { name: '刷新模型目录' })
+      ).toBeEnabled()
+    )
+    expect(within(row).getByRole('button', { name: '删掉' })).toBeInTheDocument()
+  })
+
+  it('只有代码没有行的平台：没有「自定义模型」入口', async () => {
+    const client = clientWith([codeOnly()])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('只有代码的平台')
+    // 人工元数据是写在平台那一行上的：没有行就没处写。
+    expect(
+      within(rowOf('只有代码的平台')).queryByRole('button', {
+        name: '自定义模型',
+      })
+    ).not.toBeInTheDocument()
+  })
+
+  it('表里有行的平台：有「自定义模型」入口', async () => {
+    const client = clientWith([openPlatform()])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    // 控制组：没有把这一格连有行的平台一起藏了。
+    expect(
+      within(rowOf('我的中转站')).getByRole('button', { name: '自定义模型' })
+    ).toBeInTheDocument()
+  })
+
+  it('编辑模拟客户端：改名字能存，地址与额度插件两格不带值', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: {
+      id: string
+      label: string
+      baseUrl: string
+      quotaPlugin: string
+    }[] = []
+    const client = clientWith([platform()], {
+      UpdatePlatform: (input) => {
+        sent.push({
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+          quotaPlugin: input.quotaPlugin ?? '',
+        })
+        return create(UpdatePlatformResponseSchema, {
+          ok: true,
+          message: '改好了',
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('MiniMax Code')
+    await user.click(
+      within(rowOf('MiniMax Code')).getByRole('button', { name: '编辑' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    // 地址与额度插件两格不在：这两格对模拟客户端没意义。
+    expect(within(dialog).queryByLabelText('地址')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('额度插件')).not.toBeInTheDocument()
+
+    const label = within(dialog).getByLabelText('名字')
+    await user.clear(label)
+    await user.type(label, '改过的名字')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([
+        {
+          id: 'minimax',
+          label: '改过的名字',
+          // 面板不往这两格放值。注意：合同里 string 没有 presence 位，
+          // 落在这条 RPC 上「没带」与「带空串」是同一个字节 —— 面板那一侧
+          // 「整格不出现」的断言在 platform-dialog.test.tsx 里。
+          baseUrl: '',
+          quotaPlugin: '',
+        },
+      ])
+    })
+  })
+
+  it('类型清单取不到时，编辑模拟客户端也不摆地址', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([platform()], {
+      ListPlatformKinds: () => {
+        throw new Error('类型清单取不到')
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('MiniMax Code')
+    await user.click(
+      within(rowOf('MiniMax Code')).getByRole('button', { name: '编辑' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByLabelText('地址')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('额度插件')).not.toBeInTheDocument()
+  })
+
+  it('删模拟客户端的确认框与开放平台同一套话', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([platform()])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('MiniMax Code')
+    const del = within(rowOf('MiniMax Code')).getByRole('button', {
+      name: '删掉',
+    })
+    // 扫主路由模型回来之前不给删：等它开。
+    await waitFor(() => expect(del).toBeEnabled())
+    await user.click(del)
+
+    const confirm = await screen.findByRole('alertdialog')
+    expect(within(confirm).getByText('删掉 MiniMax Code')).toBeInTheDocument()
+    expect(
+      within(confirm).getByText(
+        /名下的账号、凭据、额度、冷却一起清掉，删完回不来/
+      )
+    ).toBeInTheDocument()
+    // 旧的「代码里的平台删不了」那类话不再出现。
+    expect(within(confirm).queryByText(/代码里/)).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * 上一次提交的失败不许串到下一次打开。
+ *
+ * 清的时机在**打开**那一侧：`openAddPlatform` / `openEditPlatform` 里把两个
+ * mutation 都 reset 掉（见 index.tsx）。关闭那一侧刻意不清 —— 那种「提交中
+ * 关窗、请求随后才失败」的残留，只有下一次打开时那一次 reset 盖得住。
+ *
+ * 第一条与第二条就是这条不变量的护栏：把打开处那对 reset 去掉，两条都得红。
+ */
+describe('上一次提交的失败不串到下一次打开', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('改平台失败后关掉，再打开另一个平台：看不到上一次的失败', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith(
+      [
+        openPlatform({ id: 'alpha', label: '甲平台' }),
+        openPlatform({ id: 'beta', label: '乙平台' }),
+      ],
+      {
+        UpdatePlatform: () =>
+          create(UpdatePlatformResponseSchema, {
+            ok: false,
+            message: '这个名字被别人用掉了',
+          }),
+      }
+    )
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('甲平台')
+    await user.click(
+      within(rowOf('甲平台')).getByRole('button', { name: '编辑' })
+    )
+
+    const first = await screen.findByRole('dialog')
+    await user.click(within(first).getByRole('button', { name: '保存' }))
+    // 失败的话弹窗留着，服务端那句话显示在表单旁边。
+    expect(await within(first).findByRole('alert')).toHaveTextContent(
+      '这个名字被别人用掉了'
+    )
+
+    // 关掉（取消），再打开另一个平台 —— 打开时那一侧会清这两个 mutation。
+    await user.click(within(first).getByRole('button', { name: '取消' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+
+    await user.click(
+      within(rowOf('乙平台')).getByRole('button', { name: '编辑' })
+    )
+
+    const second = await screen.findByRole('dialog')
+    expect(within(second).getByText('改平台 乙平台')).toBeInTheDocument()
+    // 上一次那一单的失败不该串过来（它是在上一次打开时清掉的）。
+    expect(within(second).queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      within(second).queryByText(/这个名字被别人用掉了/)
+    ).not.toBeInTheDocument()
+  })
+
+  it('新建平台失败后关掉，再打开：看不到上一次的失败', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith([], {
+      AddPlatform: () =>
+        create(AddPlatformResponseSchema, {
+          ok: false,
+          message: '这个 id 已经有了',
+        }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+
+    const first = await screen.findByRole('dialog')
+    await user.click(within(first).getByRole('button', { name: '加上' }))
+    expect(await within(first).findByRole('alert')).toHaveTextContent(
+      '这个 id 已经有了'
+    )
+
+    await user.click(within(first).getByRole('button', { name: '取消' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+
+    await user.click(screen.getByRole('button', { name: '新增平台' }))
+
+    const second = await screen.findByRole('dialog')
+    expect(within(second).getByText('新增平台')).toBeInTheDocument()
+    expect(within(second).queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      within(second).queryByText(/这个 id 已经有了/)
+    ).not.toBeInTheDocument()
+  })
+
+  it('控制组：失败后不关窗再点保存，还是显示那句话', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[] = []
+    const client = clientWith([openPlatform()], {
+      UpdatePlatform: (input) => {
+        sent.push(input.id ?? '')
+        return create(UpdatePlatformResponseSchema, {
+          ok: false,
+          message: '这个名字被别人用掉了',
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('我的中转站')
+    await user.click(
+      within(rowOf('我的中转站')).getByRole('button', { name: '编辑' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      '这个名字被别人用掉了'
+    )
+
+    // 控制组：不关窗、再点一次，那句话还在 —— 清状态不能把正在看的失败也清掉。
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(sent).toHaveLength(2))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      '这个名字被别人用掉了'
+    )
+  })
+})
+
+describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     toastSuccess.mockClear()
     toastError.mockClear()
     window.history.replaceState(null, '', '/')

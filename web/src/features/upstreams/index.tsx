@@ -83,9 +83,9 @@ const REGION_LABELS: Record<string, string> = {
 /**
  * 上游页：平台列表 + 账号管理。
  *
- * 平台是代码里的模板（九个服务），它的 id 是请求路径里那一段，所以删不掉、
- * 关不掉，能改的只有生效策略。账号是 provider 表里的行：一个平台下可以有好几
- * 个，各自的凭据、开关、额度各归各。
+ * 平台是表里的行（播种的模拟客户端与自建的开放平台都是），它的 id 是请求路径
+ * 里那一段：名字改得了、平台删得掉，id 改不了。能改的还有生效策略。账号是 provider
+ * 表里的行：一个平台下可以有好几个，各自的凭据、开关、额度各归各。
  */
 export function UpstreamsPage() {
   const upstreams = useUpstreams()
@@ -95,7 +95,7 @@ export function UpstreamsPage() {
   const deleteAccount = useDeleteAccount()
   const setKeys = useSetProviderKeys()
   const login = useAccountLogin()
-  // 开放平台：面板上加的那些平台（表里的行），跟代码里的模板不是一回事。
+  // 开放平台：面板上加的那些平台（表里的行），跟播种的模拟客户端不是一回事。
   const plugins = useQuotaPlugins()
   const kindsQuery = useListPlatformKinds()
   const addPlatform = useAddPlatform()
@@ -275,8 +275,9 @@ export function UpstreamsPage() {
                               <span className='font-mono text-xs text-muted-foreground'>
                                 {upstream.id}
                               </span>
-                              {/* 开放平台（表里的那一行）的配置：地址、模型目录、
-                                  额度插件与额度。模板平台没有这些格。 */}
+                              {/* 开放平台的配置：地址、模型目录、额度插件与额度。
+                                  模拟客户端那一族（表里有行、地址与目录归代码）
+                                  没有地址与插件这两格。 */}
                               {upstream.isOpenPlatform ? (
                                 <OpenPlatformFacts
                                   upstream={upstream}
@@ -329,61 +330,64 @@ export function UpstreamsPage() {
                             className='flex items-center justify-end gap-2'
                             onClick={(event) => event.stopPropagation()}
                           >
-                            {/* 自定义模型：所有平台都有这一份 —— 模板平台的目录在代
-                                码里，人写的元数据一样能覆盖它。 */}
-                            <PlatformModelsButton platform={upstream} />
-                            {/* 开放平台能改能删；模板平台只能开关（在账号上），
-                                那套不动。 */}
-                            {upstream.isOpenPlatform ? (
-                              <>
+                            {/* 自定义模型：写的是平台那一行上的人工元数据，所以跟
+                                「有行才能改」同一个判据。模板平台的目录在代码里，
+                                人写的那一份一样能覆盖它。 */}
+                            {upstream.fromRow ? (
+                              <PlatformModelsButton platform={upstream} />
+                            ) : null}
+                            {/* 能改能删看的是表里有没有它这一行：开放平台与模拟客户
+                                端都有行，只有代码没有行的才只能开关（在账号上）。 */}
+                            {upstream.fromRow ? (
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                onClick={() => openEditPlatform(upstream)}
+                              >
+                                编辑
+                              </Button>
+                            ) : null}
+                            {/* 刷新模型目录看两件事：清单到没到手、这一类拉不拉。
+                                清单没到手摆一个禁用按钮加一句原因（按钮忽然
+                                消失再出现比一直禁着更让人困惑）；这一类确实
+                                不拉才不摆。 */}
+                            {refreshControl.show ? (
+                              <div className='grid justify-items-end gap-0.5'>
                                 <Button
                                   size='sm'
                                   variant='outline'
-                                  onClick={() => openEditPlatform(upstream)}
-                                >
-                                  编辑
-                                </Button>
-                                {/* 刷新模型目录看两件事：清单到没到手、这一类拉不拉。
-                                    清单没到手摆一个禁用按钮加一句原因（按钮忽然
-                                    消失再出现比一直禁着更让人困惑）；这一类确实
-                                    不拉才不摆。 */}
-                                {refreshControl.show ? (
-                                  <div className='grid justify-items-end gap-0.5'>
-                                    <Button
-                                      size='sm'
-                                      variant='outline'
-                                      disabled={!refreshControl.enabled}
-                                      onClick={() =>
-                                        refreshModels.mutate(
-                                          { platformId: upstream.id },
-                                          {
-                                            onSuccess: (result) => {
-                                              setRefreshOutcomes((prev) => ({
-                                                ...prev,
-                                                [upstream.id]: {
-                                                  ok: result.ok,
-                                                  message: result.message,
-                                                  models: [...result.models],
-                                                },
-                                              }))
+                                  disabled={!refreshControl.enabled}
+                                  onClick={() =>
+                                    refreshModels.mutate(
+                                      { platformId: upstream.id },
+                                      {
+                                        onSuccess: (result) => {
+                                          setRefreshOutcomes((prev) => ({
+                                            ...prev,
+                                            [upstream.id]: {
+                                              ok: result.ok,
+                                              message: result.message,
+                                              models: [...result.models],
                                             },
-                                          }
-                                        )
+                                          }))
+                                        },
                                       }
-                                    >
-                                      刷新模型目录
-                                    </Button>
-                                    {refreshControl.enabled ? null : (
-                                      <span className='text-xs text-muted-foreground'>
-                                        {refreshControl.reason}
-                                      </span>
-                                    )}
-                                  </div>
-                                ) : null}
-                                {/* 删平台之前要先扫主路由模型：指向它的那些
-                                    模型会跟着一起删，这事得在弹框里说清楚。 */}
-                                <DeletePlatformButton platform={upstream} />
-                              </>
+                                    )
+                                  }
+                                >
+                                  刷新模型目录
+                                </Button>
+                                {refreshControl.enabled ? null : (
+                                  <span className='text-xs text-muted-foreground'>
+                                    {refreshControl.reason}
+                                  </span>
+                                )}
+                              </div>
+                            ) : null}
+                            {/* 删平台之前要先扫主路由模型：指向它的那些
+                                模型会跟着一起删，这事得在弹框里说清楚。 */}
+                            {upstream.fromRow ? (
+                              <DeletePlatformButton platform={upstream} />
                             ) : null}
                             <Button
                               size='sm'

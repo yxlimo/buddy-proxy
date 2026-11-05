@@ -7,6 +7,7 @@ import {
   QuotaPluginSchema,
   UpstreamSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
+import type { Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 import { PlatformDialog } from '@/features/open-platforms/platform-dialog'
 import {
   platformKindValue,
@@ -99,7 +100,12 @@ const allKinds: PlatformKindList = {
   ],
 }
 
-/** 表里的一个预置的模拟客户端：地址与额度插件都是空串。 */
+/**
+ * 表里的一个预置的模拟客户端。
+ *
+ * 播种出来的那一行：表里有它（`fromRow`），但服务端不算它作开放平台
+ * （`isOpenPlatform` 为假）—— 地址与额度插件归代码，面板不摆也不往上送。
+ */
 const simulatedPlatform = create(UpstreamSchema, {
   id: 'minimax',
   kind: 'minimax',
@@ -108,9 +114,29 @@ const simulatedPlatform = create(UpstreamSchema, {
   quotaPlugin: '',
   modelsAuto: false,
   models: ['MiniMax-M2'],
-  isOpenPlatform: true,
+  isOpenPlatform: false,
+  fromRow: true,
   accounts: [],
 })
+
+/**
+ * 模拟客户端，但服务端给的形状里没有 `isOpenPlatform` 这一格。
+ *
+ * 「没说」不能当成「不是模拟客户端」:那样会给模拟客户端露出地址格，用户一
+ * 填就写进那一行。真开放平台这一格一定是 true。
+ */
+function platformWithoutOpenFlag(): Upstream {
+  const message = create(UpstreamSchema, {
+    id: 'minimax',
+    kind: 'minimax',
+    label: 'MiniMax Code',
+    models: ['MiniMax-M2'],
+    fromRow: true,
+    accounts: [],
+  })
+  delete (message as { isOpenPlatform?: boolean }).isOpenPlatform
+  return message
+}
 
 /** 在新增弹窗里挑一条类型。 */
 async function pickKind(user: ReturnType<typeof userEvent.setup>, label: string) {
@@ -147,6 +173,7 @@ const platform = create(UpstreamSchema, {
   modelsAuto: true,
   models: ['gpt-4o', 'claude-3'],
   isOpenPlatform: true,
+  fromRow: true,
   accounts: [],
 })
 
@@ -321,40 +348,204 @@ describe('新增平台：两族类型', () => {
 })
 
 describe('改一个模拟客户端', () => {
-  it('类型说预置名，地址与额度插件两格不摆', async () => {
-    const user = userEvent.setup({ delay: null })
-    const submitted: unknown[] = []
-
+  /** 改一个模拟客户端的弹窗。 */
+  function renderEdit(platformMessage: Upstream, submitted: unknown[] = []) {
     render(
       <PlatformDialog
         open
-        platform={simulatedPlatform}
+        platform={platformMessage}
         kinds={allKinds}
-        registry={{ status: 'ready', plugins: [] }}
+        registry={{ status: 'ready', plugins }}
+        pending={false}
+        onSubmit={(input) => submitted.push(input)}
+        onOpenChange={() => {}}
+      />
+    )
+    return submitted
+  }
+
+  it('类型说预置名，地址与额度插件两格不摆', () => {
+    renderEdit(simulatedPlatform)
+
+    // 两族 kind 会重名：这一行说的是预置名，不是 raw kind。
+    expect(screen.getByText('类型：MiniMax Code')).toBeInTheDocument()
+    // 这两格的值都是空串：摆出来只会让人以为要填。
+    expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
+  })
+
+  it('只改名字：交上去的那一单里没有 baseUrl、也没有 quotaPlugin', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderEdit(simulatedPlatform)
+
+    const label = screen.getByLabelText('名字')
+    await user.clear(label)
+    await user.type(label, '我的 MiniMax')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(submitted).toHaveLength(1)
+    // 判据是「整格不出现」：带一个空串就是「清空那一格」，库里原来那份就没了。
+    expect(submitted[0]).not.toHaveProperty('baseUrl')
+    expect(submitted[0]).not.toHaveProperty('quotaPlugin')
+    expect(submitted[0]).toEqual({
+      id: 'minimax',
+      label: '我的 MiniMax',
+      modelsAuto: false,
+      models: ['MiniMax-M2'],
+    })
+  })
+
+  it('名字是这一行的值：不动名字格直接保存，交上去的不是预置名', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted: unknown[] = []
+
+    // 名字跟预置名不一样（用户以前改过）：那是用户的值。
+    const renamed = create(UpstreamSchema, {
+      id: 'minimax',
+      kind: 'minimax',
+      label: '我的 MiniMax',
+      models: ['MiniMax-M2'],
+      isOpenPlatform: false,
+      fromRow: false,
+      accounts: [],
+    })
+
+    const dialog = (list: PlatformKindList) => (
+      <PlatformDialog
+        open
+        platform={renamed}
+        kinds={list}
+        registry={{ status: 'ready', plugins }}
         pending={false}
         onSubmit={(input) => submitted.push(input)}
         onOpenChange={() => {}}
       />
     )
 
-    // 两族 kind 会重名：这一行说的是预置名，不是 raw kind。
-    expect(screen.getByText('类型：MiniMax Code')).toBeInTheDocument()
-    // 两格的值都是空串：摆出来只会让人以为要填。
+    // 清单还没到手：认不出是哪一条预置，只看这一行自己说不说得清（族的问题，
+    // 与「表里有没有这一行」无关）。地址与额度插件那两格从一开始就不摆。
+    const { rerender } = render(dialog({ status: 'pending' }))
     expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
 
-    // 整单提交：这两格照空串发，不动库里那一行。
+    // 清单到手：类型那一行说得出来了，名字不许被目录里的预置名盖掉。
+    rerender(dialog(allKinds))
+    expect(screen.getByText('类型：MiniMax Code')).toBeInTheDocument()
+    expect(screen.getByLabelText('名字')).toHaveValue('我的 MiniMax')
+
     await user.click(screen.getByRole('button', { name: '保存' }))
+
+    // 整单对：多一格都不行（baseUrl / quotaPlugin 在模拟客户端这一族不出现）。
     expect(submitted).toEqual([
       {
         id: 'minimax',
-        label: 'MiniMax Code',
-        baseUrl: '',
-        quotaPlugin: '',
+        label: '我的 MiniMax',
         modelsAuto: false,
         models: ['MiniMax-M2'],
       },
     ])
+  })
+
+  it('行上原有的 quota_plugin 不会被前端抹掉：仍是不带这一格', async () => {
+    const user = userEvent.setup({ delay: null })
+    // 库里那一行上存着一个插件 id（面板不掌这一格，但也不能把它冲成空串）。
+    const submitted = renderEdit(
+      create(UpstreamSchema, {
+        id: 'minimax',
+        kind: 'minimax',
+        label: 'MiniMax Code',
+        quotaPlugin: 'qiniu',
+        models: ['MiniMax-M2'],
+        isOpenPlatform: false,
+        fromRow: true,
+        accounts: [],
+      })
+    )
+
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(submitted[0]).not.toHaveProperty('quotaPlugin')
+    expect(submitted[0]).not.toHaveProperty('baseUrl')
+  })
+
+  it('开放平台改名字：地址与额度插件两格带上现在的值', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted: unknown[] = []
+
+    render(
+      <PlatformDialog
+        open
+        platform={platform}
+        kinds={allKinds}
+        registry={{ status: 'ready', plugins }}
+        pending={false}
+        onSubmit={(input) => submitted.push(input)}
+        onOpenChange={() => {}}
+      />
+    )
+
+    const label = screen.getByLabelText('名字')
+    await user.clear(label)
+    await user.type(label, '新的名字')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    // 开放平台那两格本来就摆在界面上：整单提交带的是现在的值。
+    expect(submitted[0]).toEqual({
+      id: 'my-gateway',
+      label: '新的名字',
+      baseUrl: 'https://api.example.com/v1',
+      quotaPlugin: 'qiniu-portal',
+      modelsAuto: true,
+      models: [],
+    })
+  })
+})
+
+describe('改平台时怎么判是不是模拟客户端', () => {
+  /** 清单取不到那一档：认不出预置，只看平台那一行自己说不说得清。 */
+  const noKinds: PlatformKindList = {
+    status: 'error',
+    message: '类型清单取不到',
+  }
+
+  function renderEdit(platformMessage: Upstream) {
+    const submitted: unknown[] = []
+    render(
+      <PlatformDialog
+        open
+        platform={platformMessage}
+        kinds={noKinds}
+        registry={{ status: 'ready', plugins }}
+        pending={false}
+        onSubmit={(input) => submitted.push(input)}
+        onOpenChange={() => {}}
+      />
+    )
+    return submitted
+  }
+
+  it('清单取不到：服务端说是开放平台的那一个，地址照样摆出来', () => {
+    renderEdit(platform)
+
+    // 控制组：开放平台的地址格不能被误判成模拟客户端藏起来。
+    expect(screen.getByLabelText('地址')).toHaveValue(
+      'https://api.example.com/v1'
+    )
+    expect(screen.getByLabelText('额度插件')).toBeInTheDocument()
+  })
+
+  it('清单取不到：模拟客户端（isOpenPlatform 为假）不摆地址', () => {
+    renderEdit(simulatedPlatform)
+
+    expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
+  })
+
+  it('清单取不到：这一格缺失也不摆地址（「没说」不是「不是」）', () => {
+    renderEdit(platformWithoutOpenFlag())
+
+    expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
   })
 })
 
@@ -459,7 +650,7 @@ describe('换一条类型：草稿里那几格跟着走', () => {
     ])
   })
 
-  it('方言下选了插件、平台其实是模拟客户端：提交体里的额度插件是空串', async () => {
+  it('清单晚一步到手：模拟客户端那两格从头就不摆，提交体也不带', async () => {
     const user = userEvent.setup({ delay: null })
     const submitted: unknown[] = []
 
@@ -476,31 +667,20 @@ describe('换一条类型：草稿里那几格跟着走', () => {
       />
     )
 
-    // 清单还没到手：认不出这个平台是预置的模拟客户端，按方言那套摆，
-    // 地址与额度插件两格都在。
+    // 清单还没到手：认不出是哪一条预置，但平台那一行自己说得清楚（表里有行、
+    // 不是开放平台）。不靠清单说话，模拟客户端的两格从头就不摆。
     const { rerender } = render(dialog({ status: 'pending' }))
-    expect(screen.getByLabelText('地址')).toBeInTheDocument()
-    await user.click(screen.getByRole('combobox'))
-    await user.click(await screen.findByRole('option', { name: '七牛云资源包' }))
-    expect(screen.getByRole('combobox')).toHaveTextContent('七牛云资源包')
+    expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
 
-    // 清单到手：认出来是模拟客户端，那两格收起（草稿里那个插件 id 还在）。
+    // 清单到手：还是那样，两格不会忽然冒出来。
     rerender(dialog(allKinds))
     expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '保存' }))
 
-    // 模拟客户端的额度不走平台这一行：不许把那个不相干的插件 id 发上去。
-    expect(submitted).toEqual([
-      {
-        id: 'minimax',
-        label: 'MiniMax Code',
-        baseUrl: '',
-        quotaPlugin: '',
-        modelsAuto: false,
-        models: ['MiniMax-M2'],
-      },
-    ])
+    expect(submitted[0]).not.toHaveProperty('baseUrl')
+    expect(submitted[0]).not.toHaveProperty('quotaPlugin')
   })
 })

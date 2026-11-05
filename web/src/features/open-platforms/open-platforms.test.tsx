@@ -69,7 +69,9 @@ function twoKinds() {
   ]
 }
 
-/** 代码里的模板平台：删不掉也改不了。 */
+/**
+ * 模拟客户端平台：表里有行（能改能删），但不只是一个开放平台。
+ */
 function template(
   overrides: Partial<MessageInitShape<typeof UpstreamSchema>> = {}
 ): Upstream {
@@ -83,6 +85,7 @@ function template(
     policies: [ProviderPolicy.SINGLE],
     accountCount: 1,
     hasEnabledAccount: true,
+    fromRow: true,
     accounts: [],
   }
   return create(UpstreamSchema, Object.assign(base, overrides))
@@ -111,6 +114,7 @@ function openPlatform(
     modelsSource: 'auto',
     modelsFetchedAtMs: FETCHED_AT,
     isOpenPlatform: true,
+    fromRow: true,
     accounts: [],
   }
   return create(UpstreamSchema, Object.assign(base, overrides))
@@ -337,7 +341,7 @@ describe('面板上的开放平台', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
-  it('开放平台显示地址、模型来源、额度插件名；模板平台只能开关', async () => {
+  it('开放平台显示地址、模型来源、额度插件名；模拟客户端不摆这两格', async () => {
     const client = clientWith(
       [template(), openPlatform({ quotaPlugin: 'qiniu', modelsAuto: true })],
       {
@@ -374,14 +378,21 @@ describe('面板上的开放平台', () => {
       within(open).getByRole('button', { name: '删掉' })
     ).toBeInTheDocument()
 
-    // 模板平台没有这两样：它只能开关（在账号上）。
+    // 模拟客户端：地址与额度插件这两格不摆（归代码）。
     const tmpl = rowOf('MiniMax Code')
     expect(
-      within(tmpl).queryByRole('button', { name: '编辑' })
+      within(tmpl).queryByText(/https?:\/\//)
     ).not.toBeInTheDocument()
     expect(
-      within(tmpl).queryByRole('button', { name: '删掉' })
+      within(tmpl).queryByText(/额度插件/)
     ).not.toBeInTheDocument()
+    // 但表里有它这一行：能改能删。
+    expect(
+      within(tmpl).getByRole('button', { name: '编辑' })
+    ).toBeInTheDocument()
+    expect(
+      within(tmpl).getByRole('button', { name: '删掉' })
+    ).toBeInTheDocument()
   })
 
   it('手动配的模型目录显示模型数', async () => {
