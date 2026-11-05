@@ -1,19 +1,28 @@
-// lib/open-platforms.ts — 开放平台：用户自己加的平台，一行一个。
+// lib/open-platforms.ts — 开放平台：平台表里的行，一行一个平台。
 //
-// 平台有两处数据源：代码里的模板（lib/platform-templates.ts）与这张表。模板
-// 优先 —— 模板里有的 id，表里的那一行当没有。这样把模板加回代码时不用先清库，
-// 回滚是安全的。
+// 平台的唯一数据源就是这张表（代码里的模板名单已清空，见
+// lib/platform-templates.ts）：模拟客户端那一族由启动时的播种补行，厂商那几家由
+// 平台模板表补行，用户自己加的就是面板上建的那一行。
 //
 // 这一层只管数据：账号、路由与面板的接线是后面的阶段。
 //
-// 它不引 lib/platforms.ts —— 那一层要引它（平台列表要把两处数据源合起来），
-// 反过来引就成环。模板的 id 名单在叶子模块 lib/platform-templates.ts 里，两边
-// 都直接引它：不用谁在求值期把名单交给别人。
+// 它不引 lib/platforms.ts —— 那一层要引它（平台列表从这张表出），反过来引就
+// 成环。
 
-import { store, UPSTREAM_CATALOG_KINDS } from "./store.ts";
-import { PLATFORMS } from "./platform-templates.ts";
+import {
+  forgetPlatformPresetRemoved,
+  rememberPlatformPresetRemoved,
+  store,
+  UPSTREAM_CATALOG_KINDS,
+} from "./store.ts";
 // 能建的平台种类：建的时候要照着它校验，拒绝时要把可选的列出来。
-import { PLATFORM_KIND_OPTIONS, platformKindOptionOf } from "./platform-catalog.ts";
+import {
+  isSimulatedClientId,
+  isSimulatedClientKind,
+  PLATFORM_KIND_OPTIONS,
+  platformKindOptionOf,
+  simulatedClientPresetsOfKind,
+} from "./platform-catalog.ts";
 // 额度插件的登记表（lib/quota-plugins.ts）反过来要读这一层的平台表，所以这两
 // 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
 // 那里也不在求值期读这边的东西。
@@ -95,11 +104,6 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,30}$/;
  */
 const RESERVED_IDS = new Set(["v1", "admin", "health", "healthz", "metrics"]);
 
-/** 模板的 id：代码里写死的那几个。表里的开放平台不能跟它们重名。 */
-function isTemplateId(id: string): boolean {
-  return PLATFORMS.some((p) => p.id === id);
-}
-
 /** 表里的全部开放平台，按 id 排。 */
 export function listOpenPlatforms(): OpenPlatformRow[] {
   const rows = store()
@@ -125,9 +129,9 @@ export function openPlatformOf(id: string): OpenPlatformRow | null {
 /**
  * 加一个开放平台。
  *
- * id 必须是能放进路径里的那一段，而且不能跟网关自己的路径、代码里的模板
- * 或者已有的账号撞 —— 撞了的话这个平台就是死的：模板优先，表里那一行没人看；
- * 账号的 id 跟平台 id 共用一个命名空间，撞了面板分不清哪个是哪个。
+ * id 必须是能放进路径里的那一段，而且不能跟网关自己的路径或者已有的账号撞 ——
+ * 账号的 id 跟平台 id 共用一个命名空间，撞了面板分不清哪个是哪个。已经在表里的
+ * id（包括播种进来的模拟客户端）当然也不能重。
  */
 export function createOpenPlatform(input: {
   id: string;
@@ -143,27 +147,68 @@ export function createOpenPlatform(input: {
   if (openPlatformOf(id)) return { ok: false, message: "已经有这个平台了" };
   const label = String(input.label ?? "").trim();
   if (!label) return { ok: false, message: "得有个名字" };
-  const baseUrl = String(input.baseUrl ?? "").trim();
-  const urlProblem = checkBaseUrl(baseUrl);
-  if (urlProblem) return { ok: false, message: urlProblem };
   // 空串 = 通用那一类：契约里 AddPlatformRequest.kind 就是这么约定的（老面板
   // 不带这一格，建出来还是原来那个东西）。
   const kind = String(input.kind ?? "").trim() || OPEN_PLATFORM_KIND_NAME;
-  const kindProblem = checkKind(kind);
-  if (kindProblem) return { ok: false, message: kindProblem };
+
+  let baseUrl = String(input.baseUrl ?? "").trim();
+  let quotaPlugin = String(input.quotaPlugin ?? "").trim();
+  let region = "";
+  let modelsAuto = true;
+
+  if (isSimulatedClientKind(kind)) {
+    // 预置的模拟客户端：它不是「往某个地址讲某种方言」，而是冒充一个封闭
+    // 客户端 —— 地址、区域、id 都是那个客户端的身份（改了会话就接不上），
+    // 所以按目录定死，请求里那几格不收。
+    const presets = simulatedClientPresetsOfKind(kind);
+    if (!presets.length) {
+      // 走到这里只有一种原因：目录里有这一类、但每条都 hidden（zcode 那种，行由
+      // 启动时的播种补，面板上还不给建）。说成「没有预置，得从预置里选一个」是
+      // 自相矛盾，用户会以为列表没刷新。目录里根本没有这一类的进不来
+      // （isSimulatedClientKind 就是「含 hidden 的条目在不在」），它们在下面
+      // checkKind 里被拒，答复里列得出能建的那几种。
+      return { ok: false, message: `${kind} 这一类由内部预置创建，面板上不提供新建` };
+    }
+    const preset = presets.find((candidate) => candidate.id === id);
+    if (!preset) {
+      // id 是请求路径里那一段，也是调用方 base_url 的那一段：让它随便填，
+      // 建出来就是一个谁都不认识的平台。
+      return {
+        ok: false,
+        message: `${kind} 这一类的平台 id 只能是 ${presets.map((candidate) => candidate.id).join(" 或 ")}`,
+      };
+    }
+    baseUrl = "";
+    // 额度插件将来要的话另说：模拟客户端的额度走自己的配额路径，不落在
+    // platform 这一行上。
+    quotaPlugin = "";
+    region = preset.region;
+    // 目录是代码挑过的一份，不让上游盖上来（上游那份更宽，会出现被上游拒的
+    // 模型）。
+    modelsAuto = false;
+  } else {
+    const urlProblem = checkBaseUrl(baseUrl);
+    if (urlProblem) return { ok: false, message: urlProblem };
+    const kindProblem = checkKind(kind);
+    if (kindProblem) return { ok: false, message: kindProblem };
+    const pluginProblem = checkQuotaPlugin(quotaPlugin);
+    if (pluginProblem) return { ok: false, message: pluginProblem };
+  }
+
   const now = Date.now();
-  const models: OpenPlatformModels = { items: [], auto: true, fetchedAt: 0, source: "auto" };
-  const quotaPlugin = String(input.quotaPlugin ?? "").trim();
-  const pluginProblem = checkQuotaPlugin(quotaPlugin);
-  if (pluginProblem) return { ok: false, message: pluginProblem };
-  // kind 显式写：列的默认值是 openai，靠默认值就变成「谁都没说，反正建出来是
-  // openai」—— 这一格现在由调用方定，写进去的必须是校验过的那一个。
-  store()
-    .prepare(
-      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, kind, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .run(
+  const models: OpenPlatformModels = { items: [], auto: modelsAuto, fetchedAt: 0, source: "auto" };
+  const db = store();
+  // 行与墓碑的清除在同一个事务里：只清墓碑而没写进行，播种就会把这个 id 当成
+  // 「用户没删过但也不存在」—— 下次启动补回一个空平台，用户刚建的配置没了。
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // kind 显式写：列的默认值是 openai，靠默认值就变成「谁都没说，反正建出来是
+    // openai」—— 这一格现在由调用方定，写进去的必须是校验过的那一个。
+    db.prepare(
+      "INSERT INTO platform " +
+        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
       id,
       label,
       normalizeBaseUrl(baseUrl),
@@ -171,9 +216,32 @@ export function createOpenPlatform(input: {
       models.auto ? 1 : 0,
       quotaPlugin,
       kind,
+      region,
       now,
       now,
     );
+    // 这一行回来了，墓碑就作废：用户明确要的 id（可能是预置目录里被删过的那条），
+    // 留着墓碑只会让下次启动的播种继续跳开它 —— 将来用户手写这个 id 的目录会被
+    // 一次「表里已经有它」的 INSERT OR IGNORE 盖不住，而墓碑没用。
+    forgetPlatformPresetRemoved(id);
+    db.exec("COMMIT");
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* 事务可能已经没了 */
+    }
+    // 回滚之后墓碑还在：这个 id 仍然是「用户删过」，播种不该把它插回来。
+    const detail = (e as Error)?.message ?? String(e);
+    // 事务外那句 openPlatformOf 只在本进程看得到：两个进程同时建同一个 id 时，
+    // 后一个撞在 INSERT 的唯一约束上。SQLite 的原话（UNIQUE constraint failed:
+    // platform.id）原样进答复，面板就显示一句英文 SQL —— 这一种翻成人话，其余
+    // 照旧拼原因（不回显 SQL 与参数）。
+    if (/UNIQUE/i.test(detail) && /platform/i.test(detail)) {
+      return { ok: false, message: "已经有这个平台了" };
+    }
+    return { ok: false, message: `没加上：${detail}` };
+  }
   return { ok: true, message: `加好了：${label}` };
 }
 
@@ -208,8 +276,6 @@ export function updateOpenPlatform(
     kind?: string;
   },
 ): { ok: boolean; message: string } {
-  // 代码里的平台改不了：它们不在表里，改了也是改一份没人看的东西。
-  if (isTemplateId(id)) return { ok: false, message: "这个 id 是代码里的平台，改不了" };
   const row = openPlatformOf(id);
   if (!row) return { ok: false, message: `没有这个平台：${id}` };
   // 类型建完就定下：换类型不是改一个字段，它名下的凭据、地址、目录都得跟着
@@ -221,9 +287,19 @@ export function updateOpenPlatform(
   }
   const label = patch.label === undefined ? row.label : String(patch.label).trim();
   if (!label) return { ok: false, message: "得有个名字" };
-  const baseUrl = patch.baseUrl === undefined ? row.baseUrl : String(patch.baseUrl).trim();
-  const urlProblem = checkBaseUrl(baseUrl);
-  if (urlProblem) return { ok: false, message: urlProblem };
+  // 模拟客户端的地址由预置定死（它是那个客户端的身份，改了会话就接不上）：
+  // 面板上改个名字会送来空 base_url，那不是「把地址清空」而是要改别的格 —— 拿
+  // 它去过非空校验，连改名都改不动。所以这一类不管请求里那一格，照库里存着。
+  const simulated = isSimulatedClientKind(row.kind);
+  const baseUrl = simulated
+    ? row.baseUrl
+    : patch.baseUrl === undefined
+      ? row.baseUrl
+      : String(patch.baseUrl).trim();
+  if (!simulated) {
+    const urlProblem = checkBaseUrl(baseUrl);
+    if (urlProblem) return { ok: false, message: urlProblem };
+  }
   // null 与没给是两回事：null 是「把这一格清空」，没给是「别动它」。
   const quotaPlugin = patch.quotaPlugin === undefined ? row.quotaPlugin : String(patch.quotaPlugin ?? "").trim();
   const pluginProblem = checkQuotaPlugin(quotaPlugin);
@@ -312,13 +388,45 @@ export function syncPlatformModels(platform: string, items: readonly unknown[]):
  * 只删平台那一行：名下的账号与它们的凭据不归这一层管，级联由调用方负责
  * （那是账号层的事 —— 它才知道哪些凭据属于哪个账号）。调用方删平台之前
  * 必须自己把名下的账号删干净，否则那些账号就没有平台可挂了。
+ *
+ * 预置目录里的那几条删的时候多写一行墓碑（store 的 platform_preset_removed）：
+ * 它们的行是启动时播的，不留记号的话删了等于重启长回来 —— 「删了就是没了」得靠
+ * 这一行兑现。用户自己建的行不需要墓碑：没人会去播它。
+ *
+ * 存在性检查在事务里读：事务外先读一遍的话，读到行与进事务之间别的进程（NAS 上的
+ * 管理脚本、另一个实例）可以把这个 id 删掉再重建 —— 本进程删掉的就是别人刚建好的
+ * 那一行，还顺手记下「用户删过」，而用户看到的平台其实没被删。BEGIN IMMEDIATE 之后
+ * 的读与删在同一个连接、同一个写事务里，中间插不进别人。
+ *
+ * 墓碑在删行成功之后写（同一个事务，原子性不受影响），没删到行就不写：一条都没删
+ * 到却记「用户删过」，播种会永远跳开这个 id —— 记的是没发生过的事。
  */
 export function deleteOpenPlatform(id: string): { ok: boolean; message: string } {
-  // 代码里的平台删不了：删了就是删掉一段代码。
-  if (isTemplateId(id)) return { ok: false, message: "这个 id 是代码里的平台，删不了" };
-  const row = openPlatformOf(id);
-  if (!row) return { ok: false, message: `没有这个平台：${id}` };
-  store().prepare("DELETE FROM platform WHERE id = ?").run(id);
+  const db = store();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!openPlatformOf(id)) {
+      db.exec("ROLLBACK");
+      return { ok: false, message: `没有这个平台：${id}` };
+    }
+    const removed = db.prepare("DELETE FROM platform WHERE id = ?").run(id);
+    if (Number(removed.changes) === 0) {
+      db.exec("ROLLBACK");
+      return { ok: false, message: `没有这个平台：${id}` };
+    }
+    if (isSimulatedClientId(id)) rememberPlatformPresetRemoved(id);
+    db.exec("COMMIT");
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* 事务可能已经没了 */
+    }
+    throw new Error(
+      `删平台 ${id} 没删成：${(e as Error)?.message ?? String(e)}。` +
+        `事务已整个回滚，平台行与墓碑都还是删之前的样子。`,
+    );
+  }
   return { ok: true, message: "删掉了" };
 }
 
@@ -331,7 +439,6 @@ function checkId(id: string): string | null {
   if (!id) return "得有个平台 id";
   if (!ID_PATTERN.test(id)) return "平台 id 只能用小写字母、数字与连字符";
   if (RESERVED_IDS.has(id)) return "这个 id 是网关自己用的，换一个";
-  if (isTemplateId(id)) return "这个 id 已经是代码里的平台了，换一个";
   if (isAccountId(id)) return "这个 id 已经是一个账号了，换一个";
   return null;
 }

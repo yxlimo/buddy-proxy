@@ -1,17 +1,16 @@
-// lib/platform-templates.ts — 代码里的平台模板。
+// lib/platform-templates.ts — 代码里的平台模板。现在一个都没有。
 //
-// 平台有两处数据源：这里的模板（代码里写死的）与表里的开放平台
-// （lib/open-platforms.ts）。模板优先：id 撞了算模板的 —— 把模板加回代码时
-// 不用先清库，回滚是安全的。
+// 平台全在表里了（lib/open-platforms.ts 那张 platform 表）：模拟客户端那一族由启动
+// 时的播种按目录补齐（lib/platform-catalog.ts 的 SIMULATED_CLIENTS），厂商那几家由
+// 平台模板表补，用户自己加的本来就是表里的行。
 //
-// 这一层是叶子：不引任何模块。两边都要认得模板的 id 名单（表里的开放平台
-// 不能跟模板重名），所以名单放在这里，谁都能直接引 —— 不用谁在求值期把名单
-// 交给别人（那件事出过事：模块求值期的先后顺序一变，判重就失效了）。
+// 这一层只剩类型与一个空名单。名单留着的理由是 import：lib/platforms.ts 还在转出
+// 它、还有地方 `import { PLATFORMS }`。清空名单是一件事，删导出是另一件事 —— 后
+// 者会把一堆 import 打红，等那些调用方都改完再删。
 //
-// 模板现在只剩「模拟客户端那一侧」的五家：它们按上游桌面端的指纹说话，行为
-// 写在代码里。开放平台那一族（七牛云、讯飞星火、SenseNova、书生·端砚、
-// TokenRhythm，还有用户自己加的那些）都在表里 —— 它们是谁由那一行的 kind
-// 与地址说明，代码里不再留一份。
+// 这一层是叶子：不引任何模块。按 id 判「是不是模板平台」的那些判别条件因此全部
+// 失效（空名单对谁都答不属于）—— 平台之间的区别现在只剩 kind，判别函数在
+// lib/platform-catalog.ts（isSimulatedClientKind）。
 
 /** 一个平台：代码里的模板，或者表里的开放平台。 */
 export interface Platform {
@@ -26,15 +25,10 @@ export interface Platform {
 }
 
 /**
- * 代码里的模板。
+ * 代码里的模板。现在是空的：平台的唯一数据源是表里的行。
  *
  * The region and the name live with the platform rather than with the account:
- * they are properties of the service, not of who is logged in.
+ * they are properties of the service, not of who is logged in. That is why the
+ * table carries them, and why seeding one row per platform is enough.
  */
-export const PLATFORMS: Platform[] = [
-  { id: "minimax", kind: "minimax", label: "MiniMax Code", region: "cn" },
-  { id: "qoder", kind: "qoder", label: "Qoder（全球区）", region: "global" },
-  { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },
-  { id: "workbuddy-cn", kind: "workbuddy", label: "WorkBuddy（中国区）", region: "cn" },
-  { id: "workbuddy-global", kind: "workbuddy", label: "WorkBuddy（国际区）", region: "global" },
-];
+export const PLATFORMS: Platform[] = [];

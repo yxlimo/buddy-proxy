@@ -1,30 +1,33 @@
-// test/open-platforms-check.ts — 平台的数据源：代码里的模板 + 表里的开放平台。
+// test/open-platforms-check.ts — 平台的数据源：表里的行。
 //
 //   node --experimental-strip-types test/open-platforms-check.ts
 //
 // 离线：一个临时数据目录，不起服务，不发请求，不碰真凭据。
 //
-// 平台有两处数据源：代码里的模板（lib/platforms.ts）与表里的开放平台
-// （lib/open-platforms.ts）。模板优先 —— 模板里有的 id，表里的那一行当没有：
-// 把模板加回代码时不用先清库，回滚是安全的。
+// 平台的唯一数据源是表（lib/open-platforms.ts 那张 platform 表）：模拟客户端那一族
+// 由启动时的播种补行（lib/platform-catalog.ts 的 SIMULATED_CLIENTS），厂商那几家由
+// 平台模板表补行，用户自己加的就是面板上建的那一行。代码里的模板名单已清空
+// （lib/platform-templates.ts 的 PLATFORMS 是空的）。
 //
 // 这里查的是：
 //
 //   1. 建一行 → 平台列表多出一条，kind 是 openai
-//   2. id 的规矩：不合法、保留字、跟模板重名、跟账号重名、重名，都不收
-//   3. 绕过校验插进去的一行（跟模板重名）被忽略，还是按模板算
+//   2. id 的规矩：不合法、保留字、跟播种进来的行重名、跟账号重名、重名，都不收
+//   3. 播种进来的那一族就是普通的行：改得动、删得掉；删过的留墓碑，重启不长
+//      回来，用户再建回来就清墓碑
 //   4. 改名字、改地址、改模型目录（手写的目录 source 是 manual）；没收登记的
 //      额度插件 id（没登记就不写库，原值留着）
 //   5. 删掉以后平台列表回到基线
 //   6. 坏掉的目录 JSON 读成空目录，不抛
 //   7. 账号 id 与平台 id 相互独立：账号 id 是自增数，关联只靠 provider.platform
-//   8. 只加载 lib/open-platforms.ts 的进程里，模板的判重照样生效
-//   9. 表里那几行的 kind 是它们自己那一类（不是清一色的 openai），模板那一
-//      侧（minimax 等）还是模板
+//   8. 只加载 lib/open-platforms.ts 的进程里，播种照样跑完（不靠谁先引平台层）
+//   9. 表里那几行的 kind 是它们自己那一类（不是清一色的 openai）
 //  10. 能建的平台种类：建的时候带 kind 写进去的是它、不带是 openai、不在清单
-//      里的（含模拟客户端那类）拒收、建好之后换不了类型
+//      里的（厂商那几家）拒收、建好之后换不了类型
+//  11. 预置的模拟客户端：按（kind, id）挑预置，建出来地址空、目录不自动拉、
+//      区域照目录；id 自己取不收，目录里藏起来的那一条不给建
 //
-// 断言里不写平台的个数：一律跟 PLATFORMS.length 与表里的行数比。
+// 断言里不写平台的个数：一律跟表里的行数比。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +40,7 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "open-platforms-"));
 // 数据目录要在库被打开之前定下来：库是第一次用的时候才开的。
 process.env.BUDDY_DATA_DIR = DATA_DIR;
 
-const { PLATFORMS, allPlatforms, platformOfAny } = await import("../lib/platforms.ts");
+const { allPlatforms, platformOfAny } = await import("../lib/platforms.ts");
 const {
   createOpenPlatform,
   updateOpenPlatform,
@@ -46,13 +49,13 @@ const {
   openPlatformOf,
 } = await import("../lib/open-platforms.ts");
 const { addAccount, provider } = await import("../lib/providers.ts");
-const { store, migratePlatforms, seedPlatformModels } = await import("../lib/store.ts");
+const { store, migratePlatforms, migrateSimulatedClients, seedPlatformModels, platformPresetRemoved } =
+  await import("../lib/store.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
 // 引用即登记：这一节要拿 kind.models() 报的代码目录做对照。
 await import("../lib/kinds/index.ts");
-const { PLATFORM_TEMPLATES, PLATFORM_KIND_OPTIONS, platformKindOptionOf } = await import(
-  "../lib/platform-catalog.ts"
-);
+const { PLATFORM_TEMPLATES, PLATFORM_KIND_OPTIONS, SIMULATED_CLIENTS, platformKindOptionOf, platformKindChoices } =
+  await import("../lib/platform-catalog.ts");
 
 let pass = 0;
 let fail = 0;
@@ -77,35 +80,30 @@ function section(title: string): void {
 /**
  * 平台列表应该有几条。
  *
- * 模板 + 表里那些 id 不撞模板的行：不写死个数，跟着数据源走。
+ * 就是表里的行数（代码里的模板名单已清空）：不写死个数，跟着数据源走。
  */
 function expectedPlatformCount(): number {
-  const rows = listOpenPlatforms();
-  return PLATFORMS.length + rows.filter((row) => !PLATFORMS.some((p) => p.id === row.id)).length;
+  return listOpenPlatforms().length;
 }
 
-/** 迁移补进来的那几行的 id。 */
-const SEEDED_IDS = new Set(PLATFORM_TEMPLATES.map((t) => t.key));
+/** 迁移与播种补进来的那几行的 id：厂商模板 + 会播种的模拟客户端。 */
+const SEEDED_IDS = new Set([
+  ...PLATFORM_TEMPLATES.map((t) => t.key),
+  ...SIMULATED_CLIENTS.filter((c) => !c.hidden).map((c) => c.id),
+]);
+
+/** 目录里会播种的那几条：hidden 的不播（目录里留着条目，表里没有行）。 */
+const SEEDED = SIMULATED_CLIENTS.filter((c) => !c.hidden);
+const HIDDEN = SIMULATED_CLIENTS.filter((c) => c.hidden);
 
 /**
- * 用户自己建的行：不是迁移补进来的那几行。
+ * 用户自己建的行：不是迁移或播种补进来的那几行。
  *
- * 迁移补的那几行用的是模板的 id（qiniu 之类），它们在表里，但不算「用户加的
- * 开放平台」。
+ * 补进来的那几行用的是目录里的 id（qiniu、minimax 之类），它们在表里，但不算
+ * 「用户加的开放平台」。
  */
 function userPlatformRows(): { id: string }[] {
   return listOpenPlatforms().filter((row) => !SEEDED_IDS.has(row.id));
-}
-
-/** 往表里直接插一行：绕过校验，用来试「模板优先」。 */
-function insertRow(id: string, label: string): void {
-  const now = Date.now();
-  store()
-    .prepare(
-      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .run(id, label, "https://example.test/v1", "[]", 1, "", now, now);
 }
 
 /**
@@ -226,16 +224,40 @@ check(
 // 删掉：后面的计数按「用户自己建的行」算。
 deleteOpenPlatform("seed-manual-row");
 
-// 模板那一侧：模拟端那五家还在代码里，kind 还是它们自己的。
+// 模拟客户端那一族：该播的那几条都播成了表里的行，kind、区域与名字跟目录一致。
+//
+// 「清空模板 + 播种」这一对改动的判别力就在这里：代码里的名单空了，平台仍然
+// 在，因为启动时把目录播进了表。
 check(
-  "minimax 仍是模板",
-  PLATFORMS.some((p) => p.id === "minimax") && platformOfAny("minimax")?.kind === "minimax",
-  JSON.stringify(platformOfAny("minimax")),
+  "该播种的模拟客户端都播成了行",
+  SEEDED.length > 0 && SEEDED.every((c) => openPlatformOf(c.id) !== null),
+  SEEDED.filter((c) => openPlatformOf(c.id) === null)
+    .map((c) => c.id)
+    .join(","),
 );
+for (const client of SEEDED) {
+  const seeded = openPlatformOf(client.id);
+  check(`${client.id} 的 kind 是目录里的`, seeded?.kind === client.kind, String(seeded?.kind));
+  check(
+    `${client.id} 的区域是目录里的`,
+    seeded?.region === client.region,
+    JSON.stringify(seeded?.region),
+  );
+  check(`${client.id} 的名字是目录里的`, seeded?.label === client.label, String(seeded?.label));
+  check(
+    `${client.id} 在平台列表里的 kind 也是它`,
+    platformOfAny(client.id)?.kind === client.kind,
+    String(platformOfAny(client.id)?.kind),
+  );
+  check(`${client.id} 的地址是空的`, seeded?.baseUrl === "", JSON.stringify(seeded?.baseUrl));
+  check(`${client.id} 不自动拉目录`, seeded?.models.auto === false, JSON.stringify(seeded?.models));
+}
+// hidden 的那一条目录里有、表里没有：播出来就是一个地址、目录、额度全空的平台，
+// 面板上看得见却用不了。
 check(
-  "模板里的 id 不在表里（模板与表各管各的）",
-  PLATFORMS.every((p) => openPlatformOf(p.id) === null),
-  PLATFORMS.filter((p) => openPlatformOf(p.id) !== null).map((p) => p.id).join(","),
+  "hidden 的那一条没播成行",
+  HIDDEN.length > 0 && HIDDEN.every((c) => openPlatformOf(c.id) === null),
+  HIDDEN.map((c) => `${c.id}:${openPlatformOf(c.id) !== null}`).join(","),
 );
 
 const countBeforeCreate = allPlatforms().length;
@@ -281,10 +303,10 @@ check(
   createOpenPlatform({ id: "acme", label: "又一个", baseUrl: "https://api.acme.test/v1" }).ok === false,
 );
 check(
-  "跟代码模板同 id 的不收",
+  "跟播种进来的模拟客户端同 id 的不收",
   createOpenPlatform({
-    id: PLATFORMS[0].id,
-    label: "撞模板",
+    id: "qoder",
+    label: "撞播种",
     baseUrl: "https://api.acme.test/v1",
   }).ok === false,
 );
@@ -319,51 +341,73 @@ check(
   userPlatformRows().map((r) => r.id).join(","),
 );
 
-section("模板优先");
+section("播种的行就是普通的行");
 
-// 绕过校验直接插一行（跟模板重名）：这种行代码里不该有，但旧库里可能有。
-const templateId = PLATFORMS[0].id;
-const rowsBeforeInsert = listOpenPlatforms().length;
-insertRow(templateId, "残留的行");
+// 上一单里这些行是代码里的模板：改不了、删不了，表里同 id 的那一行当没有。
+// 现在它们是表里的行，跟用户自己建的没有区别 —— 差别只在 kind（lib/platform-catalog.ts
+// 的 isSimulatedClientKind），面板与路由按 kind 判别，不按「在不在代码名单里」。
+const seededId = SIMULATED_CLIENTS[0].id;
+// 名字是用户的值（面板、脚本都能写）：模拟客户端那一行也改得动，只是地址不收
+// （那一格由预置定死），所以改名字不需要送 base_url。
+const seededRename = updateOpenPlatform(seededId, { label: "我改的名字" });
+check("模拟客户端的行改得动名字", seededRename.ok === true, seededRename.message);
 check(
-  "表里确实多了一行",
-  listOpenPlatforms().length === rowsBeforeInsert + 1,
+  "改完地址还是空串（预置定死）",
+  openPlatformOf(seededId)?.baseUrl === "",
+  JSON.stringify(openPlatformOf(seededId)?.baseUrl),
+);
+// 再跑一次迁移：已有的行不动 —— 用户改的名字不能被启动时的播种拨回目录值。
+migrateSimulatedClients(store());
+check(
+  "再播种一次不覆盖用户改的名字",
+  openPlatformOf(seededId)?.label === "我改的名字",
+  String(openPlatformOf(seededId)?.label),
+);
+const rowsBeforeDelete = listOpenPlatforms().length;
+const seededDelete = deleteOpenPlatform(seededId);
+check("播种的行删得掉", seededDelete.ok === true, seededDelete.message);
+check(
+  "表里少了一行",
+  listOpenPlatforms().length === rowsBeforeDelete - 1,
   listOpenPlatforms().map((r) => r.id).join(","),
 );
+// 删预置的行要留墓碑：只删行的话，下次启动播种又插回一个地址、目录、额度全空的
+// 平台 —— 「删了就是没了」得由这一行兑现。
+//
+// 这一条不能只看「行没长回来」：把播种整段去掉也能过，那等于把功能删了也绿。
+check("删预置的行留了墓碑", platformPresetRemoved(seededId) === true);
+migrateSimulatedClients(store());
 check(
-  "跟模板同 id 的行被忽略",
-  allPlatforms().length === expectedPlatformCount(),
-  `${allPlatforms().length} vs ${expectedPlatformCount()}`,
+  "删掉之后重启不长回来",
+  openPlatformOf(seededId) === null,
+  String(openPlatformOf(seededId)?.label),
 );
+// 用户明确要它回来：建回来会清墓碑，否则下次启动播种仍然跳过它 —— 而这一行现在
+// 归用户（名字与地址都是他写的），跟播种无关。
+const rebuilt = createOpenPlatform({
+  id: seededId,
+  label: "建回来的 MiniMax",
+  baseUrl: "https://rebuilt.test/v1",
+});
+check("同名建得回来", rebuilt.ok === true, rebuilt.message);
 check(
-  "同 id 还是算模板",
-  platformOfAny(templateId)?.label === PLATFORMS[0].label,
-  JSON.stringify(platformOfAny(templateId)),
+  "建回来之后墓碑清掉了",
+  platformPresetRemoved(seededId) === false,
+  String(platformPresetRemoved(seededId)),
 );
-// 那一行说的是模板：改不了也删不了（假装改成功了更糟）。
-const blockedUpdate = updateOpenPlatform(templateId, { label: "改一下" });
+// 再播种一次：行在，播种按 id 跳过，用户写的那两个值留着。
+migrateSimulatedClients(store());
 check(
-  "模板的行改不了",
-  blockedUpdate.ok === false && blockedUpdate.message.includes("代码里的平台"),
-  blockedUpdate.message,
-);
-const blockedDelete = deleteOpenPlatform(templateId);
-check(
-  "模板的行删不了",
-  blockedDelete.ok === false && blockedDelete.message.includes("代码里的平台"),
-  blockedDelete.message,
+  "播种没把建回来的名字盖回目录值",
+  openPlatformOf(seededId)?.label === "建回来的 MiniMax",
+  String(openPlatformOf(seededId)?.label),
 );
 check(
   "平台列表跟数据源对得上",
   allPlatforms().length === expectedPlatformCount(),
   `${allPlatforms().length} vs ${expectedPlatformCount()}`,
 );
-store().prepare("DELETE FROM platform WHERE id = ?").run(templateId);
-check(
-  "那行清掉了",
-  listOpenPlatforms().length === rowsBeforeInsert,
-  listOpenPlatforms().map((r) => r.id).join(","),
-);
+
 
 section("改");
 
@@ -513,24 +557,88 @@ check(
 );
 check("被拒的那一行没写进表", openPlatformOf("kinds-bad") === null, JSON.stringify(openPlatformOf("kinds-bad")));
 
-// 厂商与模拟客户端都不是用户能建的一类：厂商是本仓预置的模板（迁移补出来的
-// 库行，kind 已经体现了协议差异），模拟客户端是一个客户端一份会话 —— 两种都
-// 不该出现在下拉里，同一个理由，所以放在一条里比。
-for (const kind of ["minimax", "sensenova"]) {
+// 厂商那几家不是用户能建的一类：它们是本仓预置的模板（迁移补出来的库行，
+// kind 已经体现了协议差异）。
+for (const kind of ["sensenova"]) {
   const rejected = createOpenPlatform({
     id: `kinds-${kind}`,
     label: `Kinds ${kind}`,
     baseUrl: "https://simulated.test/v1",
     kind,
   });
-  check(`厂商或模拟客户端类型不可建：${kind}`, rejected.ok === false, rejected.message);
-  check(
-    `${kind} 说的是没有这一类`,
-    rejected.message.includes(`没有这一类平台：${kind}`),
-    rejected.message,
-  );
+  check(`厂商类型不可建：${kind}`, rejected.ok === false, rejected.message);
+  check(`${kind} 说的是没有这一类`, rejected.message.includes(`没有这一类平台：${kind}`), rejected.message);
   check(`${kind} 那一行也没写进表`, openPlatformOf(`kinds-${kind}`) === null);
 }
+
+// 预置的模拟客户端：面板上从目录里挑一个，id 与地址都由预置定死。
+//
+// 挑一条播种过的先删再建：删过的那条留着墓碑，建回来要清掉（否则下次启动
+// 播种仍然跳过它）。
+const simulatedPreset = SIMULATED_CLIENTS.find((c) => c.id === "workbuddy-global")!;
+const rowsBeforeSimulated = listOpenPlatforms().length;
+deleteOpenPlatform(simulatedPreset.id);
+const simulatedAdded = createOpenPlatform({
+  id: simulatedPreset.id,
+  label: simulatedPreset.label,
+  // 送了也不收：模拟端的地址由 kind 自己算。
+  baseUrl: "https://ignored.test/v1",
+  kind: simulatedPreset.kind,
+});
+check("预置的模拟客户端建得起来", simulatedAdded.ok === true, simulatedAdded.message);
+const simulatedRow = openPlatformOf(simulatedPreset.id);
+check("区域照预置", simulatedRow?.region === simulatedPreset.region, JSON.stringify(simulatedRow?.region));
+check("地址是空串（不收请求里那一个）", simulatedRow?.baseUrl === "", JSON.stringify(simulatedRow?.baseUrl));
+check("目录不让自动拉", simulatedRow?.models.auto === false, JSON.stringify(simulatedRow?.models));
+check("额度插件是空串", simulatedRow?.quotaPlugin === "", JSON.stringify(simulatedRow?.quotaPlugin));
+check("kind 就是预置那一类", simulatedRow?.kind === simulatedPreset.kind, JSON.stringify(simulatedRow?.kind));
+check(
+  "表里的行数回到删之前",
+  listOpenPlatforms().length === rowsBeforeSimulated,
+  `${listOpenPlatforms().length} vs ${rowsBeforeSimulated}`,
+);
+
+// id 由预置定死：它是请求路径里那一段，也是调用方 base_url 的那一段。
+const wrongSimulatedId = createOpenPlatform({
+  id: "my-minimax",
+  label: "我的 MiniMax",
+  baseUrl: "",
+  kind: "minimax",
+});
+check("模拟客户端的 id 不能自己取", wrongSimulatedId.ok === false, wrongSimulatedId.message);
+check("说的是 id 只能是预置那一个", wrongSimulatedId.message.includes("minimax"), wrongSimulatedId.message);
+check("被拒的那一行没写进表", openPlatformOf("my-minimax") === null);
+check(
+  "拒绝时一行都没多",
+  listOpenPlatforms().length === rowsBeforeSimulated,
+  `${listOpenPlatforms().length} vs ${rowsBeforeSimulated}`,
+);
+
+// 目录里藏起来的那一条（zcode）：面板上根本看不到，也不给建。
+const hiddenPreset = SIMULATED_CLIENTS.find((c) => c.id === "zcode")!;
+const hiddenBuild = createOpenPlatform({
+  id: hiddenPreset.id,
+  label: hiddenPreset.label,
+  baseUrl: "",
+  kind: hiddenPreset.kind,
+});
+check("hidden 的那一条不给建", hiddenBuild.ok === false, hiddenBuild.message);
+check("表里也没多出它", openPlatformOf("zcode") === null);
+
+// 一个 kind 名下不止一个平台（Qoder 的全球区与中国区）：id 挑的是哪一条。
+const qoderCnPreset = SIMULATED_CLIENTS.find((c) => c.id === "qoder-cn")!;
+deleteOpenPlatform(qoderCnPreset.id);
+const qoderCn = createOpenPlatform({
+  id: qoderCnPreset.id,
+  label: qoderCnPreset.label,
+  baseUrl: "",
+  kind: qoderCnPreset.kind,
+});
+check("同一个 kind 下按 id 挑预置", qoderCn.ok === true, qoderCn.message);
+check("挑中的是中国区那一条", openPlatformOf("qoder-cn")?.region === "cn", JSON.stringify(openPlatformOf("qoder-cn")?.region));
+const qoderWrongId = createOpenPlatform({ id: "qoder-xx", label: "Qoder XX", baseUrl: "", kind: "qoder" });
+check("同一个 kind 下 id 不对也拒", qoderWrongId.ok === false, qoderWrongId.message);
+check("表里没有 qoder-xx", openPlatformOf("qoder-xx") === null);
 
 // 建好之后换不了类型：换类型要连它名下的凭据一起重算，那是另一件事。
 const switched = updateOpenPlatform("kinds-demo", { kind: "openai", label: "Kinds Demo 改" });
@@ -594,7 +702,57 @@ check(
   PLATFORM_KIND_OPTIONS.every((o) => o.modelsFromUpstream === true),
   JSON.stringify(PLATFORM_KIND_OPTIONS.map((o) => o.modelsFromUpstream)),
 );
-check("认不出的 kind 是 null", platformKindOptionOf("minimax") === null, JSON.stringify(platformKindOptionOf("minimax")));
+check("认不出的 kind 是 null", platformKindOptionOf("no-such-kind") === null, JSON.stringify(platformKindOptionOf("no-such-kind")));
+
+// 面板上那一份（两族）：先方言，再目录里没藏起来的模拟客户端。
+const choices = platformKindChoices();
+const dialectChoices = choices.filter((c) => c.category === "dialect");
+const simulatedChoices = choices.filter((c) => c.category === "simulated");
+check(
+  "先方言后模拟客户端",
+  choices.slice(0, dialectChoices.length).every((c) => c.category === "dialect") &&
+    choices.slice(dialectChoices.length).every((c) => c.category === "simulated"),
+  choices.map((c) => `${c.category}:${c.kind}`).join(","),
+);
+check(
+  "方言那一族就是那两条",
+  dialectChoices.map((c) => c.kind).join(",") === PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(","),
+  dialectChoices.map((c) => c.kind).join(","),
+);
+check(
+  "方言类的 preset_id 与 region 都是空串",
+  dialectChoices.every((c) => c.presetId === "" && c.region === ""),
+  JSON.stringify(dialectChoices.map((c) => [c.presetId, c.region])),
+);
+const visible = SIMULATED_CLIENTS.filter((c) => !c.hidden);
+check(
+  "模拟客户端那一族就是目录里看得见的那几条",
+  simulatedChoices.map((c) => c.presetId).join(",") === visible.map((c) => c.id).join(","),
+  simulatedChoices.map((c) => c.presetId).join(","),
+);
+check(
+  "每一条的 kind与区域照目录",
+  simulatedChoices.every((c) => {
+    const preset = visible.find((p) => p.id === c.presetId)!;
+    return preset.kind === c.kind && preset.region === c.region && preset.label === c.label;
+  }),
+  JSON.stringify(simulatedChoices.map((c) => [c.presetId, c.kind, c.region])),
+);
+check(
+  "模拟客户端没有默认地址、不从上游拉目录",
+  simulatedChoices.every((c) => c.defaultBaseUrl === "" && c.modelsFromUpstream === false),
+  JSON.stringify(simulatedChoices.map((c) => [c.defaultBaseUrl, c.modelsFromUpstream])),
+);
+check(
+  "hidden 的 zcode 不在里面",
+  !choices.some((c) => c.kind === "zcode" || c.presetId === "zcode"),
+  choices.map((c) => c.presetId).join(","),
+);
+check(
+  "厂商那几家也不在里面",
+  VENDOR_KINDS.every((kind) => !choices.some((c) => c.kind === kind)),
+  choices.map((c) => c.kind).join(","),
+);
 
 // 上面建的几行删掉：后面的小节按行数比。
 for (const id of ["kinds-demo", "kinds-plain", "kinds-empty"]) deleteOpenPlatform(id);
@@ -698,8 +856,8 @@ check(
 
 section("只加载 open-platforms 的进程");
 
-// 一个只引 lib/open-platforms.ts 的进程（不引 lib/platforms.ts）：模板的判重
-// 照样生效 —— 模板名单在叶子模块里，不靠谁在求值期登记。
+// 一个只引 lib/open-platforms.ts 的进程（不引 lib/platforms.ts）：播种照样跑完 ——
+// 播种在开库那一步（lib/store.ts 的 openDatabase），不靠谁先引平台层。
 const ONLY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "open-platforms-only-"));
 const onlyRun = spawnSync(
   process.execPath,
@@ -707,9 +865,9 @@ const onlyRun = spawnSync(
     "--experimental-strip-types",
     "-e",
     `
-      const { createOpenPlatform } = await import(${JSON.stringify(path.join(ROOT, "lib/open-platforms.ts"))});
-      const res = createOpenPlatform({ id: "qoder", label: "撞模板", baseUrl: "https://only.test/v1" });
-      console.log(JSON.stringify({ ok: res.ok, message: res.message }));
+      const { createOpenPlatform, listOpenPlatforms } = await import(${JSON.stringify(path.join(ROOT, "lib/open-platforms.ts"))});
+      const res = createOpenPlatform({ id: "qoder", label: "撞播种", baseUrl: "https://only.test/v1" });
+      console.log(JSON.stringify({ ok: res.ok, message: res.message, rows: listOpenPlatforms().map((r) => r.id) }));
     `,
   ],
   {
@@ -719,18 +877,59 @@ const onlyRun = spawnSync(
   },
 );
 check("只加载 open-platforms 的进程跑得起来", onlyRun.status === 0, onlyRun.stderr?.slice(-300) ?? "");
-let onlyBody: { ok?: boolean; message?: string } = {};
+let onlyBody: { ok?: boolean; message?: string; rows?: string[] } = {};
 try {
   onlyBody = JSON.parse(onlyRun.stdout.trim().split("\n").pop() ?? "{}");
 } catch {
   onlyBody = {};
 }
 check(
-  "那个进程里撞模板的 id 照样被拒",
-  onlyBody.ok === false && String(onlyBody.message ?? "").includes("代码里的平台"),
+  "那个进程里该播种的模拟客户端已经在了",
+  SEEDED.every((c) => (onlyBody.rows ?? []).includes(c.id)),
+  JSON.stringify(onlyBody.rows),
+);
+check(
+  "那个进程里撞已有行的 id 照样被拒",
+  onlyBody.ok === false && String(onlyBody.message ?? "").includes("已经有这个平台了"),
   JSON.stringify(onlyBody),
 );
 fs.rmSync(ONLY_DIR, { recursive: true, force: true });
+
+section("模拟客户端不拉目录");
+
+// 平台行只按 kind 分开（lib/platform-catalog.ts 的 isSimulatedClientKind）：模拟
+// 客户端那一族的行长得跟开放平台一样，但它们的目录归各 kind 自己的代码，不能拿去
+// 问上游要 —— 那会带着真 key 去打一个封闭客户端的接口。
+//
+// 把它们那一格「自动拉」打开：播种写的是 0，老库里那几行是 1（播种改口径之前写进去
+// 的），所以只有按 kind 判别才拦得住。
+const { openPlatformCatalogRefreshable, refreshOpenPlatformCatalog } = await import(
+  "../lib/open-platform-catalog.ts"
+);
+// 用一条没被动过的播种行：上面那条（minimax）删过又建回来了，现在是一条用户建的
+// 开放平台，kind 已经不是模拟端那一族，拿它验不到这里要验的东西。
+const simId = SEEDED.find((c) => c.id !== SIMULATED_CLIENTS[0].id)!.id;
+store().prepare("UPDATE platform SET models_auto = 1 WHERE id = ?").run(simId);
+const simRow = openPlatformOf(simId);
+check(
+  "自动拉开着也不刷新",
+  openPlatformCatalogRefreshable(simRow!) === false,
+  JSON.stringify(simRow?.models),
+);
+const simRefresh = await refreshOpenPlatformCatalog(simId);
+check(
+  "说要拉的那一次被挡下了",
+  simRefresh.ok === false && simRefresh.message.includes("不用从上游拉目录"),
+  JSON.stringify(simRefresh),
+);
+// 对照：同一个判断在开放平台上放行（不然上面那条只能说「什么都不刷新」）。
+const plainRow = openPlatformOf("zephyr");
+check(
+  "开放平台的目录照旧要拉",
+  plainRow !== null && openPlatformCatalogRefreshable(plainRow) === true,
+  JSON.stringify(plainRow?.models),
+);
+store().prepare("UPDATE platform SET models_auto = 0 WHERE id = ?").run(simId);
 
 section("地址的结尾斜杠");
 

@@ -23,7 +23,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
 // 平台模板表（叶子模块，不引任何东西）：迁移要把那几行补进 platform 表。
-import { isVendorTemplateKind, PLATFORM_TEMPLATES } from "./platform-catalog.ts";
+import { isVendorTemplateKind, PLATFORM_TEMPLATES, SIMULATED_CLIENTS } from "./platform-catalog.ts";
 // 播种用的模型目录：与各 kind 的代码目录同一个来源（见 seedPlatformModels）。
 import { knownCatalogForBaseUrl } from "./model-catalog.ts";
 import { QINIU_MODELS } from "./qiniu/models.ts";
@@ -164,6 +164,20 @@ export function store(): DatabaseSync {
       updated_at   INTEGER NOT NULL
     )`,
   );
+  // 预置平台被删掉的墓碑：一行一个 id。
+  //
+  // 播种是「表里没有就补一行」，补不出「用户删过它」这件事 —— 删掉 minimax 的
+  // 行，下次启动又插回一个空平台，等于删不掉。所以删的那一下在这里留一条，播种
+  // 见到就跳过；用户自己把它建回来（createOpenPlatform）就把墓碑清掉。
+  //
+  // 只记预置目录（platform-catalog.ts 的 SIMULATED_CLIENTS）里的 id：用户自己建
+  // 的平台没有播种这一层，删了本来就没了。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS platform_preset_removed (
+      id         TEXT PRIMARY KEY,
+      removed_at INTEGER NOT NULL
+    )`,
+  );
   // 人给某个模型的元数据：一行一个模型，只放**写了的**那些字段（JSON）。
   //
   // 平台一级一份：模板平台与开放平台共用这一张表 —— 目录的来源是两回事（有的
@@ -195,6 +209,10 @@ export function store(): DatabaseSync {
   migrateProviderToAccounts(db);
   migrateProviderWeight(db);
   migratePlatforms(db);
+  // 模拟客户端那一族的平台行必须在任何 allPlatforms() 之前就位：代码里的
+  // PLATFORMS 已经清空（lib/platform-templates.ts），表里没有的行等于平台不存在 ——
+  // 路由、面板、额度、目录全都按表里的行找平台。
+  migrateSimulatedClients(db);
   seedPlatformModels(db);
   migrateAccountIds(db);
   return db;
@@ -549,8 +567,78 @@ function seedPlatformTemplates(db: DatabaseSync): void {
 }
 
 /**
- * 账号 id 从「平台名」换成数字。
+ * 模拟客户端那一族的平台补成表里的行。
  *
+ * 必须在启动时播完，不能等第一次用到再建：PLATFORMS 已经清空
+ * （lib/platform-templates.ts），表里没有的行就等于这个平台不存在 —— 路由、面板、
+ * 额度、目录全都按表里的行找平台。少一行，那个客户端的请求就整条路断掉。
+ *
+ * 只播 `hidden === false` 的：hidden 是「目录里先备着、面板上还不给」。播出来就是
+ * 一个地址空、目录空、额度空的平台，面板上看得见却用不了 —— 那样 hidden 就没意义
+ * 了。将来把它改成 false，下一次启动自然就播。
+ *
+ * 删过的不播（platform_preset_removed 的墓碑）：删了就是没了，重启不该插回来。
+ * 用户自己建回来会清墓碑（lib/open-platforms.ts 的 createOpenPlatform）。
+ *
+ * 幂等：存在就不插，已经有的行一个字段都不改 —— 名字用户在面板上能改，那是用户
+ * 的值；目录与额度插件归别处维护，重启不该把它们拨回去。
+ *
+ * 判存在与判墓碑都在同一条语句里（INSERT … SELECT … WHERE NOT EXISTS），不再有
+ * 两次读之间的窗口：先读墓碑、再读平台行、再插，中间别人写一条墓碑或建一行，播
+ * 出来就是「删掉的长回来了」或者「盖掉用户刚建的行」。一句里判完，窗口就没了。
+ *
+ * `models_auto` 是 0：模拟客户端的目录是代码里挑过的一份（各 kind 自己的
+ * models()），不从上游拉 —— 上游那份是那个封闭客户端的目录，网关拿不到也不该拿。
+ */
+export function migrateSimulatedClients(db: DatabaseSync): void {
+  const insert = db.prepare(
+    "INSERT INTO platform " +
+      "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+      "SELECT ?, ?, '', '[]', 0, '', ?, ?, ?, ? " +
+      "WHERE NOT EXISTS (SELECT 1 FROM platform_preset_removed WHERE id = ?) " +
+      "AND NOT EXISTS (SELECT 1 FROM platform WHERE id = ?)",
+  );
+  const now = Date.now();
+  for (const client of SIMULATED_CLIENTS) {
+    // hidden 是目录数据（「面板上还不给」），不是库里的状态，留在 JS 这一层判。
+    if (client.hidden) continue;
+    insert.run(client.id, client.label, client.kind, client.region, now, now, client.id, client.id);
+  }
+}
+
+/**
+ * 这个预置平台是不是被用户删掉了。
+ *
+ * 只有播种与面板的删除/新建用得着：判断一个 id 在不在表里用 openPlatformOf。
+ */
+export function platformPresetRemoved(id: string): boolean {
+  return store().prepare("SELECT id FROM platform_preset_removed WHERE id = ?").get(id) !== undefined;
+}
+
+/**
+ * 记下「用户删掉了这个预置平台」。
+ *
+ * 与删平台那一行写在同一个事务里（调用方已经开着的那个）：两句话之间断掉，
+ * 就会出现「行删了、墓碑没写，重启又长回来」。
+ */
+export function rememberPlatformPresetRemoved(id: string): void {
+  store()
+    .prepare("INSERT OR REPLACE INTO platform_preset_removed (id, removed_at) VALUES (?, ?)")
+    .run(id, Date.now());
+}
+
+/**
+ * 用户把这个 id 建回来了，把墓碑清掉。
+ *
+ * 不清的话，这一行哪天再被删一次也无所谓 —— 问题在下次建的时候：播种见到墓碑就
+ * 跳过，可那一行是用户自己建的、归用户，墓碑留着只会误导后来读这张表的人。
+ */
+export function forgetPlatformPresetRemoved(id: string): void {
+  store().prepare("DELETE FROM platform_preset_removed WHERE id = ?").run(id);
+}
+
+/**
+ * 账号 id 从「平台名」换成数字。 *
  * 账号 id 现在是一个自增整数（lib/providers.ts 的 nextAccountId），面板只显示
  * alias，所以换号对使用者不可见 —— 但凭据与冷却都按 id 认人，得跟着搬。老库里
  * 还是「平台名」形态（`tokenrhythm`、`qoder`、`workbuddy-cn`），启动时换掉。

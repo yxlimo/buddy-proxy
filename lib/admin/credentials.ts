@@ -16,18 +16,15 @@ import { writeTokenRhythmKey } from "../tokenrhythm/keys.ts";
 import { quotaPluginOf } from "../quota-plugins.ts";
 import { writePluginField } from "../quota-plugin-credentials.ts";
 import { openPlatformOf, OPEN_PLATFORM_KIND_NAME, type OpenPlatformRow } from "../open-platforms.ts";
-import { platformOf, platformOfAny } from "../platforms.ts";
+import { isSimulatedClientKind } from "../platform-catalog.ts";
+import { platformOfAny } from "../platforms.ts";
 import { provider, providerKindOf } from "../providers.ts";
 
 /**
  * 这个账号是不是开放平台的账号。
  *
- * 开放平台是用户自己加的平台（表里的那一行）。它的 kind 登记了（"openai"），
- * 但这里问的不是 kind：账号行说它属于哪个平台，那一行在平台表里、且不跟代码
- * 里的模板重名，就是开放平台。
- *
- * 表里有、代码里也有的 id 算模板：模板优先（lib/platforms.ts），那个账号不是
- * 开放平台的账号 —— 它按模板那一套算。
+ * 开放平台是用户自己加的平台（表里的那一行）。模拟客户端那一族也有平台行，但
+ * 它们靠登录拿会话，不归“填几格 key”这一档 —— 按 kind 分开。
  *
  * 有自己那一类凭据形状的开放平台不算「开放平台」这一档：七牛云要两段（推理
  * key 与门户 cookie），书生·端砚要两段，其余三家各一把。它们凭 kind 分流到
@@ -39,7 +36,7 @@ export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null
   if (!row) return null;
   const open = openPlatformOf(row.platform);
   if (!open) return null;
-  if (platformOf(row.platform) !== null) return null;
+  if (isSimulatedClientKind(open.kind)) return null;
   return GENERIC_OPEN_PLATFORM_KINDS.has(open.kind) ? open : null;
 }
 

@@ -348,8 +348,11 @@ function seedCredentials(kind: string, accountId: string): void {
   }
 }
 
-// 每个 kind 用哪个平台建账号。zcode 没有平台模板（它的 kind 是从平台派生
-// 的），所以那一类只能验注册表那一半。
+// 每个 kind 用哪个平台建账号。平台的 id 就是目录里的 id（lib/platform-catalog.ts
+// 的 SIMULATED_CLIENTS 与 PLATFORM_TEMPLATES）：平台全在表里，每一类都造得出账号。
+//
+// zcode 是空串：目录里那一条还在，但 `hidden: true` —— 播种不播它，表里没有
+// 这个平台，也就造不出这一类账号（下面走兜底那一支）。
 const KIND_PLATFORM: Record<string, string> = {
   minimax: "minimax",
   qoder: "qoder",
@@ -365,11 +368,9 @@ const KIND_PLATFORM: Record<string, string> = {
 for (const kind of kinds) {
   const platform = KIND_PLATFORM[kind.kind] ?? "";
   if (!platform) {
-    // 这一类还没有平台模板：账号的 kind 是从平台派生的（lib/providers.ts 的
-    // toRow），没有平台就没有这一类的账号 —— credentialsOf 的这一支今天造不
-    // 出来（注册表那一半上面已经验过：canInfer 与 inferWith 一致）。
-    //
-    // 这一行不是恒真：哪天这一类有了平台模板，它就会失败，那时该把真正的
+    // 兜底：表里没有这个 kind 的平台就造不出这一类的账号 —— credentialsOf
+    // 的这一支今天验不了（注册表那一半上面已经验过：canInfer 与 inferWith
+    // 一致）。这一行不是恒真：哪天这一类有了平台，它就会失败，那时该把真正的
     // credentialsOf 断言补上。
     check(
       `${kind.kind}：还没有平台模板（这一类只能验注册表那一半）`,

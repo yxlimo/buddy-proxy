@@ -559,8 +559,14 @@ message OpenPlatform {
 message AddPlatformRequest {
   string id = 1;
   string label = 2;
+  // 方言类的平台必须给；预置的模拟客户端类忽略这一格（地址由模拟端定）。
   string base_url = 3;
-  // 用哪一类适配器。空串 = openai（OpenAI 兼容的通用平台）。
+  // 哪一类。两种取值都收：
+  //
+  //   方言（openai / anthropic，空串当 openai）：id 与地址都由调用方填。
+  //   预置的模拟客户端（minimax / qoder / workbuddy）：id 只能是那一类预置的
+  //   id（minimax / qoder / qoder-cn / workbuddy-cn / workbuddy-global），
+  //   地址与区域照预置来。
   string kind = 4;
 }
 
@@ -646,6 +652,13 @@ message PlatformKind {
   string default_base_url = 3;
   // 这一类的模型目录能不能从上游拉（不能的话面板不显示「刷新模型目录」）。
   bool models_from_upstream = 4;
+  // 这一条是「方言」还是「预置的模拟客户端」。
+  // dialect = 用户自己加的平台（选的是报文格式）；simulated = 从预置里挑一个。
+  string category = 5;
+  // 预置平台建出来的 id（方言类为空串：id 由用户填）。
+  string preset_id = 6;
+  // 预置平台的区域（cn / global / 空串）。方言类为空串。
+  string region = 7;
 }
 
 message ListPlatformKindsRequest {}

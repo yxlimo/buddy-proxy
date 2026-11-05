@@ -152,13 +152,12 @@ import {
   type OpenPlatformRow,
 } from "../open-platforms.ts";
 import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
-import { PLATFORM_KIND_OPTIONS } from "../platform-catalog.ts";
+import { isSimulatedClientKind, platformKindChoices } from "../platform-catalog.ts";
 import { allQuotaPlugins } from "../quota-plugins.ts";
 import { quotaConclusionOf, quotaPluginIdOf, type QuotaConclusion } from "../quota-state.ts";
 import { peekHealthSnapshot } from "../health-cache.ts";
 import { listAggregateModels } from "../aggregate.ts";
 import {
-  PLATFORMS,
   allPlatforms,
   forgetPlatformPolicy,
   isPlatform,
@@ -578,11 +577,12 @@ function platformMessages() {
   const availabilities = platformAvailabilities(platforms);
   // 账号视图也一次算齐：每个账号行自己去读凭据的话，平台一多就是 O(N²)。
   const accounts = new Map(listAccounts().map((a) => [a.id, a]));
-  // 开放平台那一行：表里的行减去跟代码模板重名的那些（模板优先，那一行不生效）。
-  const templateIds = new Set(PLATFORMS.map((p) => p.id));
+  // 平台行：那几格（额度插件、自动拉、目录）只有开放平台有。模拟客户端那一族
+  // 的行长得一样，但它们不是开放平台 —— 判别按 kind，不按「在不在代码模板里」
+  // （模板名单已经空了）。
   const openRows = new Map(
     listOpenPlatforms()
-      .filter((row) => !templateIds.has(row.id))
+      .filter((row) => !isSimulatedClientKind(row.kind))
       .map((row) => [row.id, row]),
   );
   return platforms.flatMap((platform) => {
@@ -843,10 +843,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async deletePlatform(request) {
     const id = String(request.id ?? "").trim();
-    // 模板平台删不掉：它是代码，不是数据。
-    if (PLATFORMS.some((p) => p.id === id)) {
-      return create(DeletePlatformResponseSchema, { ok: false, message: "这个 id 是代码里的平台，删不了" });
-    }
     const row = openPlatformOf(id);
     if (!row) {
       return create(DeletePlatformResponseSchema, { ok: false, message: `没有这个平台：${id}` });
@@ -913,14 +909,18 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   },
 
   async listPlatformKinds() {
-    // 顺序照表里的顺序：面板按答复渲染下拉，不自己排。
+    // 两族：先是方言（用户自己加，选的是报文格式），再是预置的模拟客户端（从
+    // 目录里挑一个）。顺序照表里的顺序：面板按答复渲染下拉，不自己排。
     return create(ListPlatformKindsResponseSchema, {
-      kinds: PLATFORM_KIND_OPTIONS.map((option) =>
+      kinds: platformKindChoices().map((option) =>
         create(PlatformKindSchema, {
           kind: option.kind,
           label: option.label,
           defaultBaseUrl: option.defaultBaseUrl,
           modelsFromUpstream: option.modelsFromUpstream,
+          category: option.category,
+          presetId: option.presetId,
+          region: option.region,
         }),
       ),
     });

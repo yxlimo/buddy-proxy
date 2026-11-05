@@ -16,10 +16,9 @@ import { randomUUID } from "node:crypto";
 import { openPlatformOf, updateOpenPlatform, type OpenPlatformRow } from "./open-platforms.ts";
 // 归因头跟推理那条路用同一个名字：两个地方各写一遍，改一处就会走样。
 import { REQUEST_ID_HEADER } from "./router/upstreams/open-platform.ts";
-// 模板的 id 名单住在叶子模块里（lib/platform-templates.ts）：这一层要判「表里
-// 那一行跟代码里的模板重名」，引 lib/platforms.ts 会绕成环（那一层引这一层）。
-import { PLATFORMS } from "./platform-templates.ts";
-import { isVendorTemplateKind } from "./platform-catalog.ts";
+// 模拟客户端那一族的平台行长得跟开放平台一样，区别在 kind：它们的目录归各 kind
+// 自己的代码目录，不从上游拉。判别函数只在一个地方定义（lib/platform-catalog.ts）。
+import { isSimulatedClientKind, isVendorTemplateKind } from "./platform-catalog.ts";
 import { kindOf } from "./provider-kinds.ts";
 import { accountsOfPlatform } from "./providers.ts";
 // 引用即登记：问目录要拿各家的推理 key，而登记发生在各平台模块的求值期。环上
@@ -89,20 +88,15 @@ export function openPlatformCatalogStale(row: OpenPlatformRow, now = Date.now())
   return now - row.models.fetchedAt >= OPEN_PLATFORM_CATALOG_TTL_MS;
 }
 
-/** 这个 id 是代码里的模板（模板优先：表里那一行不生效）。 */
-function isTemplatePlatformId(id: string): boolean {
-  return PLATFORMS.some((p) => p.id === id);
-}
-
 /**
  * 这个平台的目录要不要去拉。
  *
- * 人写死的目录不动（那是明确的意思，不是默认值）。跟代码里的模板重名的表行也
- * 不动：模板优先，那一行不生效，拉回来的目录写回去也会被拒
- * （lib/open-platforms.ts）。
+ * 人写死的目录不动（那是明确的意思，不是默认值）。模拟客户端那一族也不拉：
+ * 它们是那个封闭客户端的平台，目录是各 kind 自己的代码目录（lib/minimax/models.ts
+ * 这一些），去问上游要来的那份不是给网关用的。
  *
  * 启动时与请求路径上的刷新用同一套口径：写成两份就会走样 —— 一边跳过了，另一
- * 边还在每 5 分钟带真 key 打一次上游，而写回必然被拒。
+ * 边还在每 5 分钟带真 key 打一次上游。
  */
 export function openPlatformCatalogRefreshable(row: OpenPlatformRow): boolean {
   // 厂商模板行（七牛云、讯飞星火、SenseNova、书生·端砚、TokenRhythm）的目录是
@@ -112,7 +106,7 @@ export function openPlatformCatalogRefreshable(row: OpenPlatformRow): boolean {
   // 播种已经把这些行的 models_auto 关了（新库），这一句管的是老库：那些行是
   // 播种改口径之前写进去的，models_auto 还是 1。两处都要 —— 只靠播种，老库
   // 里那几行照样每次启动都被上游那份盖一次。
-  return row.models.auto && !isTemplatePlatformId(row.id) && !isVendorTemplateKind(row.kind);
+  return row.models.auto && !isSimulatedClientKind(row.kind) && !isVendorTemplateKind(row.kind);
 }
 
 /**
@@ -284,11 +278,11 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
     const row = openPlatformOf(id);
     if (!row) return { ok: false, message: `没有这个平台：${id}` };
     if (!row.models.auto) return { ok: false, message: "目录是人写的，不自动拉" };
-    // 模板重名：表里这一行不生效（模板优先），拉回来的目录写回去也会被拒。
-    // 这个判断与退避都只看 row 与内存里的状态，不读库 —— 放在查 key 前面，
-    // 请求路径上就不用为了判重去读 provider 表与凭据。
-    if (isTemplatePlatformId(id)) {
-      return { ok: false, message: "这个 id 是代码里的平台，表里这一行不生效" };
+    // 模拟客户端那一族：目录是各 kind 自己的代码目录，不从上游拉。与退避一样
+    // 只看 row 与内存里的状态，不读库 —— 放在查 key 前面，请求路径上就不用为了
+    // 判别去读 provider 表与凭据。
+    if (isSimulatedClientKind(row.kind)) {
+      return { ok: false, message: "这个平台不用从上游拉目录" };
     }
     // 退避：上次成功之后失败过就先不再问。退避期内不告警 —— 同一个失败反复
     // 告警就是刷屏（请求路径上每个 /v1/models 都会走到这里）。

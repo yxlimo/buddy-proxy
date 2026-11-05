@@ -8,7 +8,8 @@
 //
 //   1. AddPlatform：加得进去、库里的行数多一行、ListUpstreams 里有它
 //      （isOpenPlatform）、没有账号时状态是「没有凭据」
-//   2. AddPlatform 的三种拒绝：id 不合法、跟代码模板重名、重复建
+//   2. AddPlatform 的三种拒绝：id 不合法、跟代码模板重名、重复建（答复里没有
+//      SQL 英文）
 //   3. UpdatePlatform：改名生效、地址空串被拒且库没变、额度插件写进去、
 //      手工目录（models_auto=false + 清单）写进去
 //   4. DeletePlatform：平台行、账号、凭据都清掉，ListUpstreams 里不再出现；
@@ -22,9 +23,11 @@
 //  10. ListUpstreams 的地址：开放平台还没加账号时报的是建的时候填的地址，
 //      模板平台照旧（从名下账号的 kind 算）
 //  11. 建平台时选类型：带 kind 的按那个建、不带的是 openai、没登记的那一类
-//      （含模拟客户端那几家）据收、建好之后换不了类型
-//  12. ListPlatformKinds：六条、顺序跟那张表一样、openai 没有默认地址、星火
-//      不能从上游拉目录
+//      （厂商那几家）据收、建好之后换不了类型
+//  12. ListPlatformKinds：两族（先方言后模拟客户端）、方言两条与目录一致、
+//      模拟客户端那几条的 preset_id / region 与目录一致、zcode 不在答复里
+//  13. AddPlatform / UpdatePlatform 对预置的模拟客户端：id 由预置定死、
+//      hidden 的不给建（答复不指向空列表）、改名不用送地址
 //
 // 断言里不写死平台的个数：一律跟表里的行数比。
 
@@ -37,10 +40,12 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "open-platform-admin-"));
 process.env.BUDDY_DATA_DIR = tmp;
 
 const { adminService } = await import("../lib/admin/service.ts");
-const { store } = await import("../lib/store.ts");
+const { store, migrateSimulatedClients, platformPresetRemoved, forgetPlatformPresetRemoved } =
+  await import("../lib/store.ts");
 const { openPlatformOf, updateOpenPlatform } = await import("../lib/open-platforms.ts");
-const { PLATFORM_KIND_OPTIONS, platformKindOptionOf } = await import("../lib/platform-catalog.ts");
-const { PLATFORMS } = await import("../lib/platforms.ts");
+const { PLATFORM_KIND_OPTIONS, SIMULATED_CLIENTS, platformKindChoices } = await import(
+  "../lib/platform-catalog.ts"
+);
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { upstreamBaseUrl } = await import("../lib/admin/upstreams.ts");
@@ -223,16 +228,16 @@ const badId = await addPlatform({
 check("id 不合法被拒", badId.ok === false, show(badId));
 check("说的是 id 的规矩", String(badId.message ?? "").length > 0, String(badId.message));
 
-const templateClash = await addPlatform({
-  id: PLATFORMS[0].id,
-  label: "撞模板",
+const builtInClash = await addPlatform({
+  id: SIMULATED_CLIENTS[0].id,
+  label: "撞内置平台",
   baseUrl: "https://api.acme.test/v1",
 });
-check("跟代码模板重名被拒", templateClash.ok === false, show(templateClash));
+check("跟已有的内置平台重名被拒", builtInClash.ok === false, show(builtInClash));
 check(
-  "说的是代码里的平台",
-  String(templateClash.message ?? "").includes("代码里的平台"),
-  String(templateClash.message),
+  "说的是已经有这个平台了",
+  String(builtInClash.message ?? "").includes("已经有这个平台了"),
+  String(builtInClash.message),
 );
 
 // 账号 id 与平台 id 相互独立：账号 id 是自增数，平台表看不见它，也不占平台表
@@ -262,6 +267,32 @@ check("重复建被拒", again.ok === false, show(again));
 check("说的是已经有了", String(again.message ?? "").length > 0, String(again.message));
 check(
   "被拒的那些都没写进表",
+  countPlatforms() === platformsBefore + 1,
+  `${countPlatforms()} vs ${platformsBefore + 1}`,
+);
+
+// 撞车的答复得是中文。事务外那句判重只看得见本进程：两个进程同时建同一个 id 时
+// 后一个撞在 INSERT 的唯一约束上，SQLite 的原话（UNIQUE constraint failed:
+// platform.id）不该被面板原样显示。
+const clashAgain = await addPlatform({
+  id: "acme",
+  label: "撞车",
+  baseUrl: "https://api.acme.test/v1",
+});
+check("撞车被拒", clashAgain.ok === false, show(clashAgain));
+check(
+  "撞车的答复里没有 SQL 英文",
+  !/UNIQUE/i.test(String(clashAgain.message ?? "")) &&
+    !/constraint/i.test(String(clashAgain.message ?? "")),
+  String(clashAgain.message),
+);
+check(
+  "撞车说的是已经有这个平台了",
+  String(clashAgain.message ?? "").includes("已经有这个平台了"),
+  String(clashAgain.message),
+);
+check(
+  "撞车没多写一行",
   countPlatforms() === platformsBefore + 1,
   `${countPlatforms()} vs ${platformsBefore + 1}`,
 );
@@ -474,12 +505,54 @@ check(
   String(deleted.message),
 );
 
-const templateDelete = await deletePlatform({ id: PLATFORMS[0].id });
-check("模板平台删不掉", templateDelete.ok === false, show(templateDelete));
+// hidden 的 zcode：目录里有条目、表里没有行。播出来就是一个地址、目录、额度全空
+// 的平台，面板上看得见却用不了 —— 所以它不在平台列表里。
+//
+// 断言两件事：列表里没有，而且目录里还在。只看「列表里没有」的话，把它从目录里
+// 删掉也能过 —— 那是把「先备着」这条路径删了，不是把它藏起来。
 check(
-  "说的是代码里的平台",
-  String(templateDelete.message ?? "").includes("代码里的平台"),
-  String(templateDelete.message),
+  "目录里还有 zcode 那一条，而且是 hidden",
+  SIMULATED_CLIENTS.some((c) => c.id === "zcode" && c.hidden === true),
+  show(SIMULATED_CLIENTS.filter((c) => c.id === "zcode")),
+);
+check(
+  "hidden 的那一条不在平台列表里",
+  !(await listUpstreams()).some((u: any) => u.id === "zcode"),
+  show((await listUpstreams()).map((u: any) => u.id)),
+);
+
+// 播种的行删得掉，而且删掉之后不会在下次启动长回来（墓碑里记着）。挑一条后面几
+// 节用不到的：workbuddy-global（minimax 后面还要当对照）。
+const builtInDelete = await deletePlatform({ id: "workbuddy-global" });
+check("播种的模拟客户端平台删得掉", builtInDelete.ok === true, show(builtInDelete));
+check(
+  "删了就不在列表里了",
+  !(await listUpstreams()).some((u: any) => u.id === "workbuddy-global"),
+  show((await listUpstreams()).map((u: any) => u.id)),
+);
+check(
+  "删预置的行留了墓碑",
+  platformPresetRemoved("workbuddy-global") === true,
+  show(platformPresetRemoved("workbuddy-global")),
+);
+migrateSimulatedClients(store());
+check(
+  "删掉之后播种不补回来",
+  openPlatformOf("workbuddy-global") === null,
+  show(openPlatformOf("workbuddy-global")),
+);
+check(
+  "不补回来也不会又冒出一个空平台",
+  !(await listUpstreams()).some((u: any) => u.id === "workbuddy-global"),
+  show((await listUpstreams()).map((u: any) => u.id)),
+);
+// 把墓碑清掉就回到「没删过」：后面几节按行数比，得补回基线。
+forgetPlatformPresetRemoved("workbuddy-global");
+migrateSimulatedClients(store());
+check(
+  "墓碑清掉之后播种补回来了",
+  openPlatformOf("workbuddy-global")?.kind === "workbuddy",
+  show(openPlatformOf("workbuddy-global")),
 );
 
 const missingDelete = await deletePlatform({ id: "no-such-platform" });
@@ -537,18 +610,23 @@ check(
   String(badKind.message),
 );
 check("被拒的那一行没写进表", openPlatformOf("kind-bad") === null, show(openPlatformOf("kind-bad")));
+// 这种「目录里根本没有这一类」的也不许指向预置列表：能建的那两种方言已经列出来了。
+check(
+  "没登记的 kind 不让人去选预置",
+  !String(badKind.message ?? "").includes("从预置里选"),
+  String(badKind.message),
+);
 
-// 厂商与模拟客户端都不是能建的一类：厂商是本仓预置的模板（迁移补出来的库行，
-// kind 已经体现了协议差异），模拟客户端是一个客户端一份会话 —— 同一个理由，
-// 放在一条里比。
-for (const kind of ["minimax", "sensenova"]) {
+// 厂商那几家不是能建的一类：它们是本仓预置的模板（迁移补出来的库行，kind 已经
+// 体现了协议差异）。
+for (const kind of ["sensenova"]) {
   const rejected = await addPlatform({
     id: `kind-reject-${kind}`,
     label: `Kind Reject ${kind}`,
     baseUrl: "https://api.kind.test/v1",
     kind,
   });
-  check(`厂商或模拟客户端类型不可建：${kind}`, rejected.ok === false, show(rejected));
+  check(`厂商类型不可建：${kind}`, rejected.ok === false, show(rejected));
   check(
     `${kind} 说的是没有这一类`,
     String(rejected.message ?? "").includes(`没有这一类平台：${kind}`),
@@ -588,15 +666,41 @@ check("表里回到基线", countPlatforms() === platformsBefore, `${countPlatfo
 section("能建的平台种类");
 
 const kindOptions = await listPlatformKinds();
-check("返回两条", kindOptions.length === 2, show(kindOptions.map((k: any) => k.kind)));
+const choices = platformKindChoices();
+const dialectKinds = kindOptions.filter((k: any) => k.category === "dialect");
+const simulatedKinds = kindOptions.filter((k: any) => k.category === "simulated");
+
+// 两族：先是方言（用户自己加，选的是报文格式），再是预置的模拟客户端（从目录里
+// 挑一个）。
+check("方言那一族在答复里", dialectKinds.length === PLATFORM_KIND_OPTIONS.length, show(dialectKinds.map((k: any) => k.kind)));
 check(
-  "顺序跟那张表一样",
-  kindOptions.map((k: any) => k.kind).join(",") === PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(","),
-  show([kindOptions.map((k: any) => k.kind), PLATFORM_KIND_OPTIONS.map((o) => o.kind)]),
+  "模拟客户端那一族也在答复里",
+  simulatedKinds.length === SIMULATED_CLIENTS.filter((c) => !c.hidden).length,
+  show(simulatedKinds.map((k: any) => k.presetId)),
 );
 check(
-  "每一条都带名字、默认地址、能不能拉目录这三格",
-  kindOptions.every((k: any) => typeof k.kind === "string" && typeof k.label === "string" && typeof k.defaultBaseUrl === "string" && typeof k.modelsFromUpstream === "boolean"),
+  "顺序：先方言后模拟客户端",
+  kindOptions.map((k: any) => k.kind).join(",") === choices.map((o) => o.kind).join(",") &&
+    kindOptions.slice(0, dialectKinds.length).every((k: any) => k.category === "dialect"),
+  show([kindOptions.map((k: any) => `${k.category}:${k.kind}`), choices.map((o) => `${o.category}:${o.kind}`)]),
+);
+check(
+  "每一对都是那两种之一",
+  kindOptions.every((k: any) => k.category === "dialect" || k.category === "simulated"),
+  show(kindOptions.map((k: any) => k.category)),
+);
+check(
+  "每一条都带名字、默认地址、能不能拉目录、category、preset_id、region 这六格",
+  kindOptions.every(
+    (k: any) =>
+      typeof k.kind === "string" &&
+      typeof k.label === "string" &&
+      typeof k.defaultBaseUrl === "string" &&
+      typeof k.modelsFromUpstream === "boolean" &&
+      typeof k.category === "string" &&
+      typeof k.presetId === "string" &&
+      typeof k.region === "string",
+  ),
   show(kindOptions),
 );
 check(
@@ -604,28 +708,125 @@ check(
   kindOptions.every((k: any) => String(k.label ?? "").length > 0),
   show(kindOptions.map((k: any) => k.label)),
 );
-const openaiOption = kindOptions.find((k: any) => k.kind === "openai");
+
+// 方言那两条：与原来一样（id 由用户填，所以要占位地址，且能自己拉目录）。
+check(
+  "方言那两条就是 openai 与 anthropic",
+  dialectKinds.map((k: any) => k.kind).join(",") === "openai,anthropic",
+  show(dialectKinds.map((k: any) => k.kind)),
+);
+check(
+  "方言类的 preset_id 与 region 都是空串（id 由用户填）",
+  dialectKinds.every((k: any) => k.presetId === "" && k.region === ""),
+  show(dialectKinds.map((k: any) => [k.presetId, k.region])),
+);
+const openaiOption = dialectKinds.find((k: any) => k.kind === "openai");
 check("openai 的默认地址是空串", openaiOption?.defaultBaseUrl === "", show(openaiOption?.defaultBaseUrl));
 check("openai 能从上游拉目录", openaiOption?.modelsFromUpstream === true, show(openaiOption?.modelsFromUpstream));
-const anthropicOption = kindOptions.find((k: any) => k.kind === "anthropic");
+const anthropicOption = dialectKinds.find((k: any) => k.kind === "anthropic");
 check("anthropic 的默认地址是空串", anthropicOption?.defaultBaseUrl === "", show(anthropicOption?.defaultBaseUrl));
 check("anthropic 能从上游拉目录", anthropicOption?.modelsFromUpstream === true, show(anthropicOption?.modelsFromUpstream));
-// 面板要收的是方言：厂商那五家是本仓预置的模板，模拟客户端那五家一个客户端
-// 一份会话 —— 都不在能建的清单里（本次收敛的判据）。
+
+// 模拟客户端那几条：kind / preset_id / region 跟目录一致，地址不由用户填。
+const visibleSimulated = SIMULATED_CLIENTS.filter((c) => !c.hidden);
+check(
+  "模拟客户端那几条的 preset_id 与目录一致（含顺序）",
+  simulatedKinds.map((k: any) => k.presetId).join(",") === visibleSimulated.map((c) => c.id).join(","),
+  show([simulatedKinds.map((k: any) => k.presetId), visibleSimulated.map((c) => c.id)]),
+);
+check(
+  "每一条的 kind、名字、区域都照目录",
+  simulatedKinds.every((k: any) => {
+    const preset = visibleSimulated.find((c) => c.id === k.presetId);
+    return preset !== undefined && preset.kind === k.kind && preset.label === k.label && preset.region === k.region;
+  }),
+  show(simulatedKinds.map((k: any) => [k.presetId, k.kind, k.label, k.region])),
+);
+check(
+  "模拟客户端没有默认地址也不从上游拉目录",
+  simulatedKinds.every((k: any) => k.defaultBaseUrl === "" && k.modelsFromUpstream === false),
+  show(simulatedKinds.map((k: any) => [k.defaultBaseUrl, k.modelsFromUpstream])),
+);
+check(
+  "hidden 的 zcode 不在答复里",
+  !kindOptions.some((k: any) => k.kind === "zcode" || k.presetId === "zcode"),
+  show(kindOptions.map((k: any) => k.presetId)),
+);
+// 厂商那五家是本仓预置的模板（迁移补出来的库行）—— 不在能选的两族里。
 check(
   "厂商类型不在里面",
   ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].every(
-    (kind) => !kindOptions.some((k: any) => k.kind === kind) && platformKindOptionOf(kind) === null,
+    (kind) => !kindOptions.some((k: any) => k.kind === kind),
   ),
   show(kindOptions.map((k: any) => k.kind)),
 );
+
+/* ------------------------------------------------------------------ *
+ * 4d. 建预置的模拟客户端
+ * ------------------------------------------------------------------ */
+
+section("建预置的模拟客户端");
+
+// 播种进来的 minimax 先删掉（后面几节把它当模板平台的对照）：这一节要查的是
+// 从面板建一条回来 —— 删过的那条留着墓碑，建回来得把墓碑清掉。
+const platformsBeforeSimulated = countPlatforms();
+const removedMinimax = await deletePlatform({ id: "minimax" });
+check("先删掉播种进来的那一条", removedMinimax.ok === true, show(removedMinimax));
+
+const builtMinimax = await addPlatform({ kind: "minimax", id: "minimax", label: "MiniMax Code" });
+check("预置的模拟客户端建得起来", builtMinimax.ok === true, show(builtMinimax));
+check("答复里带着这一行", builtMinimax.platform?.id === "minimax", show(builtMinimax.platform));
+check("区域照预置", openPlatformOf("minimax")?.region === "cn", show(openPlatformOf("minimax")?.region));
+check("目录不让自动拉", openPlatformOf("minimax")?.models.auto === false, show(openPlatformOf("minimax")?.models));
+check("地址是空串", openPlatformOf("minimax")?.baseUrl === "", show(openPlatformOf("minimax")?.baseUrl));
+check("额度插件是空串", openPlatformOf("minimax")?.quotaPlugin === "", show(openPlatformOf("minimax")?.quotaPlugin));
+check("墓碑清掉了", platformPresetRemoved("minimax") === false, show(platformPresetRemoved("minimax")));
 check(
-  "模拟客户端那几家不在里面",
-  ["minimax", "qoder", "qoder-cn", "workbuddy-cn", "workbuddy-global"].every(
-    (kind) => !kindOptions.some((k: any) => k.kind === kind) && platformKindOptionOf(kind) === null,
-  ),
-  show(kindOptions.map((k: any) => k.kind)),
+  "表里的行数回到删之前",
+  countPlatforms() === platformsBeforeSimulated,
+  `${countPlatforms()} vs ${platformsBeforeSimulated}`,
 );
+
+// id 由预置定死：它是请求路径里那一段，也是调用方 base_url 的那一段。
+const wrongSimulatedId = await addPlatform({ kind: "minimax", id: "my-minimax", label: "我的 MiniMax" });
+check("模拟客户端的 id 不能自己取", wrongSimulatedId.ok === false, show(wrongSimulatedId));
+check(
+  "说的是 id 只能是预置那一个",
+  String(wrongSimulatedId.message ?? "").includes("minimax"),
+  String(wrongSimulatedId.message),
+);
+check("被拒的那一行没写进库", openPlatformOf("my-minimax") === null, show(openPlatformOf("my-minimax")));
+check(
+  "拒绝时一行都没多",
+  countPlatforms() === platformsBeforeSimulated,
+  `${countPlatforms()} vs ${platformsBeforeSimulated}`,
+);
+
+// 目录里藏起来的那一条（zcode）：面板上看不到，也不给建。
+const hiddenBuild = await addPlatform({ kind: "zcode", id: "zcode", label: "ZCode" });
+check("hidden 的那一条不给建", hiddenBuild.ok === false, show(hiddenBuild));
+// 这一类的每一条都 hidden：说「没有预置、得从预置里选一个」是指着一个空列表让人
+// 选，用户会以为列表没刷新。要说的是「面板上不提供新建」。
+const hiddenMessage = String(hiddenBuild.message ?? "");
+check("hidden 的答复不让人去选预置", !hiddenMessage.includes("从预置里选"), hiddenMessage);
+check("hidden 的答复说的是面板上不提供新建", hiddenMessage.includes("面板上不提供新建"), hiddenMessage);
+check("库里没多行", openPlatformOf("zcode") === null && countPlatforms() === platformsBeforeSimulated, show(openPlatformOf("zcode")));
+
+// 改名：模拟客户端那一行的地址是空串，改名不带 baseUrl 也得让过 —— 只改名字、
+// 额度插件、目录那几格。
+const renamedSimulated = await updatePlatform({ id: "minimax", label: "MM" });
+check("模拟客户端的行改得动名字", renamedSimulated.ok === true, show(renamedSimulated));
+const simulatedEdited = openPlatformOf("minimax");
+check("名字改了", simulatedEdited?.label === "MM", show(simulatedEdited?.label));
+check("地址还是空串", simulatedEdited?.baseUrl === "", show(simulatedEdited?.baseUrl));
+check(
+  "kind 与区域不变",
+  simulatedEdited?.kind === "minimax" && simulatedEdited?.region === "cn",
+  show([simulatedEdited?.kind, simulatedEdited?.region]),
+);
+// 改回来：后面几节把它当模板平台的对照，名字照目录。
+const renamedBack = await updatePlatform({ id: "minimax", label: SIMULATED_CLIENTS[0].label });
+check("改回去也改得动", renamedBack.ok === true, show(renamedBack));
 
 /* ------------------------------------------------------------------ *
  * 5. 刷新目录
@@ -723,7 +924,7 @@ check(
 
 section("模板平台");
 
-const templateUpstream = (await listUpstreams()).find((u) => u.id === PLATFORMS[0].id);
+const templateUpstream = (await listUpstreams()).find((u) => u.id === SIMULATED_CLIENTS[0].id);
 check("模板平台的额度插件是空串", templateUpstream?.quotaPlugin === "", show(templateUpstream?.quotaPlugin));
 check("模板平台的自动拉是 false", templateUpstream?.modelsAuto === false, show(templateUpstream?.modelsAuto));
 check("模板平台不是开放平台", templateUpstream?.isOpenPlatform === false, show(templateUpstream?.isOpenPlatform));

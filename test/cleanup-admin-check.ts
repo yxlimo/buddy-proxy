@@ -50,27 +50,35 @@ function section(title: string): void {
 section("新装好的服务");
 
 const { listProviders, addAccount } = await import("../lib/providers.ts");
-const { PLATFORMS, allPlatforms } = await import("../lib/platforms.ts");
+const { allPlatforms } = await import("../lib/platforms.ts");
 const { listOpenPlatforms } = await import("../lib/open-platforms.ts");
-const { PLATFORM_TEMPLATES } = await import("../lib/platform-catalog.ts");
+const { PLATFORM_TEMPLATES, SIMULATED_CLIENTS } = await import("../lib/platform-catalog.ts");
 
-// 启动不再插行：新装好的服务里一个账号都没有，平台是代码里的模板。
+// 启动不再插账号行：新装好的服务里一个账号都没有，平台是表里的行（模拟客户端
+// 那六条与厂商那五家由迁移补出来）。
 const builtIn = listProviders();
 check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
-// 模板的 id 必须是唯一的：平台 id 与账号 id 共用一个命名空间（账号 id 是
-// `<平台>-<序号>`，跟平台 id 长得一样），重了就分不清。
-const templateIds = PLATFORMS.map((p) => p.id);
+// 目录里的全部 id（含 hidden 的）：唯一性要按整张目录算。
+const builtInIds = [...PLATFORM_TEMPLATES.map((t) => t.key), ...SIMULATED_CLIENTS.map((c) => c.id)];
 check(
-  "模板的 id 是唯一的",
-  new Set(templateIds).size === templateIds.length,
-  templateIds.join(","),
+  "内置平台的 id 是唯一的",
+  new Set(builtInIds).size === builtInIds.length,
+  builtInIds.join(","),
 );
+// 会播种的那几条：目录里的 hidden 条目（zcode）不播 —— 它在目录里，但表里没有
+// 行。所以「会播种的」与「目录里有的」不是一回事，不能拿 builtInIds 当行数用。
+const seededIds = [
+  ...PLATFORM_TEMPLATES.map((t) => t.key),
+  ...SIMULATED_CLIENTS.filter((c) => !c.hidden).map((c) => c.id),
+];
+// 平台全在表里：会播种的模拟客户端 + 厂商那五家都是迁移补出来的行，代码里的
+// 模板名单是空的。
 check(
-  "平台是模板 + 表里那几行（迁移补进来的）",
-  PLATFORMS.every((p) => typeof p.id === "string" && p.id.length > 0) &&
-    listOpenPlatforms().length === PLATFORM_TEMPLATES.length &&
-    allPlatforms().length === PLATFORMS.length + listOpenPlatforms().length,
-  `${PLATFORMS.map((p) => p.id).join(",")} / ${listOpenPlatforms().length}`,
+  "平台就是表里那几行（迁移补进来的）",
+  seededIds.every((id) => typeof id === "string" && id.length > 0) &&
+    listOpenPlatforms().length === seededIds.length &&
+    allPlatforms().length === listOpenPlatforms().length,
+  `${seededIds.join(",")} / ${listOpenPlatforms().length}`,
 );
 check(
   "上游的开关不在环境里了",
@@ -453,12 +461,12 @@ const envRun = spawnSync(
   process.execPath,
   ["--experimental-strip-types", "-e", `
     const { listProviders } = await import("${pathToFileURL(path.join(ROOT, "lib/providers.ts")).href}");
-    const { PLATFORMS } = await import("${pathToFileURL(path.join(ROOT, "lib/platforms.ts")).href}");
+    const { allPlatforms } = await import("${pathToFileURL(path.join(ROOT, "lib/platforms.ts")).href}");
     const { listOpenPlatforms } = await import("${pathToFileURL(path.join(ROOT, "lib/open-platforms.ts")).href}");
     // 环境里那几个开关还在，但没人读了：一个账号都不该冒出来。
     const rows = listProviders();
     console.log(JSON.stringify({
-      platforms: PLATFORMS.length,
+      platforms: allPlatforms().length,
       platformRows: listOpenPlatforms().length,
       rows: rows.map((r) => [r.id, r.enabled]),
     }));
@@ -482,8 +490,8 @@ try {
 }
 check(
   "环境里的开关被忽略了（一个账号都没有）",
-  envRun_body.platforms === PLATFORMS.length &&
-    envRun_body.platformRows === PLATFORM_TEMPLATES.length &&
+  envRun_body.platforms === allPlatforms().length &&
+    envRun_body.platformRows === listOpenPlatforms().length &&
     envRun_body.rows.length === 0,
   JSON.stringify(envRun_body),
 );

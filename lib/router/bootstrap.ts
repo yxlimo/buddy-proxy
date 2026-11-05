@@ -139,8 +139,7 @@ export function startUpstreams(): void {
   }
 
   // 中转站：一个账号一行一个钱包，启动时问一遍平台，余额不明就早说。
-  // 模板只有模拟端那五家了：中转站在开放平台表里，所以按 allPlatforms() 走
-  // （只认模板的话这一段就没人跑了）。
+  // 平台全在表里（代码里的模板名单已经空了），按 allPlatforms() 走。
   for (const template of allPlatforms()) {
     if (template.kind !== "tokenrhythm") continue;
     if (!accountsOfPlatform(template.id).length) continue;

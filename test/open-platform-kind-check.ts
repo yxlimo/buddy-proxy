@@ -1373,7 +1373,8 @@ check(
 // 五、模拟客户端那几家不动：它们的模型口径是逆推加实测来的，以代码为准。
 //
 // 造一行同名的平台（目录里写着别的），它们的 models() 也不许读它。
-insertPlatform("qoder", "qoder", "http://127.0.0.1:1/v1");
+// 播种已经把 qoder 这一行补进表里（模拟客户端的平台全在表里了）：直接往那一行
+// 写一份别人的目录，够验「它们的 models() 不读行」。
 putRowModels("qoder", ["row-should-be-ignored"]);
 const { qoderCatalogModels } = await import("../lib/catalog-models.ts");
 const { qoderModelsForRegion } = await import("../lib/qoder/models.ts");

@@ -5,9 +5,13 @@
 // 平台的 id 就是请求路径里那一段（`/minimax/v1/messages`），所以它是契约的
 // 一部分，改名等于把调用方的 base_url 打断。
 //
-// 平台有两处数据源：模板（lib/platform-templates.ts 里的 PLATFORMS）与表里
-// 的开放平台（lib/open-platforms.ts）。模板优先：id 撞了算模板的 —— 把模板
-// 加回代码时不用先清库，回滚是安全的。
+// 平台的唯一数据源是表里那些行（lib/open-platforms.ts）：模拟客户端那一族由启动时
+// 的播种补行（lib/platform-catalog.ts 的 SIMULATED_CLIENTS），厂商那几家由平台模板
+// 表补行，用户自己加的就是面板上建的那一行。
+//
+// 代码里的模板名单（lib/platform-templates.ts 的 PLATFORMS）已经清空，这里的「模板
+// 优先」那一套只剩一个外壳：名单是空的时候它跟「表里有就算」是同一个答案。等调用
+// 方的 import 都改成 platformOfAny 之后，那一层可以整个删掉。
 //
 // 账号不在这里：账号是 provider 表里的行，同一个平台下可以有多行。平台说
 // 「怎么说话」（kind）、「在哪个区域」、「支持哪些选账号的策略」；账号说
@@ -77,14 +81,16 @@ export function platformOfAny(id: string): Platform | null {
   return row ? { id: row.id, kind: row.kind, label: row.label, region: row.region } : null;
 }
 
-/** 这个 id 是哪个平台。不认识的 id 就是 null。 */
+/**
+ * 这个 id 是哪个平台。不认识的 id 就是 null。
+ *
+ * 两处数据源合流之后（代码里的模板名单已经空了）它与 platformOfAny 是同一个
+ * 答案。留着这个名字是因为调用方问的是「这个平台的区域/种类」：Qoder 中国区
+ * 的区域就靠这一句答出来（lib/router/upstreams/qoder.ts）—— 答成 null 会让它
+ * 按全球区发请求。
+ */
 export function platformOf(id: string): Platform | null {
-  return BY_ID.get(id) ?? null;
-}
-
-/** 哪些平台用的是这一类。 */
-export function platformsOfKind(kind: string): Platform[] {
-  return PLATFORMS.filter((p) => p.kind === kind);
+  return platformOfAny(id);
 }
 
 /**

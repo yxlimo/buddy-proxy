@@ -19,8 +19,6 @@
 // CatalogModel carries (see the comment on its fields).
 
 import { store } from "./store.ts";
-// 模板的 id 名单是叶子模块（不引任何东西），直接引它不会有环上的麻烦。
-import { PLATFORMS } from "./platform-templates.ts";
 // 只为形状：编译后这一行就没有了。catalog-models 引了开放平台那一层，从注册表
 // 走过来的链上不能再长（见 registerKind 的注释）。
 import type { CatalogModel } from "./catalog-models.ts";
@@ -255,12 +253,12 @@ function fromOverride(override: ModelOverrideRow): CatalogModel {
 /**
  * 这个平台存在吗。
  *
- * 模板（代码里写死的 id）与表里的开放平台都算。这里不引 lib/open-platforms.ts：
- * 它把额度插件与判定那一条链拖进来，而这一层是从 kind 注册表来的 —— 注册表在
- * 求值期是最敏感的地方，链上不能再长。查一下表里有没有这一行就够了。
+ * 平台的唯一数据源是表里的行（模拟客户端、厂商那几家与用户自己加的都在里面）。
+ * 这里不引 lib/open-platforms.ts：它把额度插件与判定那一条链拖进来，而这一层
+ * 是从 kind 注册表来的 —— 注册表在求值期是最敏感的地方，链上不能再长。查一下
+ * 表里有没有这一行就够了。
  */
 function platformExists(id: string): boolean {
-  if (PLATFORMS.some((platform) => platform.id === id)) return true;
   return store().prepare("SELECT 1 FROM platform WHERE id = ?").get(id) !== undefined;
 }
 
