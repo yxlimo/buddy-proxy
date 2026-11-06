@@ -1645,6 +1645,160 @@ for (const one of VENDOR_AUTO) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 16. 建平台：额度插件与目录都预填
+ * ------------------------------------------------------------------ */
+
+section("16. 建平台时预填额度插件与目录");
+
+// 额度插件：这一类默认用哪个插件写在 kind 注册表里（ProviderKind.defaultQuotaPlugin）。
+// 面板建平台时拿它预填那一格，用户可以改。
+const VENDOR_PLUGIN: { kind: string; plugin: string }[] = [
+  { kind: "qiniu", plugin: "qiniu" },
+  { kind: "sensenova", plugin: "sensenova-pools" },
+  { kind: "intern-ai", plugin: "intern-ai-credits" },
+  { kind: "tokenrhythm", plugin: "tokenrhythm-wallet" },
+  { kind: "xinghuo", plugin: "" },
+];
+for (const one of VENDOR_PLUGIN) {
+  const row = kindsListed.find((k) => k.kind === one.kind);
+  check(
+    `${one.kind}：清单里的默认插件是 ${one.plugin || "（空）"}`,
+    row?.defaultQuotaPlugin === one.plugin,
+    String(row?.defaultQuotaPlugin),
+  );
+  check(
+    `${one.kind}：与注册表那一格一致`,
+    (kindOf(one.kind)?.defaultQuotaPlugin ?? "") === one.plugin,
+    String(kindOf(one.kind)?.defaultQuotaPlugin),
+  );
+}
+
+// 建平台：额度插件写进行里（像以前那些模板一样）。
+for (const one of VENDOR_PLUGIN) {
+  const id = `prefill-${one.kind}`;
+  const created = createOpenPlatform({
+    id,
+    label: one.kind,
+    baseUrl: upstreamBase,
+    kind: one.kind,
+  });
+  check(`${one.kind}：平台建得起来`, created.ok === true, created.message);
+  check(
+    `${one.kind}：额度插件预填成 ${one.plugin || "（空）"}`,
+    openPlatformOf(id)?.quotaPlugin === one.plugin,
+    String(openPlatformOf(id)?.quotaPlugin),
+  );
+}
+
+// 目录：代码里挑过一份的那几家，建平台时把这一份写进去；目录归上游的那几家建
+// 的时候本来就是空的。
+const { XINGHUO_MODELS } = await import("../lib/xinghuo/models.ts");
+const PREFILLED_MODELS: { kind: string; ids: string[] }[] = [
+  { kind: "qiniu", ids: QINIU_MODELS.map((m) => m.id) },
+  { kind: "xinghuo", ids: XINGHUO_MODELS.map((m) => m.id) },
+  { kind: "tokenrhythm", ids: TOKENRHYTHM_MODELS.map((m) => m.id) },
+];
+for (const one of PREFILLED_MODELS) {
+  const id = `prefill-models-${one.kind}`;
+  const created = createOpenPlatform({
+    id,
+    label: one.kind,
+    baseUrl: upstreamBase,
+    kind: one.kind,
+  });
+  check(`${one.kind}：平台建得起来`, created.ok === true, created.message);
+  const row = openPlatformOf(id);
+  check(
+    `${one.kind}：目录预填成代码里那一份`,
+    row?.models.items.join(",") === one.ids.join(","),
+    JSON.stringify(row?.models.items),
+  );
+  check(`${one.kind}：目录算自动来的`, row?.models.source === "auto", String(row?.models.source));
+  check(`${one.kind}：没拉过上游`, row?.models.fetchedAt === 0, String(row?.models.fetchedAt));
+}
+
+// 目录归上游的那几家：建的时候目录是空的，等上游那份。
+for (const kind of ["sensenova", "intern-ai", "openai"]) {
+  const id = `prefill-empty-${kind}`;
+  const created = createOpenPlatform({
+    id,
+    label: kind,
+    baseUrl: upstreamBase,
+    ...(kind === "openai" ? {} : { kind }),
+  });
+  check(`${kind}：平台建得起来`, created.ok === true, created.message);
+  check(
+    `${kind}：目录是空的`,
+    openPlatformOf(id)?.models.items.length === 0,
+    JSON.stringify(openPlatformOf(id)?.models.items),
+  );
+}
+
+// 用户自己给了目录：用用户那份，不被预填盖掉。
+const given = createOpenPlatform({
+  id: "prefill-given",
+  label: "given",
+  baseUrl: upstreamBase,
+  kind: "qiniu",
+  models: ["my/model-a", "my/model-b"],
+});
+check("给了目录的平台建得起来", given.ok === true, given.message);
+check(
+  "用户给的目录不被预填盖掉",
+  openPlatformOf("prefill-given")?.models.items.join(",") === "my/model-a,my/model-b",
+  JSON.stringify(openPlatformOf("prefill-given")?.models.items),
+);
+
+// 三种给法是三件事（这一层是定规矩的地方）：
+//   不给这一格 = 这一类声明的默认插件；给了空串 = 不用插件；给了 id = 用这个。
+const DEFAULT_PLUGIN_KIND = "qiniu";
+const defaultPluginRow = createOpenPlatform({
+  id: "plugin-default",
+  label: "默认插件",
+  baseUrl: upstreamBase,
+  kind: DEFAULT_PLUGIN_KIND,
+});
+check("不给插件：平台建得起来", defaultPluginRow.ok === true, defaultPluginRow.message);
+check(
+  "不给就是这一类声明的默认插件",
+  openPlatformOf("plugin-default")?.quotaPlugin === "qiniu",
+  String(openPlatformOf("plugin-default")?.quotaPlugin),
+);
+
+const emptyPluginRow = createOpenPlatform({
+  id: "plugin-empty",
+  label: "不用插件",
+  baseUrl: upstreamBase,
+  kind: DEFAULT_PLUGIN_KIND,
+  quotaPlugin: "",
+});
+check("给空串：平台建得起来", emptyPluginRow.ok === true, emptyPluginRow.message);
+check(
+  "空串是「不用插件」，不是默认那个",
+  openPlatformOf("plugin-empty")?.quotaPlugin === "",
+  String(openPlatformOf("plugin-empty")?.quotaPlugin),
+);
+
+const unknownPluginRow = createOpenPlatform({
+  id: "plugin-unknown",
+  label: "没登记的插件",
+  baseUrl: upstreamBase,
+  kind: DEFAULT_PLUGIN_KIND,
+  quotaPlugin: "no-such-plugin",
+});
+check("没登记的插件被拒", unknownPluginRow.ok === false, unknownPluginRow.message);
+check(
+  "机器码是 QUOTA_PLUGIN_UNKNOWN",
+  unknownPluginRow.code === "QUOTA_PLUGIN_UNKNOWN",
+  String(unknownPluginRow.code),
+);
+check(
+  "被拒的那一行没写进表",
+  openPlatformOf("plugin-unknown") === null,
+  String(openPlatformOf("plugin-unknown")),
+);
+
+/* ------------------------------------------------------------------ *
  * 收尾
  * ------------------------------------------------------------------ */
 server.close();

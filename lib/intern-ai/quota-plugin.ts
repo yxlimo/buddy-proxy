@@ -16,6 +16,10 @@ import type { ProviderRow } from "../providers.ts";
 import { quotaProbe } from "../quota-state.ts";
 import { quotaEndpointBase, registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
 import { INTERN_AI_DISCOVERY_BASE } from "./config.ts";
+// 插件 id 住在一个没有依赖的地方（lib/intern-ai/quota-plugin-id.ts）：本模块与
+// register 互相引用，id 若在本模块里，register 在求值期读它就会撞上「还在初始化」。
+import { INTERN_AI_CREDITS_PLUGIN_ID } from "./quota-plugin-id.ts";
+export { INTERN_AI_CREDITS_PLUGIN_ID };
 import { InternAiError, loadSession, tokenFor } from "./auth.ts";
 import {
   balance as internAiBalance,
@@ -167,7 +171,7 @@ export function internAiRecoverAt(credits: InternAiCredits): number | null {
 }
 
 export const internAiCreditsPlugin = registerQuotaPlugin({
-  id: "intern-ai-credits",
+  id: INTERN_AI_CREDITS_PLUGIN_ID,
   label: "书生·端砚墨点",
   fields: [],
   probe: async (account) => {

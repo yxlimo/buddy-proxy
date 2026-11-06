@@ -99,6 +99,13 @@ export type AddPlatformSubmit = {
   baseUrl: string
   /** 用哪一类适配器（清单里的一个 kind）。 */
   kind: string
+  /**
+   * 额度插件的 id。
+   *
+   * 三种给法是三件事：没给 = 用这一类声明的默认插件，空串 = 不用插件，给了 id =
+   * 用那个。模拟客户端不带这一格（额度不走平台这一行）。
+   */
+  quotaPlugin?: string
 }
 
 /**
@@ -143,11 +150,25 @@ type Draft = {
   labelEdited: boolean
   baseUrl: string
   /**
+   * 用户自己敲过地址吗。
+   *
+   * 面板按类型预填的地址不算：换一条类型时那一格要跟着新类型走。敲过的才算
+   * 用户的值：换类型时不覆盖它。
+   */
+  baseUrlEdited: boolean
+  /**
    * 选中的那一条（见 `platformKindValue`：方言看 kind，模拟客户端看 presetId）。
    * 改平台时没有这一格 —— 类型建完就改不了。
    */
   choice: string
   quotaPlugin: string
+  /**
+   * 用户自己动过额度插件这一格吗。
+   *
+   * 跟地址那格不一样：空串在这儿是一个有意义的答案（「不用插件」），所以不能
+   * 拿「不是空」当「动过」。动过之后换类型不再覆盖这一格。
+   */
+  quotaPluginEdited: boolean
   modelsAuto: boolean
   /** 模型目录：一行一个模型名。 */
   models: string
@@ -370,9 +391,16 @@ export function PlatformDialog({
             // 地址是空的才用这一类的默认地址占位；填过的不动。
             baseUrl: isSimulatedKind(first)
               ? ''
-              : prev.baseUrl.trim()
+              : prev.baseUrlEdited
                 ? prev.baseUrl
                 : first.defaultBaseUrl,
+            // 额度插件：这一类声明了哪个就预填哪个（空串 = 这一类没有额度
+            // 接口）。用户自己改过就不动。
+            quotaPlugin: isSimulatedKind(first)
+              ? ''
+              : prev.quotaPluginEdited
+                ? prev.quotaPlugin
+                : first.defaultQuotaPlugin,
             // 名字空着、选中的又是预置：填它的名字（能改）。
             label:
               isSimulatedKind(first) && !prev.labelEdited && !prev.label.trim()
@@ -389,9 +417,9 @@ export function PlatformDialog({
    * 名字没被用户改过时跟着换成这一条的名字：换一条预置却留着上一条的名字，
    * 建出来就是一个名字对不上的平台。
    *
-   * 离开预置那一族（模拟客户端 → 方言）时 id 与额度插件都清掉：那两格在预置
-   * 那边是不摆的，草稿里留着的东西跟现在选中的类型没关系 —— 提交上去就成了
-   * 一个用户没填过的 id、一个不相干的插件。
+   * 离开预置那一族（模拟客户端 → 方言）时 id 清掉：那格在预置那边是不摆的，
+   * 草稿里留着的东西跟现在选中的类型没关系 —— 提交上去就成了一个用户没填过
+   * 的 id。额度插件改成跟着这一类的默认插件走（用户自己改过就不动）。
    */
   const chooseKind = (value: string) => {
     const option = kindOptions.find((item) => platformKindValue(item) === value)
@@ -408,11 +436,16 @@ export function PlatformDialog({
         id: leavingPreset ? '' : prev.id,
         baseUrl: simulated
           ? ''
-          : prev.baseUrl.trim()
+          : prev.baseUrlEdited
             ? prev.baseUrl
             : (option?.defaultBaseUrl ?? ''),
         // 模拟客户端的额度不走平台这一行：草稿里那个插件 id 跟它无关。
-        quotaPlugin: simulated ? '' : prev.quotaPlugin,
+        // 方言：这一类声明了哪个默认插件就预填哪个；用户自己改过就不覆盖。
+        quotaPlugin: simulated
+          ? ''
+          : prev.quotaPluginEdited
+            ? prev.quotaPlugin
+            : (option?.defaultQuotaPlugin ?? ''),
         label: prev.labelEdited
           ? prev.label
           : simulated
@@ -474,14 +507,19 @@ export function PlatformDialog({
       onSubmit(update)
       return
     }
-    onSubmit({
+    // 新增：额度插件这一格带上。给 id = 用那个，给空串 = 不用插件。
+    // 模拟客户端不带这一格（额度不走平台这一行）：带空串等于明确说「不用」，
+    // 那一族的插件是代码定的事。
+    const add: AddPlatformSubmit = {
       // 模拟客户端：id 是预置定的那一个，不是下拉里那个值本身（方言的
       // 下拉值是 kind，不是 id）。
       id: simulated ? fixedId : draft.id.trim(),
       label: draft.label.trim(),
       baseUrl: simulated ? '' : draft.baseUrl.trim(),
       kind: chosenKind?.kind ?? '',
-    })
+    }
+    if (!simulated) add.quotaPlugin = draft.quotaPlugin
+    onSubmit(add)
   }
 
   return (
@@ -669,7 +707,8 @@ export function PlatformDialog({
                 }
                 onChange={(event) => {
                   touch('baseUrl')
-                  patch({ baseUrl: event.target.value })
+                  // 敲过的地址是用户的值：换类型时不再拿默认值盖它。
+                  patch({ baseUrl: event.target.value, baseUrlEdited: true })
                 }}
               />
               {shown('baseUrl') ? (
@@ -683,46 +722,49 @@ export function PlatformDialog({
             </div>
           )}
 
+          {/* 额度插件：模拟客户端的额度不走平台这一行（库里的插件 id 是空
+              串），摆一个选不了东西的下拉只会让人以为要填。新增时按这一类
+              声明的默认插件预填，用户可以改。 */}
+          {simulated ? null : (
+            <div className='grid gap-2'>
+              <Label htmlFor='platform-quota-plugin'>额度插件</Label>
+              <Select
+                value={draft.quotaPlugin === '' ? NO_PLUGIN : draft.quotaPlugin}
+                onValueChange={(value) =>
+                  patch({
+                    quotaPlugin: value === NO_PLUGIN ? '' : value,
+                    // 动过这一格：换类型时不再拿默认值盖它。
+                    quotaPluginEdited: true,
+                  })
+                }
+              >
+                <SelectTrigger id='platform-quota-plugin'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_PLUGIN}>不用插件</SelectItem>
+                  {plugins.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                  {/* 现在选着的 id 不在可选项里：摆出来，别让它变成一个空下拉框，
+                    也别把它静默改写回第一项。 */}
+                  {unregistered ? (
+                    <SelectItem value={unregistered}>
+                      {storedPluginLabel(unregistered, registry)}
+                    </SelectItem>
+                  ) : null}
+                </SelectContent>
+              </Select>
+              <p className='text-xs text-muted-foreground'>
+                {pluginHint(registry, unregistered)}
+              </p>
+            </div>
+          )}
+
           {editing ? (
             <>
-              {/* 模拟客户端的额度不走平台这一行（库里的插件 id 是空串）：摆一
-                  个选不了东西的下拉只会让人以为要填。 */}
-              {simulated ? null : (
-                <div className='grid gap-2'>
-                  <Label htmlFor='platform-quota-plugin'>额度插件</Label>
-                  <Select
-                    value={
-                      draft.quotaPlugin === '' ? NO_PLUGIN : draft.quotaPlugin
-                    }
-                    onValueChange={(value) =>
-                      patch({ quotaPlugin: value === NO_PLUGIN ? '' : value })
-                    }
-                  >
-                    <SelectTrigger id='platform-quota-plugin'>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NO_PLUGIN}>不用插件</SelectItem>
-                      {plugins.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                      {/* 存着的 id 不在可选项里：摆出来，别让它变成一个空下拉框，
-                        也别把它静默改写回第一项。 */}
-                      {unregistered ? (
-                        <SelectItem value={unregistered}>
-                          {storedPluginLabel(unregistered, registry)}
-                        </SelectItem>
-                      ) : null}
-                    </SelectContent>
-                  </Select>
-                  <p className='text-xs text-muted-foreground'>
-                    {pluginHint(registry, unregistered)}
-                  </p>
-                </div>
-              )}
-
               {selected && !simulated ? (
                 <div className='grid gap-1 rounded-md border p-3'>
                   <p className='text-sm font-medium'>
@@ -863,9 +905,13 @@ function toDraft(platform?: Upstream): Draft {
       label: '',
       labelEdited: false,
       baseUrl: '',
+      // 新增：地址是面板按类型预填的，用户没敲过。
+      baseUrlEdited: false,
       // 空串：清单到手后由上面那个 effect 选第一条。
       choice: '',
       quotaPlugin: '',
+      // 新增：预填由类型决定，用户没动过。
+      quotaPluginEdited: false,
       modelsAuto: false,
       models: '',
       // 新增没有平台行，这一格没有意义（界面上也不摆）。
@@ -879,9 +925,14 @@ function toDraft(platform?: Upstream): Draft {
     // 平台上的名字是用户的值（改平台没有类型这一格，也没人换它）。
     labelEdited: true,
     baseUrl: platform.baseUrl,
+    // 改平台时这一格是行上的值（用户自己存的那份）：当成敲过的。
+    baseUrlEdited: true,
     // 改平台没有类型这一格（契约里 UpdatePlatform 没有它）。
     choice: '',
     quotaPlugin: platform.quotaPlugin,
+    // 改平台时这一格是行上的值（用户自己存的那份）：当成动过，别拿类型的
+    // 默认值去盖它。
+    quotaPluginEdited: true,
     modelsAuto: platform.modelsAuto,
     models: platform.models.join('\n'),
     // 还没动过：提交时不带这一格。

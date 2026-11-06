@@ -9,6 +9,10 @@ import { quotaEndpointBase, registerQuotaPlugin } from "../quota-plugins.ts";
 import type { CreditLotView, QuotaView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { qiniuPortalCookie, QINIU_ACCOUNT_FIELD } from "./account.ts";
+// 插件 id 住在一个没有依赖的地方（lib/qiniu/quota-plugin-id.ts）：本模块与
+// register 互相引用，id 若在本模块里，register 在求值期读它就会撞上「还在初始化」。
+import { QINIU_QUOTA_PLUGIN_ID } from "./quota-plugin-id.ts";
+export { QINIU_QUOTA_PLUGIN_ID };
 import { QINIU_PORTAL_BASE } from "./config.ts";
 import { fetchQiniuQuota, type QiniuQuota } from "./quota.ts";
 
@@ -73,7 +77,7 @@ export function qiniuQuotas(account: ProviderRow, payload: unknown): QuotaView[]
 }
 
 export const qiniuQuotaPlugin = registerQuotaPlugin({
-  id: "qiniu",
+  id: QINIU_QUOTA_PLUGIN_ID,
   label: "七牛云资源包",
   fields: [{ name: QINIU_ACCOUNT_FIELD, label: "门户 cookie", secret: true }],
   probe: async (account) => {

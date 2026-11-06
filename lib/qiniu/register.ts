@@ -21,6 +21,9 @@ import { qiniuInferenceKey, qiniuStatus } from "./account.ts";
 import { qiniuCatalogModels } from "./catalog.ts";
 import { QINIU_INFER_BASE } from "./config.ts";
 import { QINIU_MODELS } from "./models.ts";
+// 插件 id 从没有依赖的地方读（lib/qiniu/quota-plugin-id.ts）：插件模块与本模块
+// 互相引用，从插件对象上取 id 会在求值期撞上「还在初始化」。
+import { QINIU_QUOTA_PLUGIN_ID } from "./quota-plugin-id.ts";
 // import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
 import "./quota-plugin.ts";
 
@@ -54,6 +57,10 @@ export const qiniuKind = registerCompatiblePlatform({
   // 这一类默认指哪台：额度请求靠它分辨「行上的地址还是默认那台」（行上的地址
   // 等于它时，额度问门户而不是推理端点）。
   defaultBaseUrl: QINIU_INFER_BASE,
+  // 额度插件：门户那一路。面板建平台时预填这一格（用户可以改）。
+  defaultQuotaPlugin: QINIU_QUOTA_PLUGIN_ID,
+  // 目录是代码挑过的一份：建平台时先写进去这一份。
+  defaultModels: QINIU_MODELS.map((model) => model.id),
   // 推理用的是那把 API key：门户 cookie 只用来查额度。
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.

@@ -584,6 +584,15 @@ message AddPlatformRequest {
   //   id（minimax / qoder / qoder-cn / workbuddy-cn / workbuddy-global），
   //   地址与区域照预置来。
   string kind = 4;
+  // 额度插件的 id。三种给法是三件事：
+  //
+  //   没给   = 用这一类声明的默认插件（kind 注册表里的 default_quota_plugin）。
+  //   空串   = 不用插件。
+  //   给了 id = 用这个（必须已登记；没登记就拒，不写库）。
+  //
+  // 带 presence 是为了分清「没给」与「给了空串」：没有 presence 时这两件事在线上
+  // 是同一份字节，用户在弹窗里选「不选插件」就变成了「用默认插件」。
+  optional string quota_plugin = 5;
 }
 
 message AddPlatformResponse {
@@ -684,6 +693,8 @@ message PlatformKind {
   string preset_id = 6;
   // 预置平台的区域（cn / global / 空串）。方言类为空串。
   string region = 7;
+  // 建平台时给这一格预填（额度插件那一格）；用户可以改。空串 = 这一类没有额度接口。
+  string default_quota_plugin = 8;
 }
 
 message ListPlatformKindsRequest {}

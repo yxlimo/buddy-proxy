@@ -15,6 +15,10 @@ import type { ProviderRow } from "../providers.ts";
 import { quotaProbe } from "../quota-state.ts";
 import { quotaEndpointBase, registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
 import { SENSENOVA_PLATFORM_BASE } from "./config.ts";
+// 插件 id 住在一个没有依赖的地方（lib/sensenova/quota-plugin-id.ts）：本模块与
+// register 互相引用，id 若在本模块里，register 在求值期读它就会撞上「还在初始化」。
+import { SENSE_NOVA_POOLS_PLUGIN_ID } from "./quota-plugin-id.ts";
+export { SENSE_NOVA_POOLS_PLUGIN_ID };
 import { loadSession, SenseNovaError } from "./auth.ts";
 import { poolUsage, totalRemaining, type SenseNovaPool, type SenseNovaPoolUsage } from "./quota.ts";
 
@@ -108,7 +112,7 @@ export function senseNovaRecoverAt(usage: SenseNovaPoolUsage | null): number | n
 }
 
 export const senseNovaPoolsPlugin = registerQuotaPlugin({
-  id: "sensenova-pools",
+  id: SENSE_NOVA_POOLS_PLUGIN_ID,
   label: "SenseNova 资源池",
   fields: [],
   probe: async (account) => {

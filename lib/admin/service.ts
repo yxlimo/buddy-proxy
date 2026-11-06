@@ -832,6 +832,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       label: String(request.label ?? ""),
       baseUrl: String(request.baseUrl ?? ""),
       kind: String(request.kind ?? ""),
+      // 这一格带 presence：没给（undefined）= 用这一类声明的默认插件；给了空串
+      // = 不用插件。别用 ?? "" 抹平 —— 抹平了「没给」就变成了「不用插件」。
+      quotaPlugin: request.quotaPlugin,
     });
     if (!result.ok) throw adminError(result.code, result.message);
     console.log(`[ADMIN] 加了开放平台 ${id}`);
@@ -951,13 +954,15 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // 答复渲染下拉，不自己排。
     //
     // 默认地址取自 kind 注册表（ProviderKind.defaultBaseUrl）：catalog 那一列是
-    // 空的，地址是各自适配器的地址常量，不写在面板这一层。
+    // 空的，地址是各自适配器的地址常量，不写在面板这一层。额度插件同理（注册表
+    // 里的 defaultQuotaPlugin）：面板建平台时拿它预填那一格，用户可以改。
     return create(ListPlatformKindsResponseSchema, {
       kinds: platformKindChoices().map((option) =>
         create(PlatformKindSchema, {
           kind: option.kind,
           label: option.label,
           defaultBaseUrl: kindOf(option.kind)?.defaultBaseUrl ?? "",
+          defaultQuotaPlugin: kindOf(option.kind)?.defaultQuotaPlugin ?? "",
           modelsFromUpstream: option.modelsFromUpstream,
           category: option.category,
           presetId: option.presetId,

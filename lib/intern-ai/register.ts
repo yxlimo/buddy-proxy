@@ -11,6 +11,9 @@ import { internAiStatus } from "./auth.ts";
 // 登录链登记：引用即登记（见 lib/login-flow.ts）。
 import "./login-flow.ts";
 import { INTERN_AI_DISCOVERY_API_BASE } from "./config.ts";
+// 插件 id 从没有依赖的地方读（lib/intern-ai/quota-plugin-id.ts）：插件模块与本
+// 模块互相引用，从插件对象上取 id 会在求值期撞上「还在初始化」。
+import { INTERN_AI_CREDITS_PLUGIN_ID } from "./quota-plugin-id.ts";
 // 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
 // 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
 // 一头就有了两个来源，两边不一致时面板自相矛盾。
@@ -25,6 +28,8 @@ export const internAiKind = registerCompatiblePlatform({
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
   // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）。
   defaultBaseUrl: INTERN_AI_DISCOVERY_API_BASE,
+  // 额度插件：墨点那一路。面板建平台时预填这一格（用户可以改）。
+  defaultQuotaPlugin: INTERN_AI_CREDITS_PLUGIN_ID,
   // 推理用的是 Discovery 那把 key：子站 token 只用来补 key 与问额度。
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.

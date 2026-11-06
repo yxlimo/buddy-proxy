@@ -487,25 +487,60 @@ const restoredPlugin = await guard(() => updatePlatform({
 }));
 check("登记的插件选得回来", restoredPlugin !== null, errDetail());
 
-// AddPlatform 现在不接 quota_plugin：契约里 AddPlatformRequest 只有 id、名字、
-// 地址三格。所以“加平台时写插件”本来就没路，想加插件得建完再 UpdatePlatform；
-// 将来接了这一格也得走同一校验。这条断言钉的就是“现在不接”：请求里塞了也不
-// 进库。
-const addedWithPlugin = await guard(() => addPlatform({
-  id: "acme-plugin-ignored",
-  label: "带插件的加平台",
+// AddPlatform 接 quota_plugin 了（契约里 AddPlatformRequest 有这一格，带
+// presence）：没给 = 这一类声明的默认插件；给了空串 = 不用插件；给了 id = 用
+// 那个（必须已登记，没登记就拒，一个字都不落库）。
+const pluginDefault = await guard(() => addPlatform({
+  id: "acme-plugin-default",
+  label: "默认插件的加平台",
   baseUrl: "https://api.acme.test/v1",
+  kind: "qiniu",
+}));
+check("加平台：不带 quota_plugin 建得起来", pluginDefault !== null, errDetail());
+check(
+  "不带就是这一类声明的默认插件（qiniu）",
+  openPlatformOf("acme-plugin-default")?.quotaPlugin === "qiniu",
+  String(openPlatformOf("acme-plugin-default")?.quotaPlugin),
+);
+
+const pluginEmpty = await guard(() => addPlatform({
+  id: "acme-plugin-empty",
+  label: "不用插件的加平台",
+  baseUrl: "https://api.acme.test/v1",
+  kind: "qiniu",
+  quotaPlugin: "",
+}));
+check("加平台：quota_plugin 给空串建得起来", pluginEmpty !== null, errDetail());
+check(
+  "空串是「不用插件」，不是默认那个",
+  openPlatformOf("acme-plugin-empty")?.quotaPlugin === "",
+  String(openPlatformOf("acme-plugin-empty")?.quotaPlugin),
+);
+
+const pluginUnknown = await guard(() => addPlatform({
+  id: "acme-plugin-unknown",
+  label: "没登记的插件",
+  baseUrl: "https://api.acme.test/v1",
+  kind: "openai",
   quotaPlugin: "no-such-plugin",
 }));
-check("加平台不看 quota_plugin（契约里没这一格）", addedWithPlugin !== null, errDetail());
+check("加平台：没登记的插件被拒", pluginUnknown === null, show(pluginUnknown));
 check(
-  "所以没登记的插件带不进库",
-  openPlatformOf("acme-plugin-ignored")?.quotaPlugin === "",
-  String(openPlatformOf("acme-plugin-ignored")?.quotaPlugin),
+  "机器码是 QUOTA_PLUGIN_UNKNOWN",
+  errCode() === errorCodes.QUOTA_PLUGIN_UNKNOWN,
+  `${errCode()} / ${errDetail()}`,
 );
-// 这个平台只是为了上面那两条断言：删掉，免得影响后面按行数比的那几节。
-const droppedExtra = await guard(() => deletePlatform({ id: "acme-plugin-ignored" }));
-check("为了那条断言建的平台删得掉", droppedExtra !== null, errDetail());
+check(
+  "被拒的那一行没写进表",
+  openPlatformOf("acme-plugin-unknown") === null,
+  show(openPlatformOf("acme-plugin-unknown")),
+);
+
+// 这两个平台只是为了上面那几行断言：删掉，免得影响后面按行数比的那几节。
+for (const id of ["acme-plugin-default", "acme-plugin-empty"]) {
+  const dropped = await guard(() => deletePlatform({ id }));
+  check(`为了那条断言建的平台删得掉：${id}`, dropped !== null, errDetail());
+}
 
 const manual = await guard(() => updatePlatform({
   id: "acme",

@@ -16,6 +16,10 @@ import type { ProviderRow } from "../providers.ts";
 import { quotaProbe } from "../quota-state.ts";
 import { registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
 import { tokenRhythmStatuses, type TokenRhythmAccountStatus } from "./wallet.ts";
+// 插件 id 住在一个没有依赖的地方（lib/tokenrhythm/quota-plugin-id.ts）：本模块与
+// register 互相引用，id 若在本模块里，register 在求值期读它就会撞上「还在初始化」。
+import { TOKENRHYTHM_WALLET_PLUGIN_ID } from "./quota-plugin-id.ts";
+export { TOKENRHYTHM_WALLET_PLUGIN_ID };
 
 /** 平台标记「永不过期」的那一天。 */
 const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
@@ -80,7 +84,7 @@ export function tokenRhythmRecoverAt(status: TokenRhythmAccountStatus | null): n
 }
 
 export const tokenRhythmWalletPlugin = registerQuotaPlugin({
-  id: "tokenrhythm-wallet",
+  id: TOKENRHYTHM_WALLET_PLUGIN_ID,
   label: "TokenRhythm 钱包",
   fields: [],
   probe: async (account) => {

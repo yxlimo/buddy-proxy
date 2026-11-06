@@ -75,15 +75,25 @@ export function useAddPlatform() {
       baseUrl: string
       /** 用哪一类适配器：清单里的一个 kind。 */
       kind: string
+      /**
+       * 额度插件的 id。
+       *
+       * 三种给法是三件事：没给 = 用这一类声明的默认插件，空串 = 不用插件，
+       * 给了 id = 用那个。契约里这一格带 presence，就是为了分清「没给」与
+       * 「给了空串」。
+       */
+      quotaPlugin?: string
     }) => {
-      return await client.addPlatform(
-        create(AddPlatformRequestSchema, {
-          id: input.id,
-          label: input.label,
-          baseUrl: input.baseUrl,
-          kind: input.kind,
-        })
-      )
+      const init: MessageInitShape<typeof AddPlatformRequestSchema> = {
+        id: input.id,
+        label: input.label,
+        baseUrl: input.baseUrl,
+        kind: input.kind,
+      }
+      // 不放就是「没给」：服务端用这一类的默认插件。放了（哪怕是空串）就是
+      // 用户自己的选择。
+      if (input.quotaPlugin !== undefined) init.quotaPlugin = input.quotaPlugin
+      return await client.addPlatform(create(AddPlatformRequestSchema, init))
     },
     onSuccess: () => {
       toast.success('已新增')

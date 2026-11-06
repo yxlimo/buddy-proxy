@@ -10,7 +10,12 @@ import { tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
 // 地址在叶子模块里：这一层与 accounts.ts 互相引着，从那边读常量会在模块求值
 // 期撞上「还在初始化」。
 import { TOKENRHYTHM_API_BASE, TOKENRHYTHM_INFER_BASE } from "../tokenrhythm/config.ts";
+// 代码里那一份模型目录：建平台时预填的那几条就是它。
+import { TOKENRHYTHM_MODELS } from "../tokenrhythm/models.ts";
 import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balance.ts";
+// 插件 id 从没有依赖的地方读（lib/tokenrhythm/quota-plugin-id.ts）：插件模块与本
+// 模块互相引用，从插件对象上取 id 会在求值期撞上「还在初始化」。
+import { TOKENRHYTHM_WALLET_PLUGIN_ID } from "../tokenrhythm/quota-plugin-id.ts";
 // 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
 // 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
 // 一头就有了两个来源，两边不一致时面板自相矛盾。
@@ -34,6 +39,10 @@ registerKind({
   // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）：额度请求靠它
   // 分辨「行上的地址还是默认那台」。
   defaultBaseUrl: TOKENRHYTHM_INFER_BASE,
+  // 额度插件：钱包那一路。面板建平台时预填这一格（用户可以改）。
+  defaultQuotaPlugin: TOKENRHYTHM_WALLET_PLUGIN_ID,
+  // 目录是代码挑过的一份：建平台时先写进去这一份。
+  defaultModels: TOKENRHYTHM_MODELS.map((model) => model.id),
   // 推理用的是钱包里的那把 api key：会话只用来登录与查余额。
   inferWith: "api_key",
   modelsFromUpstream: false,

@@ -301,6 +301,71 @@ describe('面板上的开放平台', () => {
     })
   })
 
+  it('新建平台：额度插件按类型预填，请求里带上 quota_plugin', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: {
+      id: string
+      label: string
+      baseUrl: string
+      kind: string
+      quotaPlugin?: string
+    }[] = []
+    const client = clientWith([], {
+      // 服务端给的类型清单：七牛云这一类有默认地址与默认额度插件。
+      ListPlatformKinds: () =>
+        create(ListPlatformKindsResponseSchema, {
+          kinds: [
+            ...twoKinds(),
+            create(PlatformKindSchema, {
+              kind: 'qiniu',
+              label: '七牛云',
+              category: 'dialect',
+              defaultBaseUrl: 'https://api.qnaigc.com/v1',
+              defaultQuotaPlugin: 'qiniu-portal',
+              modelsFromUpstream: false,
+            }),
+          ],
+        }),
+      ListQuotaPlugins: () =>
+        create(ListQuotaPluginsResponseSchema, { plugins: fourPlugins() }),
+      AddPlatform: (input) => {
+        sent.push({
+          id: input.id ?? '',
+          label: input.label ?? '',
+          baseUrl: input.baseUrl ?? '',
+          kind: input.kind ?? '',
+          quotaPlugin: input.quotaPlugin,
+        })
+        return create(AddPlatformResponseSchema, {
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+            baseUrl: input.baseUrl ?? '',
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+    // 类型选七牛云：地址与额度插件都按这一类预填。
+    await user.click(within(dialog).getByRole('combobox', { name: '类型' }))
+    await user.click(await screen.findByRole('option', { name: '七牛云' }))
+    await user.type(within(dialog).getByLabelText('平台 id'), 'my-qiniu')
+    await user.type(within(dialog).getByLabelText('名字'), '我的七牛')
+    await user.click(within(dialog).getByRole('button', { name: '加上' }))
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    // 预填的那一格真的在请求体里。
+    expect(sent[0].quotaPlugin).toBe('qiniu-portal')
+    expect(sent[0].baseUrl).toBe('https://api.qnaigc.com/v1')
+    expect(sent[0].kind).toBe('qiniu')
+  })
+
   it('新增成功：弹窗关掉', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([], {
@@ -1415,7 +1480,7 @@ describe('建平台时能选类型', () => {
     })
   })
 
-  it('类型带默认地址：地址空着的时候用它占位，填过的不动', async () => {
+  it('类型带默认地址：地址空着的时候用它占位，换类型时跟着新类型走', async () => {
     const user = userEvent.setup({ delay: null })
     const kinds = [
       create(PlatformKindSchema, {
@@ -1447,12 +1512,53 @@ describe('建平台时能选类型', () => {
       expect(address).toHaveValue('https://gw.example.com/v1')
     )
 
-    // 换成没有默认地址的那一条：填过的地址不动。
+    // 换成没有默认地址的那一条：面板预填的那份不算用户填的，跟着新类型走。
     await user.click(within(dialog).getByRole('combobox', { name: '类型' }))
     await user.click(
       await screen.findByRole('option', { name: 'Anthropic 兼容' })
     )
-    expect(address).toHaveValue('https://gw.example.com/v1')
+    expect(address).toHaveValue('')
+  })
+
+  it('地址是用户自己敲的：换类型时不覆盖它', async () => {
+    const user = userEvent.setup({ delay: null })
+    const kinds = [
+      create(PlatformKindSchema, {
+        kind: 'openai',
+        label: 'OpenAI 兼容',
+        defaultBaseUrl: 'https://gw.example.com/v1',
+        modelsFromUpstream: true,
+      }),
+      create(PlatformKindSchema, {
+        kind: 'anthropic',
+        label: 'Anthropic 兼容',
+        defaultBaseUrl: 'https://anthropic.example.com/v1',
+        modelsFromUpstream: true,
+      }),
+    ]
+    const client = clientWith([], {
+      ListPlatformKinds: () =>
+        create(ListPlatformKindsResponseSchema, { kinds }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await user.click(await screen.findByRole('button', { name: '新增平台' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const address = within(dialog).getByLabelText('地址')
+    await waitFor(() =>
+      expect(address).toHaveValue('https://gw.example.com/v1')
+    )
+    await user.clear(address)
+    await user.type(address, 'https://my-own.example.com/v1')
+
+    // 换一条类型：敲过的地址是用户的值，不覆盖。
+    await user.click(within(dialog).getByRole('combobox', { name: '类型' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Anthropic 兼容' })
+    )
+    expect(address).toHaveValue('https://my-own.example.com/v1')
   })
 
   it('类型清单取不到：选择禁用、说原因，保存禁用，不发请求', async () => {

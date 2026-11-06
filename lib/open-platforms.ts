@@ -175,9 +175,19 @@ export function createOpenPlatform(input: {
   id: string;
   label: string;
   baseUrl: string;
+  /**
+   * 额度插件。不给 = 这一类声明了哪个就用哪个（kind 注册表里的 defaultQuotaPlugin）。
+   *
+   * 空串是「不用插件」：那是用户的明确意思，不走默认值。
+   */
   quotaPlugin?: string;
   /** 哪一类适配器。空串 = openai（OpenAI 兼容的通用平台）。 */
   kind?: string;
+  /**
+   * 模型目录。给了就用这份；不给就看这一类声明的那一份（kind 注册表里的
+   * defaultModels），也没声明就建一个空目录。
+   */
+  models?: string[];
 }): AdminResult {
   const id = String(input.id ?? "").trim();
   const problem = checkId(id);
@@ -192,7 +202,11 @@ export function createOpenPlatform(input: {
   const kind = String(input.kind ?? "").trim() || OPEN_PLATFORM_KIND_NAME;
 
   let baseUrl = String(input.baseUrl ?? "").trim();
-  let quotaPlugin = String(input.quotaPlugin ?? "").trim();
+  // 没给 = 这一类默认用哪个插件；给了空串 = 不用插件（用户的明确意思）。
+  let quotaPlugin =
+    input.quotaPlugin === undefined
+      ? (kindOf(kind)?.defaultQuotaPlugin ?? "")
+      : String(input.quotaPlugin).trim();
   let region = "";
   let modelsAuto = true;
 
@@ -246,7 +260,13 @@ export function createOpenPlatform(input: {
   }
 
   const now = Date.now();
-  const models: OpenPlatformModels = { items: [], traits: {}, auto: modelsAuto, fetchedAt: 0, source: "auto" };
+  // 目录：用户给了就用用户那份；没给就写这一类代码里挑过的那一份（有的家才有）。
+  // 写进去的那份算「自动来的」（source=auto）：它以后还能被上游那份盖上，
+  // 人手写的那一份才是 manual。
+  const kindMeta = kindOf(kind);
+  const askedModels = input.models === undefined ? undefined : normalizeModels(input.models);
+  const items = askedModels ?? [...(kindMeta?.defaultModels ?? [])];
+  const models: OpenPlatformModels = { items, traits: {}, auto: modelsAuto, fetchedAt: 0, source: "auto" };
   const db = store();
   // 行与墓碑的清除在同一个事务里：只清墓碑而没写进行，播种就会把这个 id 当成
   // 「用户没删过但也不存在」—— 下次启动补回一个空平台，用户刚建的配置没了。

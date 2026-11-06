@@ -242,6 +242,8 @@ describe('平台弹窗交出去的那一单', () => {
         // 清单到手后默认选第一条。
         kind: 'openai',
         baseUrl: 'https://api.example.com/v1',
+        // 这一类没有默认插件：发空串 = 不用插件。
+        quotaPlugin: '',
       },
     ])
   })
@@ -696,6 +698,8 @@ describe('换一条类型：草稿里那几格跟着走', () => {
         label: '自己搭的',
         baseUrl: 'https://qoder.example.com/v1',
         kind: 'openai',
+        // 这一类没有默认插件：发空串 = 不用插件。
+        quotaPlugin: '',
       },
     ])
   })
@@ -884,6 +888,8 @@ describe('正常操作点不出的错：提交前就拦住', () => {
         label: '另一个中转站',
         baseUrl: 'https://api.example.com/v1',
         kind: 'openai',
+        // 这一类没有默认插件：发空串 = 不用插件。
+        quotaPlugin: '',
       },
     ])
   })
@@ -1026,5 +1032,147 @@ describe('用共性表补模型参数', () => {
 
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(submitted[0]).not.toHaveProperty('traitsFromCommon')
+  })
+})
+
+/**
+ * 新建平台时按类型预填的两格：地址与额度插件。
+ *
+ * 两格都取自服务端给的类型清单（`default_base_url` 与 `default_quota_plugin`）：
+ * 面板不写死这几个平台各自的地址与插件 id。
+ */
+const vendorKinds: PlatformKindList = {
+  status: 'ready',
+  kinds: [
+    create(PlatformKindSchema, {
+      kind: 'openai',
+      label: 'OpenAI 兼容',
+      category: 'dialect',
+      defaultBaseUrl: '',
+      defaultQuotaPlugin: '',
+      modelsFromUpstream: true,
+    }),
+    create(PlatformKindSchema, {
+      kind: 'qiniu',
+      label: '七牛云',
+      category: 'dialect',
+      defaultBaseUrl: 'https://api.qnaigc.com/v1',
+      defaultQuotaPlugin: 'qiniu',
+      modelsFromUpstream: false,
+    }),
+    create(PlatformKindSchema, {
+      kind: 'xinghuo',
+      label: '讯飞星火',
+      category: 'dialect',
+      defaultBaseUrl: 'https://maas-api.cn-huabei-1.xf-yun.com/v2',
+      defaultQuotaPlugin: '',
+      modelsFromUpstream: true,
+    }),
+  ],
+}
+
+describe('新建平台：按类型预填地址与额度插件', () => {
+  /** 新建弹窗（清单里有那三家）。 */
+  function renderAdd(submitted: unknown[] = []) {
+    render(
+      <PlatformDialog
+        open
+        existing={[]}
+        kinds={vendorKinds}
+        registry={{ status: 'ready', plugins }}
+        pending={false}
+        onSubmit={(input) => submitted.push(input)}
+        onOpenChange={() => {}}
+      />
+    )
+    return submitted
+  }
+
+  it('选七牛云：地址与额度插件都按这一类预填', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await pickKind(user, '七牛云')
+
+    expect(screen.getByLabelText('地址')).toHaveValue(
+      'https://api.qnaigc.com/v1'
+    )
+    // 下拉里摆的是插件自己的名字。
+    expect(screen.getByRole('combobox', { name: '额度插件' })).toHaveTextContent(
+      '七牛云资源包'
+    )
+
+    await user.type(screen.getByLabelText('平台 id'), 'my-qiniu')
+    await user.type(screen.getByLabelText('名字'), '我的七牛')
+    await user.click(screen.getByRole('button', { name: '加上' }))
+
+    expect(submitted).toEqual([
+      {
+        id: 'my-qiniu',
+        label: '我的七牛',
+        kind: 'qiniu',
+        baseUrl: 'https://api.qnaigc.com/v1',
+        // 预填的那一格也交上去：发的是插件 id。
+        quotaPlugin: 'qiniu',
+      },
+    ])
+  })
+
+  it('选讯飞星火：地址按这一类预填，额度插件留空', async () => {
+    const user = userEvent.setup({ delay: null })
+    renderAdd()
+
+    await pickKind(user, '讯飞星火')
+
+    expect(screen.getByLabelText('地址')).toHaveValue(
+      'https://maas-api.cn-huabei-1.xf-yun.com/v2'
+    )
+    // 这一类没有额度接口：那一格是「不用插件」。
+    expect(screen.getByRole('combobox', { name: '额度插件' })).toHaveTextContent(
+      '不用插件'
+    )
+  })
+
+  it('选 OpenAI 兼容：地址与额度插件都空着', async () => {
+    const user = userEvent.setup({ delay: null })
+    renderAdd()
+
+    await pickKind(user, 'OpenAI 兼容')
+
+    expect(screen.getByLabelText('地址')).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: '额度插件' })).toHaveTextContent(
+      '不用插件'
+    )
+  })
+
+  it('用户自己选过额度插件：换类型不再覆盖它', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await pickKind(user, '七牛云')
+    // 改成「不用插件」。
+    await user.click(screen.getByRole('combobox', { name: '额度插件' }))
+    await user.click(await screen.findByRole('option', { name: '不用插件' }))
+    // 再换一条类型：这一格是用户自己选的，不跟着默认值走。
+    await pickKind(user, '讯飞星火')
+
+    expect(screen.getByRole('combobox', { name: '额度插件' })).toHaveTextContent(
+      '不用插件'
+    )
+
+    await user.type(screen.getByLabelText('平台 id'), 'my-xinghuo')
+    await user.type(screen.getByLabelText('名字'), '我的星火')
+    await user.click(screen.getByRole('button', { name: '加上' }))
+
+    expect(submitted).toEqual([
+      {
+        id: 'my-xinghuo',
+        label: '我的星火',
+        kind: 'xinghuo',
+        baseUrl: 'https://maas-api.cn-huabei-1.xf-yun.com/v2',
+        // 用户明确选的「不用插件」：发空串。
+        quotaPlugin: '',
+      },
+    ])
   })
 })
