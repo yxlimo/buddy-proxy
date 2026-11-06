@@ -1,11 +1,11 @@
 import { create, type MessageInitShape } from '@bufbuild/protobuf'
+import { Code, ConnectError } from '@connectrpc/connect'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   AccountSchema,
   AddAccountResponseSchema,
-  AddPlatformResponseSchema,
   DeletePlatformResponseSchema,
   DeletePublishedModelResponseSchema,
   ListAccountsResponseSchema,
@@ -85,6 +85,8 @@ function openPlatform(
     hasEnabledAccount: false,
     baseUrl: 'https://api.example.com/v1',
     isOpenPlatform: true,
+    // 开放平台的目录归上游：卡片上有「刷新模型目录」。
+    modelsFromUpstream: true,
     // 表里的那一行：能改能删。
     fromRow: true,
     accounts: [],
@@ -228,7 +230,7 @@ describe('上游页的平台列表', () => {
       within(row).queryByRole('button', { name: '编辑' })
     ).not.toBeInTheDocument()
     expect(
-      within(row).queryByRole('button', { name: '删掉' })
+      within(row).queryByRole('button', { name: '删除' })
     ).not.toBeInTheDocument()
   })
 
@@ -297,7 +299,9 @@ describe('上游页的平台列表', () => {
     )
 
     expect(await screen.findByText('这个平台还没有账号')).toBeInTheDocument()
-    expect(screen.getByText(/点这一行的「新增账号」加一个/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/点这一行的「新增账号」新增一个/)
+    ).toBeInTheDocument()
   })
 
   it('「新增账号」带平台与别名，加完关掉弹窗', async () => {
@@ -309,11 +313,7 @@ describe('上游页的平台列表', () => {
           platform: input.platform ?? '',
           alias: input.alias ?? '',
         })
-        return create(AddAccountResponseSchema, {
-          ok: true,
-          message: '加上了',
-          id: 'minimax-2',
-        })
+        return create(AddAccountResponseSchema, { id: 'minimax-2' })
       },
     })
 
@@ -335,7 +335,7 @@ describe('上游页的平台列表', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
-    expect(toastSuccess).toHaveBeenCalledWith('加上了')
+    expect(toastSuccess).toHaveBeenCalledWith('已新增')
   })
 
   it('别名可以不填：加的时候带空串，名字由服务端起', async () => {
@@ -344,7 +344,7 @@ describe('上游页的平台列表', () => {
     const client = clientWith([platform()], {
       AddAccount: (input) => {
         sent.push(input.alias ?? '')
-        return create(AddAccountResponseSchema, { ok: true, id: 'minimax-2' })
+        return create(AddAccountResponseSchema, { id: 'minimax-2' })
       },
     })
 
@@ -396,7 +396,7 @@ describe('平台的编辑与删除入口', () => {
 
     // 表里有它这一行，所以能改能删。
     expect(within(row).getByRole('button', { name: '编辑' })).toBeInTheDocument()
-    expect(within(row).getByRole('button', { name: '删掉' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '删除' })).toBeInTheDocument()
     // 目录归代码，不从上游拉：没有刷新那一格。
     expect(
       within(row).queryByRole('button', { name: '刷新模型目录' })
@@ -421,7 +421,7 @@ describe('平台的编辑与删除入口', () => {
         within(row).getByRole('button', { name: '刷新模型目录' })
       ).toBeEnabled()
     )
-    expect(within(row).getByRole('button', { name: '删掉' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '删除' })).toBeInTheDocument()
   })
 
   it('只有代码没有行的平台：没有「自定义模型」入口', async () => {
@@ -435,6 +435,39 @@ describe('平台的编辑与删除入口', () => {
       within(rowOf('只有代码的平台')).queryByRole('button', {
         name: '自定义模型',
       })
+    ).not.toBeInTheDocument()
+  })
+
+  it('刷新模型目录只看平台自己那一格：厂商模板不归上游就没有按钮', async () => {
+    // 默认的类型清单（`platformKinds()`）里只有 minimax 与 openai —— 厂商模板
+    // 与自建平台的 kind 都不在里面，照清单判就永远没有刷新按钮。
+    const client = clientWith([
+      platform({
+        id: 'qiniu',
+        kind: 'qiniu',
+        label: '七牛',
+        modelsFromUpstream: false,
+      }),
+      openPlatform({
+        id: 'opencode-go',
+        kind: 'opencode',
+        label: '自建中转',
+        modelsFromUpstream: true,
+      }),
+    ])
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await screen.findByText('七牛')
+    await waitFor(() => {
+      expect(
+        within(rowOf('自建中转')).getByRole('button', {
+          name: '刷新模型目录',
+        })
+      ).toBeInTheDocument()
+    })
+    expect(
+      within(rowOf('七牛')).queryByRole('button', { name: '刷新模型目录' })
     ).not.toBeInTheDocument()
   })
 
@@ -466,10 +499,7 @@ describe('平台的编辑与删除入口', () => {
           baseUrl: input.baseUrl ?? '',
           quotaPlugin: input.quotaPlugin ?? '',
         })
-        return create(UpdatePlatformResponseSchema, {
-          ok: true,
-          message: '改好了',
-        })
+        return create(UpdatePlatformResponseSchema)
       },
     })
 
@@ -533,17 +563,17 @@ describe('平台的编辑与删除入口', () => {
 
     await screen.findByText('MiniMax Code')
     const del = within(rowOf('MiniMax Code')).getByRole('button', {
-      name: '删掉',
+      name: '删除',
     })
     // 扫主路由模型回来之前不给删：等它开。
     await waitFor(() => expect(del).toBeEnabled())
     await user.click(del)
 
     const confirm = await screen.findByRole('alertdialog')
-    expect(within(confirm).getByText('删掉 MiniMax Code')).toBeInTheDocument()
+    expect(within(confirm).getByText('删除 MiniMax Code')).toBeInTheDocument()
     expect(
       within(confirm).getByText(
-        /名下的账号、凭据、额度、冷却一起清掉，删完回不来/
+        /删除该平台会同时删除其名下的账号与凭据/
       )
     ).toBeInTheDocument()
     // 旧的「代码里的平台删不了」那类话不再出现。
@@ -575,11 +605,10 @@ describe('上一次提交的失败不串到下一次打开', () => {
         openPlatform({ id: 'beta', label: '乙平台' }),
       ],
       {
-        UpdatePlatform: () =>
-          create(UpdatePlatformResponseSchema, {
-            ok: false,
-            message: '这个名字被别人用掉了',
-          }),
+        // 失败是一次 Connect 错误（这一族方法没有 ok / message 两格）。
+        UpdatePlatform: () => {
+          throw new ConnectError('这个名字被别人用掉了', Code.AlreadyExists)
+        },
       }
     )
 
@@ -619,11 +648,9 @@ describe('上一次提交的失败不串到下一次打开', () => {
   it('新建平台失败后关掉，再打开：看不到上一次的失败', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([], {
-      AddPlatform: () =>
-        create(AddPlatformResponseSchema, {
-          ok: false,
-          message: '这个 id 已经有了',
-        }),
+      AddPlatform: () => {
+        throw new ConnectError('这个 id 已经有了', Code.AlreadyExists)
+      },
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
@@ -657,10 +684,7 @@ describe('上一次提交的失败不串到下一次打开', () => {
     const client = clientWith([openPlatform()], {
       UpdatePlatform: (input) => {
         sent.push(input.id ?? '')
-        return create(UpdatePlatformResponseSchema, {
-          ok: false,
-          message: '这个名字被别人用掉了',
-        })
+        throw new ConnectError('这个名字被别人用掉了', Code.AlreadyExists)
       },
     })
 
@@ -701,7 +725,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
 
   /** 删平台那一行的「删掉」按钮。 */
   function deleteButton(): HTMLElement {
-    return within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    return within(rowOf('我的中转站')).getByRole('button', { name: '删除' })
   }
 
   it('没有模型指向它：确认后只发 DeletePlatform', async () => {
@@ -712,12 +736,12 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
         sent.push(`model:${input.id ?? ''}`)
         return create(DeletePublishedModelResponseSchema, {
           ok: true,
-          message: '删掉了',
+          message: '已删除',
         })
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -729,7 +753,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     await user.click(deleteButton())
 
     const confirm = await screen.findByRole('alertdialog')
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     await waitFor(() => {
       expect(sent).toEqual(['platform:my-gateway'])
@@ -748,12 +772,12 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
         sent.push(`model:${input.id ?? ''}`)
         return create(DeletePublishedModelResponseSchema, {
           ok: true,
-          message: '删掉了',
+          message: '已删除',
         })
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -769,10 +793,10 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     expect(within(confirm).getByText('gpt-4o')).toBeInTheDocument()
     expect(within(confirm).getByText(/GPT-4o/)).toBeInTheDocument()
     expect(
-      within(confirm).getByText(/这些主路由模型会一起删掉/)
+      within(confirm).getByText(/以下主路由模型将一并删除/)
     ).toBeInTheDocument()
 
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     await waitFor(() => {
       // 顺序：先删模型，再删平台。
@@ -795,12 +819,12 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
         sent.push(`model:${input.id ?? ''}`)
         return create(DeletePublishedModelResponseSchema, {
           ok: true,
-          message: '删掉了',
+          message: '已删除',
         })
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -815,7 +839,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     expect(within(confirm).getByText('gpt-4o')).toBeInTheDocument()
     expect(within(confirm).getByText('claude-3')).toBeInTheDocument()
 
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     await waitFor(() => {
       expect(sent).toEqual([
@@ -838,12 +862,12 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
         sent.push(`model:${input.id ?? ''}`)
         return create(DeletePublishedModelResponseSchema, {
           ok: true,
-          message: '删掉了',
+          message: '已删除',
         })
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -880,7 +904,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -892,7 +916,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     await user.click(deleteButton())
 
     const confirm = await screen.findByRole('alertdialog')
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     // 失败显示出来。
     expect(
@@ -926,12 +950,12 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
         }
         return create(DeletePublishedModelResponseSchema, {
           ok: true,
-          message: '删掉了',
+          message: '已删除',
         })
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -942,7 +966,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     await user.click(deleteButton())
 
     const confirm = await screen.findByRole('alertdialog')
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     // 第一个删掉了，第二个失败：平台没删。
     await waitFor(() => {
@@ -953,7 +977,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     ).toBeInTheDocument()
 
     // 再试一次：只删还没删掉的那一个（gpt-4o 已经没了，不再动它）。
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     await waitFor(() => {
       expect(sent).toEqual([
@@ -991,12 +1015,12 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
         }
         return create(DeletePublishedModelResponseSchema, {
           ok: true,
-          message: '删掉了',
+          message: '已删除',
         })
       },
       DeletePlatform: (input) => {
         sent.push(`platform:${input.id ?? ''}`)
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema)
       },
     })
 
@@ -1007,7 +1031,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
     await user.click(deleteButton())
 
     const confirm = await screen.findByRole('alertdialog')
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     // 第一个删掉了，第二个失败：弹框留着。
     await waitFor(() => {
@@ -1030,7 +1054,7 @@ describe('删平台之前先扫主路由引用', () => {  beforeEach(() => {
       .queryAllByText(/^(gpt-4o|claude-3)$/)
       .map((node) => node.textContent)
 
-    await user.click(within(again).getByRole('button', { name: '删掉' }))
+    await user.click(within(again).getByRole('button', { name: '删除' }))
 
     // 只发还没删掉的那个：gpt-4o 不再发一遍。
     await waitFor(() => {

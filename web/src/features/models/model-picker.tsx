@@ -39,7 +39,7 @@ export function ModelPicker({
   value,
   onChange,
   id,
-  placeholder = '选一个上游模型',
+  placeholder = '选一个平台模型',
 }: ModelPickerProps) {
   const upstreams = useUpstreams()
   // 目录跟上游的开关有关（关着就不给模型），所以缓存键里带上状态。
@@ -76,13 +76,13 @@ export function ModelPicker({
           <p className='text-xs text-muted-foreground'>正在加载模型目录…</p>
         ) : catalog.isError ? (
           <p className='text-xs text-destructive'>
-            取模型目录失败，手填一个上游模型 id。
+            取模型目录失败，手填一个平台模型 id。
           </p>
         ) : hasCatalog ? (
           // 目录是有的，是用户自己选了手填：给他一条回去的路。
           <div className='flex items-center gap-1'>
             <p className='text-xs text-muted-foreground'>
-              这个上游有模型目录（{models.length} 个）。
+              这个平台有模型目录（{models.length} 个）。
             </p>
             <Button
               type='button'
@@ -96,7 +96,7 @@ export function ModelPicker({
           </div>
         ) : (
           <p className='text-xs text-muted-foreground'>
-            这个上游没有目录，手填模型 id。
+            这个平台没有目录，手填模型 id。
           </p>
         )}
       </div>

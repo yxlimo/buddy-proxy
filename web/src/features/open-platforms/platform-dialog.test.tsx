@@ -547,6 +547,33 @@ describe('改平台时怎么判是不是模拟客户端', () => {
     expect(screen.queryByLabelText('地址')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
   })
+
+  it('模拟客户端：目录归代码，不摆「自动拉」开关，也不摆可改的目录', () => {
+    renderEdit(simulatedPlatform)
+
+    // 服务端对模拟客户端的 models / modelsAuto 一律忽略：摆出来的开关与文本域
+    // 就成了两个改了也不算数的控件。
+    expect(
+      screen.queryByRole('switch', { name: '自动拉模型目录' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('模型目录')).not.toBeInTheDocument()
+    // 说清这一格为什么没有。
+    expect(
+      screen.getByText('模型目录由代码提供，不能改。')
+    ).toBeInTheDocument()
+  })
+
+  it('开放平台：开关与目录都还在（控制组）', () => {
+    renderEdit(platform)
+
+    expect(
+      screen.getByRole('switch', { name: '自动拉模型目录' })
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('模型目录')).toBeInTheDocument()
+    expect(
+      screen.queryByText('模型目录由代码提供，不能改。')
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe('换一条类型：草稿里那几格跟着走', () => {

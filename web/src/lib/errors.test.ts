@@ -35,17 +35,17 @@ describe('把错误翻成人话', () => {
 
 describe('assertOk', () => {
   it('ok 为真就什么都不做', () => {
-    expect(() => assertOk({ ok: true, message: '好了' }, '没保存成')).not.toThrow()
+    expect(() => assertOk({ ok: true, message: '好了' }, '保存失败')).not.toThrow()
   })
 
   it('ok 为假就抛异常，消息用服务端给的', () => {
     expect(() =>
-      assertOk({ ok: false, message: '不认识的上游：xxx' }, '没改成')
+      assertOk({ ok: false, message: '不认识的上游：xxx' }, '保存失败')
     ).toThrow('不认识的上游：xxx')
   })
 
   it('服务端没给消息就用兜底的那句', () => {
-    expect(() => assertOk({ ok: false }, '没改成')).toThrow('没改成')
+    expect(() => assertOk({ ok: false }, '保存失败')).toThrow('保存失败')
   })
 })
 

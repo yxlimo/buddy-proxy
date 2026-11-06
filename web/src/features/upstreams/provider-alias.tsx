@@ -32,14 +32,14 @@ export function ProviderAliasCell({
         className={
           iconOnly ? undefined : 'h-7 px-2 text-xs text-muted-foreground'
         }
-        aria-label={`改 ${providerId} 的别名`}
+        aria-label={`编辑 ${providerId} 的别名`}
         onClick={() => {
           setText(alias)
           setEditing(true)
         }}
       >
         <Pencil className='size-3' />
-        {iconOnly ? null : alias || '加名称'}
+        {iconOnly ? null : alias || '新增名称'}
       </Button>
     )
   }

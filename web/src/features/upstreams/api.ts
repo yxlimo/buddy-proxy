@@ -53,7 +53,7 @@ export function useSetAccountEnabled() {
           enabled: input.enabled,
         })
       )
-      assertOk(result, '没改成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {
@@ -79,20 +79,19 @@ export function useAddAccount() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { platform: string; alias?: string }) => {
-      const result = await client.addAccount(
+      // 失败是一次 Connect 错误（AddAccount 没有 ok / message 两格）。
+      return await client.addAccount(
         create(AddAccountRequestSchema, {
           platform: input.platform,
           alias: input.alias ?? '',
         })
       )
-      assertOk(result, '没加上')
-      return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '加上了')
+    onSuccess: () => {
+      toast.success('已新增')
     },
     onSettled: () => {
       invalidateServerData(queryClient, 'accounts')
@@ -113,14 +112,14 @@ export function useDeleteAccount() {
       const result = await client.deleteAccount(
         create(DeleteAccountRequestSchema, { id: input.id })
       )
-      assertOk(result, '没删掉')
+      assertOk(result, '删除失败')
       return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '删掉了')
+      toast.success(result.message || '已删除')
     },
     onSettled: () => {
       invalidateServerData(queryClient, 'accounts')
@@ -148,14 +147,14 @@ export function useSetPlatformPolicy() {
           policy: input.policy,
         })
       )
-      assertOk(result, '没改成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '策略改好了')
+      toast.success(result.message || '策略已保存')
     },
     onSettled: () => {
       // 策略是平台那一行上的字段：平台那份答复变了。
@@ -183,14 +182,14 @@ export function useUpdateProvider() {
           weight: input.weight,
         })
       )
-      assertOk(result, '没改成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '改好了')
+      toast.success(result.message || '已保存')
     },
     onSettled: () => {
       invalidateServerData(queryClient, 'accounts')

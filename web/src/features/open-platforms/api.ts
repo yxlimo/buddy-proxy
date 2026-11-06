@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import {
   AddPlatformRequestSchema,
   DeletePlatformRequestSchema,
+  DeleteModelOverrideRequestSchema,
   ListModelOverridesRequestSchema,
   ListPlatformKindsRequestSchema,
   ListQuotaPluginsRequestSchema,
@@ -58,8 +59,8 @@ export function useListPlatformKinds() {
 /**
  * 加一个开放平台。
  *
- * 只建空平台：不接 key、不接模型清单（那是后面的事）。失败走答复里的 ok/message
- * —— 服务端说 id 不行就是不行，面板不自己写一套 id 规则。
+ * 只建空平台：不接 key、不接模型清单（那是后面的事）。服务端说 id 不行就是不行
+ * —— 面板不自己写一套 id 规则，失败是一次 Connect 错误（`describeError` 翻）。
  *
  * 错误不在这里弹 toast：新增的表单在弹窗里，错误显示在表单旁边更显眼（弹窗里
  * 那句见 platform-dialog.tsx）。
@@ -75,7 +76,7 @@ export function useAddPlatform() {
       /** 用哪一类适配器：清单里的一个 kind。 */
       kind: string
     }) => {
-      const result = await client.addPlatform(
+      return await client.addPlatform(
         create(AddPlatformRequestSchema, {
           id: input.id,
           label: input.label,
@@ -83,11 +84,9 @@ export function useAddPlatform() {
           kind: input.kind,
         })
       )
-      assertOk(result, '没加上这个平台')
-      return result
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '加上了')
+    onSuccess: () => {
+      toast.success('已新增')
     },
     onSettled: () => {
       // 平台表多了一行。
@@ -125,14 +124,12 @@ export function useUpdatePlatform() {
       }
       if (input.baseUrl !== undefined) init.baseUrl = input.baseUrl
       if (input.quotaPlugin !== undefined) init.quotaPlugin = input.quotaPlugin
-      const result = await client.updatePlatform(
+      return await client.updatePlatform(
         create(UpdatePlatformRequestSchema, init)
       )
-      assertOk(result, '没改成')
-      return result
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '改好了')
+    onSuccess: () => {
+      toast.success('已保存')
     },
     onSettled: () => {
       // 名字、地址、额度插件、模型目录都是平台那一行上的字段。
@@ -145,24 +142,22 @@ export function useUpdatePlatform() {
  * 删一个开放平台。
  *
  * 服务端连它名下的账号、凭据、额度、冷却一起删。被主路由模型引用时服务端会
- * 拒绝并说明引用了哪些 —— 面板照那句话显示。
+ * 拒绝（一次 Connect 错误）并说明引用了哪些 —— 面板照那句话显示。
  */
 export function useDeletePlatform() {
   const client = useAdminClient()
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { id: string }) => {
-      const result = await client.deletePlatform(
+      return await client.deletePlatform(
         create(DeletePlatformRequestSchema, { id: input.id })
       )
-      assertOk(result, '没删掉')
-      return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '删掉了')
+    onSuccess: () => {
+      toast.success('已删除')
     },
     onSettled: () => {
       // 服务端连它名下的账号、凭据、额度一起删了。失败也可能是删了一半
@@ -175,8 +170,12 @@ export function useDeletePlatform() {
 /**
  * 手动拉一次上游的模型目录。
  *
- * 拉不到不是错误：ok=false 时原来那份目录留着，答复里的 message 说明为什么没
- * 拉到。面板照答复显示，不自己判断原因。
+ * 拉不到不是错误：ok=false 时原来那份目录留着。面板上那句「已刷新，N 个模型」
+ * 由面板自己按拉回来的条数说，不摆服务端那句 message —— 这一族答复里的文案
+ * 归面板。
+ *
+ * ok=false 在这里翻成一次异常：成功与失败只有一条路，页面拿到 reject 就用
+ * `describeError` 说原因（那句话显示在平台那一行下面）。
  *
  * 拉完目录与拉取时刻都在服务端那边（ListUpstreams 的 Upstream 上那三格），
  * 面板不自己留一份：留一份就会跟服务端那份对不上（拉失败的时候尤其明显）。
@@ -186,14 +185,13 @@ export function useRefreshPlatformModels() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { platformId: string }) => {
-      return await client.refreshPlatformModels(
+      const result = await client.refreshPlatformModels(
         create(RefreshPlatformModelsRequestSchema, {
           platformId: input.platformId,
         })
       )
-    },
-    onError: (error) => {
-      toast.error(describeError(error))
+      assertOk(result, '刷新模型目录失败')
+      return result
     },
     onSettled: () => {
       // 目录与上次拉取时刻在平台那一行上；ok=false 时服务端也记了这次问过。
@@ -224,11 +222,14 @@ export function useModelOverrides(platformId: string) {
 /**
  * 存某个平台的自定义模型。
  *
- * SetModelOverrides 是整体替换：没发来的条目等于删掉，所以发上去的就是那一整份
- * 人工条目 —— 空列表也照发，那就是「把人工那部分清空」。
+ * SetModelOverrides 按 id 覆盖：发来的每一条同 id 的换掉、新 id 的加进来，没发
+ * 来的条目原封不动。所以弹窗一次只发当前在改的那一条，别的那几条不会被碰到。
  *
  * 错误不在这里弹 toast：弹窗不关、把服务端那句话摆在弹窗里更显眼（它会说清是
  * 哪一格不合法）。成功也不弹：弹窗关掉本身就是「存上了」。
+ *
+ * 失败是一次 Connect 错误（这一族方法没有 ok / message 两格），`describeError`
+ * 会把它翻成人话。
  */
 export function useSetModelOverrides() {
   const client = useAdminClient()
@@ -238,7 +239,7 @@ export function useSetModelOverrides() {
       platformId: string
       overrides: OverrideInput[]
     }) => {
-      const result = await client.setModelOverrides(
+      return await client.setModelOverrides(
         create(SetModelOverridesRequestSchema, {
           platformId: input.platformId,
           overrides: input.overrides.map((item) =>
@@ -246,11 +247,33 @@ export function useSetModelOverrides() {
           ),
         })
       )
-      assertOk(result, '没存上')
-      return result
     },
     onSettled: () => {
       // 目录、平台那行、人工那一份都是这一笔改的。失败里服务端也可能只写了一部分。
+      invalidateServerData(queryClient, 'modelOverrides')
+    },
+  })
+}
+
+/**
+ * 删一条人工条目。
+ *
+ * 覆盖语义下「没发来」不再等于删，删要有自己这一条路。这条不存在时服务端回
+ * 一次 Connect 错误（不是静默成功），弹窗把 `describeError` 那句话显示出来。
+ */
+export function useDeleteModelOverride() {
+  const client = useAdminClient()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { platformId: string; modelId: string }) =>
+      await client.deleteModelOverride(
+        create(DeleteModelOverrideRequestSchema, {
+          platformId: input.platformId,
+          modelId: input.modelId,
+        })
+      ),
+    onSettled: () => {
+      // 人工那一份少了一条：目录、平台那行也跟着变。
       invalidateServerData(queryClient, 'modelOverrides')
     },
   })

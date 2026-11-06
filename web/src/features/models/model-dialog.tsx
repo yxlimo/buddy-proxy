@@ -126,8 +126,8 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
 
 /** 继承时把现在实际的值显示出来。 */
 function inheritedHint(value: number | undefined): string {
-  if (value === undefined) return '继承上游'
-  return `继承上游（现在 ${value.toLocaleString()}）`
+  if (value === undefined) return '继承平台'
+  return `继承平台（现在 ${value.toLocaleString()}）`
 }
 
 function toTriState(value: boolean | undefined): TriState {
@@ -235,10 +235,10 @@ export function ModelDialog({
       <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-2xl'>
         <DialogHeader>
           <DialogTitle>
-            {model ? '改主路由模型' : '新建一个主路由模型'}
+            {model ? '编辑主路由模型' : '新增主路由模型'}
           </DialogTitle>
           <DialogDescription>
-            对外公布一个 id，背后挂一个或多个上游模型。
+            对外公布一个 id，背后挂一个或多个平台模型。
           </DialogDescription>
         </DialogHeader>
 
@@ -308,7 +308,7 @@ export function ModelDialog({
                   placeholder={
                     draft.contextWindowInherit
                       ? inheritedHint(draft.effectiveContextWindow)
-                      : '留空 = 继承上游'
+                      : '留空 = 继承平台'
                   }
                   value={draft.contextWindow}
                   onChange={(event) =>
@@ -317,7 +317,7 @@ export function ModelDialog({
                 />
                 <InheritToggle
                   id='model-ctx-inherit'
-                  label='继承上游'
+                  label='继承平台'
                   checked={draft.contextWindowInherit}
                   onChange={(checked) =>
                     patch({
@@ -336,7 +336,7 @@ export function ModelDialog({
                   placeholder={
                     draft.maxOutputTokensInherit
                       ? inheritedHint(draft.effectiveMaxOutputTokens)
-                      : '留空 = 继承上游'
+                      : '留空 = 继承平台'
                   }
                   value={draft.maxOutputTokens}
                   onChange={(event) =>
@@ -345,7 +345,7 @@ export function ModelDialog({
                 />
                 <InheritToggle
                   id='model-out-inherit'
-                  label='继承上游'
+                  label='继承平台'
                   checked={draft.maxOutputTokensInherit}
                   onChange={(checked) =>
                     patch({
@@ -370,7 +370,7 @@ export function ModelDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='inherit'>继承上游</SelectItem>
+                    <SelectItem value='inherit'>继承平台</SelectItem>
                     <SelectItem value='yes'>支持</SelectItem>
                     <SelectItem value='no'>不支持</SelectItem>
                   </SelectContent>
@@ -388,7 +388,7 @@ export function ModelDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='inherit'>继承上游</SelectItem>
+                    <SelectItem value='inherit'>继承平台</SelectItem>
                     <SelectItem value='yes'>支持</SelectItem>
                     <SelectItem value='no'>不支持</SelectItem>
                   </SelectContent>
@@ -421,7 +421,7 @@ export function ModelDialog({
           <TabsContent value='targets' className='grid gap-3'>
             {targetsMissing ? (
               <p className='text-xs text-destructive'>
-                至少要有一个填全的目标：平台组和上游模型 id 都要填。
+                至少要有一个填全的目标：平台组和平台模型 id 都要填。
               </p>
             ) : null}
             {draft.targets.map((target, index) => (
@@ -444,7 +444,7 @@ export function ModelDialog({
                   />
                 </div>
                 <div className='grid gap-2'>
-                  <Label htmlFor={`target-model-${index}`}>上游模型 id</Label>
+                  <Label htmlFor={`target-model-${index}`}>平台模型 id</Label>
                   <ModelPicker
                     id={`target-model-${index}`}
                     groupName={target.groupName}
@@ -474,7 +474,7 @@ export function ModelDialog({
                 ) : null}
                 {!targetFilled(target) ? (
                   <p className='text-xs text-destructive sm:col-span-2'>
-                    这一行还没填全：平台组和上游模型 id 都要填。
+                    这一行还没填全：平台组和平台模型 id 都要填。
                   </p>
                 ) : null}
                 <div className='flex items-center justify-between gap-2 sm:col-span-2'>
@@ -499,7 +499,7 @@ export function ModelDialog({
                     disabled={draft.targets.length === 1}
                   >
                     <Trash2 />
-                    删掉
+                    删除
                   </Button>
                 </div>
               </div>

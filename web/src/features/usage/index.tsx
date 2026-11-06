@@ -77,7 +77,7 @@ export function UsagePage() {
   return (
     <PageShell
       title='用量'
-      description='走过的请求：token、耗时与明细。只统计真正发到上游的请求。'
+      description='走过的请求：token、耗时与明细。只统计真正发到平台的请求。'
       actions={
         <Select
           value={windowFilter}

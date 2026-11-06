@@ -49,7 +49,7 @@ export function useRunBenefitNow() {
     },
     onSuccess: (result) => {
       if (result.ok) {
-        toast.success('签到跑完了')
+        toast.success('签到已完成')
         return
       }
       // 有账号没签到成功：具体是哪个账号、出了什么事，都在 lines 里，界面

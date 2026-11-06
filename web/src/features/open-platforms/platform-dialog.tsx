@@ -616,36 +616,44 @@ export function PlatformDialog({
                 </div>
               ) : null}
 
-              <div className='grid gap-2'>
-                <label
-                  htmlFor='platform-models-auto'
-                  className='flex items-center gap-2 text-sm'
-                >
-                  <Switch
-                    id='platform-models-auto'
-                    aria-label='自动拉模型目录'
-                    checked={draft.modelsAuto}
-                    onCheckedChange={(checked) =>
-                      patch({ modelsAuto: checked })
-                    }
-                  />
-                  自动拉模型目录
-                </label>
-                <Label htmlFor='platform-models'>模型目录</Label>
-                <Textarea
-                  id='platform-models'
-                  value={draft.models}
-                  disabled={draft.modelsAuto}
-                  rows={4}
-                  placeholder='一行一个模型名'
-                  onChange={(event) => patch({ models: event.target.value })}
-                />
-                <p className='text-xs text-muted-foreground'>
-                  {draft.modelsAuto
-                    ? '自动拉的时候这份目录由上游给，这里改不了'
-                    : '留空表示保留现在这份目录'}
+              {/* 模拟客户端的目录归代码（后端对这一族的 models / modelsAuto 一律
+                  忽略）：不摆开关与文本域，只留一句说清。 */}
+              {simulated ? (
+                <p className='text-sm text-muted-foreground'>
+                  模型目录由代码提供，不能改。
                 </p>
-              </div>
+              ) : (
+                <div className='grid gap-2'>
+                  <label
+                    htmlFor='platform-models-auto'
+                    className='flex items-center gap-2 text-sm'
+                  >
+                    <Switch
+                      id='platform-models-auto'
+                      aria-label='自动拉模型目录'
+                      checked={draft.modelsAuto}
+                      onCheckedChange={(checked) =>
+                        patch({ modelsAuto: checked })
+                      }
+                    />
+                    自动拉模型目录
+                  </label>
+                  <Label htmlFor='platform-models'>模型目录</Label>
+                  <Textarea
+                    id='platform-models'
+                    value={draft.models}
+                    disabled={draft.modelsAuto}
+                    rows={4}
+                    placeholder='一行一个模型名'
+                    onChange={(event) => patch({ models: event.target.value })}
+                  />
+                  <p className='text-xs text-muted-foreground'>
+                    {draft.modelsAuto
+                      ? '自动拉的时候这份目录由平台给，这里改不了'
+                      : '留空表示保留现在这份目录'}
+                  </p>
+                </div>
+              )}
             </>
           ) : null}
 

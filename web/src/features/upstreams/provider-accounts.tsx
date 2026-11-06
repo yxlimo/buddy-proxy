@@ -145,7 +145,7 @@ export function ProviderAccounts({
       <div>
         <EmptyState
           title='这个平台还没有账号'
-          description='点这一行的「新增账号」加一个，加完在账号那一行登录'
+          description='点这一行的「新增账号」新增一个，然后在账号那一行登录'
         />
       </div>
     )

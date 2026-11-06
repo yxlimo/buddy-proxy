@@ -244,7 +244,7 @@ function UpstreamQuotaCards({
 function AllUpstreamsFailedNotice({ onRetry }: { onRetry: () => void }) {
   return (
     <div className='mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3'>
-      <p className='text-sm text-destructive'>所有上游都没问出来</p>
+      <p className='text-sm text-destructive'>所有平台都没问出来</p>
       <Button variant='outline' size='sm' onClick={onRetry}>
         全部重试
       </Button>

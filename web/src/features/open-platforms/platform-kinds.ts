@@ -162,25 +162,18 @@ export function platformKindHint(list: PlatformKindList): string | null {
 }
 
 /**
- * 「刷新模型目录」按钮的三档。
+ * 「刷新模型目录」按钮存不存在。
  *
- * 清单没到手（还在加载 / 取不到）跟「这一类不从上游拉」是两回事：前者说不准，
- * 摆一个禁用按钮加一句原因 —— 按钮忽然消失再出现比一直禁着更让人困惑；后者
- * 这一类确实不拉，不摆按钮。清单到手了但里面没这一条，跟不拉一样处理。
+ * 判据只有一个：平台自己那一格 `models_from_upstream`（服务端按类型登记表算好、
+ * 跟着 Upstream 一起给的那个值）。不看 `ListPlatformKinds` —— 那个清单只有能新建
+ * 的那几类，厂商模板（七牛、星火……）与模拟客户端都不在里面，照它判就永远没有
+ * 刷新按钮。清单那一格现在只服务「新建平台」。
  */
-export type RefreshModelsControl =
-  | { show: false }
-  | { show: true; enabled: true }
-  | { show: true; enabled: false; reason: string }
+export type RefreshModelsControl = { show: false } | { show: true }
 
-/** 这一行摆不摆刷新模型目录按钮，摆的话能不能点。 */
+/** 这一行摆不摆刷新模型目录按钮。 */
 export function refreshModelsControl(
-  list: PlatformKindList,
-  kind: string
+  modelsFromUpstream: boolean
 ): RefreshModelsControl {
-  const notice = listNotice(list)
-  if (notice) return { show: true, enabled: false, reason: notice }
-  return findKind(list, kind)?.modelsFromUpstream === true
-    ? { show: true, enabled: true }
-    : { show: false }
+  return modelsFromUpstream === true ? { show: true } : { show: false }
 }

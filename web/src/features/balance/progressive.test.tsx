@@ -107,7 +107,7 @@ describe('额度按上游并发拉', () => {
     expect(screen.getByText('acc-good')).toBeInTheDocument()
   }, 20000)
 
-  it('所有上游都没问出来：给一个统一入口，点一次两家都重问', async () => {
+  it('所有平台都没问出来：给一个统一入口，点一次两家都重问', async () => {
     const user = userEvent.setup({ delay: null })
     const asked: string[] = []
     const client = mockAdminClient({
@@ -132,7 +132,7 @@ describe('额度按上游并发拉', () => {
       { name: '全部重试' },
       { timeout: 15000 }
     )
-    expect(screen.getByText('所有上游都没问出来')).toBeInTheDocument()
+    expect(screen.getByText('所有平台都没问出来')).toBeInTheDocument()
     expect(asked.filter((id) => id === 'minimax')).toHaveLength(1)
     expect(asked.filter((id) => id === 'qoder')).toHaveLength(1)
 
@@ -170,7 +170,7 @@ describe('额度按上游并发拉', () => {
     )
     // 只有一家失败：没有统一入口。
     expect(screen.queryByRole('button', { name: '全部重试' })).toBeNull()
-    expect(screen.queryByText('所有上游都没问出来')).toBeNull()
+    expect(screen.queryByText('所有平台都没问出来')).toBeNull()
   }, 20000)
 
   it('刷新之后各上游那条重新问一遍，卡片里的数换成新的', async () => {

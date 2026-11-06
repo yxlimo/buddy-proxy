@@ -119,8 +119,6 @@ describe('账号的 API Key', () => {
       SetProviderKeys: (input) => {
         sent.push(input.upstreamId ?? '')
         return create(SetProviderKeysResponseSchema, {
-          ok: true,
-          message: '写好了',
           count: 1,
         })
       },
@@ -174,7 +172,7 @@ describe('账号的 API Key', () => {
         create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
         sent.push(input.upstreamId ?? '')
-        return create(SetProviderKeysResponseSchema, { ok: true })
+        return create(SetProviderKeysResponseSchema)
       },
     })
 
@@ -227,7 +225,7 @@ describe('账号的 API Key', () => {
         create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
         sent.push(input.upstreamId ?? '')
-        return create(SetProviderKeysResponseSchema, { ok: true })
+        return create(SetProviderKeysResponseSchema)
       },
     })
 
@@ -292,8 +290,6 @@ describe('七牛云的凭据', () => {
         const keys = input.keys ?? []
         sent.push(keys)
         return create(SetProviderKeysResponseSchema, {
-          ok: true,
-          message: '写好了',
           count: keys.length,
         })
       },
@@ -411,7 +407,7 @@ describe('凭据的入口按这一类的格子给', () => {
       ListCredentials: () => create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
         sent?.push(input.keys ?? [])
-        return create(SetProviderKeysResponseSchema, { ok: true })
+        return create(SetProviderKeysResponseSchema)
       },
     })
   }
@@ -645,8 +641,6 @@ describe('凭据弹窗按平台渲染格子', () => {
         const keys = [...(input.keys ?? [])]
         sent.push(keys)
         return create(SetProviderKeysResponseSchema, {
-          ok: true,
-          message: '写好了',
           count: keys.length,
         })
       },
@@ -1037,7 +1031,7 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
     ListQuotaPlugins: listPlugins,
     ListPublishedModels: () =>
       create(ListPublishedModelsResponseSchema, { models: [] }),
-    SetProviderKeys: () => create(SetProviderKeysResponseSchema, { ok: true }),
+    SetProviderKeys: () => create(SetProviderKeysResponseSchema),
     })
   }
 

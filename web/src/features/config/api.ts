@@ -39,7 +39,7 @@ export function useSetConfig() {
           clear: input.clear,
         })
       )
-      assertOk(result, '没保存成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {

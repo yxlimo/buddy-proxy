@@ -92,7 +92,7 @@ export function DeletePlatformButton({ platform }: { platform: Upstream }) {
     if (failure !== null) {
       // 停在半路：平台不删（删了会留下更多接不了的模型）。
       // 已经删掉的那几个不回滚 —— 回不来，也不该回滚。
-      setError(`主路由模型没删掉，平台没删：${failure}`)
+      setError(`主路由模型删除失败，平台未删除：${failure}`)
       setBusy(false)
       return
     }
@@ -120,7 +120,7 @@ export function DeletePlatformButton({ platform }: { platform: Upstream }) {
             setOpen(true)
           }}
         >
-          删掉
+          删除
         </Button>
         {!scanned && !scanFailed ? (
           <span className='text-xs text-muted-foreground'>
@@ -156,16 +156,16 @@ export function DeletePlatformButton({ platform }: { platform: Upstream }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              删掉 {platform.label || platform.id}
+              删除 {platform.label || platform.id}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              这个平台会删掉，名下的账号、凭据、额度、冷却一起清掉，删完回不来。客户端走这个平台的地址也就不通了
+              删除该平台会同时删除其名下的账号与凭据。额度与冷却记录一并清除，且不可恢复。客户端使用该平台的地址将无法连接。
             </AlertDialogDescription>
           </AlertDialogHeader>
           {pending.length > 0 ? (
             <div className='grid gap-1'>
               <p className='text-sm font-medium'>
-                这些主路由模型会一起删掉：
+                以下主路由模型将一并删除：
               </p>
               <ul className='grid gap-0.5'>
                 {pending.map((model) => (
@@ -193,7 +193,7 @@ export function DeletePlatformButton({ platform }: { platform: Upstream }) {
                 void confirm()
               }}
             >
-              删掉
+              删除
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

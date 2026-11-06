@@ -67,6 +67,7 @@ import {
 } from '@/features/accounts/provider-key-fields'
 import { useSetProviderKeys } from '@/features/accounts/api'
 import { formatLocalMoment } from '@/lib/format'
+import { describeError } from '@/lib/errors'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
 import type {
@@ -141,7 +142,7 @@ export function UpstreamsPage() {
   // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它变，
   // 免得先弹回旧值再跳到新值。
   const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
-  // 建平台时能选的类型：判据（卡片上的名字、刷新按钮的三档）都收在
+  // 建平台时能选的类型：名字那一行（`platformKindReadout`）收在
   // platform-kinds.ts，这里只照结果渲染。用 useMemo 稳住这一份：弹窗里那个
   // 「清单到手了选第一条」的 effect 拿它当依赖，每次渲染新建一个就会白跑一次。
   // 得摆在下面那两个提前 return 之前：hook 不能只在有数据的时候调。
@@ -199,7 +200,7 @@ export function UpstreamsPage() {
 
   return (
     <PageShell
-      title='上游'
+      title='平台'
       description='平台分两种：内置的模板平台，和自己在面板上加的开放平台。每个平台下可以有多个账号。'
       actions={
         <Button onClick={openAddPlatform}>
@@ -231,11 +232,9 @@ export function UpstreamsPage() {
               <TableBody>
                 {list.map((upstream) => {
                   const isExpanded = expanded === upstream.id
-                  // 刷新模型目录按钮的三档：清单没到手（加载中 / 取不到）是禁用
-                  // 加一句原因；这一类确实不拉才不摆；剩下来才是能点的。
+                  // 刷新模型目录摆不摆：只看平台自己那一格（目录归不归上游）。
                   const refreshControl = refreshModelsControl(
-                    kinds,
-                    upstream.kind
+                    upstream.modelsFromUpstream
                   )
                   return (
                     <Fragment key={upstream.id}>
@@ -347,42 +346,46 @@ export function UpstreamsPage() {
                                 编辑
                               </Button>
                             ) : null}
-                            {/* 刷新模型目录看两件事：清单到没到手、这一类拉不拉。
-                                清单没到手摆一个禁用按钮加一句原因（按钮忽然
-                                消失再出现比一直禁着更让人困惑）；这一类确实
-                                不拉才不摆。 */}
+                            {/* 刷新模型目录只看平台自己那一格 `models_from_upstream`：
+                                目录归上游才有这一格。 */}
                             {refreshControl.show ? (
-                              <div className='grid justify-items-end gap-0.5'>
-                                <Button
-                                  size='sm'
-                                  variant='outline'
-                                  disabled={!refreshControl.enabled}
-                                  onClick={() =>
-                                    refreshModels.mutate(
-                                      { platformId: upstream.id },
-                                      {
-                                        onSuccess: (result) => {
-                                          setRefreshOutcomes((prev) => ({
-                                            ...prev,
-                                            [upstream.id]: {
-                                              ok: result.ok,
-                                              message: result.message,
-                                              models: [...result.models],
-                                            },
-                                          }))
-                                        },
-                                      }
-                                    )
-                                  }
-                                >
-                                  刷新模型目录
-                                </Button>
-                                {refreshControl.enabled ? null : (
-                                  <span className='text-xs text-muted-foreground'>
-                                    {refreshControl.reason}
-                                  </span>
-                                )}
-                              </div>
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                onClick={() =>
+                                  refreshModels.mutate(
+                                    { platformId: upstream.id },
+                                    {
+                                      // 成功那句由面板自己说：拉回来几个模型。
+                                      onSuccess: (result) => {
+                                        setRefreshOutcomes((prev) => ({
+                                          ...prev,
+                                          [upstream.id]: {
+                                            ok: true,
+                                            message: `已刷新，${result.models.length} 个模型`,
+                                            models: [...result.models],
+                                          },
+                                        }))
+                                      },
+                                      // 失败（拉不到、服务端说 ok=false）都走
+                                      // `describeError`：原因写在平台那一行下面，
+                                      // 不再弹 toast 说一遍。
+                                      onError: (error) => {
+                                        setRefreshOutcomes((prev) => ({
+                                          ...prev,
+                                          [upstream.id]: {
+                                            ok: false,
+                                            message: describeError(error),
+                                            models: [],
+                                          },
+                                        }))
+                                      },
+                                    }
+                                  )
+                                }
+                              >
+                                刷新模型目录
+                              </Button>
                             ) : null}
                             {/* 删平台之前要先扫主路由模型：指向它的那些
                                 模型会跟着一起删，这事得在弹框里说清楚。 */}
@@ -460,7 +463,7 @@ export function UpstreamsPage() {
                                   // 账号不在列表里了：不要把 key 写到别处去。
                                   if (!findAccount(list, account.id)) {
                                     toast.error('找不到这个账号', {
-                                      description: `${account.id} 不在上游列表里`,
+                                      description: `${account.id} 不在平台列表里`,
                                     })
                                     return
                                   }
@@ -575,8 +578,8 @@ export function UpstreamsPage() {
               注销 {deleteTarget ? deleteTarget.alias || deleteTarget.id : ''}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              这个账号会被删掉，它名下的 {deleteTarget?.credentialCount ?? 0}{' '}
-              条凭据也一起删掉，删完回不来。平台本身还在，客户端的地址不变
+              删除该账号会同时删除其名下的 {deleteTarget?.credentialCount ?? 0}{' '}
+              条凭据，且不可恢复。平台本身保留，客户端的地址不变
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

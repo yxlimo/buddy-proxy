@@ -70,7 +70,7 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
       <div className='grid gap-1'>
         <Select disabled value=''>
           <SelectTrigger id={id} className='w-full'>
-            <SelectValue placeholder='正在加载上游…' />
+            <SelectValue placeholder='正在加载平台…' />
           </SelectTrigger>
         </Select>
       </div>
@@ -109,12 +109,12 @@ export function GroupPicker({ value, onChange, id }: GroupPickerProps) {
 
       {all.length === 0 ? (
         <p className='text-xs text-muted-foreground'>
-          {'还没有可用的平台，先在平台页添加并登录。'}
+          {'还没有可用的平台，先在平台页新增并登录。'}
         </p>
       ) : null}
       {missing ? (
         <p className='text-xs text-muted-foreground'>
-          现在选的这个组不能用（上游列表里没有它），换一个吧。
+          现在选的这个组不能用（平台列表里没有它），换一个吧。
         </p>
       ) : null}
     </div>

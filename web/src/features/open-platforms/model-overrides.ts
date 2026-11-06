@@ -6,9 +6,14 @@ import type {
 /**
  * 「自定义模型」弹窗的纯逻辑：行怎么摆出来、保存时发什么。
  *
- * 保存（SetModelOverrides）是整体替换：发上去的那份就是人工那一份的全部，没发
- * 来的条目等于删掉。所以这里只做一件事 —— 每一行记着「这一轮改过哪几格」，
- * 发出去的时候只写改过的格：没改的格一写，代码/上游那份值就被固化成人工的了。
+ * 保存（SetModelOverrides）按 id 覆盖：发来的每一条同 id 的换掉、新 id 的加进
+ * 来，没提到的条目原封不动 —— 删除走 DeleteModelOverride。弹窗一次只发当前在改
+ * 的那一条，所以这里做两件事：
+ *
+ * 1. 每一行记着「这一轮改过哪几格」，发出去的时候只写改过的格：没改的格一写，
+ *    代码/上游那份值就被固化成人工的了。
+ * 2. 一行跟它刚进来时的那一份逐格比（`changedFields` / `idChanged`）：全等就是
+ *    「没改动」，那一次保存不发请求。
  */
 
 /** 一行上能改的字段：与契约里 ModelOverride 那几格一一对应。 */
@@ -20,6 +25,17 @@ export type OverrideField =
   | 'toolCall'
   | 'effortOptions'
   | 'credits'
+
+/** 上面那几格，全部。 */
+const ALL_FIELDS: OverrideField[] = [
+  'displayName',
+  'contextWindow',
+  'maxOutputTokens',
+  'reasoning',
+  'toolCall',
+  'effortOptions',
+  'credits',
+]
 
 /** 要发上去的一条人工条目：除了 id，只带写着值的那几格。 */
 export type OverrideInput = {
@@ -78,7 +94,12 @@ export interface ModelRow {
   effortMode: EffortMode
   /** 这一轮改过哪几格。没改的格不写进人工条目。 */
   touched: OverrideField[]
-  /** 打开弹窗时已经写着的人工条目：用户没碰的格要原样带上去（整体替换）。 */
+  /**
+   * 库里已经写着的人工条目：用户没碰的格要原样带上去。
+   *
+   * 保存一条就是换掉它那一整行，没带上的格等于没写 —— 改显示名的时候不把库里
+   * 那几个数字带上，它们就回到代码/上游那份值了。
+   */
   saved?: OverrideInput
 }
 
@@ -141,7 +162,76 @@ export function modelRows(
   return rows
 }
 
-/** 新行的序号：同一份弹窗里每行一个键，删了再加也不会撞。 */
+/**
+ * 这一行现在跟它刚进来时差哪几格。
+ *
+ * 保存按钮拿它判「有没有改动」：一格都没差就不发请求。比的是控件里那几格的
+ * 原文（数字格的空与 0 分得开），外加 `idChanged` 管的那个模型 id。
+ */
+export function changedFields(
+  row: ModelRow,
+  pristine: ModelRow
+): OverrideField[] {
+  const out: OverrideField[] = []
+  if (row.text.displayName.trim() !== pristine.text.displayName.trim()) {
+    out.push('displayName')
+  }
+  if (row.text.contextWindow.trim() !== pristine.text.contextWindow.trim()) {
+    out.push('contextWindow')
+  }
+  if (row.text.maxOutputTokens.trim() !== pristine.text.maxOutputTokens.trim()) {
+    out.push('maxOutputTokens')
+  }
+  if (row.text.credits.trim() !== pristine.text.credits.trim()) {
+    out.push('credits')
+  }
+  if (row.reasoning !== pristine.reasoning) out.push('reasoning')
+  if (row.toolCall !== pristine.toolCall) out.push('toolCall')
+  if (
+    row.effortMode !== pristine.effortMode ||
+    row.text.effortOptions.trim() !== pristine.text.effortOptions.trim()
+  ) {
+    out.push('effortOptions')
+  }
+  return out
+}
+
+/** 模型 id 改过没有。改成一个新 id 是「照这条再建一条」，见 `withId`。 */
+export function idChanged(row: ModelRow, pristine: ModelRow): boolean {
+  return row.id.trim() !== pristine.id.trim()
+}
+
+/**
+ * 把这一行的模型 id 换成 `id`。
+ *
+ * 换成一个新 id 就是「拿这条当模板再建一条」：字段照现在看到的留着，但库里那条
+ * 人工条目不属于它 —— 那是原来那个 id 的。所以这里把它自己那几格写成值（用户看
+ * 得见的就是这些值），删掉原来那条人工条目的关联。
+ *
+ * 换回原来那个 id：人工那一份又归它了，只把真跟原来不一样的格记成「改过」。
+ */
+export function withId(
+  row: ModelRow,
+  id: string,
+  pristine: ModelRow
+): ModelRow {
+  if (idChanged({ ...row, id }, pristine)) {
+    return {
+      ...row,
+      id,
+      added: true,
+      saved: undefined,
+      touched: [...ALL_FIELDS],
+    }
+  }
+  return {
+    ...row,
+    id,
+    added: pristine.added,
+    saved: pristine.saved,
+    touched: changedFields(row, pristine),
+  }
+}
 let newRowCount = 0
 
 /** 人工加的一行：id 空着，等用户填。 */
@@ -257,16 +347,17 @@ function triState(
 }
 
 /**
- * 保存时发上去的人工那一份。
+ * 保存时发上去的那一条。
  *
- * 两条规矩：
+ * 弹窗一次只发当前在改的那一条：SetModelOverrides 按 id 覆盖，没发来的条目
+ * 原封不动，所以别的那几条不会被这一单碰到。两条规矩：
  *
  * 1. 只写改过的格。没改的格不发，人工条目里就不会把代码/上游那份值固化成人工值。
  * 2. 目录里、这一轮没碰过、原来也没有人工条目的行整条不发 —— 发一条只写 id 的
  *    条目是「把它加进目录」，跟「没动它」是两件事。
  *
- * 原来就写着的人工格：这一轮没碰的照旧带上（整体替换，不带就等于删掉）。这一轮
- * 改过又清空的格不带：清空表示回到代码/上游那份值。
+ * 原来就写着的人工格：这一轮没碰的照旧带上（换掉的是那一整行，不带就等于没写）。
+ * 这一轮改过又清空的格不带：清空表示回到代码/上游那份值。
  */
 export function overridesFromRows(rows: ModelRow[]): OverrideInput[] {
   const entries: OverrideInput[] = []

@@ -114,6 +114,8 @@ function openPlatform(
     modelsSource: 'auto',
     modelsFetchedAtMs: FETCHED_AT,
     isOpenPlatform: true,
+    // 开放平台的目录归上游：卡片上有「刷新模型目录」。
+    modelsFromUpstream: true,
     fromRow: true,
     accounts: [],
   }
@@ -204,8 +206,6 @@ function editingClient(
     UpdatePlatform: (input) => {
       sent.push(input.quotaPlugin ?? '')
       return create(UpdatePlatformResponseSchema, {
-        ok: true,
-        message: '改好了',
         platform: create(OpenPlatformSchema, {
           id: input.id ?? '',
           label: input.label ?? '',
@@ -247,8 +247,6 @@ describe('面板上的开放平台', () => {
           kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
-          ok: true,
-          message: '加上了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -290,8 +288,6 @@ describe('面板上的开放平台', () => {
     const client = clientWith([], {
       AddPlatform: (input) =>
         create(AddPlatformResponseSchema, {
-          ok: true,
-          message: '加上了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -317,11 +313,12 @@ describe('面板上的开放平台', () => {
   it('服务端说这个 id 不行：照它的话显示，面板不自己写规则', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([], {
-      AddPlatform: () =>
-        create(AddPlatformResponseSchema, {
-          ok: false,
-          message: '这个 id 不行：只能用小写字母、数字与短横线',
-        }),
+      AddPlatform: () => {
+        throw new ConnectError(
+          '这个 id 不行：只能用小写字母、数字与短横线',
+          Code.InvalidArgument
+        )
+      },
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
@@ -375,7 +372,7 @@ describe('面板上的开放平台', () => {
       within(open).getByRole('button', { name: '编辑' })
     ).toBeInTheDocument()
     expect(
-      within(open).getByRole('button', { name: '删掉' })
+      within(open).getByRole('button', { name: '删除' })
     ).toBeInTheDocument()
 
     // 模拟客户端：地址与额度插件这两格不摆（归代码）。
@@ -391,7 +388,7 @@ describe('面板上的开放平台', () => {
       within(tmpl).getByRole('button', { name: '编辑' })
     ).toBeInTheDocument()
     expect(
-      within(tmpl).getByRole('button', { name: '删掉' })
+      within(tmpl).getByRole('button', { name: '删除' })
     ).toBeInTheDocument()
   })
 
@@ -469,8 +466,6 @@ describe('面板上的开放平台', () => {
           models: [...(input.models ?? [])],
         })
         return create(UpdatePlatformResponseSchema, {
-          ok: true,
-          message: '改好了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -548,7 +543,7 @@ describe('面板上的开放平台', () => {
           whole.kind = (input as unknown as Record<string, unknown>).kind
         }
         sent.push(whole)
-        return create(UpdatePlatformResponseSchema, { ok: true, message: '改好了' })
+        return create(UpdatePlatformResponseSchema, {})
       },
     })
 
@@ -574,11 +569,12 @@ describe('面板上的开放平台', () => {
   it('改平台失败：弹窗里显示服务端那句话，弹窗不关', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([openPlatform()], {
-      UpdatePlatform: () =>
-        create(UpdatePlatformResponseSchema, {
-          ok: false,
-          message: '这个 id 是代码里的平台，改不了',
-        }),
+      UpdatePlatform: () => {
+        throw new ConnectError(
+          '这个 id 是代码里的平台，改不了',
+          Code.FailedPrecondition
+        )
+      },
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
@@ -603,7 +599,7 @@ describe('面板上的开放平台', () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([openPlatform()], {
       UpdatePlatform: () =>
-        create(UpdatePlatformResponseSchema, { ok: true, message: '改好了' }),
+        create(UpdatePlatformResponseSchema, {}),
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
@@ -634,8 +630,6 @@ describe('面板上的开放平台', () => {
           models: [...(input.models ?? [])],
         })
         return create(UpdatePlatformResponseSchema, {
-          ok: true,
-          message: '改好了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -697,8 +691,6 @@ describe('面板上的开放平台', () => {
       UpdatePlatform: (input) => {
         sent.push(input.quotaPlugin ?? '')
         return create(UpdatePlatformResponseSchema, {
-          ok: true,
-          message: '改好了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -827,8 +819,6 @@ describe('面板上的开放平台', () => {
       UpdatePlatform: (input) => {
         sent.push(input.quotaPlugin ?? '')
         return create(UpdatePlatformResponseSchema, {
-          ok: true,
-          message: '改好了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -874,8 +864,6 @@ describe('面板上的开放平台', () => {
       UpdatePlatform: (input) => {
         sent.push(input.quotaPlugin ?? '')
         return create(UpdatePlatformResponseSchema, {
-          ok: true,
-          message: '改好了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -907,7 +895,7 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('刷新模型目录：发的是 RefreshPlatformModels，结果照服务端显示', async () => {
+  it('刷新模型目录：发的是 RefreshPlatformModels，成功那句由面板按条数说', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
     const client = clientWith([openPlatform({ modelsAuto: true })], {
@@ -915,7 +903,6 @@ describe('面板上的开放平台', () => {
         sent.push(input.platformId ?? '')
         return create(RefreshPlatformModelsResponseSchema, {
           ok: true,
-          message: '拉到 3 个模型',
           models: ['a', 'b', 'c'],
         })
       },
@@ -933,8 +920,8 @@ describe('面板上的开放平台', () => {
     await waitFor(() => {
       expect(sent).toEqual(['my-gateway'])
     })
-    // 服务端那句话照原样显示。
-    expect(await screen.findByText(/拉到 3 个模型/)).toBeInTheDocument()
+    // 成功那句是面板自己说的（条数来自答复里的 models），不摆服务端的 message。
+    expect(await screen.findByText(/已刷新，3 个模型/)).toBeInTheDocument()
   })
 
   it('刷新失败：显示服务端给的原因', async () => {
@@ -968,8 +955,6 @@ describe('面板上的开放平台', () => {
       DeletePlatform: (input) => {
         sent.push(input.id ?? '')
         return create(DeletePlatformResponseSchema, {
-          ok: true,
-          message: '删掉了',
         })
       },
     })
@@ -978,14 +963,14 @@ describe('面板上的开放平台', () => {
 
     await screen.findByText('我的中转站')
     // 删之前要先扫主路由引用：扫完了删除入口才开。
-    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删除' })
     await waitFor(() => expect(del).toBeEnabled())
     await user.click(del)
 
     // 先确认：确认框里说的是这个平台。
     const confirm = await screen.findByRole('alertdialog')
     expect(within(confirm).getByText(/我的中转站/)).toBeInTheDocument()
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     await waitFor(() => {
       expect(sent).toEqual(['my-gateway'])
@@ -995,21 +980,23 @@ describe('面板上的开放平台', () => {
   it('删平台失败：显示服务端那句话', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([openPlatform()], {
-      DeletePlatform: () =>
-        create(DeletePlatformResponseSchema, {
-          ok: false,
-          message: '这个平台正被主路由引用：my-gateway',
-        }),
+      // 失败是一次 Connect 错误（这一族方法没有 ok / message 两格）。
+      DeletePlatform: () => {
+        throw new ConnectError(
+          '这个平台正被主路由引用：my-gateway',
+          Code.FailedPrecondition
+        )
+      },
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
-    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删除' })
     await waitFor(() => expect(del).toBeEnabled())
     await user.click(del)
     const confirm = await screen.findByRole('alertdialog')
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     // 服务端那句话显示出来。
     await waitFor(() => {
@@ -1115,8 +1102,6 @@ describe('面板上的开放平台', () => {
           kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
-          ok: true,
-          message: '加上了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -1171,8 +1156,6 @@ describe('面板上的开放平台', () => {
           kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
-          ok: true,
-          message: '加上了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -1253,8 +1236,6 @@ describe('面板上的开放平台', () => {
           kind: input.kind ?? '',
         })
         return create(AddPlatformResponseSchema, {
-          ok: true,
-          message: '加上了',
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
@@ -1294,12 +1275,9 @@ describe('面板上的开放平台', () => {
   it('id 撞了：服务端说已经有这个平台了，那句话显示在表单里，弹窗不关', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([], {
-      AddPlatform: () =>
-        create(AddPlatformResponseSchema, {
-          ok: false,
-          // 服务端那一句原话（lib/open-platforms.ts：id 撞了已有的平台）。
-          message: '已经有这个平台了',
-        }),
+      AddPlatform: () => {
+        throw new ConnectError('已经有这个平台了', Code.AlreadyExists)
+      },
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
@@ -1311,9 +1289,9 @@ describe('面板上的开放平台', () => {
     await user.type(within(dialog).getByLabelText('平台 id'), 'deepseek')
     await user.click(within(dialog).getByRole('button', { name: '加上' }))
 
-    // 服务端那句话原样显示。
+    // 服务端那句话照原样显示（describeError 给这一档加的前缀）。
     expect(
-      await within(dialog).findByText('已经有这个平台了')
+      await within(dialog).findByText(/资源已存在：已经有这个平台了/)
     ).toBeInTheDocument()
     // 弹窗不关：还得改。
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -1344,7 +1322,7 @@ describe('建平台时能选类型', () => {
           baseUrl: input.baseUrl ?? '',
           kind: input.kind ?? '',
         })
-        return create(AddPlatformResponseSchema, { ok: true, message: '加上了' })
+        return create(AddPlatformResponseSchema, {})
       },
     })
 
@@ -1434,7 +1412,7 @@ describe('建平台时能选类型', () => {
       },
       AddPlatform: (input) => {
         sent.push(input.kind ?? '')
-        return create(AddPlatformResponseSchema, { ok: true, message: '加上了' })
+        return create(AddPlatformResponseSchema, {})
       },
     })
 
@@ -1620,62 +1598,45 @@ describe('建平台时能选类型', () => {
   })
 })
 
-describe('刷新模型目录按钮看类型', () => {
-  it('这一类不能从上游拉：不显示按钮，也不显示说明', async () => {
-    const kinds = [
-      create(PlatformKindSchema, {
-        kind: 'openai',
-        label: 'OpenAI 兼容',
+describe('刷新模型目录按钮看平台那一格', () => {
+  it('目录不归上游就不摆按钮：厂商模板不再因为清单里没有它而拿不到按钮', async () => {
+    // 类型清单是「能新建的那几类」，厂商模板（七牛）与模拟客户端都不在里面。
+    // 以前照清单判，七牛这一类平台永远拿不到刷新按钮 —— 现在只看平台自己那一格。
+    const client = clientWith([
+      openPlatform({
+        id: 'qiniu',
+        kind: 'qiniu',
+        label: '七牛',
+        quotaPlugin: '',
         modelsFromUpstream: false,
       }),
-      create(PlatformKindSchema, {
-        kind: 'anthropic',
-        label: 'Anthropic 兼容',
+      openPlatform({
+        id: 'opencode-go',
+        kind: 'openai',
+        label: '自建中转',
+        quotaPlugin: '',
         modelsFromUpstream: true,
       }),
-    ]
-    const client = clientWith(
-      [
-        openPlatform({
-          id: 'no-pull',
-          label: '拉不到目录的',
-          kind: 'openai',
-          quotaPlugin: '',
-        }),
-        openPlatform({
-          id: 'can-pull',
-          label: '能拉目录的',
-          kind: 'anthropic',
-          quotaPlugin: '',
-        }),
-      ],
-      {
-        ListPlatformKinds: () =>
-          create(ListPlatformKindsResponseSchema, { kinds }),
-      }
-    )
+    ])
 
     renderWithClient({ client, children: <UpstreamsPage /> })
 
-    await screen.findByText('拉不到目录的')
-    // 能拉的那一行有按钮。
+    await screen.findByText('七牛')
     await waitFor(() => {
       expect(
-        within(rowOf('能拉目录的')).getByRole('button', {
+        within(rowOf('自建中转')).getByRole('button', {
           name: '刷新模型目录',
         })
       ).toBeInTheDocument()
     })
     expect(
-      within(rowOf('拉不到目录的')).queryByRole('button', {
-        name: '刷新模型目录',
-      })
+      within(rowOf('七牛')).queryByRole('button', { name: '刷新模型目录' })
     ).not.toBeInTheDocument()
     // 不解释为什么没有这个按钮。
     expect(screen.queryByText(/不能刷新|不支持刷新/)).not.toBeInTheDocument()
   })
 
-  it('清单还没到手：摆一个禁用的按钮，并说清单还在加载', async () => {
+  it('类型清单没到手也不影响这个按钮：它是平台自己那一格说了算', async () => {
     const client = clientWith([openPlatform()], {
       ListPlatformKinds: () => new Promise(() => {}),
     })
@@ -1683,37 +1644,13 @@ describe('刷新模型目录按钮看类型', () => {
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
-    // 按钮忽然消失再出现比一直禁着更让人困惑：这一档摆禁用的按钮。
-    const button = within(rowOf('我的中转站')).getByRole('button', {
-      name: '刷新模型目录',
-    })
-    expect(button).toBeDisabled()
-    // 为什么点不了：清单的事，不是这个平台不支持刷新。
+    // 以前这一档摆的是禁用按钮加「类型清单还在加载」——清单与这个按钮已无关。
     expect(
-      within(rowOf('我的中转站')).getByText('类型清单还在加载')
-    ).toBeInTheDocument()
-    expect(screen.queryByText(/不支持刷新|不能刷新/)).not.toBeInTheDocument()
-  })
-
-  it('清单取不到：同样摆禁用的按钮，说的是取不到加原因', async () => {
-    const client = clientWith([openPlatform()], {
-      ListPlatformKinds: () => {
-        throw new ConnectError('问不到', Code.Unavailable)
-      },
-    })
-
-    renderWithClient({ client, children: <UpstreamsPage /> })
-
-    await screen.findByText('我的中转站')
-    const button = within(rowOf('我的中转站')).getByRole('button', {
-      name: '刷新模型目录',
-    })
-    expect(button).toBeDisabled()
-    expect(
-      await within(rowOf('我的中转站')).findByText(
-        /类型清单取不到：网关不可用/
-      )
-    ).toBeInTheDocument()
+      within(rowOf('我的中转站')).getByRole('button', {
+        name: '刷新模型目录',
+      })
+    ).toBeEnabled()
+    expect(screen.queryByText(/类型清单还在加载/)).not.toBeInTheDocument()
   })
 })
 
@@ -1758,7 +1695,7 @@ describe('改完平台，列表当场重取', () => {
             baseUrl: input.baseUrl ?? '',
           })
         )
-        return create(AddPlatformResponseSchema, { ok: true, message: '加上了' })
+        return create(AddPlatformResponseSchema, {})
       },
     })
 
@@ -1794,7 +1731,7 @@ describe('改完平台，列表当场重取', () => {
       },
       UpdatePlatform: (input) => {
         rows[0] = openPlatform({ label: input.label ?? '' })
-        return create(UpdatePlatformResponseSchema, { ok: true, message: '改好了' })
+        return create(UpdatePlatformResponseSchema, {})
       },
     })
 
@@ -1827,18 +1764,18 @@ describe('改完平台，列表当场重取', () => {
       },
       DeletePlatform: () => {
         rows.length = 0
-        return create(DeletePlatformResponseSchema, { ok: true, message: '删掉了' })
+        return create(DeletePlatformResponseSchema, {})
       },
     })
 
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
-    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删掉' })
+    const del = within(rowOf('我的中转站')).getByRole('button', { name: '删除' })
     await waitFor(() => expect(del).toBeEnabled())
     await user.click(del)
     const confirm = await screen.findByRole('alertdialog')
-    await user.click(within(confirm).getByRole('button', { name: '删掉' }))
+    await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
     await waitFor(() => {
       expect(listCalls).toBe(2)

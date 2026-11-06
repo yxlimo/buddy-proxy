@@ -143,7 +143,7 @@ export function useLoginWithPassword() {
       toast.error(loginErrorText(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '登录好了')
+      toast.success(result.message || '已登录')
     },
     onSettled: () => {
       // 登录写成了一份凭据：账号那一行（状态、凭据条数）、平台那份答复、总览、
@@ -177,7 +177,7 @@ export function useExchangeLoginCode() {
       toast.error(loginErrorText(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '换好了')
+      toast.success(result.message || '已切换')
     },
     onSettled: () => {
       // 换码换回来的是凭据，跟账号密码登录写的是同一处。
@@ -210,7 +210,7 @@ export function useImportLoginToken() {
       toast.error(loginErrorText(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '导入好了')
+      toast.success(result.message || '已导入')
     },
     onSettled: () => {
       // 贴回来的 token 也是一份凭据。

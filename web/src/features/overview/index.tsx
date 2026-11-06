@@ -59,7 +59,7 @@ export function OverviewPage() {
   return (
     <PageShell
       title='总览'
-      description='网关当前状态：上游概况与今日用量。'
+      description='网关当前状态：平台概况与今日用量。'
     >
 
       <div className='mb-4'>
@@ -126,15 +126,15 @@ export function OverviewPage() {
           <CardHeader>
             <CardTitle className='flex items-center gap-2 text-base'>
               <Boxes className='size-4' />
-              上游
+              平台
             </CardTitle>
             <CardDescription>
-              开关在「上游」页改，改完立刻生效。
+              开关在「平台」页改，改完立刻生效。
             </CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>
             {data.upstreams.length === 0 ? (
-              <EmptyState title='暂无上游' />
+              <EmptyState title='暂无平台' />
             ) : (
               data.upstreams.map((upstream) => (
                 <div
@@ -178,7 +178,7 @@ export function OverviewPage() {
               <Activity className='size-4' />
               今日用量
             </CardTitle>
-            <CardDescription>按上游分的 token 数。</CardDescription>
+            <CardDescription>按平台分的 token 数。</CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>
             {usage.isPending ? (

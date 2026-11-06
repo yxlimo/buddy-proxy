@@ -141,11 +141,11 @@ export function PublishedModelsPage() {
   return (
     <PageShell
       title='主路由模型'
-      description='对外公布一个模型 id，背后挂一个或多个上游模型。'
+      description='对外公布一个模型 id，背后挂一个或多个平台模型。'
       actions={
         <Button onClick={openCreate}>
           <Plus />
-          新建
+          新增
         </Button>
       }
     >
@@ -165,7 +165,7 @@ export function PublishedModelsPage() {
               action={
                 <Button onClick={openCreate}>
                   <Plus />
-                  新建一个
+                  新增一个
                 </Button>
               }
             />
@@ -314,8 +314,8 @@ export function PublishedModelsPage() {
                         <Button
                           variant='outline'
                           size='icon'
-                          title='改'
-                          aria-label='改'
+                          title='编辑'
+                          aria-label='编辑'
                           onClick={() => openEdit(model)}
                         >
                           <Pencil />
@@ -323,8 +323,8 @@ export function PublishedModelsPage() {
                         <Button
                           variant='ghost'
                           size='icon'
-                          title='删'
-                          aria-label='删'
+                          title='删除'
+                          aria-label='删除'
                           onClick={() => setDeleting(model)}
                         >
                           <Trash2 />
@@ -411,7 +411,7 @@ export function PublishedModelsPage() {
               disabled={busy}
               onClick={() => void confirmDelete()}
             >
-              删掉
+              删除
             </Button>
           </DialogFooter>
         </DialogContent>

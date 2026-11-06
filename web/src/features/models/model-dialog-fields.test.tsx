@@ -102,11 +102,11 @@ describe('模型编辑弹窗', () => {
     await user.click(screen.getByRole('tab', { name: /平台目标/ }))
 
     expect(
-      screen.getByText('至少要有一个填全的目标：平台组和上游模型 id 都要填。')
+      screen.getByText('至少要有一个填全的目标：平台组和平台模型 id 都要填。')
     ).toBeInTheDocument()
   })
 
-  it('选了平台组之后，上游模型 id 变成目录里的下拉', async () => {
+  it('选了平台组之后，平台模型 id 变成目录里的下拉', async () => {
     const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
@@ -124,7 +124,7 @@ describe('模型编辑弹窗', () => {
 
     // 目录拉回来之后变成下拉。
     const picker = await screen.findByRole('combobox', {
-      name: '上游模型 id',
+      name: '平台模型 id',
     })
     await user.click(picker)
 
@@ -155,11 +155,11 @@ describe('模型编辑弹窗', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('这个上游没有目录，手填模型 id。')
+        screen.getByText('这个平台没有目录，手填模型 id。')
       ).toBeInTheDocument()
     })
     // 手填的输入框在。
-    expect(screen.getByLabelText('上游模型 id')).toBeInTheDocument()
+    expect(screen.getByLabelText('平台模型 id')).toBeInTheDocument()
   })
 
   it('single 策略下没有权重输入框，fallback 才有', async () => {

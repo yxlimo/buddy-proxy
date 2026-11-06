@@ -68,20 +68,19 @@ export function useSetProviderKeys() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { accountId: string; keys: string[] }) => {
-      const result = await client.setProviderKeys(
+      // 失败是一次 Connect 错误（SetProviderKeys 没有 ok / message 两格）。
+      return await client.setProviderKeys(
         create(SetProviderKeysRequestSchema, {
           upstreamId: input.accountId,
           keys: input.keys,
         })
       )
-      assertOk(result, '写入失败')
-      return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '已写入')
+    onSuccess: () => {
+      toast.success('已写入')
     },
     onSettled: () => {
       // 写进去的是凭据：条数、能不能用都变了，账号那一行与平台那份答复跟着变。
