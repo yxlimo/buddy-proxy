@@ -58,9 +58,9 @@ type ModelData =
 /**
  * 「自定义模型」弹窗：一次改一条。
  *
- * 上面那个框列着这个平台现有的全部模型（目录里原有的与人加的都在），选一条、
- * 下面只摆它那一套格子。把 id 改成现有的没有的，就是照选中的那条复制一份新的
- * —— 这也是「加一个模型」的做法。
+ * 上面那个下拉里列着这个平台现有的全部模型（目录里原有的与人工加的都在，
+ * 落过自定义的那几条带「已改」），选一条、下面只摆它那一套格子。点「新增模型」
+ * 换成手填一个 id，填成下拉里已有的那条等于选它，不另造一行。
  *
  * 保存只发当前这一条：SetModelOverrides 按 id 覆盖，没发来的条目原封不动。
  * 一格都没改（id 也没改）就不发请求 —— 判据是 `changedFields` 与 `idChanged`。
@@ -92,10 +92,10 @@ export function PlatformModelsDialog({
   /** 现在改的是哪一条（`ModelRow.key`）。 */
   const [selected, setSelected] = useState('')
   /**
-   * 上面那个框里的字。
+   * 手填那一格的原文。
    *
    * 不直接读选中的那一行的 id：用户敲到一半的 id 还不是任何一条模型，写进行里
-   * 就等于当场多出一条、还会在候选列表里冒出来。敲完了（保存时）才算。
+   * 就等于当场多出一条、还会在下拉里冒出来。敲完了（保存时）才算。
    */
   const [idText, setIdText] = useState('')
 
@@ -147,6 +147,10 @@ export function PlatformModelsDialog({
   const row = index >= 0 ? list[index] : undefined
   /** 选中的这一条刚进来时的样子：保存前跟它比。 */
   const base = row ? pristine[row.key] : undefined
+  /** 下拉里列着的那几条：有 id 的那些。刚敲出来还没填 id 的那一行不在里面。 */
+  const listed = list.filter((item) => item.id.trim() !== '')
+  /** 现在是「从列表里选一条」还是「手填一个新 id」：选中的那条还没有 id 就是手填。 */
+  const picking = row !== undefined && row.id.trim() !== ''
   /**
    * 这一条要存成什么。
    *
@@ -203,6 +207,10 @@ export function PlatformModelsDialog({
     const target = list.find((item) => item.key === key)
     setSelected(key)
     setIdText(target?.id ?? '')
+    // 刚敲出来又换走的空行：它只因为要加一条才在，别留着占位置。
+    setRows((prev) =>
+      (prev ?? []).filter((item) => item.key === key || item.id.trim() !== '')
+    )
   }
 
   const patchText = (field: TextField, value: string) =>
@@ -248,6 +256,12 @@ export function PlatformModelsDialog({
   }
 
   const addModel = () => {
+    // 已经有一条等着填 id 的：转到那一条，不叠出第二条空行。
+    const blank = list.find((item) => item.id.trim() === '')
+    if (blank) {
+      pick(blank.key)
+      return
+    }
     const fresh = newRow()
     setRows((prev) => [...(prev ?? []), fresh])
     setPristine((prev) => ({ ...prev, [fresh.key]: fresh }))
@@ -329,28 +343,56 @@ export function PlatformModelsDialog({
         ) : (
           <div className='grid gap-3'>
             <div className='grid gap-1'>
-              <Label htmlFor='model-id'>模型 id</Label>
+              <div className='flex items-baseline gap-2'>
+                <Label htmlFor='model-id'>模型 id</Label>
+                <span className='text-xs text-muted-foreground'>
+                  共 {listed.length} 个模型
+                </span>
+              </div>
               <div className='flex items-center gap-2'>
-                <Input
-                  id='model-id'
-                  list='model-id-options'
-                  className='max-w-72 font-mono text-sm'
-                  placeholder='选一条，或者敲一个新 id'
-                  aria-invalid={
-                    problemIds.has('id') ? true : undefined
-                  }
-                  aria-describedby={problemIds.get('id')}
-                  value={idText}
-                  onChange={(event) => patchId(event.target.value)}
-                />
-                <datalist id='model-id-options'>
-                  {list
-                    .filter((item) => item.id.trim() !== '')
-                    .map((item) => (
-                      <option key={item.key} value={item.id} />
-                    ))}
-                </datalist>
-                <span className='grow' />
+                {picking ? (
+                  <Select value={selected} onValueChange={pick}>
+                    <SelectTrigger
+                      id='model-id'
+                      aria-label='模型 id'
+                      aria-invalid={problemIds.has('id') ? true : undefined}
+                      aria-describedby={problemIds.get('id')}
+                      className='w-72 font-mono text-sm'
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {listed.map((item) => (
+                        <SelectItem
+                          key={item.key}
+                          value={item.key}
+                          aria-label={item.id}
+                          className='font-mono text-sm'
+                        >
+                          {item.id}
+                          {pristine[item.key]?.saved !== undefined ? (
+                            <span
+                              aria-hidden='true'
+                              className='text-xs text-muted-foreground'
+                            >
+                              已改
+                            </span>
+                          ) : null}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    id='model-id'
+                    className='w-72 font-mono text-sm'
+                    placeholder='新 id'
+                    aria-invalid={problemIds.has('id') ? true : undefined}
+                    aria-describedby={problemIds.get('id')}
+                    value={idText}
+                    onChange={(event) => patchId(event.target.value)}
+                  />
+                )}
                 <Button size='sm' variant='outline' onClick={addModel}>
                   <Plus />
                   新增模型
@@ -368,9 +410,11 @@ export function PlatformModelsDialog({
                   </Button>
                 ) : null}
               </div>
-              <p className='text-xs text-muted-foreground'>
-                敲一个列表里没有的 id，就是照这条复制一份新的
-              </p>
+              {picking ? null : (
+                <p className='text-xs text-muted-foreground'>
+                  这个 id 还不在列表里，保存后加进目录
+                </p>
+              )}
             </div>
 
             {row && base ? (

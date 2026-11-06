@@ -339,6 +339,12 @@ run = "node --experimental-strip-types test/route-e2e-check.ts"
 description = "Run the end-to-end matrix (platforms, logins, catalogue, weights, restart) against a fake upstream — slow, so not part of `test`"
 run = "node --experimental-strip-types test/matrix-e2e-check.ts"
 
+# 要真浏览器（agent-browser）与构建过的面板（web/dist），所以不进 `test` 的 depends。
+# 面板没构建时打印原因并跳过（exit 0）；REQUIRE_BROWSER=1 时跳过了算失败。
+[tasks."test:e2e:panel"]
+description = "Click through the panel in a real browser (the model dialog, the greyed-out saves, the refresh button) — needs `cd web && pnpm build`"
+run = "node --experimental-strip-types test/panel-e2e-check.ts"
+
 [tasks."test:qoder:benefits"]
 description = "Check which Qoder campaigns are worth claiming"
 run = "node --experimental-strip-types test/qoder-benefits-check.ts"

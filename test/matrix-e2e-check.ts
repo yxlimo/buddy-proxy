@@ -233,11 +233,33 @@ async function rpc(method: string, body: unknown = {}): Promise<any> {
     body: JSON.stringify(body),
   });
   const text = await res.text();
+  let reply: any;
   try {
-    return JSON.parse(text);
+    reply = JSON.parse(text);
   } catch {
-    return { raw: text, httpStatus: res.status };
+    reply = { raw: text };
   }
+  // 失败是一次 Connect 错误（见 lib/admin/error-codes.ts）：机器码在响应头
+  // `buddy-error` 上，正文里只有状态名与一句排查用的事实。这里把它挑出来，
+  // 断言只认机器码 —— 文案在面板那一侧，会变。
+  const code = res.headers.get("buddy-error");
+  return { ...reply, httpStatus: res.status, ...(code ? { errorCode: code } : {}) };
+}
+
+/** 这一单失败了没有：失败才有 errorCode（响应头 buddy-error）。 */
+function errorCodeOf(reply: any): string {
+  return String(reply?.errorCode ?? "");
+}
+
+/** ListUpstreams 里的那几行。 */
+async function listUpstreams(): Promise<any[]> {
+  const reply = await rpc("ListUpstreams", {});
+  return Array.isArray(reply.upstreams) ? reply.upstreams : [];
+}
+
+/** 某一个平台那一行。 */
+async function upstreamOf(id: string): Promise<any | undefined> {
+  return (await listUpstreams()).find((row) => row.id === id);
 }
 
 async function call(
@@ -262,8 +284,11 @@ async function call(
 const { listOpenPlatforms } = await import("../lib/open-platforms.ts");
 const { addAccount, accountsOfPlatform, updateProvider, provider: providerRow } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
-const { setSecret, getSecret, listSecrets } = await import("../lib/store.ts");
+const { setSecret, getSecret, listSecrets, store, platformPresetRemoved } = await import("../lib/store.ts");
 const { listCooldowns, setCooldown } = await import("../lib/cooldown.ts");
+// 瞬时失败会在同一个账号上再试：断言次数照它算，不写死 1。
+const { transientRetryPlan } = await import("../lib/router/upstreams/policy.ts");
+const retryPlan = transientRetryPlan();
 
 const users = [{ role: "user", content: "say ok" }];
 
@@ -274,7 +299,7 @@ const users = [{ role: "user", content: "say ok" }];
 section("A 开放平台（openai 方言）");
 
 const madeA = await rpc("AddPlatform", { id: "e2e-openai", label: "E2E OpenAI", baseUrl: `${upBase}/v1`, kind: "openai" });
-check("A1 建 openai 平台成功", madeA.ok === true && madeA.platform?.id === "e2e-openai", JSON.stringify(madeA).slice(0, 200));
+check("A1 建 openai 平台成功", madeA.platform?.id === "e2e-openai" && !errorCodeOf(madeA), JSON.stringify(madeA).slice(0, 200));
 check(
   "A1 列表里有它",
   listOpenPlatforms().some((p) => p.id === "e2e-openai"),
@@ -337,7 +362,7 @@ const savedEmpty = await rpc("SavePublishedModel", {
     targets: [{ groupName: "e2e-openai", upstreamModel: "fake-model-a", weight: 100, enabled: true }],
   },
 });
-check("A6 空 id 被拒（与实现一致）", savedEmpty.ok === false && /id/.test(String(savedEmpty.message ?? "")), JSON.stringify(savedEmpty).slice(0, 200));
+check("A6 空 id 被拒（与实现一致）", errorCodeOf(savedEmpty) === "MODEL_ID_MISSING", JSON.stringify(savedEmpty).slice(0, 200));
 
 const saved = await rpc("SavePublishedModel", {
   model: {
@@ -348,7 +373,7 @@ const saved = await rpc("SavePublishedModel", {
     targets: [{ groupName: "e2e-openai", upstreamModel: "fake-model-a", weight: 100, enabled: true }],
   },
 });
-check("A6 带 id 发布成功", saved.ok === true && saved.id === "e2e-published", JSON.stringify(saved).slice(0, 200));
+check("A6 带 id 发布成功", saved.id === "e2e-published" && !errorCodeOf(saved), JSON.stringify(saved).slice(0, 200));
 const rootModels = await call("/v1/models");
 check(
   "A6 根路由 /v1/models 有它",
@@ -374,7 +399,7 @@ check(
 section("B 开放平台（anthropic 方言）");
 
 const madeB = await rpc("AddPlatform", { id: "e2e-anthropic", label: "E2E Anthropic", baseUrl: `${upBase}/v1`, kind: "anthropic" });
-check("B7 建 anthropic 平台成功", madeB.ok === true && madeB.platform?.id === "e2e-anthropic", JSON.stringify(madeB).slice(0, 200));
+check("B7 建 anthropic 平台成功", madeB.platform?.id === "e2e-anthropic" && !errorCodeOf(madeB), JSON.stringify(madeB).slice(0, 200));
 const accB = addAccount({ platform: "e2e-anthropic", alias: "e2e-b" });
 check("B7 加账号成功", accB.ok && !!accB.id, accB.message);
 if (accB.id) {
@@ -420,9 +445,9 @@ check(
   listOpenPlatforms().map((p) => p.id).join(","),
 );
 const dupId = await rpc("AddPlatform", { id: "minimax", label: "MiniMax Code", baseUrl: "", kind: "minimax" });
-check("C10 同 id 再建被拒", dupId.ok === false && /已存在/.test(String(dupId.message ?? "")), JSON.stringify(dupId).slice(0, 200));
+check("C10 同 id 再建被拒", errorCodeOf(dupId) === "PLATFORM_ALREADY_EXISTS", JSON.stringify(dupId).slice(0, 200));
 const dupMinimax = await rpc("AddPlatform", { id: "my-minimax", label: "我的 MiniMax", baseUrl: "", kind: "minimax" });
-check("C10 同 kind 换 id 被拒", dupMinimax.ok === false, JSON.stringify(dupMinimax).slice(0, 200));
+check("C10 同 kind 换 id 被拒", errorCodeOf(dupMinimax) === "PLATFORM_ID_NOT_PRESET", JSON.stringify(dupMinimax).slice(0, 200));
 check(
   "C10 库里没多一行",
   !listOpenPlatforms().some((p) => p.id === "my-minimax"),
@@ -430,12 +455,12 @@ check(
 );
 
 const delSeeded = await rpc("DeletePlatform", { id: "minimax" });
-check("C10 删掉播种的 minimax", delSeeded.ok === true, JSON.stringify(delSeeded).slice(0, 200));
+check("C10 删掉播种的 minimax", !errorCodeOf(delSeeded), JSON.stringify(delSeeded).slice(0, 200));
 const madeMinimax = await rpc("AddPlatform", { id: "minimax", label: "MiniMax Code", baseUrl: "", kind: "minimax" });
-check("C10 删完同 id 能建回", madeMinimax.ok === true, JSON.stringify(madeMinimax).slice(0, 200));
+check("C10 删完同 id 能建回", madeMinimax.platform?.id === "minimax" && !errorCodeOf(madeMinimax), JSON.stringify(madeMinimax).slice(0, 200));
 
 const zcode = await rpc("AddPlatform", { id: "zcode", label: "ZCode", baseUrl: "", kind: "zcode" });
-check("C11 建 zcode 被拒", zcode.ok === false, JSON.stringify(zcode).slice(0, 200));
+check("C11 建 zcode 被拒", errorCodeOf(zcode) === "PLATFORM_KIND_NOT_CREATABLE", JSON.stringify(zcode).slice(0, 200));
 
 /** 走面板的登录，等到终态。 */
 async function loginViaPanel(platformId: string, accountId: string): Promise<any> {
@@ -548,7 +573,7 @@ check(
 
 // E19（single）：只用权重最高的那个。它接不了就是接不了，不换人。
 const singlePolicy = await rpc("SetPlatformPolicy", { platform: "e2e-anthropic", policy: "PROVIDER_POLICY_SINGLE" });
-check("E19 切 single", singlePolicy.ok === true, JSON.stringify(singlePolicy).slice(0, 200));
+check("E19 切 single", !errorCodeOf(singlePolicy), JSON.stringify(singlePolicy).slice(0, 200));
 {
   const beforeSingle = seen.length;
   const attempt = await call("/e2e-anthropic/v1/messages", {
@@ -557,14 +582,21 @@ check("E19 切 single", singlePolicy.ok === true, JSON.stringify(singlePolicy).s
     headers: { "x-api-key": "client-key", "anthropic-version": "2023-06-01" },
   });
   const hits = seen.slice(beforeSingle).filter((s) => s.path.endsWith("/messages"));
-  check("E19 single 只打了一次上游", hits.length === 1, `${hits.length} 次`);
+  // 瞬时失败（上游 500）在同一个账号上再试：一个账号最多被打 retryPlan.maxAttempts 次，
+  // 次数用完才交给策略。single 的判据是「只用了权重最高的那个账号」。
+  check("E19 single 只打了一个账号", hits.every((h) => h.xApiKey === keyE1), hits.map((h) => h.xApiKey).join(","));
+  check(
+    "E19 single 在这个账号上把重试次数用完了",
+    hits.length === retryPlan.maxAttempts,
+    `${hits.length} 次（上限 ${retryPlan.maxAttempts}）`,
+  );
   check("E19 single 用的是权重最高的账号", hits[0]?.xApiKey === keyE1, hits[0]?.xApiKey ?? "空");
   check("E19 single 失败就是失败（没换人）", attempt.status >= 400, String(attempt.status));
 }
 
 // C14 / E19（fallback）：第一个账号 500 → 请求落到第二个账号。
 const fallbackPolicy = await rpc("SetPlatformPolicy", { platform: "e2e-anthropic", policy: "PROVIDER_POLICY_FALLBACK" });
-check("C14 切 fallback", fallbackPolicy.ok === true, JSON.stringify(fallbackPolicy).slice(0, 200));
+check("C14 切 fallback", !errorCodeOf(fallbackPolicy), JSON.stringify(fallbackPolicy).slice(0, 200));
 {
   const beforeFallback = seen.length;
   const attempt = await call("/e2e-anthropic/v1/messages", {
@@ -573,9 +605,16 @@ check("C14 切 fallback", fallbackPolicy.ok === true, JSON.stringify(fallbackPol
     headers: { "x-api-key": "client-key", "anthropic-version": "2023-06-01" },
   });
   const hits = seen.slice(beforeFallback).filter((s) => s.path.endsWith("/messages"));
-  check("C14 上游收到两次", hits.length === 2, hits.map((h) => h.xApiKey).join(","));
+  // 第一个账号先被重试用完（500 是瞬时失败），才轮到第二个账号。
+  const firstAccountHits = hits.filter((h) => h.xApiKey === keyE1).length;
+  check(
+    "C14 第一个账号先被打到重试上限",
+    firstAccountHits === retryPlan.maxAttempts,
+    `${firstAccountHits} 次（上限 ${retryPlan.maxAttempts}）`,
+  );
+  check("C14 换到第二个账号只试了一次", hits.at(-1)?.xApiKey === keyE2 && hits.filter((h) => h.xApiKey === keyE2).length === 1, hits.map((h) => h.xApiKey).join(","));
   check("C14 先试权重最高的", hits[0]?.xApiKey === keyE1, hits[0]?.xApiKey ?? "空");
-  check("C14 第二次用第二个账号的凭据", hits[1]?.xApiKey === keyE2, hits[1]?.xApiKey ?? "空");
+  check("C14 最后用的是第二个账号的凭据", hits.at(-1)?.xApiKey === keyE2, hits.at(-1)?.xApiKey ?? "空");
   check("C14 客户端拿到 200", attempt.status === 200, `${attempt.status} ${attempt.text.slice(0, 120)}`);
 }
 
@@ -617,7 +656,7 @@ check("C14 切 fallback", fallbackPolicy.ok === true, JSON.stringify(fallbackPol
 section("D 新建/删除平台");
 
 const delA = await rpc("DeletePlatform", { id: "e2e-openai" });
-check("D16 删自建平台成功", delA.ok === true, JSON.stringify(delA).slice(0, 200));
+check("D16 删自建平台成功", !errorCodeOf(delA), JSON.stringify(delA).slice(0, 200));
 check(
   "D16 列表里没了",
   !listOpenPlatforms().some((p) => p.id === "e2e-openai"),
@@ -642,7 +681,7 @@ check("D16 删完那条路的 chat 不再接", goneChat.status >= 400, String(go
 
 const beforeDeleteMinimax = listOpenPlatforms().length;
 const delMin = await rpc("DeletePlatform", { id: "minimax" });
-check("D17 删 minimax 成功", delMin.ok === true, JSON.stringify(delMin).slice(0, 200));
+check("D17 删 minimax 成功", !errorCodeOf(delMin), JSON.stringify(delMin).slice(0, 200));
 check("D17 列表少一行", listOpenPlatforms().length === beforeDeleteMinimax - 1, `${beforeDeleteMinimax} → ${listOpenPlatforms().length}`);
 // D17 的真重启在收尾那一节（同一份 BUDDY_DATA_DIR 再起一次网关）。
 
@@ -684,7 +723,7 @@ check("F21 刷新也没去问上游", seen.filter((s) => s.path.endsWith("/model
 // D 那一节把 minimax 删了一次，所以这里先把它和它的账号补回来。
 if (!listOpenPlatforms().some((p) => p.id === "minimax")) {
   const remake = await rpc("AddPlatform", { id: "minimax", label: "MiniMax Code", baseUrl: "", kind: "minimax" });
-  check("F22 前提：重新建 minimax", remake.ok === true, JSON.stringify(remake).slice(0, 200));
+  check("F22 前提：重新建 minimax", remake.platform?.id === "minimax" && !errorCodeOf(remake), JSON.stringify(remake).slice(0, 200));
 }
 if (accountsOfPlatform("minimax").length === 0) {
   const acc = addAccount({ platform: "minimax", alias: "e2e-f22" });
@@ -804,9 +843,181 @@ if (baseWb) {
   );
 }
 
-const cleared = await rpc("SetModelOverrides", { platformId: "workbuddy-cn", overrides: [] });
-const afterClear = await rpc("ListModels", { upstreamId: "workbuddy-cn" });
-check("G26 空列表清空人工条目", cleared.ok !== false && !(afterClear.models ?? []).some((m: any) => m.id === "e2e-custom-model"), (afterClear.models ?? []).map((m: any) => m.id).join(",").slice(0, 200));
+// 覆盖语义下「没发来」不等于删：空列表什么都不改，删要走 DeleteModelOverride。
+const sentNothing = await rpc("SetModelOverrides", { platformId: "workbuddy-cn", overrides: [] });
+const afterNothing = await rpc("ListModels", { upstreamId: "workbuddy-cn" });
+check(
+  "G26 空列表什么都不改（不是清空）",
+  !errorCodeOf(sentNothing) &&
+    ["e2e-custom-model", "e2e-effort-empty", "e2e-effort-set"].every((id) =>
+      (afterNothing.models ?? []).some((m: any) => m.id === id),
+    ),
+  (afterNothing.models ?? []).map((m: any) => m.id).join(",").slice(0, 200),
+);
+
+/* ------------------------------------------------------------------ *
+ * H 人工模型元数据：按 id 覆盖、删除、不改平台行
+ * ------------------------------------------------------------------ */
+
+section("H 人工模型元数据：按 id 覆盖、删除、不改平台行");
+
+const WB = "workbuddy-cn";
+const wbCatalogNow = async (): Promise<any[]> => {
+  const reply = await rpc("ListModels", { upstreamId: WB });
+  return Array.isArray(reply.models) ? reply.models : [];
+};
+const wbOverrideIds = async (): Promise<string[]> => {
+  const reply = await rpc("ListModelOverrides", { platformId: WB });
+  return (Array.isArray(reply.overrides) ? reply.overrides : []).map((one: any) => String(one.id));
+};
+
+// 从一条不剩开始：G 那一节留了几条，先删干净 —— 下面每一条都断言「谁在、谁不在」，
+// 不能靠上一段留下的行。
+for (const id of await wbOverrideIds()) {
+  const removed = await rpc("DeleteModelOverride", { platformId: WB, modelId: id });
+  check(`H27 前提：删掉 G 留下的 ${id}`, !errorCodeOf(removed), JSON.stringify(removed).slice(0, 160));
+}
+check("H27 前提：人工条目已清空", (await wbOverrideIds()).length === 0, (await wbOverrideIds()).join(","));
+
+const wbBase = await wbCatalogNow();
+check("H27 前提：目录里至少有两条模型", wbBase.length >= 2, `${wbBase.length} 条`);
+const modelA = String(wbBase[0]?.id ?? "");
+const modelB = String(wbBase[1]?.id ?? "");
+/** 目录里那一条原本的显示名（override 全删时它就是代码/上游给的那个）。 */
+const baseNameOf = (id: string): string => String(wbBase.find((m) => m.id === id)?.displayName ?? "");
+
+await rpc("SetModelOverrides", {
+  platformId: WB,
+  overrides: [
+    { id: modelA, displayName: "e2e-A-一版" },
+    { id: modelB, displayName: "e2e-B-一版" },
+  ],
+});
+let wbNow = await wbCatalogNow();
+check(
+  "H27 两条人工条目都写进去了",
+  wbNow.find((m) => m.id === modelA)?.displayName === "e2e-A-一版" &&
+    wbNow.find((m) => m.id === modelB)?.displayName === "e2e-B-一版",
+  `${wbNow.find((m) => m.id === modelA)?.displayName} / ${wbNow.find((m) => m.id === modelB)?.displayName}`,
+);
+
+// 只发 A 的新值：B 不在这一单里，就不该被动到 —— 这是「没提到的条目不动」的判据。
+const onlyA = await rpc("SetModelOverrides", { platformId: WB, overrides: [{ id: modelA, displayName: "e2e-A-二版" }] });
+check("H27 只发一条不报错", !errorCodeOf(onlyA), JSON.stringify(onlyA).slice(0, 160));
+wbNow = await wbCatalogNow();
+check("H27 A 换成了新值", wbNow.find((m) => m.id === modelA)?.displayName === "e2e-A-二版", String(wbNow.find((m) => m.id === modelA)?.displayName));
+check("H27 没发来的 B 原封不动", wbNow.find((m) => m.id === modelB)?.displayName === "e2e-B-一版", String(wbNow.find((m) => m.id === modelB)?.displayName));
+check(
+  "H27 两条都还在（按 id 覆盖，不是整体替换）",
+  (await wbOverrideIds()).sort().join(",") === [modelA, modelB].sort().join(","),
+  (await wbOverrideIds()).join(","),
+);
+
+// H28：删要走自己那一条路，删完 A 回到原样，B 仍在。
+const deletedA = await rpc("DeleteModelOverride", { platformId: WB, modelId: modelA });
+check("H28 删 A 成功", !errorCodeOf(deletedA), JSON.stringify(deletedA).slice(0, 160));
+wbNow = await wbCatalogNow();
+check("H28 A 从目录里回到原样", wbNow.find((m) => m.id === modelA)?.displayName === baseNameOf(modelA), `${baseNameOf(modelA)} → ${wbNow.find((m) => m.id === modelA)?.displayName}`);
+check("H28 B 仍在、仍是人工那一份", wbNow.find((m) => m.id === modelB)?.displayName === "e2e-B-一版", String(wbNow.find((m) => m.id === modelB)?.displayName));
+check("H28 人工条目里只剩 B", (await wbOverrideIds()).join(",") === modelB, (await wbOverrideIds()).join(","));
+const deleteMissing = await rpc("DeleteModelOverride", { platformId: WB, modelId: modelA });
+check("H28 删不存在的回 MODEL_OVERRIDE_NOT_FOUND", errorCodeOf(deleteMissing) === "MODEL_OVERRIDE_NOT_FOUND", JSON.stringify(deleteMissing).slice(0, 160));
+check("H28 它是一次 404", deleteMissing.httpStatus === 404, String(deleteMissing.httpStatus));
+
+// H29：改一条目录里原有的模型（只改显示名）—— 落库在 override 表，不动代码表与平台行。
+// 用七牛：它平台行的 models 是非空的一份代码常量，
+//「行里的清单没变」这一条才看得见（模拟客户端与 workbuddy 那几行本来就是空的）。
+const qiniuAcc = addAccount({ platform: "qiniu", alias: "e2e-qiniu" });
+check("H29 前提：加一个七牛账号", qiniuAcc.ok && !!qiniuAcc.id, qiniuAcc.message);
+const qiniuBase: any[] = (await rpc("ListModels", { upstreamId: "qiniu" })).models ?? [];
+check("H29 前提：七牛的目录不空", qiniuBase.length > 0, `${qiniuBase.length} 条`);
+const qiniuRowBefore = await upstreamOf("qiniu");
+const qiniuTarget = String(qiniuBase[0]?.id ?? "");
+await rpc("SetModelOverrides", { platformId: "qiniu", overrides: [{ id: qiniuTarget, displayName: "e2e-七牛改名" }] });
+const qiniuAfter: any[] = (await rpc("ListModels", { upstreamId: "qiniu" })).models ?? [];
+const qiniuRowAfter = await upstreamOf("qiniu");
+check("H29 那条的显示名变了", qiniuAfter.find((m) => m.id === qiniuTarget)?.displayName === "e2e-七牛改名", String(qiniuAfter.find((m) => m.id === qiniuTarget)?.displayName));
+check("H29 目录条数不变", qiniuAfter.length === qiniuBase.length, `${qiniuBase.length} → ${qiniuAfter.length}`);
+check(
+  "H29 别的条目逐字段不变",
+  JSON.stringify(qiniuAfter.filter((m) => m.id !== qiniuTarget)) === JSON.stringify(qiniuBase.filter((m) => m.id !== qiniuTarget)),
+  JSON.stringify(qiniuAfter.filter((m) => m.id !== qiniuTarget)).slice(0, 200),
+);
+check(
+  "H29 平台行的模型清单没变",
+  JSON.stringify(qiniuRowAfter?.models ?? null) === JSON.stringify(qiniuRowBefore?.models ?? null),
+  JSON.stringify(qiniuRowAfter?.models ?? null).slice(0, 200),
+);
+check("H29 平台报的模型数没变", qiniuRowAfter?.modelCount === qiniuRowBefore?.modelCount, `${qiniuRowBefore?.modelCount} → ${qiniuRowAfter?.modelCount}`);
+check(
+  "H29 落库在 override 表",
+  (store().prepare("SELECT data FROM platform_model_override WHERE platform_id = ? AND model_id = ?").get("qiniu", qiniuTarget) as any) !== undefined,
+  "override 表里没有那一行",
+);
+// 收拾：删掉，后面不留一条七牛的人工条目。
+await rpc("DeleteModelOverride", { platformId: "qiniu", modelId: qiniuTarget });
+
+/* ------------------------------------------------------------------ *
+ * I 模型目录归不归上游：逐平台看 modelsFromUpstream
+ * ------------------------------------------------------------------ */
+
+section("I 模型目录归不归上游：逐平台看 modelsFromUpstream");
+
+// opencode-go 不在代码模板里：它是用户自己建的 openai 方言平台。会被新建，
+// 正是面板上「刷新模型目录」该露出来的那一类。
+const madeOpencode = await rpc("AddPlatform", { id: "opencode-go", label: "OpenCode Go", baseUrl: `${upBase}/v1`, kind: "openai" });
+check("I31 建 opencode-go 成功", madeOpencode.platform?.id === "opencode-go" && !errorCodeOf(madeOpencode), JSON.stringify(madeOpencode).slice(0, 200));
+
+const upstreamDistribution: [string, boolean][] = [
+  ["opencode-go", true],
+  ["sensenova", true],
+  ["intern-ai", true],
+  ["qiniu", false],
+  ["xinghuo", false],
+  ["tokenrhythm", false],
+  ["minimax", false],
+  ["qoder", false],
+  ["qoder-cn", false],
+  ["workbuddy-cn", false],
+  ["workbuddy-global", false],
+];
+const upstreamRows = await listUpstreams();
+for (const [id, expected] of upstreamDistribution) {
+  const row = upstreamRows.find((one) => one.id === id);
+  check(`I31 ${id}：modelsFromUpstream=${expected}`, row?.modelsFromUpstream === expected, row ? String(row.modelsFromUpstream) : "平台不在 ListUpstreams 里");
+}
+
+/* ------------------------------------------------------------------ *
+ * J 模拟客户端的目录归代码：同单的 models / modelsAuto 被静默忽略
+ * ------------------------------------------------------------------ */
+
+section("J 模拟客户端的目录归代码：送来的 models / modelsAuto 不认");
+
+const minBefore = await upstreamOf("minimax");
+const updateSimulated = await rpc("UpdatePlatform", {
+  id: "minimax",
+  label: "e2e-改名",
+  models: ["x"],
+  modelsAuto: true,
+});
+check("J32 改模拟客户端不报错（那两格被静默忽略）", !errorCodeOf(updateSimulated), JSON.stringify(updateSimulated).slice(0, 200));
+const minAfter = await upstreamOf("minimax");
+check("J32 同单的 label 照常生效", minAfter?.label === "e2e-改名", `${minBefore?.label} → ${minAfter?.label}`);
+check("J32 平台行说 modelsAuto 仍是 false", minAfter?.modelsAuto === false, String(minAfter?.modelsAuto));
+check("J32 平台行说清单仍是空", JSON.stringify(minAfter?.models ?? null) === "[]", JSON.stringify(minAfter?.models));
+const minDbRow = store().prepare("SELECT models, models_auto FROM platform WHERE id = ?").get("minimax") as any;
+check("J32 库里 models_auto 仍是 0", Number(minDbRow?.models_auto) === 0, String(minDbRow?.models_auto));
+check(
+  "J32 库里清单仍是空",
+  (() => {
+    try {
+      return (JSON.parse(String(minDbRow?.models ?? "null"))?.items ?? []).length === 0;
+    } catch {
+      return false;
+    }
+  })(),
+  String(minDbRow?.models),
+);
 
 /* ------------------------------------------------------------------ *
  * D17′ 真重启
@@ -817,7 +1028,8 @@ section("D17 真重启（同一份 BUDDY_DATA_DIR）");
 // 第一次重启：刚删掉 minimax 就重启，它不该被播种复活。
 // （F 那一节为了验目录把它建回来过，所以这里再删一次。）
 const delAgain = await rpc("DeletePlatform", { id: "minimax" });
-check("D17 重启前再删掉 minimax", delAgain.ok === true, JSON.stringify(delAgain).slice(0, 200));
+check("D17 重启前再删掉 minimax", !errorCodeOf(delAgain), JSON.stringify(delAgain).slice(0, 200));
+check("D17 删掉的预置平台留了墓磑", platformPresetRemoved("minimax") === true, String(platformPresetRemoved("minimax")));
 await gw.stopAndWait();
 const gw2 = await startGateway({
   dataDir,
@@ -828,22 +1040,32 @@ const gw2 = await startGateway({
   },
 });
 const token2 = fs.readFileSync(path.join(gw2.dataDir, "admin-token"), "utf8").trim();
-const rpc2 = async (method: string, body: unknown = {}): Promise<any> => {
+/** 起第二次网关之后的那一单：同样把响应头里的机器码挑出来。 */
+async function rpcOn(method: string, body: unknown = {}): Promise<any> {
   const res = await fetch(`${gw2.base}/buddy.admin.v1.AdminService/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token2}` },
     body: JSON.stringify(body),
   });
-  return JSON.parse(await res.text());
-};
+  const text = await res.text();
+  let reply: any;
+  try {
+    reply = JSON.parse(text);
+  } catch {
+    reply = { raw: text };
+  }
+  const code = res.headers.get("buddy-error");
+  return { ...reply, httpStatus: res.status, ...(code ? { errorCode: code } : {}) };
+}
 check(
   "D17 重启后删掉的 minimax 不复活",
   !listOpenPlatforms().some((p) => p.id === "minimax"),
   listOpenPlatforms().map((p) => p.id).join(","),
 );
 
-const again = await rpc2("AddPlatform", { id: "minimax", label: "用户起的名字", baseUrl: "", kind: "minimax" });
-check("D17 同 id 建回成功", again.ok === true, JSON.stringify(again).slice(0, 200));
+const again = await rpcOn("AddPlatform", { id: "minimax", label: "用户起的名字", baseUrl: "", kind: "minimax" });
+check("D17 同 id 建回成功", again.platform?.id === "minimax" && !errorCodeOf(again), JSON.stringify(again).slice(0, 200));
+check("D17 建回来就把墓磑清掉了", platformPresetRemoved("minimax") === false, String(platformPresetRemoved("minimax")));
 check(
   "D17 名字是用户填的（墓碑清掉，没被播种改回）",
   listOpenPlatforms().find((p) => p.id === "minimax")?.label === "用户起的名字",

@@ -1,6 +1,6 @@
 import { create, type MessageInitShape } from '@bufbuild/protobuf'
 import { Code, ConnectError } from '@connectrpc/connect'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
@@ -20,13 +20,17 @@ import {
   SetModelOverridesResponseSchema,
   UpstreamSchema,
   UpstreamState,
+  UpdatePlatformResponseSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import type {
   CatalogModel,
   ModelOverride,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import type { AdminClient } from '@/features/auth/client-provider'
-import { PlatformModelsDialog } from '@/features/open-platforms/models-dialog'
+import {
+  PlatformModelsButton,
+  PlatformModelsDialog,
+} from '@/features/open-platforms/models-dialog'
 import { UpstreamsPage } from '@/features/upstreams/index'
 import { mockAdminClient } from '@/test/mock-transport'
 import { renderWithClient } from '@/test/render'
@@ -139,13 +143,18 @@ function setup() {
   return userEvent.setup({ delay: null })
 }
 
-/** 目录与人工那两份都到手：上面那个框出来了。 */
-async function ready(): Promise<HTMLInputElement> {
-  return (await screen.findByLabelText('模型 id')) as HTMLInputElement
+/** 目录与人工那两份都到手：上面那个下拉出来了。 */
+async function ready(): Promise<HTMLElement> {
+  return await screen.findByRole('combobox', { name: '模型 id' })
 }
 
-/** 上面那个框里的字。 */
-function picker(): HTMLInputElement {
+/** 上面那个下拉（它显示的就是当前选中的那条）。 */
+function picker(): HTMLElement {
+  return screen.getByRole('combobox', { name: '模型 id' })
+}
+
+/** 手填那一格：点了「新增模型」之后才换成它。 */
+function manualBox(): HTMLInputElement {
   return screen.getByLabelText('模型 id') as HTMLInputElement
 }
 
@@ -159,33 +168,34 @@ function selectOf(name: string): HTMLElement {
   return screen.getByRole('combobox', { name })
 }
 
-/**
- * 上面那个框里列着的候选：这个平台现有的全部模型 id（目录里的与人加的都在）。
- *
- * 顺序就是列表的顺序：第一条就是打开时选中的那条。`datalist` 那一列在 jsdom 里
- * 没有可查的角色（浏览器里是输入框旁边那个下拉），所以按那个框指的 id 找。
- */
-function candidates(): string[] {
-  const list = document.getElementById('model-id-options')
-  if (!list) throw new Error('找不到候选列表')
-  return Array.from(list.querySelectorAll('option')).map(
-    (option) => (option as HTMLOptionElement).value
-  )
+/** 打开上面那个下拉，拿到的就是它里面的每一项。 */
+async function openPicker(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(picker())
+  return await screen.findAllByRole('option')
 }
 
 /**
- * 换成另一个模型（或者敲一个新 id）。
+ * 下拉里列着的候选：这个平台现有的全部模型 id（目录里的与人加的都在）。
  *
- * 上面那个框既是选哪一条、也是那条的模型 id —— 敲成现有某个模型的 id 就转过去，
- * 敲成别的就是照现在这条复制一份新的。
+ * 顺序就是列表的顺序：第一条就是打开时选中的那条。每一项的 `aria-label` 就是
+ * 它的模型 id（「已改」那类标记不算进这个名字里）。
  */
-async function typeId(
+async function candidates(
+  user: ReturnType<typeof userEvent.setup>
+): Promise<string[]> {
+  const options = await openPicker(user)
+  const ids = options.map((option) => option.getAttribute('aria-label') ?? '')
+  await user.keyboard('{Escape}')
+  return ids
+}
+
+/** 换成另一个模型：打开下拉，点那一条。 */
+async function chooseModel(
   user: ReturnType<typeof userEvent.setup>,
   id: string
 ) {
-  const box = picker()
-  await user.clear(box)
-  if (id) await user.type(box, id)
+  await openPicker(user)
+  await user.click(await screen.findByRole('option', { name: id }))
 }
 
 function saveButton(): HTMLElement {
@@ -241,6 +251,7 @@ function describedError(input: HTMLElement): HTMLElement {
 
 describe('自定义模型弹窗', () => {
   it('打开：列出这个平台的全部模型，默认选第一条', async () => {
+    const user = setup()
     openDialog(
       client({
         overrides: [
@@ -250,10 +261,12 @@ describe('自定义模型弹窗', () => {
       })
     )
 
-    const box = await ready()
-    expect(candidates()).toEqual(['glm-4.6', 'glm-4.5-air', 'glm-5'])
+    await ready()
+    expect(await candidates(user)).toEqual(['glm-4.6', 'glm-4.5-air', 'glm-5'])
+    // 总数就摆在下拉旁边：列表整不整一眼能看出来。
+    expect(screen.getByText('共 3 个模型')).toBeInTheDocument()
     // 默认选第一条。
-    expect(box).toHaveValue('glm-4.6')
+    expect(picker()).toHaveTextContent('glm-4.6')
     // 摆出来的是第一条那几格。倍率给了 0 就写 0。
     expect(field('显示名')).toHaveValue('GLM-4.6')
     expect(field('上下文')).toHaveValue('200000')
@@ -268,14 +281,137 @@ describe('自定义模型弹窗', () => {
     expect(screen.queryByDisplayValue('GLM-4.5 Air')).toBeNull()
   })
 
+  it('下拉里的条数就是目录与人工条目之和，每个 id 都在', async () => {
+    const user = setup()
+    // 拉到五条以上：列表被截断、或者只留“常用的几条”，这条就站不住。
+    const models = Array.from({ length: 7 }, (_, at) =>
+      create(CatalogModelSchema, { id: `glm-${at + 1}` })
+    )
+    openDialog(
+      client({
+        models,
+        overrides: [
+          // 改目录里已有的一条：不另算一条。
+          create(ModelOverrideSchema, { id: 'glm-1', displayName: '改过的' }),
+          // 目录里没有的：多算一条。
+          create(ModelOverrideSchema, { id: '人工-a' }),
+        ],
+      })
+    )
+
+    await ready()
+    const ids = await candidates(user)
+    expect(ids).toEqual([
+      'glm-1',
+      'glm-2',
+      'glm-3',
+      'glm-4',
+      'glm-5',
+      'glm-6',
+      'glm-7',
+      '人工-a',
+    ])
+    // 总数摆在下拉旁边。
+    expect(screen.getByText('共 8 个模型')).toBeInTheDocument()
+  })
+
+  it('落过自定义的那几条带「已改」，没改的没有', async () => {
+    const user = setup()
+    openDialog(
+      client({
+        overrides: [
+          create(ModelOverrideSchema, {
+            id: 'glm-4.6',
+            displayName: '改过的名字',
+          }),
+          create(ModelOverrideSchema, { id: 'glm-5', displayName: 'GLM-5' }),
+        ],
+      })
+    )
+
+    await ready()
+    const options = await openPicker(user)
+    const marks = options.map(
+      (option) => within(option).queryByText('已改') !== null
+    )
+    // glm-4.6 改过、glm-4.5-air 没改、人工那条 glm-5 也是落过的。
+    expect(marks).toEqual([true, false, true])
+    await user.keyboard('{Escape}')
+  })
+
+  it('手填一个已有的 id：就是改那一条，不多出一行', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ sent }))
+
+    await ready()
+    await user.click(screen.getByRole('button', { name: '新增模型' }))
+    await user.type(manualBox(), 'glm-4.5-air')
+
+    // 填成已有那条：转去选它，手填那一格收起来。
+    await waitFor(() => {
+      expect(picker()).toHaveTextContent('glm-4.5-air')
+    })
+    expect(await candidates(user)).toEqual(['glm-4.6', 'glm-4.5-air'])
+    expect(screen.getByText('共 2 个模型')).toBeInTheDocument()
+    // 摆的也是它原有的那几格，不是空的一份。
+    expect(field('显示名')).toHaveValue('GLM-4.5 Air')
+
+    // 改一个字段：发出去的还是 glm-4.5-air 这一条。
+    await user.type(field('显示名'), ' 改')
+    await user.click(saveButton())
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sent[0].overrides).toHaveLength(1)
+    expect(sentOverride(sent[0]).id).toBe('glm-4.5-air')
+  })
+
+  it('改目录里原有的一条：只发一条 SetModelOverrides，不碰平台的模型清单', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    const updatePlatform = vi.fn(() => create(UpdatePlatformResponseSchema))
+    openDialog(
+      mockAdminClient({
+        ListModels: () =>
+          create(ListModelsResponseSchema, { models: catalog() }),
+        ListModelOverrides: () =>
+          create(ListModelOverridesResponseSchema, { overrides: [] }),
+        SetModelOverrides: (input) => {
+          sent.push(input)
+          return create(SetModelOverridesResponseSchema)
+        },
+        UpdatePlatform: updatePlatform,
+      })
+    )
+
+    await ready()
+    await chooseModel(user, 'glm-4.5-air')
+    const name = field('显示名')
+    await user.clear(name)
+    await user.type(name, '改过的名字')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sent[0].overrides).toHaveLength(1)
+    expect(sentOverride(sent[0])).toEqual({
+      id: 'glm-4.5-air',
+      displayName: '改过的名字',
+    })
+    // 改的是目录里原有的模型：只落一条人工条目，平台行的模型清单一个字不动。
+    expect(updatePlatform).not.toHaveBeenCalled()
+  })
+
   it('选第二条：只显示它那一套字段', async () => {
     const user = setup()
     openDialog(client({}))
 
     await ready()
-    await typeId(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.5-air')
 
-    expect(picker()).toHaveValue('glm-4.5-air')
+    expect(picker()).toHaveTextContent('glm-4.5-air')
     expect(field('显示名')).toHaveValue('GLM-4.5 Air')
     expect(field('上下文')).toHaveValue('128000')
     expect(field('输出上限')).toHaveValue('16384')
@@ -289,29 +425,52 @@ describe('自定义模型弹窗', () => {
     expect(screen.queryByDisplayValue('200000')).toBeNull()
   })
 
-  it('手填一个新 id：保存只发这一条，id 是手填的', async () => {
+  it('手填一个新 id：发一条新增，保存后列表里出现它', async () => {
     const user = setup()
     const sent: SaveInput[] = []
-    openDialog(client({ sent }))
+    let saved = false
+    const admin = mockAdminClient({
+      ListModels: () => create(ListModelsResponseSchema, { models: catalog() }),
+      ListModelOverrides: () =>
+        create(ListModelOverridesResponseSchema, {
+          overrides: saved
+            ? [create(ModelOverrideSchema, { id: 'glm-9' })]
+            : [],
+        }),
+      SetModelOverrides: (input) => {
+        sent.push(input)
+        saved = true
+        return create(SetModelOverridesResponseSchema)
+      },
+    })
 
+    renderWithClient({
+      client: admin,
+      children: <PlatformModelsButton platform={PLATFORM} />,
+    })
+
+    await user.click(screen.getByRole('button', { name: '自定义模型' }))
     await ready()
-    await typeId(user, 'glm-9')
+    await user.click(screen.getByRole('button', { name: '新增模型' }))
+
+    expect(manualBox()).toHaveValue('')
+    await user.type(manualBox(), 'glm-9')
     await user.click(saveButton())
 
     await waitFor(() => {
       expect(sent).toHaveLength(1)
     })
-    expect(sent[0].platformId).toBe('workbuddy-cn')
-    // 只发这一条：别的那几条不会被这一单碰到。
+    // 只发这一条，只写了 id：元数据沿用原来的来源。
     expect(sent[0].overrides).toHaveLength(1)
-    expect(sentOverride(sent[0]).id).toBe('glm-9')
-    // 参数照选中的那条复制过来，不是空手起一条。
-    expect(sentOverride(sent[0])).toMatchObject({
-      displayName: 'GLM-4.6',
-      contextWindow: 200000,
-      maxOutputTokens: 128000,
-      credits: 0,
+    expect(sentOverride(sent[0])).toEqual({ id: 'glm-9' })
+
+    // 存完弹窗关掉；再打开时它就落在下拉里了。
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull()
     })
+    await user.click(screen.getByRole('button', { name: '自定义模型' }))
+    await ready()
+    expect(await candidates(user)).toEqual(['glm-4.6', 'glm-4.5-air', 'glm-9'])
   })
 
   it('没改动：保存禁用、说一句「没有改动」，一个请求都不发', async () => {
@@ -328,8 +487,8 @@ describe('自定义模型弹窗', () => {
     expect(sent).toHaveLength(0)
 
     // 换一条再换回来：还是没改动。
-    await typeId(user, 'glm-4.5-air')
-    await typeId(user, 'glm-4.6')
+    await chooseModel(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.6')
     expect(saveButton()).toBeDisabled()
     expect(sent).toHaveLength(0)
   })
@@ -420,7 +579,7 @@ describe('自定义模型弹窗', () => {
     )
 
     await ready()
-    await typeId(user, 'glm-5')
+    await chooseModel(user, 'glm-5')
     expect(field('显示名')).toHaveValue('GLM-5')
     await user.type(field('输出上限'), '8000')
 
@@ -447,11 +606,11 @@ describe('自定义模型弹窗', () => {
     await user.click(screen.getByRole('button', { name: '新增模型' }))
 
     // 新增的这一条字段是空的：只填 id 就是把模型加进目录。
-    expect(picker()).toHaveValue('')
+    expect(manualBox()).toHaveValue('')
     expect(field('显示名')).toHaveValue('')
     expect(field('上下文')).toHaveValue('')
 
-    await user.type(picker(), 'glm-5')
+    await user.type(manualBox(), 'glm-5')
     await user.click(saveButton())
 
     await waitFor(() => {
@@ -474,7 +633,7 @@ describe('自定义模型弹窗', () => {
     )
 
     await ready()
-    await typeId(user, 'glm-5')
+    await chooseModel(user, 'glm-5')
     await user.click(screen.getByRole('button', { name: '删除 glm-5' }))
 
     await waitFor(() => {
@@ -484,13 +643,11 @@ describe('自定义模型弹窗', () => {
       platformId: 'workbuddy-cn',
       modelId: 'glm-5',
     })
-    // 删完这条不在候选里了。
-    await waitFor(
-      () => {
-        expect(candidates()).toEqual(['glm-4.6', 'glm-4.5-air'])
-      },
-      { timeout: 8000 }
-    )
+    // 删完这条不在候选里了；选中落到前一条。
+    await waitFor(() => {
+      expect(picker()).toHaveTextContent('glm-4.5-air')
+    })
+    expect(await candidates(user)).toEqual(['glm-4.6', 'glm-4.5-air'])
   })
 
   it('删除目录里那条改过的：删完回到目录那份值', async () => {
@@ -524,7 +681,7 @@ describe('自定义模型弹窗', () => {
     await waitFor(() => {
       expect(field('显示名')).toHaveValue('GLM-4.6')
     })
-    expect(candidates()).toContain('glm-4.6')
+    expect(await candidates(user)).toContain('glm-4.6')
     // 跟基准一样了：没有改动可存。
     expect(saveButton()).toBeDisabled()
   })
@@ -535,7 +692,7 @@ describe('自定义模型弹窗', () => {
     openDialog(client({ sent }))
 
     await ready()
-    await typeId(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.5-air')
     expect(selectOf('档位模式')).toHaveTextContent('指定档位')
     const tiers = field('可选档位')
     await user.clear(tiers)
@@ -580,7 +737,7 @@ describe('自定义模型弹窗', () => {
     openDialog(client({ sent }))
 
     await ready()
-    await typeId(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.5-air')
     // 目录里有几档：初值就是那几档。改成「不设置」= 回到原来的那份。
     expect(selectOf('档位模式')).toHaveTextContent('指定档位')
     await user.click(selectOf('档位模式'))
@@ -612,7 +769,7 @@ describe('自定义模型弹窗', () => {
     )
 
     await ready()
-    await typeId(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.5-air')
     // 读回来不能显示成「不设置」，也不能冒出个空输入框。
     expect(selectOf('档位模式')).toHaveTextContent('不能选档')
     expect(screen.queryByLabelText('可选档位')).toBeNull()
@@ -660,7 +817,7 @@ describe('自定义模型弹窗', () => {
 
     await ready()
     // 目录里没报倍率的那一条：格子空着，改的是别的格。
-    await typeId(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.5-air')
     expect(field('倍率')).toHaveValue('')
     const context = field('上下文')
     await user.clear(context)
@@ -685,7 +842,7 @@ describe('自定义模型弹窗', () => {
     openDialog(client({ sent }))
 
     await ready()
-    await typeId(user, 'glm-4.5-air')
+    await chooseModel(user, 'glm-4.5-air')
     await user.type(field('倍率'), '0')
 
     await user.click(saveButton())
@@ -706,7 +863,7 @@ describe('自定义模型弹窗', () => {
     const message = await screen.findByText('新模型 3 · 模型 id 不能空')
     expect(saveButton()).toBeDisabled()
 
-    const box = picker()
+    const box = manualBox()
     expect(box).toHaveAttribute('aria-invalid', 'true')
     expect(describedError(box)).toBe(message)
   })
@@ -820,7 +977,7 @@ describe('自定义模型弹窗', () => {
 
     // 重试成功：那一条摆出来了。
     await ready()
-    expect(picker()).toHaveValue('glm-4.6')
+    expect(picker()).toHaveTextContent('glm-4.6')
   })
 
   it('保存失败：弹窗不关，服务端那句话原样显示', async () => {
@@ -887,14 +1044,14 @@ describe('自定义模型弹窗', () => {
     )
 
     await ready()
-    await typeId(user, 'glm-5')
+    await chooseModel(user, 'glm-5')
     await user.click(screen.getByRole('button', { name: '删除 glm-5' }))
 
     expect(
       await screen.findByText(/资源不存在：这个平台没有这条人工元数据/)
     ).toBeInTheDocument()
     // 没删成：这条还在。
-    expect(candidates()).toContain('glm-5')
+    expect(await candidates(user)).toContain('glm-5')
   })
 
   it('平台卡片上有入口：点哪一行就取哪一行的目录', async () => {
@@ -956,10 +1113,8 @@ describe('自定义模型弹窗', () => {
     await user.click(within(row).getByRole('button', { name: '自定义模型' }))
 
     const dialog = await screen.findByRole('dialog')
-    const box = (await within(dialog).findByLabelText(
-      '模型 id'
-    )) as HTMLInputElement
-    expect(box).toHaveValue('glm-global')
+    const box = await within(dialog).findByRole('combobox', { name: '模型 id' })
+    expect(box).toHaveTextContent('glm-global')
     expect(askedModels).toEqual(['workbuddy-global'])
     expect(askedOverrides).toEqual(['workbuddy-global'])
   })
