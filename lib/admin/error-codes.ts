@@ -42,8 +42,6 @@ export const PLATFORM_KIND_UNKNOWN = "PLATFORM_KIND_UNKNOWN";
 export const PLATFORM_KIND_NOT_CREATABLE = "PLATFORM_KIND_NOT_CREATABLE";
 /** 类型建完就定下，改不了（换类型要删了重建）。 */
 export const PLATFORM_KIND_FIXED = "PLATFORM_KIND_FIXED";
-/** 模拟客户端的模型目录由代码提供：请求里要改 models / models_auto 就拒。 */
-export const PLATFORM_MODELS_FIXED = "PLATFORM_MODELS_FIXED";
 export const PLATFORM_NOT_FOUND = "PLATFORM_NOT_FOUND";
 /** 写库失败，且不是重名（重名有自己的码）。 */
 export const PLATFORM_WRITE_FAILED = "PLATFORM_WRITE_FAILED";
@@ -124,7 +122,6 @@ export const ADMIN_ERRORS = {
   [PLATFORM_KIND_UNKNOWN]: Code.InvalidArgument,
   [PLATFORM_KIND_NOT_CREATABLE]: Code.FailedPrecondition,
   [PLATFORM_KIND_FIXED]: Code.FailedPrecondition,
-  [PLATFORM_MODELS_FIXED]: Code.FailedPrecondition,
   [PLATFORM_NOT_FOUND]: Code.NotFound,
   [PLATFORM_WRITE_FAILED]: Code.Internal,
 

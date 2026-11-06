@@ -228,6 +228,24 @@ async function openEdit(
   return await screen.findByRole('dialog')
 }
 
+/**
+ * 把一个新平台的三格填成能提交的。
+ *
+ * 三格都是必填的：那把保存按钮提前置灰的判据就是它们（地址空着就不发请求）。
+ */
+async function fillNewPlatform(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  id: string
+) {
+  await user.type(within(dialog).getByLabelText('平台 id'), id)
+  await user.type(within(dialog).getByLabelText('名字'), '我的中转站')
+  await user.type(
+    within(dialog).getByLabelText('地址'),
+    'https://api.example.com/v1'
+  )
+}
+
 describe('面板上的开放平台', () => {
   beforeEach(() => {
     toastSuccess.mockClear()
@@ -302,7 +320,7 @@ describe('面板上的开放平台', () => {
       await screen.findByRole('button', { name: '新增平台' })
     )
     const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByLabelText('平台 id'), 'my-gateway')
+    await fillNewPlatform(user, dialog, 'my-gateway')
     await user.click(within(dialog).getByRole('button', { name: '加上' }))
 
     await waitFor(() => {
@@ -310,14 +328,13 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('服务端说这个 id 不行：照它的话显示，面板不自己写规则', async () => {
+  it('面板放行了、服务端仍然拒：它那句话原样显示，弹窗不关', async () => {
     const user = userEvent.setup({ delay: null })
+    // 三格在面板这一侧都是合法的：这条错误只有服务端知道（它认得的比面板多）。
+    // 面板只负责把服务端那句话摆出来，不替它另写一句。
     const client = clientWith([], {
       AddPlatform: () => {
-        throw new ConnectError(
-          '这个 id 不行：只能用小写字母、数字与短横线',
-          Code.InvalidArgument
-        )
+        throw new ConnectError('这个地址上游不认', Code.InvalidArgument)
       },
     })
 
@@ -327,12 +344,12 @@ describe('面板上的开放平台', () => {
       await screen.findByRole('button', { name: '新增平台' })
     )
     const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByLabelText('平台 id'), 'My Gateway')
+    await fillNewPlatform(user, dialog, 'my-gateway')
     await user.click(within(dialog).getByRole('button', { name: '加上' }))
 
     // 服务端那句话原样显示。
     expect(
-      await within(dialog).findByText(/只能用小写字母、数字与短横线/)
+      await within(dialog).findByText(/参数不合法：这个地址上游不认/)
     ).toBeInTheDocument()
     // 弹窗不关：还得改。
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -1286,7 +1303,8 @@ describe('面板上的开放平台', () => {
       await screen.findByRole('button', { name: '新增平台' })
     )
     const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByLabelText('平台 id'), 'deepseek')
+    // 面板那份清单里没有 deepseek（它是别人刚建的）：挡不住，服务端来说。
+    await fillNewPlatform(user, dialog, 'deepseek')
     await user.click(within(dialog).getByRole('button', { name: '加上' }))
 
     // 服务端那句话照原样显示（describeError 给这一档加的前缀）。

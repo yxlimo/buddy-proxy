@@ -318,22 +318,27 @@ export function updateOpenPlatform(
   if (pluginProblem) return pluginProblem;
 
   let models = row.models;
-  if (patch.models !== undefined) {
-    models = {
-      items: normalizeModels(patch.models),
-      // 人写的目录就不是自动拉的：写死了就别再让它被覆盖（显式说了要自动的
-      // 除外 —— 那是明确的意思，不是默认值）。
-      auto: patch.modelsAuto === undefined ? false : patch.modelsAuto === true,
-      // 手写的目录没拉过：0 就是「没拉过」的意思。自动拉的那份记着拉的时刻，
-      // 免得刚拉过又去问上游。
-      fetchedAt: Number(patch.fetchedAt ?? 0) || 0,
-      source: patch.source === "auto" ? "auto" : "manual",
-    };
-  } else if (patch.modelsAuto !== undefined) {
-    // 只翻自动不自动，source 不动：source 说的是这份目录**现在**哪来的，
-    // auto 说的是**以后**能不能被自动拉覆盖 —— 人把自动打开，不等于这份
-    // 目录变成自动拉来的。这是有意的。
-    models = { ...models, auto: patch.modelsAuto === true };
+  // 目录同理也是那一类的一部分：模拟客户端能过哪些模型由代码挑（能过那个客户端
+  // 的那一份），所以这两格也不管请求里怎么给，照库里存着。写入口只此一处，拦在
+  // 这里才拦得住所有调用方（面板、脚本、迁移）；放在面板那层只能拦住面板。
+  if (!simulated) {
+    if (patch.models !== undefined) {
+      models = {
+        items: normalizeModels(patch.models),
+        // 人写的目录就不是自动拉的：写死了就别再让它被覆盖（显式说了要自动的
+        // 除外 —— 那是明确的意思，不是默认值）。
+        auto: patch.modelsAuto === undefined ? false : patch.modelsAuto === true,
+        // 手写的目录没拉过：0 就是「没拉过」的意思。自动拉的那份记着拉的时刻，
+        // 免得刚拉过又去问上游。
+        fetchedAt: Number(patch.fetchedAt ?? 0) || 0,
+        source: patch.source === "auto" ? "auto" : "manual",
+      };
+    } else if (patch.modelsAuto !== undefined) {
+      // 只翻自动不自动，source 不动：source 说的是这份目录**现在**哪来的，
+      // auto 说的是**以后**能不能被自动拉覆盖 —— 人把自动打开，不等于这份
+      // 目录变成自动拉来的。这是有意的。
+      models = { ...models, auto: patch.modelsAuto === true };
+    }
   }
 
   store()

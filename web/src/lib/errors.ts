@@ -1,4 +1,9 @@
 import { Code, ConnectError } from '@connectrpc/connect'
+import {
+  BUDDY_ERROR_HEADER,
+  adminErrorText,
+  unknownAdminErrorText,
+} from '@/lib/admin-errors'
 
 /**
  * 服务端用「HTTP 200 + ok:false」表达失败（不认识的配置项、上游 id 对不上、
@@ -30,6 +35,10 @@ export function assertOk(
  *
  * 契约里区分的几类失败：凭据过期、上游不可用、配置非法、冲突。面板上
  * 至少要让人知道是自己没填令牌，还是网关自己出问题了。
+ *
+ * 三档：响应头上有机器码且面板认得 → 码表那句话（那句话已经是给人照着改的，
+ * 不再拼前缀，也不带服务端的事实句）；有码但认不得 → 说明面板没跟上；
+ * 没有码 → 按 Connect 的 Code 兜底。
  */
 export function describeError(error: unknown): string {
   // 业务上的失败（ok:false）原样给用户看，别再包一层。
@@ -37,6 +46,15 @@ export function describeError(error: unknown): string {
     return error.message
   }
   if (error instanceof ConnectError) {
+    // 机器码只在响应头上；Headers 的取值大小写不敏感，键名统一写小写。
+    const machineCode = error.metadata.get(BUDDY_ERROR_HEADER)?.trim()
+    if (machineCode) {
+      const text = adminErrorText(machineCode)
+      if (text) return text
+      // 后端加了码、面板还没跟：开发期要能看见，不能静默退回「内部错误」。
+      console.warn(`[errors] 面板还没有 ${machineCode} 这条的说明`)
+      return unknownAdminErrorText(machineCode)
+    }
     const detail = error.rawMessage || error.message
     switch (error.code) {
       case Code.Unauthenticated:

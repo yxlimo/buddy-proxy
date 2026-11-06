@@ -36,8 +36,9 @@
 //  15. ListUpstreams 的 models_from_upstream：逐 kind 的答案（方言类与
 //      SenseNova / 端砚 true；七牛 / 星火 / TokenRhythm 与模拟客户端 false）
 //      —— 面板照这一格给刷新按钮，不再去 ListPlatformKinds 里猜
-//  16. 模拟客户端的目录改不了：models / modelsAuto 两格不认，行里现值不动，
-//      答复里说清；同一格在开放平台上照常生效（对照组）
+//  16. 模拟客户端的目录不归上游：models / modelsAuto 两格在写入口（数据层）被
+//      忽略（不报错，按现值留着），同一单里别的格照常保存；面板那条路端到端
+//      也写不坏；同一格在开放平台上照常生效（对照组）
 //
 // 断言里不写死平台的个数：一律跟表里的行数比。
 
@@ -1287,10 +1288,10 @@ for (const [id, want, why] of catalogOwners) {
 }
 
 /* ------------------------------------------------------------------ *
- * 16. 模拟客户端的目录不归上游：models / modelsAuto 两格不认
+ * 16. 模拟客户端的目录不归上游：models / modelsAuto 两格在写入口（数据层）被忽略
  * ------------------------------------------------------------------ */
 
-section("模拟客户端的目录改不了");
+section("模拟客户端的目录改了也不动");
 
 const minimaxBefore = openPlatformOf("minimax");
 check(
@@ -1299,29 +1300,45 @@ check(
   show(minimaxBefore?.models),
 );
 
-// 送来的要改目录：整单拒，而且一分钱都不落库（先拒后写，别的格也没写）。
-const refused = await guard(() => updatePlatform({ id: "minimax", modelsAuto: true, models: ["x"] }));
-check("改目录被拒", refused === null, show(refused));
-check(
-  "机器码说的是目录由代码提供",
-  errCode() === errorCodes.PLATFORM_MODELS_FIXED,
-  `${errCode()} / ${errDetail()}`,
-);
-check("状态码是 FailedPrecondition", errStatus() === 9, String(errStatus()));
-check("细节里说了是哪两格", errDetail().includes("models") && errDetail().includes("models_auto"), errDetail());
-// 模型清单是用户填的内容：不往细节里搬。
-check("细节里没有模型清单的内容", !errDetail().includes('"x"') && !errDetail().includes("x]"), errDetail());
-
-// 只送与现值一样的两格（面板编辑模拟客户端时就是这样）：不拒，照常保存。
-const sameModels = await guard(() =>
-  updatePlatform({ id: "minimax", label: "MiniMax Code", modelsAuto: false, models: [] }),
-);
-check("与现值一样的两格不拦", sameModels !== null, `${errCode()} ${errDetail()}`);
+// 规矩落在写入口（updateOpenPlatform）：直接调它，就跟脚本、迁移递上来的一样。
+// 名字得用一个跟现值就是不同的值（起始名是预置的「MiniMax Code」），否则这一条
+// 证明不了「别的格没跟着一块儿被无视」。
+const ignoredLabel = "renamed minimax";
+const ignored = updateOpenPlatform("minimax", {
+  label: ignoredLabel,
+  models: ["x"],
+  modelsAuto: true,
+});
+check("数据层送目录不报错", ignored.ok === true, ignored.message);
 
 const minimaxAfter = openPlatformOf("minimax");
 check("库里的 models_auto 还是 0", minimaxAfter?.models.auto === false, show(minimaxAfter?.models));
 check("库里的清单还是空的", (minimaxAfter?.models.items ?? []).length === 0, show(minimaxAfter?.models));
 check("source 也没被改成 manual", minimaxAfter?.models.source === "auto", show(minimaxAfter?.models));
+// 同一单里的 label 得落库：不认的只有目录那两格，别的格不能跟着不生效。
+check("同一单里的名字改了", minimaxAfter?.label === ignoredLabel, show(minimaxAfter?.label));
+
+// 不带 modelsAuto 的手工目录那一形状：真让它落库，清单会被写进去、source 会被
+// 改成 manual —— 反证靠这一条抓「清单本身被改坏」，上面那条只抓得到 models_auto。
+const manualShape = updateOpenPlatform("minimax", { models: ["y"] });
+check("手工目录的形状也不报错", manualShape.ok === true, manualShape.message);
+const manualShapeRow = openPlatformOf("minimax");
+check("清单还是空的", (manualShapeRow?.models.items ?? []).length === 0, show(manualShapeRow?.models));
+check("source 还是 auto", manualShapeRow?.models.source === "auto", show(manualShapeRow?.models));
+
+// 端到端一条：面板那条路照面板的形状送（模拟客户端发的是空清单与「自动关」），
+// 也得是「成功返回、目录没动」。
+const panelShape = await guard(() =>
+  updatePlatform({ id: "minimax", label: ignoredLabel, modelsAuto: false, models: [] }),
+);
+check("面板那条路照常成功", panelShape !== null, `${errCode()} / ${errDetail()}`);
+check("答复里带着这个平台", panelShape?.platform?.id === "minimax", show(panelShape?.platform));
+const panelShapeRow = openPlatformOf("minimax");
+check(
+  "面板那条路也没写坏（自动还是关、清单还是空）",
+  panelShapeRow?.models.auto === false && (panelShapeRow?.models.items ?? []).length === 0,
+  show(panelShapeRow?.models),
+);
 const minimaxListed = (await listUpstreams()).find((u) => u.id === "minimax");
 check(
   "ListUpstreams 里报的也是「自动关、清单空」",
@@ -1329,7 +1346,7 @@ check(
   show([minimaxListed?.modelsAuto, minimaxListed?.models]),
 );
 
-// 对照组：同一格在开放平台上照常生效 —— 拒的只是模拟客户端那一族，不是这两格。
+// 对照：同一格在开放平台上照常生效 —— 不认的只是模拟客户端那一族，不是这两格。
 const control = await guard(() => updatePlatform({ id: "opencode-go", models: ["m-1"] }));
 check("对照：开放平台的目录写得进去", control !== null, show(control));
 const controlRow = openPlatformOf("opencode-go");

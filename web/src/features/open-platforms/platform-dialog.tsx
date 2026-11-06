@@ -35,6 +35,7 @@ import {
   type PlatformKindList,
 } from './platform-kinds'
 import { PLATFORM_TEMPLATES, type PlatformTemplate } from './templates'
+import { platformProblems, MISSING_TEXT, type PlatformField } from './platform-form'
 
 /**
  * 「不用插件」在契约里是空串，但下拉框的选项不能是空串（那是控件的限制），
@@ -172,12 +173,14 @@ function kindGroups(
  * 选到模拟客户端时只有名字一格是能填的：id、地址、区域都是那个客户端的身份
  * （改了会话就接不上），面板不摆那几格，提交时按预置填。
  *
- * 面板不自己定 id 的规则（哪些字符、跟谁重名）：填了什么样由服务端说了算，
- * 它说不行就不行，那句话原样显示。
+ * id 能不能用、地址是不是网址，面板先用自己手头的数据判（平台列表、账号
+ * id）：判出来的问题摆在那一格下面，保存按钮灰着，请求不发。服务端那套校验
+ * 照样在，它管的是别的客户端与并发 —— 那时它说不行就是不行，那句话原样显示。
  */
 export function PlatformDialog({
   open,
   platform,
+  existing,
   kinds,
   registry,
   pending,
@@ -188,6 +191,8 @@ export function PlatformDialog({
   open: boolean
   /** 要改的平台。新增的时候不给。 */
   platform?: Upstream
+  /** 表里现有的平台（含播种的模拟客户端）：id 重不重、是不是账号名，看它。 */
+  existing: readonly Upstream[]
   /** 建平台时能选的类型清单：三档（加载中 / 取不到 / 到手）。 */
   kinds: PlatformKindList
   /** 额度插件登记表：三档（加载中 / 取不到 / 到手）。 */
@@ -202,6 +207,15 @@ export function PlatformDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [draft, setDraft] = useState<Draft>(() => toDraft(platform))
+  /**
+   * 用户碰过哪几格。
+   *
+   * 「没填」那句话只在碰过之后才摆：新开一个空表单，一行红字先骂起来没有意义。
+   * 填错了（格式、被占用）都是敲进去才有的，不用等这个标志。
+   */
+  const [touched, setTouched] = useState<Partial<Record<PlatformField, true>>>(
+    {}
+  )
   /** 模板搜索框里的字：按名字或 id 过滤模板列表。 */
   const [templateQuery, setTemplateQuery] = useState('')
   /** 选中的那条模板：只是标一下，不参与提交。 */
@@ -216,6 +230,7 @@ export function PlatformDialog({
     // 填的东西抹掉。
     if (open) {
       setDraft(toDraft(platform))
+      setTouched({})
       setTemplateQuery('')
       setPickedTemplate('')
     }
@@ -235,6 +250,10 @@ export function PlatformDialog({
 
   const patch = (part: Partial<Draft>) =>
     setDraft((prev) => ({ ...prev, ...part }))
+
+  /** 碰过这一格（敲进来的字以后清空也算碰过）。 */
+  const touch = (field: PlatformField) =>
+    setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }))
 
   const editing = platform !== undefined
   // 清单到手了才有可选项；没到手、取不到的时候一个也没有。
@@ -269,6 +288,53 @@ export function PlatformDialog({
   const kindOptionHint = platformKindHint(kinds)
   // 「类型：xxx」那一行（改的时候）：判据在 platform-kinds.ts，卡片用的是同一个。
   const readonlyKind = platform ? platformKindReadout(kinds, platform) : null
+
+  // id 重不重、是不是账号名：看表里现有的平台与它们名下的账号（两边共用一个
+  // 命名空间）。改平台时把自己那一行排掉 —— 它当然跟自己的 id 重。
+  const takenIds = useMemo(
+    () =>
+      existing.filter((item) => item.id !== platform?.id).map((item) => item.id),
+    [existing, platform?.id]
+  )
+  const accountIds = useMemo(
+    () =>
+      existing.flatMap((item) =>
+        item.accounts.map((account) => account.id)
+      ),
+    [existing]
+  )
+  // 提交前就能说清的那几件错：id 空/格式/自用/被占，名字空，地址空/不是网址。
+  const problems = platformProblems({
+    // 改平台时 id 改不了；模拟客户端的 id 由预置定，两处都不判这一格。
+    id: editing || simulated ? undefined : draft.id,
+    label: draft.label,
+    // 模拟客户端的地址归代码，不摆也不判。
+    baseUrl: simulated ? undefined : draft.baseUrl,
+    takenIds,
+    accountIds,
+  })
+  /**
+   * 这一格下面摆不摆那句话。
+   *
+   * 「没填」只在碰过之后摆（新开的空表单不先骂人）；填错了（格式、被占用）
+   * 都是敲进去才有的，一律摆。
+   */
+  const shown = (field: PlatformField): string | undefined => {
+    const text = problems[field]
+    if (!text) return undefined
+    return draft[field].trim() === '' && !touched[field] ? undefined : text
+  }
+  // 有一格不对就不发请求：那些错在保存前就看得见。
+  const blocked = Object.keys(problems).length > 0
+  /** 还差哪几格（页脚那一行用）：只说缺哪几格，不把三句「没填」在页脚再摆一遍。 */
+  const missing = (['id', 'label', 'baseUrl'] as PlatformField[]).filter(
+    (field) => problems[field] === MISSING_TEXT[field]
+  )
+  const MISSING_LABEL: Record<PlatformField, string> = {
+    id: '平台 id',
+    label: '名字',
+    baseUrl: '地址',
+  }
 
   useEffect(() => {
     // 新增：清单到手后默认选第一条（顺序照服务端给的）。改的时候没有这一格。
@@ -518,8 +584,21 @@ export function PlatformDialog({
                 value={draft.id}
                 disabled={editing}
                 placeholder='比如 my-gateway'
-                onChange={(event) => patch({ id: event.target.value })}
+                aria-invalid={shown('id') ? true : undefined}
+                aria-describedby={shown('id') ? 'platform-id-problem' : undefined}
+                onChange={(event) => {
+                  touch('id')
+                  patch({ id: event.target.value })
+                }}
               />
+              {shown('id') ? (
+                <p
+                  id='platform-id-problem'
+                  className='text-xs text-destructive'
+                >
+                  {shown('id')}
+                </p>
+              ) : null}
               <p className='text-xs text-muted-foreground'>
                 {editing
                   ? 'id 是这个平台在客户端地址里的一段，改不了'
@@ -534,11 +613,24 @@ export function PlatformDialog({
               id='platform-label'
               value={draft.label}
               placeholder='比如 我的中转站'
-              onChange={(event) =>
-                // 用户敲过的名字不再跟着类型走。
-                patch({ label: event.target.value, labelEdited: true })
+              aria-invalid={shown('label') ? true : undefined}
+              aria-describedby={
+                shown('label') ? 'platform-label-problem' : undefined
               }
+              onChange={(event) => {
+                // 用户敲过的名字不再跟着类型走。
+                touch('label')
+                patch({ label: event.target.value, labelEdited: true })
+              }}
             />
+            {shown('label') ? (
+              <p
+                id='platform-label-problem'
+                className='text-xs text-destructive'
+              >
+                {shown('label')}
+              </p>
+            ) : null}
           </div>
 
           {/* 地址：模拟客户端的发到哪由模拟端定（库里那个是空串），不摆这一格。 */}
@@ -549,8 +641,23 @@ export function PlatformDialog({
                 id='platform-base-url'
                 value={draft.baseUrl}
                 placeholder='https://api.example.com/v1'
-                onChange={(event) => patch({ baseUrl: event.target.value })}
+                aria-invalid={shown('baseUrl') ? true : undefined}
+                aria-describedby={
+                  shown('baseUrl') ? 'platform-base-url-problem' : undefined
+                }
+                onChange={(event) => {
+                  touch('baseUrl')
+                  patch({ baseUrl: event.target.value })
+                }}
               />
+              {shown('baseUrl') ? (
+                <p
+                  id='platform-base-url-problem'
+                  className='text-xs text-destructive'
+                >
+                  {shown('baseUrl')}
+                </p>
+              ) : null}
             </div>
           )}
 
@@ -665,11 +772,18 @@ export function PlatformDialog({
         </div>
 
         <DialogFooter>
+          {/* 按钮灰着的时候旁边说清差什么：新开的空表单一行红字都没敲就先骂起来
+              没有意义，这两句合到这一行里说。 */}
+          {missing.length ? (
+            <p className='me-auto text-xs text-muted-foreground'>
+              {`还差：${missing.map((field) => MISSING_LABEL[field]).join('、')}`}
+            </p>
+          ) : null}
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             取消
           </Button>
           <Button
-            disabled={pending || (!editing && !chosenKind)}
+            disabled={pending || (!editing && !chosenKind) || blocked}
             onClick={submit}
           >
             {editing ? '保存' : '加上'}

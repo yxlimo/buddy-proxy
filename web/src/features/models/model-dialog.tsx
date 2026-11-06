@@ -29,6 +29,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ModelPicker } from '@/features/models/model-picker'
 import { GroupPicker } from '@/features/models/group-picker'
+import { intFieldProblem } from '@/lib/int-field'
 import { cn } from '@/lib/utils'
 
 /**
@@ -227,8 +228,19 @@ export function ModelDialog({
   // 哪个分组里有没填的必填项：分组标题上标红，切过去给行内提示。
   const basicMissing = draft.id.trim().length === 0
   const targetsMissing = filledTargets.length === 0
+  // 两个整数格：继承时不判（那两格灰着，值不属于这一单），填了才判。
+  const contextProblem = draft.contextWindowInherit
+    ? null
+    : intFieldProblem(draft.contextWindow)
+  const outputProblem = draft.maxOutputTokensInherit
+    ? null
+    : intFieldProblem(draft.maxOutputTokens)
 
-  const valid = !basicMissing && !targetsMissing
+  const valid =
+    !basicMissing &&
+    !targetsMissing &&
+    contextProblem === null &&
+    outputProblem === null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -305,6 +317,10 @@ export function ModelDialog({
                   id='model-ctx'
                   inputMode='numeric'
                   disabled={draft.contextWindowInherit}
+                  aria-invalid={contextProblem ? true : undefined}
+                  aria-describedby={
+                    contextProblem ? 'model-ctx-problem' : undefined
+                  }
                   placeholder={
                     draft.contextWindowInherit
                       ? inheritedHint(draft.effectiveContextWindow)
@@ -315,6 +331,14 @@ export function ModelDialog({
                     patch({ contextWindow: event.target.value })
                   }
                 />
+                {contextProblem ? (
+                  <p
+                    id='model-ctx-problem'
+                    className='text-xs text-destructive'
+                  >
+                    {contextProblem}
+                  </p>
+                ) : null}
                 <InheritToggle
                   id='model-ctx-inherit'
                   label='继承平台'
@@ -333,6 +357,10 @@ export function ModelDialog({
                   id='model-out'
                   inputMode='numeric'
                   disabled={draft.maxOutputTokensInherit}
+                  aria-invalid={outputProblem ? true : undefined}
+                  aria-describedby={
+                    outputProblem ? 'model-out-problem' : undefined
+                  }
                   placeholder={
                     draft.maxOutputTokensInherit
                       ? inheritedHint(draft.effectiveMaxOutputTokens)
@@ -343,6 +371,14 @@ export function ModelDialog({
                     patch({ maxOutputTokens: event.target.value })
                   }
                 />
+                {outputProblem ? (
+                  <p
+                    id='model-out-problem'
+                    className='text-xs text-destructive'
+                  >
+                    {outputProblem}
+                  </p>
+                ) : null}
                 <InheritToggle
                   id='model-out-inherit'
                   label='继承平台'

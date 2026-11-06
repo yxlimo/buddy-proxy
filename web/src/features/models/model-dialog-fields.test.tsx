@@ -189,6 +189,68 @@ describe('模型编辑弹窗', () => {
     expect(screen.getByText('权重大的先试，失败了才试小的。')).toBeInTheDocument()
   })
 
+  it('上下文填 1.5：那一格行内说清，保存灰着', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted: unknown[] = []
+    renderWithClient({
+      client: catalogClient(),
+      children: (
+        <ModelDialog
+          open
+          onOpenChange={() => {}}
+          onSubmit={(model) => submitted.push(model)}
+        />
+      ),
+    })
+
+    // 先摆成一份能过的：对外 id 加上一个填全的目标。
+    await user.type(screen.getByLabelText('对外 id'), 'buddy-max')
+    await user.click(screen.getByRole('tab', { name: /平台目标/ }))
+    await pickGroup(user, /Qoder 全球区/)
+    await user.click(
+      await screen.findByRole('combobox', { name: '平台模型 id' })
+    )
+    const listbox = await screen.findByRole('listbox')
+    await user.click(within(listbox).getByText('claude-sonnet-4'))
+    await user.click(screen.getByRole('tab', { name: /^基本/ }))
+
+    const save = screen.getByRole('button', { name: '保存' })
+    await waitFor(() => {
+      expect(save).toBeEnabled()
+    })
+
+    // 继承平台时那两格灰着：值不属于这一单，不判。要判就先关掉继承。
+    const [contextInherit] = screen.getAllByLabelText('继承平台')
+    await user.click(contextInherit)
+    const context = screen.getByLabelText('上下文长度')
+    await waitFor(() => {
+      expect(context).toBeEnabled()
+    })
+
+    await user.type(context, '1.5')
+    // 服务端只会回「不是整数」（MODEL_NUMBER_INVALID）：这一句在按保存前就有。
+    expect(screen.getByText('要填整数')).toBeInTheDocument()
+    expect(context).toHaveAttribute('aria-invalid', 'true')
+    expect(save).toBeDisabled()
+
+    // 判别力所在：点下去也不交东西。
+    await user.click(save)
+    expect(submitted).toEqual([])
+
+    await user.clear(context)
+    await user.type(context, '-1')
+    expect(screen.getByText('不能是负数')).toBeInTheDocument()
+    expect(save).toBeDisabled()
+
+    await user.clear(context)
+    await user.type(context, '200000')
+    await waitFor(() => {
+      expect(save).toBeEnabled()
+    })
+    expect(screen.queryByText('要填整数')).not.toBeInTheDocument()
+    expect(screen.queryByText('不能是负数')).not.toBeInTheDocument()
+  })
+
   it('没有「顺序」那个输入框', async () => {
     const user = userEvent.setup({ delay: null })
     renderWithClient({

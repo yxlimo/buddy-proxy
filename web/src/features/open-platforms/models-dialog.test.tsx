@@ -753,6 +753,34 @@ describe('自定义模型弹窗', () => {
     ).toBeInTheDocument()
   })
 
+  it('校验：id 跟另一条只差大小写也算重复，保存禁用', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    // 库里已经有一条只差大小写的：路由匹配模型 id 不分大小写，两条说的是同一个
+    // 模型，存下去互相打架 —— 服务端拒（MODEL_ID_DUPLICATE），面板先拦。
+    openDialog(
+      client({
+        sent,
+        overrides: [create(ModelOverrideSchema, { id: 'GLM-4.6' })],
+      })
+    )
+
+    await ready()
+    const message = await screen.findByText(
+      'glm-4.6 · 模型 id 和另一条只差大小写'
+    )
+    expect(picker()).toHaveAttribute('aria-invalid', 'true')
+    expect(describedError(picker())).toBe(message)
+    const button = saveButton()
+    expect(button).toBeDisabled()
+
+    // 改别的格也放不行：这一条照样存不下去。点下去不发请求。
+    await user.type(field('显示名'), ' 改')
+    expect(saveButton()).toBeDisabled()
+    await user.click(saveButton())
+    expect(sent).toEqual([])
+  })
+
   it('校验：倍率不能是负数', async () => {
     const user = setup()
     openDialog(client({}))

@@ -841,44 +841,17 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       // 没给 = 别动这一格；空串 = 不选插件。
       quotaPlugin: givenText(request.quotaPlugin),
     };
-    // 模拟客户端的目录是代码挑过的一份：要改目录的那两格就说不行，而且一分钱
-    // 都不落库 —— 别的格（名字、地址、额度插件）照样存得进去，那种「存了一半
-    // 再说一声」在面板上分不清成功还是失败。
-    //
-    // 判据是「与现值不同」，不是「带了没有」：面板编辑模拟客户端时会把
-    // models_auto 一起送过来，只看有没有送，用户改个名字就保存不了。
-    //
-    // 为什么在这一层而不是数据层（updateOpenPlatform）：数据层是唯一写入口，规矩
-    // 放在它那里才拦得住所有调用方 —— 这里只能拦住面板这一条路。落在 RPC 边界是
-    // 有意的取舍（本轮的文件边界）；将来第二个调用方（脚本、迁移）冒出来时，这条
-    // 要沉到数据层去，否则他们递上来的 modelsAuto 会直接盖上去。
-    const current = openPlatformOf(id);
-    const simulated = current !== null && isSimulatedClientKind(current.kind);
-    if (simulated) {
-      const askedModels =
-        models.length > 0 &&
-        (models.length !== current.models.items.length ||
-          models.some((one, at) => one !== current.models.items[at]));
-      const askedAuto = (request.modelsAuto === true) !== current.models.auto;
-      if (askedModels || askedAuto) {
-        // 细节只说哪一格：模型清单是用户填的内容，不往日志里搬。
-        throw adminError(
-          "PLATFORM_MODELS_FIXED",
-          `platform ${id} (${current.kind}) takes its catalogue from the code: ` +
-            `models ${askedModels ? "given" : "unchanged"}, models_auto ${askedAuto ? "given" : "unchanged"}`,
-        );
-      }
+    // 模拟客户端的目录是代码挑过的一份，数据层对那两格不认（updateOpenPlatform）：
+    // 这里照常把面板送的值递下去就行，规矩只有一处。
+    if (!request.modelsAuto && models.length) {
+      // 手工目录：写死的那一份，自动拉不许覆盖它。
+      patch.models = models;
+      patch.modelsAuto = false;
+      patch.source = "manual";
     } else {
-      if (!request.modelsAuto && models.length) {
-        // 手工目录：写死的那一份，自动拉不许覆盖它。
-        patch.models = models;
-        patch.modelsAuto = false;
-        patch.source = "manual";
-      } else {
-        // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
-        // 只翻自动那一格。
-        patch.modelsAuto = request.modelsAuto === true;
-      }
+      // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
+      // 只翻自动那一格。
+      patch.modelsAuto = request.modelsAuto === true;
     }
     const result = updateOpenPlatform(id, patch);
     if (!result.ok) throw adminError(result.code, result.message);

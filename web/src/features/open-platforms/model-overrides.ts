@@ -2,6 +2,7 @@ import type {
   CatalogModel,
   ModelOverride,
 } from '@/gen/buddy/admin/v1/admin_pb'
+import { intFieldProblem } from '@/lib/int-field'
 
 /**
  * 「自定义模型」弹窗的纯逻辑：行怎么摆出来、保存时发什么。
@@ -449,20 +450,10 @@ function numberValue(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 
-/** 契约里 int32 的上界：超了服务端不收，面板先说清。 */
-const MAX_INT32 = 2147483647
-
-/** 整数那几格：只收非负整数，超了 int32 也先拦下。 */
+/** 整数那几格：只收非负整数，超了 int32 也先拦下。判据与主路由那个弹窗同一份。 */
 function countMessage(text: string, label: string): string | null {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-  const value = Number(trimmed)
-  if (!Number.isFinite(value) || !Number.isInteger(value)) {
-    return `${label}：要填整数`
-  }
-  if (value < 0) return `${label}：不能是负数`
-  if (value > MAX_INT32) return `${label}：别超过 ${MAX_INT32}`
-  return null
+  const problem = intFieldProblem(text)
+  return problem ? `${label}：${problem}` : null
 }
 
 /** 倍率：是个数就行，不能是负数；空着表示不知道。 */
@@ -503,6 +494,7 @@ export interface RowProblem {
  */
 export function listProblems(rows: readonly ModelRow[]): RowProblem[] {
   const duplicates = duplicateIds(rows)
+  const exact = exactIdCounts(rows)
   const out: RowProblem[] = []
   const seen = new Map<string, RowProblem>()
 
@@ -522,7 +514,17 @@ export function listProblems(rows: readonly ModelRow[]): RowProblem[] {
   rows.forEach((row, index) => {
     const id = row.id.trim()
     if (id === '') add(index, 'id', '模型 id 不能空')
-    else if (duplicates.includes(id)) add(index, 'id', '模型 id 重复')
+    else if (duplicates.includes(id.toLowerCase())) {
+      // 两个 id 只差大小写：路由匹配不分大小写，存下去就是同一个模型的两条
+      // 元数据在撞。两种分开说：一模一样是重名，换个写法是一模一样的另拼法。
+      add(
+        index,
+        'id',
+        (exact.get(id) ?? 0) > 1
+          ? '模型 id 重复'
+          : '模型 id 和另一条只差大小写'
+      )
+    }
     const context = countMessage(row.text.contextWindow, '上下文')
     if (context) add(index, 'contextWindow', context)
     const output = countMessage(row.text.maxOutputTokens, '输出上限')
@@ -544,15 +546,38 @@ function rowLabel(row: ModelRow, index: number): string {
   return row.id.trim() || `新模型 ${index + 1}`
 }
 
-/** 重复的模型 id：只有人工加的行才可能撞上目录里的那几条。 */
+/**
+ * 重复的模型 id（不分大小写），已经并成小写。
+ *
+ * 判据是路由那一侧的：匹配模型 id 不分大小写（lib/router/catalog.ts），两条
+ * 只差大小写的 id 就是同一个模型的，存下去互相打架 —— 服务端也是这么拒的
+ * （MODEL_ID_DUPLICATE）。
+ */
 export function duplicateIds(rows: readonly ModelRow[]): string[] {
+  return [...sameIdCounts(rows).entries()]
+    .filter(([, count]) => count > 1)
+    .map(([id]) => id)
+}
+
+/** 每个 id（并成小写）出现了几次。 */
+function sameIdCounts(rows: readonly ModelRow[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    const id = row.id.trim()
+    if (!id) continue
+    const folded = id.toLowerCase()
+    counts.set(folded, (counts.get(folded) ?? 0) + 1)
+  }
+  return counts
+}
+
+/** 每个 id（原样）出现了几次：分辨「一模一样」与「只差大小写」。 */
+function exactIdCounts(rows: readonly ModelRow[]): Map<string, number> {
   const counts = new Map<string, number>()
   for (const row of rows) {
     const id = row.id.trim()
     if (!id) continue
     counts.set(id, (counts.get(id) ?? 0) + 1)
   }
-  return [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([id]) => id)
+  return counts
 }

@@ -541,6 +541,7 @@ export function UpstreamsPage() {
       <PlatformDialog
         open={addingPlatform || editingPlatform !== null}
         platform={editingPlatform ?? undefined}
+        existing={list}
         kinds={kinds}
         registry={registry}
         pending={addPlatform.isPending || updatePlatform.isPending}

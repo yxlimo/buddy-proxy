@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
+  AccountSchema,
   PlatformKindSchema,
   QuotaPluginSchema,
   UpstreamSchema,
@@ -186,6 +187,7 @@ describe('平台弹窗交出去的那一单', () => {
       <PlatformDialog
         open
         platform={platform}
+        existing={[]}
         kinds={kinds}
         registry={{ status: 'ready', plugins: [] }}
         pending={false}
@@ -218,6 +220,7 @@ describe('平台弹窗交出去的那一单', () => {
     render(
       <PlatformDialog
         open
+        existing={[]}
         kinds={kinds}
         registry={{ status: 'ready', plugins: [] }}
         pending={false}
@@ -228,6 +231,8 @@ describe('平台弹窗交出去的那一单', () => {
 
     await user.type(screen.getByLabelText('平台 id'), 'my-gateway')
     await user.type(screen.getByLabelText('名字'), '我的中转站')
+    // 地址是必填的一格：空着保存按钮是灰的，请求不发（这是提交前的拦截）。
+    await user.type(screen.getByLabelText('地址'), 'https://api.example.com/v1')
     await user.click(screen.getByRole('button', { name: '加上' }))
 
     expect(submitted).toEqual([
@@ -236,7 +241,7 @@ describe('平台弹窗交出去的那一单', () => {
         label: '我的中转站',
         // 清单到手后默认选第一条。
         kind: 'openai',
-        baseUrl: '',
+        baseUrl: 'https://api.example.com/v1',
       },
     ])
   })
@@ -248,6 +253,7 @@ describe('新增平台：两族类型', () => {
     render(
       <PlatformDialog
         open
+        existing={[]}
         kinds={allKinds}
         registry={{ status: 'ready', plugins: [] }}
         pending={false}
@@ -354,6 +360,7 @@ describe('改一个模拟客户端', () => {
       <PlatformDialog
         open
         platform={platformMessage}
+        existing={[]}
         kinds={allKinds}
         registry={{ status: 'ready', plugins }}
         pending={false}
@@ -414,6 +421,7 @@ describe('改一个模拟客户端', () => {
       <PlatformDialog
         open
         platform={renamed}
+        existing={[]}
         kinds={list}
         registry={{ status: 'ready', plugins }}
         pending={false}
@@ -476,6 +484,7 @@ describe('改一个模拟客户端', () => {
       <PlatformDialog
         open
         platform={platform}
+        existing={[]}
         kinds={allKinds}
         registry={{ status: 'ready', plugins }}
         pending={false}
@@ -514,6 +523,7 @@ describe('改平台时怎么判是不是模拟客户端', () => {
       <PlatformDialog
         open
         platform={platformMessage}
+        existing={[]}
         kinds={noKinds}
         registry={{ status: 'ready', plugins }}
         pending={false}
@@ -582,6 +592,7 @@ describe('换一条类型：草稿里那几格跟着走', () => {
     render(
       <PlatformDialog
         open
+        existing={[]}
         kinds={allKinds}
         registry={{ status: 'ready', plugins }}
         pending={false}
@@ -671,9 +682,21 @@ describe('换一条类型：草稿里那几格跟着走', () => {
     await pickKind(user, 'OpenAI 兼容')
     expect(screen.getByLabelText('平台 id')).toHaveValue('')
 
+    // id 空着就不发请求：空 id 那个错在按保存前就拦下了。
+    expect(screen.getByRole('button', { name: '加上' })).toBeDisabled()
+    expect(submitted).toEqual([])
+
+    await user.type(screen.getByLabelText('平台 id'), 'qoder-cn')
+    await user.type(screen.getByLabelText('名字'), '自己搭的')
+    await user.type(screen.getByLabelText('地址'), 'https://qoder.example.com/v1')
     await user.click(screen.getByRole('button', { name: '加上' }))
     expect(submitted).toEqual([
-      { id: '', label: '', baseUrl: '', kind: 'openai' },
+      {
+        id: 'qoder-cn',
+        label: '自己搭的',
+        baseUrl: 'https://qoder.example.com/v1',
+        kind: 'openai',
+      },
     ])
   })
 
@@ -686,6 +709,7 @@ describe('换一条类型：草稿里那几格跟着走', () => {
       <PlatformDialog
         open
         platform={simulatedPlatform}
+        existing={[]}
         kinds={kinds}
         registry={{ status: 'ready', plugins }}
         pending={false}
@@ -709,5 +733,176 @@ describe('换一条类型：草稿里那几格跟着走', () => {
 
     expect(submitted[0]).not.toHaveProperty('baseUrl')
     expect(submitted[0]).not.toHaveProperty('quotaPlugin')
+  })
+})
+
+describe('正常操作点不出的错：提交前就拦住', () => {
+  /** 表里现有的两个平台：一个开放平台，一个名下有账号的预置。 */
+  const existing: Upstream[] = [
+    platform,
+    create(UpstreamSchema, {
+      id: 'qoder',
+      kind: 'qoder',
+      label: 'Qoder',
+      isOpenPlatform: false,
+      fromRow: true,
+      accounts: [
+        create(AccountSchema, { id: 'qoder-2', platform: 'qoder' }),
+      ],
+    }),
+  ]
+
+  /** 新增弹窗，表里现有的平台照上面那一份。 */
+  function renderAdd(submitted: unknown[] = []) {
+    render(
+      <PlatformDialog
+        open
+        existing={existing}
+        kinds={kinds}
+        registry={{ status: 'ready', plugins: [] }}
+        pending={false}
+        onSubmit={(input) => submitted.push(input)}
+        onOpenChange={() => {}}
+      />
+    )
+    return submitted
+  }
+
+  /** 把三格填成能过的那一份。 */
+  async function fillValid(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText('平台 id'), 'my-other')
+    await user.type(screen.getByLabelText('名字'), '另一个中转站')
+    await user.type(
+      screen.getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+  }
+
+  it('id 已经被别的平台占了：保存灰着、行内说清，一个请求都不发', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await user.type(screen.getByLabelText('平台 id'), 'my-gateway')
+    await user.type(screen.getByLabelText('名字'), '同名')
+    await user.type(
+      screen.getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+
+    const id = screen.getByLabelText('平台 id')
+    expect(
+      screen.getByText('这个平台 id 已经被占用')
+    ).toBeInTheDocument()
+    // 那一格自己指着这句话：红边框之外还说得出来。
+    expect(id).toHaveAttribute('aria-invalid', 'true')
+    const button = screen.getByRole('button', { name: '加上' })
+    expect(button).toBeDisabled()
+
+    // 判别力所在：点下去也不会有东西交出去。
+    await user.click(button)
+    expect(submitted).toEqual([])
+
+    // 换一个没被占用的 id：提示没了，按钮回来。
+    await user.clear(id)
+    await user.type(id, 'my-other')
+    expect(
+      screen.queryByText('这个平台 id 已经被占用')
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加上' })).toBeEnabled()
+  })
+
+  it('id 格式不对：保存灰着、行内说清，一个请求都不发', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await user.type(screen.getByLabelText('平台 id'), 'My_Gateway')
+    await user.type(screen.getByLabelText('名字'), '大写那个')
+    await user.type(
+      screen.getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+
+    expect(
+      screen.getByText('平台 id 只能用小写字母、数字和连字符')
+    ).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: '加上' })
+    expect(button).toBeDisabled()
+    await user.click(button)
+    expect(submitted).toEqual([])
+  })
+
+  it('地址不是完整的网址：保存灰着、行内说清', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await user.type(screen.getByLabelText('平台 id'), 'my-other')
+    await user.type(screen.getByLabelText('名字'), '少了协议')
+    await user.type(screen.getByLabelText('地址'), 'api.example.com/v1')
+
+    expect(
+      screen.getByText('地址不是以 http:// 或 https:// 开头的完整网址')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加上' })).toBeDisabled()
+    expect(submitted).toEqual([])
+
+    // 补上协议就是完整网址：拦不住了。
+    await user.type(screen.getByLabelText('地址'), 'X')
+    await user.clear(screen.getByLabelText('地址'))
+    await user.type(
+      screen.getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+    expect(screen.getByRole('button', { name: '加上' })).toBeEnabled()
+  })
+
+  it('id 是某个账号的名字：两边的命名空间是同一个，先拦下', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await user.type(screen.getByLabelText('平台 id'), 'qoder-2')
+    await user.type(screen.getByLabelText('名字'), '撞账号名')
+    await user.type(
+      screen.getByLabelText('地址'),
+      'https://api.example.com/v1'
+    )
+
+    expect(screen.getByText('这个 id 已经是账号名')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加上' })).toBeDisabled()
+    expect(submitted).toEqual([])
+  })
+
+  it('三格都填对了：按钮亮着，交出去的就是这份', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderAdd()
+
+    await fillValid(user)
+    await user.click(screen.getByRole('button', { name: '加上' }))
+
+    expect(submitted).toEqual([
+      {
+        id: 'my-other',
+        label: '另一个中转站',
+        baseUrl: 'https://api.example.com/v1',
+        kind: 'openai',
+      },
+    ])
+  })
+
+  it('新开的空表单：按钮灰着，旁边说清还差哪几格', async () => {
+    renderAdd()
+
+    // 一行红字都没敲就先骂起来没有意义：这时候差别在于「还差哪几格」，
+    // 不摆三句红字。
+    expect(screen.queryByText('平台 id 没有填')).not.toBeInTheDocument()
+    expect(screen.queryByText('平台名没有填')).not.toBeInTheDocument()
+    expect(screen.queryByText('地址没有填')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加上' })).toBeDisabled()
+    expect(screen.getByText('还差：平台 id、名字、地址')).toBeInTheDocument()
+
+    // 填满一格，那一格就从这句话里消失。
+    await userEvent
+      .setup({ delay: null })
+      .type(screen.getByLabelText('平台 id'), 'my-other')
+    expect(screen.getByText('还差：名字、地址')).toBeInTheDocument()
   })
 })
