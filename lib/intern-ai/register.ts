@@ -23,6 +23,8 @@ export const internAiKind = registerCompatiblePlatform({
   login: "code",
   policies: ["single", "fallback"],
   baseUrl: () => INTERN_AI_DISCOVERY_API_BASE,
+  // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）。
+  defaultBaseUrl: INTERN_AI_DISCOVERY_API_BASE,
   // 推理用的是 Discovery 那把 key：子站 token 只用来补 key 与问额度。
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
@@ -43,3 +45,4 @@ export const internAiKind = registerCompatiblePlatform({
   outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, quotaPluginIdOf(provider)),
   recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, quotaPluginIdOf(provider)),
 });
+

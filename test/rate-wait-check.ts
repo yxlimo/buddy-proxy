@@ -155,6 +155,11 @@ const db = store();
 const now = Date.now();
 
 // 账号行在，然后把会话与推理 key 挂在它自己的 id 上。
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("sensenova");
+
 const rateAccount = addRateAccount({ platform: "sensenova", alias: "假账号" });
 if (!rateAccount.ok || !rateAccount.id) throw new Error(`加不了账号：${rateAccount.message}`);
 ACCOUNT = rateAccount.id;

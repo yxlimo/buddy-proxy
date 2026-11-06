@@ -26,15 +26,15 @@
 // any more — reading it back would hand a brand new account the identity of an
 // old tenant, and the account ids say nothing about tenancy any more.
 
-import { configString } from "../config.ts";
 import { writeSession } from "../session.ts";
 import { dataDir as sharedDataDir } from "../paths.ts";
 import { deleteSecret, getSecret, setSecret } from "../store.ts";
 import { providerSecretId } from "../providers.ts";
 import { registerLoginFlow, type LoginContext, type LoginTicket, type SubmitInput } from "../login-flow.ts";
 
-export const TOKENRHYTHM_API_BASE = configString("TOKENRHYTHM_API_BASE", "https://tokenrhythm.studio").replace(/\/+$/, "");
-export const TOKENRHYTHM_INFER_BASE = configString("TOKENRHYTHM_INFER_BASE", `${TOKENRHYTHM_API_BASE}/v1`).replace(/\/+$/, "");
+// 地址住在 lib/tokenrhythm/config.ts（叶子模块）：这一层与 kinds 那一层互相
+// 引着，地址放在外面，两边读的是同一份常量。
+import { TOKENRHYTHM_API_BASE } from "./config.ts";
 
 /** The platform id. */
 const PLATFORM = "tokenrhythm";

@@ -18,6 +18,10 @@ import { setSecret } from "../lib/store.ts";
 import { addAccount } from "../lib/providers.ts";
 import { saveTokenRhythmCredential } from "../lib/tokenrhythm/accounts.ts";
 import { store } from "../lib/store.ts";
+import { insertVendorPlatform } from "./vendor-platform.ts";
+import { isSimulatedClientId } from "../lib/platform-catalog.ts";
+import { kindOf } from "../lib/provider-kinds.ts";
+import "../lib/kinds/index.ts";
 
 const now = Date.now();
 const year = now + 365 * 24 * 3600 * 1000;
@@ -63,6 +67,9 @@ const ON = process.env.TEST_UPSTREAMS ?? "qoder,qoder-cn,workbuddy-cn";
 const on = ON.split(",").map((id) => id.trim()).filter(Boolean);
 const accountOf: Record<string, string> = {};
 for (const platform of on) {
+  // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：模拟客户端那几行
+  // 启动时自己播出来，厂商那几行测试自己造。
+  if (!isSimulatedClientId(platform) && kindOf(platform)) insertVendorPlatform(platform, platform);
   const made = addAccount({ platform, alias: "测试账号" });
   if (!made.ok || !made.id) throw new Error(`加不了 ${platform} 的账号：${made.message}`);
   accountOf[platform] = made.id;

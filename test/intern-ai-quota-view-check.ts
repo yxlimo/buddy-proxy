@@ -37,6 +37,11 @@ function check(name: string, ok: boolean, detail = ""): void {
   }
 }
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("intern-ai", "intern-ai", { quotaPlugin: "intern-ai-credits" });
+
 const PROVIDER = {
   id: "intern-ai-test",
   platform: "intern-ai",

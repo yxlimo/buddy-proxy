@@ -205,6 +205,13 @@ const { tokenRhythmCredentialOf, saveTokenRhythmCredential } = await import(
 const { setSecret } = await import("../lib/store.ts");
 const { providerSecretId } = await import("../lib/credential-ids.ts");
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("sensenova");
+insertVendorPlatform("intern-ai");
+insertVendorPlatform("tokenrhythm");
+
 const senseNovaId = addAccount({ platform: "sensenova" }).id ?? "";
 const internAiId = addAccount({ platform: "intern-ai" }).id ?? "";
 const tokenRhythmId = addAccount({ platform: "tokenrhythm" }).id ?? "";

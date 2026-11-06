@@ -240,6 +240,41 @@ process.on("exit", () => {
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
+/**
+ * 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：网关那个库里要有的
+ * 行，测试自己写进去。地址与插件照各适配器自己的默认（lib/provider-kinds.ts
+ * 里那一类的默认地址、lib/quota-plugins.ts 里登记的插件 id）。
+ */
+const VENDOR_PLATFORMS: [string, string, string][] = [
+  ["qiniu", "qiniu", "https://api.qnaigc.com/v1"],
+  ["tokenrhythm", "tokenrhythm", "https://tokenrhythm.studio/v1"],
+  ["sensenova", "sensenova", "https://token.sensenova.cn/v1"],
+  ["intern-ai", "intern-ai", "https://discovery-api.intern-ai.org.cn/v1"],
+];
+{
+  const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
+  db.exec("PRAGMA journal_mode = WAL");
+  const now = Date.now();
+  for (const [id, kind, baseUrl] of VENDOR_PLATFORMS) {
+    db.prepare(
+      "INSERT OR IGNORE INTO platform " +
+        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+    ).run(
+      id,
+      id,
+      baseUrl,
+      JSON.stringify({ items: [], traits: {}, fetchedAt: 0, source: "auto" }),
+      1,
+      "",
+      kind,
+      now,
+      now,
+    );
+  }
+  db.close();
+}
+
 
 
 /** 打一个 Connect 方法。 */

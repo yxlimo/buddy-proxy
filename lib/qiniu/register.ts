@@ -22,7 +22,7 @@ import { qiniuCatalogModels } from "./catalog.ts";
 import { QINIU_INFER_BASE } from "./config.ts";
 import { QINIU_MODELS } from "./models.ts";
 // import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
-import { qiniuQuotaPlugin } from "./quota-plugin.ts";
+import "./quota-plugin.ts";
 
 /**
  * 代码里那一份目录：元数据表的出处，也是行读不到时的兜底。
@@ -51,6 +51,9 @@ export const qiniuKind = registerCompatiblePlatform({
   login: "api_key",
   policies: ["single", "fallback"],
   baseUrl: () => QINIU_INFER_BASE,
+  // 这一类默认指哪台：额度请求靠它分辨「行上的地址还是默认那台」（行上的地址
+  // 等于它时，额度问门户而不是推理端点）。
+  defaultBaseUrl: QINIU_INFER_BASE,
   // 推理用的是那把 API key：门户 cookie 只用来查额度。
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
@@ -72,3 +75,4 @@ export const qiniuKind = registerCompatiblePlatform({
 
 // 推理用 API Key、额度用门户 cookie，两样都不是会话。
 declareNoLoginFlow("qiniu", "七牛用 API Key + 门户 cookie，没有会话登录");
+

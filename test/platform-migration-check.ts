@@ -12,6 +12,9 @@
 //
 //   1. 空库启动后 hidden === false 的那几条都在，kind 与 region 跟目录一致；
 //      hidden 的那一条（zcode）不播，但目录里的条目还在
+//   1.1 厂商那几行不再补：表里只有目录里该播的那几条（平台模板表已删，平台行
+//       是用户在面板上自己建的）
+//   1.2 已有库的行不被任何启动逻辑改写（目录空着的行，重启之后还是空的）
 //   2. 老库升级：已有的一行一个字段都不改（用户改过的名字留着）
 //   3. 重启两次：行数与字段都不变
 //   4. PLATFORMS 为空时平台仍然在 —— 清空模板与播种这对改动的判别力
@@ -58,7 +61,7 @@ const { PLATFORMS, allPlatforms } = await import("../lib/platforms.ts");
 const { openPlatformOf, listOpenPlatforms, createOpenPlatform, deleteOpenPlatform } = await import(
   "../lib/open-platforms.ts"
 );
-const { PLATFORM_TEMPLATES, SIMULATED_CLIENTS } = await import("../lib/platform-catalog.ts");
+const { SIMULATED_CLIENTS } = await import("../lib/platform-catalog.ts");
 const { store, closeStore, migrateSimulatedClients, platformPresetRemoved } = await import(
   "../lib/store.ts"
 );
@@ -123,6 +126,13 @@ check(
   HIDDEN.length > 0 && HIDDEN.every((c) => !booted.some((p) => p.id === c.id)),
   HIDDEN.map((c) => `${c.id}:${booted.some((p) => p.id === c.id)}`).join(","),
 );
+// 厂商那几行（七牛云、星火、SenseNova、端砚、TokenRhythm）不再补：平台行是
+// 用户在面板上自己建的，代码里没有模板表了。表里只有目录里该播的那几条。
+check(
+  "新库启动后表里只有目录里该播的那几条",
+  booted.map((p) => p.id).sort().join(",") === SEEDED.map((c) => c.id).sort().join(","),
+  booted.map((p) => p.id).join(","),
+);
 
 // 播种写进去的那几格：地址空串、目录空、不自动拉、没有额度插件。
 const seededRow = openPlatformOf(SIMULATED_CLIENTS[0].id);
@@ -130,6 +140,25 @@ check("播种的行地址是空串", seededRow?.baseUrl === "", JSON.stringify(s
 check("播种的行目录是空的", (seededRow?.models.items ?? []).length === 0, JSON.stringify(seededRow?.models));
 check("播种的行不自动拉目录", seededRow?.models.auto === false, JSON.stringify(seededRow?.models));
 check("播种的行没有额度插件", seededRow?.quotaPlugin === "", JSON.stringify(seededRow?.quotaPlugin));
+
+// 已有库的行不被任何启动逻辑改写：插一行目录空着的厂商行（以前那一轮播种会
+// 把它填上），重启之后它还是那样 —— 空的还是空的，那一格开关也没被动。
+store()
+  .prepare(
+    "INSERT INTO platform " +
+      "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?, '', ?, '', ?, ?)",
+  )
+  .run(
+    "vendor-keep",
+    "Vendor Keep",
+    "https://vendor.test/v1",
+    JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }),
+    1,
+    "qiniu",
+    Date.now(),
+    Date.now(),
+  );
 
 /* ------------------------------------------------------------------ *
  * 二、重启两次
@@ -147,6 +176,18 @@ closeStore();
 allPlatforms();
 check("重启两次行数不变", listOpenPlatforms().length === rowsAfterBoot, String(listOpenPlatforms().length));
 check("重启两次字段不变", snapshot() === afterBoot, snapshot());
+// 那一行目录空着的厂商行：启动不改写它（不再有播种这一说）。
+const keptRow = openPlatformOf("vendor-keep");
+check(
+  "已有库的行没被启动改写（目录还是空的）",
+  (keptRow?.models.items ?? []).length === 0,
+  JSON.stringify(keptRow?.models),
+);
+check(
+  "已有库的行没被启动改写（自动那一格没动）",
+  keptRow?.models.auto === true,
+  JSON.stringify(keptRow?.models),
+);
 
 closeStore();
 fs.rmSync(FRESH_DIR, { recursive: true, force: true });
@@ -189,10 +230,9 @@ process.env.BUDDY_DATA_DIR = OLD_DIR;
 
 // 打开库就是跑迁移（openDatabase 里有播种）。
 const upgraded = allPlatforms();
-// 老库开出来就是「厂商模板那几行 + 该播种的那几条」，原本那两行算在其中。
-const expectedIds = [
-  ...new Set([...PLATFORM_TEMPLATES.map((t) => t.key), ...SEEDED.map((c) => c.id)]),
-].sort();
+// 老库开出来就是「会播种的那几条」：厂商那几行不再补（模板表没了），原本那
+// 两行（minimax 与 qoder）本来就是目录里该播的。
+const expectedIds = SEEDED.map((c) => c.id).sort();
 check(
   "老库里那两行还在，缺的行补上了",
   upgraded.map((p) => p.id).sort().join(",") === expectedIds.join(","),

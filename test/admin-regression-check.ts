@@ -95,6 +95,13 @@ await new Promise<void>((resolve, reject) => {
   });
 });
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：health 里要有一段
+// TokenRhythm（这一节查的就是它），测试自己造这一行。
+{
+  const { insertVendorPlatform } = await import("./vendor-platform.ts");
+  insertVendorPlatform("tokenrhythm");
+}
+
 // 路由器：上游的地址都指着 mock server。起网关交给共用的 helper：端口被抢
 // 就换号重试，退出时一定收尾。
 const gw = await startGateway({

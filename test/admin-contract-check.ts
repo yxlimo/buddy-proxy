@@ -285,6 +285,22 @@ if (!seededId) throw new Error(`AddAccount 没有给出账号 id：${seeded.text
   conn.close();
 }
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的七牛行，
+// 测试自己写进网关那个库。
+const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
+{
+  const conn = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
+  conn.exec("PRAGMA busy_timeout = 5000");
+  conn
+    .prepare(
+      "INSERT OR IGNORE INTO platform " +
+        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+    )
+    .run("qiniu", "qiniu", QINIU_INFER_BASE, "[]", 0, "", "qiniu", Date.now(), Date.now());
+  conn.close();
+}
+
 /** 打一个 Connect 方法。 */
 async function call(
   method: string,

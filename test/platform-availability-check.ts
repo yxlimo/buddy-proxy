@@ -66,8 +66,15 @@ const { hasUsableCredential } = await import("../lib/admin/credentials.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
 const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
+const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
 const { putHealthSnapshot, clearHealthSnapshot } = await import("../lib/health-cache.ts");
 const { setCooldown, clearCooldown } = await import("../lib/cooldown.ts");
+
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("qiniu");
+insertVendorPlatform("sensenova");
 
 // 平台没有账号。
 const empty = platformAvailability("qiniu");
@@ -621,6 +628,21 @@ function clearCooldownRow(providerId: string): void {
   });
 }
 
+/**
+ * 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：网关那个库里要有的
+ * 行，测试自己写进去。
+ */
+function addVendorPlatform(id: string, kind: string, baseUrl: string): void {
+  const now = Date.now();
+  withDb((db) => {
+    db.prepare(
+      "INSERT OR IGNORE INTO platform " +
+        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+    ).run(id, id, baseUrl, "[]", 0, "", kind, now, now);
+  });
+}
+
 /** 表里加一个开放平台（用户自己加的：它在，但名下没有账号，所以接不了）。 */
 function addOpenPlatform(id: string): void {
   const now = Date.now();
@@ -634,6 +656,7 @@ function addOpenPlatform(id: string): void {
 
 // 账号与会话。
 await seedQoderAccount();
+addVendorPlatform("qiniu", "qiniu", QINIU_INFER_BASE);
 const added = await admin("AddAccount", { platform: "qiniu", alias: "测试七牛" });
 check("面板能加一个七牛云的账号", typeof added?.id === "string" && Boolean(added.id), JSON.stringify(added));
 // 账号 id 是面板起的（自增数）：开关、冷却都挂在它上面，不是平台 id。

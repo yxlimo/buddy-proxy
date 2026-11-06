@@ -17,6 +17,7 @@ const {
   assertQuotaPlugins,
   declareNoQuotaPlugin,
   noQuotaPluginReason,
+  quotaEndpointBase,
   quotaPluginOf,
   registerQuotaPlugin,
 } = await import("../lib/quota-plugins.ts");
@@ -181,6 +182,13 @@ globalThis.fetch = (async (input: any) => {
 
 section("七牛的插件");
 
+const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+// 行上的地址写死成这一类的默认地址（值取自常量）：「行上的地址 == 默认地址
+// → 额度问插件自己那台」那条要的就是这个前提。
+insertVendorPlatform("qiniu", "qiniu", { baseUrl: QINIU_INFER_BASE });
 const QINIU_ACCOUNT = {
   id: "qiniu-plugin-account",
   platform: "qiniu",
@@ -327,7 +335,7 @@ const kindSnapshot = {
 
 /** 一组额度，去掉两个「这一条是谁的」的 id：它们由 kind 按当前账号行重新写。 */
 function withoutIds(views: any[]): any[] {
-  return views.map(({ upstreamId, accountId, ...rest }) => rest);
+  return views.map(({ upstreamId: _upstreamId, accountId: _accountId, ...rest }) => rest);
 }
 
 check(
@@ -936,6 +944,90 @@ check(
   Boolean(merged.qiniu?.[liveId]) && Boolean(merged["two-accounts"]?.[twoAId]),
   JSON.stringify(merged),
 );
+
+/* ------------------------------------------------------------------ *
+ * 默认地址：登记时一次成形
+ *
+ * 判据是「这一类平台默认指哪台」（适配器自己声明的 defaultBaseUrl）：行上的
+ * 地址还等于它时，额度问插件自己那台（门户、控制台、钱包）；用户把行指到别处
+ * 时，跟着行走。
+ * ------------------------------------------------------------------ */
+
+section("默认地址与额度问哪台");
+
+const { QINIU_PORTAL_BASE } = await import("../lib/qiniu/config.ts");
+const { SENSENOVA_INFER_BASE } = await import("../lib/sensenova/config.ts");
+const { INTERN_AI_DISCOVERY_API_BASE } = await import("../lib/intern-ai/config.ts");
+const { XINGHUO_INFER_BASE } = await import("../lib/xinghuo/config.ts");
+const { TOKENRHYTHM_INFER_BASE } = await import("../lib/tokenrhythm/config.ts");
+
+// 五家各自声明的默认地址就是各自的地址常量（值取自常量，不写字面量）。
+check(
+  "五家的默认地址都登记在注册表里",
+  [
+    ["qiniu", QINIU_INFER_BASE],
+    ["sensenova", SENSENOVA_INFER_BASE],
+    ["intern-ai", INTERN_AI_DISCOVERY_API_BASE],
+    ["xinghuo", XINGHUO_INFER_BASE],
+    ["tokenrhythm", TOKENRHYTHM_INFER_BASE],
+  ].every(([kind, base]) => kindOf(String(kind))?.defaultBaseUrl === base),
+  ["qiniu", "sensenova", "intern-ai", "xinghuo", "tokenrhythm"]
+    .map((kind) => `${kind}=${kindOf(kind)?.defaultBaseUrl ?? ""}`)
+    .join(" "),
+);
+
+// 方向一：行上的地址还等于这一类的默认地址 → 额度问插件自己那台。
+// 拿七牛与星火两家做尺：七牛有额度插件（门户那台），星火没有额度接口（这一格
+// 只管「默认指哪台」）。
+insertVendorPlatform("xinghuo", "xinghuo-default-base", { baseUrl: XINGHUO_INFER_BASE });
+const xinghuoRow = {
+  id: "xinghuo-default-base",
+  platform: "xinghuo-default-base",
+  kind: "xinghuo",
+  region: "",
+  alias: "",
+  enabled: true,
+  weight: 0,
+  policy: "single",
+  createdAt: 0,
+  updatedAt: 0,
+} as any;
+const xinghuoRowBase = String(openPlatformOf("xinghuo-default-base")?.baseUrl ?? "");
+check(
+  "前提：星火的默认地址就是行上的地址",
+  kindOf("xinghuo")?.defaultBaseUrl === xinghuoRowBase,
+  `${kindOf("xinghuo")?.defaultBaseUrl ?? ""} / ${xinghuoRowBase}`,
+);
+check(
+  "行上的地址 == 默认地址 → 额度问插件自己那台",
+  quotaEndpointBase(xinghuoRow as any, "https://vendor.invalid") === "https://vendor.invalid",
+  quotaEndpointBase(xinghuoRow as any, "https://vendor.invalid"),
+);
+
+const defaultRow = { ...QINIU_ACCOUNT, platform: "qiniu", kind: "qiniu" };
+const qiniuRowBase = String(openPlatformOf("qiniu")?.baseUrl ?? "");
+check(
+  "前提：七牛的默认地址就是行上的地址",
+  kindOf("qiniu")?.defaultBaseUrl === qiniuRowBase,
+  `${kindOf("qiniu")?.defaultBaseUrl ?? ""} / ${qiniuRowBase}`,
+);
+check(
+  "七牛：行上的地址 == 默认地址 → 额度问插件自己那台",
+  quotaEndpointBase(defaultRow as any, QINIU_PORTAL_BASE) === QINIU_PORTAL_BASE,
+  quotaEndpointBase(defaultRow as any, QINIU_PORTAL_BASE),
+);
+
+// 方向二：行上的地址被改过 → 额度跟着行走。
+store()
+  .prepare("UPDATE platform SET base_url = ? WHERE id = ?")
+  .run(SELF_HOSTED_BASE, "qiniu");
+check(
+  "行上的地址被改 → 额度问行上那台",
+  quotaEndpointBase(defaultRow as any, QINIU_PORTAL_BASE) === SELF_HOSTED_BASE,
+  quotaEndpointBase(defaultRow as any, QINIU_PORTAL_BASE),
+);
+// 改回去：后面的段落还要用这一行。
+store().prepare("UPDATE platform SET base_url = ? WHERE id = ?").run(qiniuRowBase, "qiniu");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

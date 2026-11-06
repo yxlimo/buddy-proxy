@@ -112,6 +112,15 @@ check("额度刷新那一轮已经跑完（那时没有账号，没有请求出�
 
 section("没有账号");
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("qiniu");
+insertVendorPlatform("xinghuo");
+insertVendorPlatform("sensenova");
+insertVendorPlatform("intern-ai");
+insertVendorPlatform("tokenrhythm");
+
 const empty = platformAvailability("xinghuo");
 check("判定 → no_account", empty.state === "no_account", empty.state);
 check("面板的状态 → NO_CREDENTIAL（枚举里没有「没有账号」这一项）", upstreamState("xinghuo") === UpstreamState.NO_CREDENTIAL, String(upstreamState("xinghuo")));

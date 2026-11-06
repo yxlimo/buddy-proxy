@@ -946,14 +946,18 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   },
 
   async listPlatformKinds() {
-    // 两族：先是方言（用户自己加，选的是报文格式），再是预置的模拟客户端（从
-    // 目录里挑一个）。顺序照表里的顺序：面板按答复渲染下拉，不自己排。
+    // 两族：先是「用户自己加的一类」（方言与厂商 kind，选的是这一类怎么跟上游
+    // 说话），再是预置的模拟客户端（从目录里挑一个）。顺序照表里的顺序：面板按
+    // 答复渲染下拉，不自己排。
+    //
+    // 默认地址取自 kind 注册表（ProviderKind.defaultBaseUrl）：catalog 那一列是
+    // 空的，地址是各自适配器的地址常量，不写在面板这一层。
     return create(ListPlatformKindsResponseSchema, {
       kinds: platformKindChoices().map((option) =>
         create(PlatformKindSchema, {
           kind: option.kind,
           label: option.label,
-          defaultBaseUrl: option.defaultBaseUrl,
+          defaultBaseUrl: kindOf(option.kind)?.defaultBaseUrl ?? "",
           modelsFromUpstream: option.modelsFromUpstream,
           category: option.category,
           presetId: option.presetId,

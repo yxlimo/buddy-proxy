@@ -297,6 +297,14 @@ globalThis.fetch = (async (input: any) => {
  * 账号行与凭据（编的）
  * ------------------------------------------------------------------ */
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的三行，
+// 测试自己造。地址取这一类的默认地址（额度请求认得「行上的地址还是默认那台」），
+// 插件指名各家自己的那一个。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("sensenova", "sensenova", { quotaPlugin: "sensenova-pools" });
+insertVendorPlatform("intern-ai", "intern-ai", { quotaPlugin: "intern-ai-credits" });
+insertVendorPlatform("tokenrhythm", "tokenrhythm", { quotaPlugin: "tokenrhythm-wallet" });
+
 function accountOf(platform: string, alias: string): any {
   const made = addAccount({ platform, alias });
   if (!made.ok) throw new Error(made.message);
@@ -842,7 +850,7 @@ check(
 
 section("平台行的默认插件");
 
-const { store, migratePlatformQuotaPlugins } = await import("../lib/store.ts");
+const { store } = await import("../lib/store.ts");
 const { openPlatformOf } = await import("../lib/open-platforms.ts");
 const db = store();
 
@@ -870,28 +878,29 @@ const blank = db.prepare(
 blank.run();
 check("清空之后三家都是空的", [pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")].every((id) => id === ""), JSON.stringify([pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")]));
 
-migratePlatformQuotaPlugins(db);
+// 平台行是用户建的：库启动不再替它补默认插件（补默认值的那一步随平台模板一起
+// 删了）。空着就是空着 —— 额度那格得用户自己指。
+store();
 check(
-  "空着的补上默认值",
-  pluginOf("sensenova") === "sensenova-pools" &&
-    pluginOf("intern-ai") === "intern-ai-credits" &&
-    pluginOf("tokenrhythm") === "tokenrhythm-wallet",
+  "启动那一步不补默认插件",
+  [pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")].every((id) => id === ""),
   JSON.stringify([pluginOf("sensenova"), pluginOf("intern-ai"), pluginOf("tokenrhythm")]),
 );
 
-// 用户自己选过的插件不能被启动时的迁移改掉。
+// 用户自己选过的插件不会被启动那一步改掉。
 db.prepare("UPDATE platform SET quota_plugin = ? WHERE id = 'sensenova'").run("qiniu-portal");
-migratePlatformQuotaPlugins(db);
+store();
 check("已选的不覆盖", pluginOf("sensenova") === "qiniu-portal", pluginOf("sensenova"));
-check("没选过的照旧是默认值", pluginOf("tokenrhythm") === "tokenrhythm-wallet", pluginOf("tokenrhythm"));
+check("没选过的还是空的", pluginOf("tokenrhythm") === "", pluginOf("tokenrhythm"));
 
 const before = pluginRows();
-migratePlatformQuotaPlugins(db);
+store();
 check("再跑一次不变（连写入时刻都不动）", pluginRows() === before, `${before} / ${pluginRows()}`);
 
 // 后面那一段要三家都指着自己的插件。
 blank.run();
-migratePlatformQuotaPlugins(db);
+db.prepare("UPDATE platform SET quota_plugin = ? WHERE id = 'sensenova'").run("sensenova-pools");
+db.prepare("UPDATE platform SET quota_plugin = ? WHERE id = 'intern-ai'").run("intern-ai-credits");
 check("恢复成默认值", pluginOf("sensenova") === "sensenova-pools" && pluginOf("intern-ai") === "intern-ai-credits");
 
 // 插件 id 只有一个来源：平台行。快照里那一份还在，但平台行没指名插件时 kind

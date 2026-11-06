@@ -22,6 +22,8 @@ import {
 // 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
 // 那里也不在求值期读这边的东西。
 import { allQuotaPlugins, quotaPluginOf } from "./quota-plugins.ts";
+// kind 注册表：这一类的能力描述（能不能拉模型目录、默认地址）事实在那边。
+import { kindOf } from "./provider-kinds.ts";
 // 失败的机器码与排查用的事实。文案在面板那一侧，这里只说「哪一格不对」。
 import type { AdminFailure, AdminResult } from "./admin/error-codes.ts";
 
@@ -236,6 +238,11 @@ export function createOpenPlatform(input: {
     if (kindProblem) return kindProblem;
     const pluginProblem = checkQuotaPlugin(quotaPlugin);
     if (pluginProblem) return pluginProblem;
+    // 目录能不能自动从上游拉，由 kind 注册表说了算（ProviderKind.modelsFromUpstream）：
+    // 七牛与 TokenRhythm 的上游目录不归它管。认不出 kind 时兜底成「能拉」——
+    // 这是兜底，不是结论。
+    const kindMeta = kindOf(kind);
+    modelsAuto = kindMeta ? kindMeta.modelsFromUpstream : true;
   }
 
   const now = Date.now();

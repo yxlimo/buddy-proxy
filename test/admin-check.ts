@@ -203,6 +203,12 @@ check(
 // 启动不再插行：新库里一个账号都没有。后面要用的账号按面板的做法加出来 ——
 // 平台是模板，账号才是 provider 表里的行。
 const created: Record<string, string> = {};
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("tokenrhythm");
+insertVendorPlatform("qiniu");
+
 for (const platform of ["qoder-cn", "qoder", "tokenrhythm", "qiniu"]) {
   const res = await call("AddAccount", { platform, alias: `${platform} 主账号` }, token);
   created[platform] = String(res.body?.id ?? "");

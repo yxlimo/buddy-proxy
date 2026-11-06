@@ -29,6 +29,11 @@ const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { qiniuInferenceKey, qiniuPortalCookie, qiniuStatus } = await import("../lib/qiniu/account.ts");
 
 // 账号行：key 挂在账号名下，所以先有这个账号。
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("qiniu");
+
 const account = addAccount({ platform: "qiniu" });
 const id = account.id ?? "";
 check("加好了七牛云的账号", account.ok && id !== "", `${account.message}`);

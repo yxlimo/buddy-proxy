@@ -72,6 +72,14 @@ check("没有账号的平台策略是 single", platformPolicy("qoder") === "sing
 console.log("");
 console.log("策略的读与写");
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("tokenrhythm");
+insertVendorPlatform("qiniu");
+insertVendorPlatform("sensenova");
+insertVendorPlatform("intern-ai");
+
 check("写得进去", setPlatformPolicy("qoder", "single").ok === true);
 // 每个平台都收降级（只有 tokenrhythm 多一个余额到期优先）：读回来也得是 fallback。
 const fallbackOnQoder = setPlatformPolicy("qoder", "fallback");
@@ -273,6 +281,7 @@ check("没有账号的平台是 0", upstreamAccountCount("zcode") === 0, String(
 check("不认识的平台是 0", upstreamAccountCount("no-such-platform") === 0, String(upstreamAccountCount("no-such-platform")));
 
 // 中转站也一样：一个租户一个账号行，凭据挂在账号行上。
+
 const trOne = addAccount({ platform: "tokenrhythm", alias: "中转站一号" });
 const trTwo = addAccount({ platform: "tokenrhythm", alias: "中转站二号" });
 check("中转站两个账号", upstreamAccountCount("tokenrhythm") === 2, String(upstreamAccountCount("tokenrhythm")));

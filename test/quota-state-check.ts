@@ -33,6 +33,10 @@ const { cooldownUntil, setCooldown } = await import("../lib/cooldown.ts");
 // 平台行那一格指名插件：恢复时刻要和路由那边一样从同一格取（kind.recoverAt
 // 就是按它找插件的），不填两边都读不到插件给的时刻。
 const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("qiniu");
 updateOpenPlatform("qiniu", { quotaPlugin: "qiniu" });
 
 let pass = 0;

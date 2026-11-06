@@ -139,6 +139,11 @@ console.log("账号 id 是独立的自增数");
 console.log("");
 console.log("删账号只删它自己那一份");
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("tokenrhythm");
+
 {
   const one = addAccount({ platform: "tokenrhythm", alias: "租户 1" });
   const two = addAccount({ platform: "tokenrhythm", alias: "租户 2" });

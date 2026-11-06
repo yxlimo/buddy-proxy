@@ -228,6 +228,19 @@ export interface ProviderKind {
    * ListPlatformKinds 里那一格 —— 那个清单只有能新建的那几类。
    */
   modelsFromUpstream: boolean;
+  /**
+   * 这一类平台默认的推理地址（空 = 没有）。
+   *
+   * 说的是「这一类平台默认指哪台」：额度请求靠它分辨「行上的地址还是默认那台」
+   * （lib/quota-plugins.ts 的 quotaEndpointBase）。行上的地址还等于它时，额度
+   * 问插件自己那台（门户、控制台、钱包）；用户把行指到别处时，跟着行走。
+   *
+   * 它是适配器自己的能力描述，跟 catalogAuth、modelsFromUpstream 一样 —— 不是
+   * 平台清单：平台行是用户在面板上自己建的（表里的行），代码这边不列平台。
+   *
+   * 登记时一次成形：给就是给了，不给就没有，没有「登记完再回头补」的第二步。
+   */
+  defaultBaseUrl?: string;
   /** 区域都有哪些。 */
   regions?: string[];
   /**

@@ -37,6 +37,12 @@ const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { listAccounts } = await import("../lib/admin/accounts.ts");
 const { beginLogin } = await import("../lib/admin/login.ts");
 const { xinghuoInferenceKey, xinghuoStatus } = await import("../lib/xinghuo/account.ts");
+const { XINGHUO_MODELS } = await import("../lib/xinghuo/models.ts");
+
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("xinghuo", "xinghuo", { modelsAuto: false, models: XINGHUO_MODELS.map((m) => m.id) });
 
 const PROVIDER = {
   id: "xinghuo-test",

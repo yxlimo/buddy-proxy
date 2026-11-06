@@ -268,6 +268,28 @@ async function startGateway(): Promise<Gateway> {
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   );
+  const { TOKENRHYTHM_MODELS } = await import("../lib/tokenrhythm/models.ts");
+  // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：中转站那一行，
+  // 测试自己写进网关那个库。
+  seed
+    .prepare(
+      "INSERT OR IGNORE INTO platform " +
+        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+    )
+    .run(
+      "tokenrhythm",
+      "TokenRhythm",
+      `${inferenceBase}/v1`,
+      // 目录是代码挑的那一份：路由要先有目录才接请求（这一行空着的话，请求会
+      // 被「目录还没拿到」挡掉，测的就不是换租户了）。
+      JSON.stringify({ items: TOKENRHYTHM_MODELS.map((model) => model.id), traits: {}, fetchedAt: 0, source: "auto" }),
+      0,
+      "",
+      "tokenrhythm",
+      Date.now(),
+      Date.now(),
+    );
   const accounts: string[] = [];
   for (const index of [1, 2, 3]) {
     const made = await call(gw, "AddAccount", { platform: "tokenrhythm", alias: `中转站 ${index}` });

@@ -52,14 +52,14 @@ section("新装好的服务");
 const { listProviders, addAccount } = await import("../lib/providers.ts");
 const { allPlatforms } = await import("../lib/platforms.ts");
 const { listOpenPlatforms } = await import("../lib/open-platforms.ts");
-const { PLATFORM_TEMPLATES, SIMULATED_CLIENTS } = await import("../lib/platform-catalog.ts");
+const { SIMULATED_CLIENTS } = await import("../lib/platform-catalog.ts");
 
 // 启动不再插账号行：新装好的服务里一个账号都没有，平台是表里的行（模拟客户端
-// 那六条与厂商那五家由迁移补出来）。
+// 那几条由启动时播出来；厂商那几行是用户在面板上自己建的）。
 const builtIn = listProviders();
 check("新装好的服务里一个账号都没有", builtIn.length === 0, builtIn.map((p) => p.id).join(","));
 // 目录里的全部 id（含 hidden 的）：唯一性要按整张目录算。
-const builtInIds = [...PLATFORM_TEMPLATES.map((t) => t.key), ...SIMULATED_CLIENTS.map((c) => c.id)];
+const builtInIds = SIMULATED_CLIENTS.map((c) => c.id);
 check(
   "内置平台的 id 是唯一的",
   new Set(builtInIds).size === builtInIds.length,
@@ -67,14 +67,10 @@ check(
 );
 // 会播种的那几条：目录里的 hidden 条目（zcode）不播 —— 它在目录里，但表里没有
 // 行。所以「会播种的」与「目录里有的」不是一回事，不能拿 builtInIds 当行数用。
-const seededIds = [
-  ...PLATFORM_TEMPLATES.map((t) => t.key),
-  ...SIMULATED_CLIENTS.filter((c) => !c.hidden).map((c) => c.id),
-];
-// 平台全在表里：会播种的模拟客户端 + 厂商那五家都是迁移补出来的行，代码里的
-// 模板名单是空的。
+const seededIds = SIMULATED_CLIENTS.filter((c) => !c.hidden).map((c) => c.id);
+// 平台全在表里：会播种的模拟客户端就是表里那几行（厂商那几行不再由代码补）。
 check(
-  "平台就是表里那几行（迁移补进来的）",
+  "平台就是表里那几行（启动播进来的）",
   seededIds.every((id) => typeof id === "string" && id.length > 0) &&
     listOpenPlatforms().length === seededIds.length &&
     allPlatforms().length === listOpenPlatforms().length,
@@ -167,6 +163,13 @@ check(
 section("「试一下」说的话");
 
 const { testCredential } = await import("../lib/admin/accounts.ts");
+
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("sensenova");
+insertVendorPlatform("tokenrhythm");
+insertVendorPlatform("qiniu");
 
 const senseAccount = addAccount({ platform: "sensenova", alias: "测试 SenseNova" });
 const senseId = String(senseAccount.id ?? "");
@@ -488,10 +491,13 @@ try {
 } catch {
   envRun_body = { platforms: 0, platformRows: 0, rows: [] };
 }
+// 子进程用的是另一个（干净的）库：它看得到的是目录里该播的那几条 —— 厂商那
+// 几行是这一节之前造进本进程那个库的，两个库的平台集合本来就不一样。
+const SEEDED_ROWS = SIMULATED_CLIENTS.filter((c) => !c.hidden).length;
 check(
   "环境里的开关被忽略了（一个账号都没有）",
-  envRun_body.platforms === allPlatforms().length &&
-    envRun_body.platformRows === listOpenPlatforms().length &&
+  envRun_body.platforms === SEEDED_ROWS &&
+    envRun_body.platformRows === SEEDED_ROWS &&
     envRun_body.rows.length === 0,
   JSON.stringify(envRun_body),
 );

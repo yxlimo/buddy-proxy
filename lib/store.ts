@@ -22,13 +22,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
-// 平台模板表（叶子模块，不引任何东西）：迁移要把那几行补进 platform 表。
-import { PLATFORM_TEMPLATES, SIMULATED_CLIENTS } from "./platform-catalog.ts";
-// 播种用的模型目录：与各 kind 的代码目录同一个来源（见 seedPlatformModels）。
-import { knownCatalogForBaseUrl } from "./model-catalog.ts";
-import { QINIU_MODELS } from "./qiniu/models.ts";
-import { TOKENRHYTHM_MODELS } from "./tokenrhythm/models.ts";
-import { XINGHUO_MODELS } from "./xinghuo/models.ts";
+// 预置的模拟客户端目录（叶子模块，不引任何东西）：启动时按它把表里的行播出来。
+import { SIMULATED_CLIENTS } from "./platform-catalog.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -217,7 +212,6 @@ export function store(): DatabaseSync {
   // PLATFORMS 已经清空（lib/platform-templates.ts），表里没有的行等于平台不存在 ——
   // 路由、面板、额度、目录全都按表里的行找平台。
   migrateSimulatedClients(db);
-  seedPlatformModels(db);
   migrateAccountIds(db);
   return db;
 }
@@ -311,196 +305,15 @@ function migrateProviderWeight(db: DatabaseSync): void {
 
 
 /**
- * 平台表的两件迁移：补两列，再把那几行模板补进去。
+ * 平台表的迁移：补两列。
  *
  * 导出：测试要能单独再跑一次（老库模拟），迁移本身得能被调用。
  */
 export function migratePlatforms(db: DatabaseSync): void {
   migratePlatformColumns(db);
-  seedPlatformTemplates(db);
-  migratePlatformQuotaPlugins(db);
 }
 
-/**
- * 表里的平台那一格 `kind` 说它是通用开放平台时用的名字。
- *
- * 与 lib/open-platforms.ts 的 OPEN_PLATFORM_KIND_NAME 是同一个值 —— 从那边
- * 取会绕成环（那一层引这一层），所以写在这里，只此一处。
- */
-const OPEN_PLATFORM_KIND = "openai";
 
-/**
- * 播种用的目录：按 kind 分，与各 kind 的**代码目录**同一个来源。
- *
- * 不调 kindOf(kind).models()：注册表要靠各平台模块求值才登记，而这一层是最低
- * 层（引 lib/kinds/index.ts 会把各家平台都拖进来，绕成环）。所以取的是那些
- * 模块自己的常量表 —— 同一份数据，换个入口读。测试对着 kind.models() 逐条比，
- * 两边走样就会红。
- *
- * 每一项除了模型名，还带着这份目录从哪来：代码常量表，还是 cache 表里上游缓存
- * 的那一份。插平台行时 `models_auto` 由这一格决定（见 seededModelAuto）——
- * 「目录归谁管」这件事只有这一个来源，不再另立一张按 kind 写的表。
- *
- * SenseNova 与书生·端砚没有代码里的目录：它们的目录是从上游拉的，落在 cache
- * 表里。那两家就读 cache 那一行 —— 搬的是「现在正在服务的那份」，不是另造
- * 一份事实。cache 里还没有就是空（全新库的正常形态），不报错、不告警。
- */
-interface SeededCatalog {
-  items: string[];
-  /** 这份目录是不是 cache 表里上游缓存的那一份。 */
-  fromCache: boolean;
-}
-
-const SEEDED_MODEL_IDS: Record<string, (db: DatabaseSync) => SeededCatalog> = {
-  qiniu: () => ({ items: QINIU_MODELS.map((model) => model.id), fromCache: false }),
-  xinghuo: () => ({ items: XINGHUO_MODELS.map((model) => model.id), fromCache: false }),
-  tokenrhythm: () => ({ items: TOKENRHYTHM_MODELS.map((model) => model.id), fromCache: false }),
-  sensenova: (db) => ({ items: cachedModelIds(db, "sensenova:catalog"), fromCache: true }),
-  "intern-ai": (db) => ({ items: cachedModelIds(db, "intern-ai:catalog"), fromCache: true }),
-};
-
-/** cache 表里那一份目录的模型 id。没有那一行、读不出来都是空数组。 */
-function cachedModelIds(db: DatabaseSync, id: string): string[] {
-  const row = db.prepare("SELECT data FROM cache WHERE id = ?").get(id) as
-    | { data?: string }
-    | undefined;
-  if (!row?.data) return [];
-  try {
-    const parsed = JSON.parse(row.data) as { items?: unknown } | null;
-    if (!Array.isArray(parsed?.items)) return [];
-    // cache 里存的是上游报的那一行原样（对象），不是名字：这里取它的 id。
-    return normalizeSeedIds(
-      parsed.items.map((item) =>
-        item && typeof item === "object" ? (item as { id?: unknown }).id : item,
-      ),
-    );
-  } catch {
-    return [];
-  }
-}
-
-/** 模型名：去空的、去重号的。与读目录那一层同一个口径。 */
-function normalizeSeedIds(items: readonly unknown[]): string[] {
-  const out: string[] = [];
-  for (const raw of items) {
-    const name = String(raw ?? "").trim();
-    if (!name || out.includes(name)) continue;
-    out.push(name);
-  }
-  return out;
-}
-
-/** 这一行的目录现在有什么（认不出来的形状当空）。 */
-function seededCurrentIds(raw: unknown): string[] {
-  try {
-    const parsed = JSON.parse(String(raw ?? "")) as any;
-    // 早期存的是单纯的模型名数组。
-    if (Array.isArray(parsed)) return normalizeSeedIds(parsed);
-    if (!parsed || typeof parsed !== "object") return [];
-    return normalizeSeedIds(Array.isArray(parsed.items) ? parsed.items : []);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * 一条模板行插进去时 `models_auto` 写什么：目录从哪来，这一格就写谁。
- *
- * 上游缓存里那一份 → 1（以后跟着上游走）。代码常量表那一份 → 0（上游报得更
- * 宽，盖上来会用到没有权限的模型；要拉就由人在面板上把这一格打开）。没有目录
- * → 1（宁可被上游覆盖一次，也不要冻住一份谁都不管的目录）。
- */
-function seededModelAuto(catalog: SeededCatalog | undefined): number {
-  if (!catalog?.items.length) return 1;
-  return catalog.fromCache ? 1 : 0;
-}
-
-/**
- * 把平台行自己的模型目录播种出来。
- *
- * 以前这些行的 models 是空的，而它们各自是哪个模型只有代码知道（七牛、星火、
- * TokenRhythm 的常量表），或者只有上游缓存里那一份（SenseNova、端砚）。空的
- * 目录对开放平台是合法状态，但对这几家意味着平台在面板上看不见 —— 把手上已经
- * 有的那一份搬进去。
- *
- * 只填**空着的**：已经有内容的那一行要么是用户手写的，要么是上游拉回来的，都不
- * 能动。`models_auto` 关着的也不填：那一格说的是「以后别自动往里写」，而播种
- * 也是一次自动写入。人把目录清空是明确的意思，不该被重启填回来。
- *
- * 写的不是从上游拉的那一份：`source` 记 auto、`fetchedAt` 留 0（没拉过）—— 0
- * 就是「没拉过」的意思，写成现在会让目录看起来刚拉过，半小时内不再去问上游。
- *
- * `models_auto` 一格不碰：那一格是**面板上那个开关**（「这一行的目录归谁管」），
- * 说的是「以后允不允许自动拉覆盖」，播种没有资格替人回答它。新行的那一格由插进
- * 去的两处写（seedPlatformTemplates 按目录从哪来给初始值，createOpenPlatform 由
- * 建的人定）；老库那几行保持现值 —— 播种把它们拨成 0 会冻住本该跟着上游走的那几
- * 行（方言行，以及自己把那一格打开过的厂商行）。
- *
- * 幂等：填过的行目录非空，再跑一次连 updated_at 都不动。返回填了几行。
- */
-export function seedPlatformModels(db: DatabaseSync): number {
-  const rows = db
-    .prepare("SELECT id, kind, base_url, models, models_auto FROM platform")
-    .all() as { id?: string; kind?: string; base_url?: string; models?: unknown; models_auto?: unknown }[];
-  // 只写目录：models_auto 不在这一句里（见上面的说明）。
-  const fill = db.prepare("UPDATE platform SET models = ?, updated_at = ? WHERE id = ?");
-  const now = Date.now();
-  let seeded = 0;
-  for (const row of rows) {
-    const id = String(row.id ?? "");
-    if (!id) continue;
-    if (Number(row.models_auto ?? 1) === 0) continue;
-    const kind = String(row.kind ?? "").trim() || OPEN_PLATFORM_KIND;
-    // 已有目录：人写的或上游拉的，不动。
-    if (seededCurrentIds(row.models).length) continue;
-    // 通用开放平台：这一行背后是哪家厂商由地址说明（lib/model-catalog.ts）。
-    // 表里没有这家厂商就是空 —— 用户在面板上手填，不是错误。
-    const items =
-      kind === OPEN_PLATFORM_KIND
-        ? normalizeSeedIds(knownCatalogForBaseUrl(String(row.base_url ?? ""))?.models.map((m) => m.id) ?? [])
-        : (SEEDED_MODEL_IDS[kind]?.(db)?.items ?? []);
-    if (!items.length) continue;
-    fill.run(JSON.stringify({ items, fetchedAt: 0, source: "auto" }), now, id);
-    seeded++;
-  }
-  return seeded;
-}
-
-/**
- * 三家插件平台的默认额度插件补进已有的行。
- *
- * 模板里现在写着插件 id（lib/platform-catalog.ts），但已有的库里那几行是空的：
- * 当初补进表时不带插件。补的只有**空着的**那一格 —— 用户自己选过的插件（比如
- * 七牛换了一个门户插件）不能被启动时的迁移改掉。
- *
- * 幂等：值非空的行不 UPDATE，所以再跑一次连 updated_at 都不动。
- */
-export function migratePlatformQuotaPlugins(db: DatabaseSync): void {
-  const set = db.prepare(
-    "UPDATE platform SET quota_plugin = ?, updated_at = ? WHERE id = ? AND TRIM(quota_plugin) = ''",
-  );
-  const now = Date.now();
-  // 三行要么都补上要么都不补：补到一半的话，重启后剩下的那几家会看着像「这个
-  // 平台没额度插件」—— 那是错的话，比不补更糟。
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    for (const t of PLATFORM_TEMPLATES) {
-      // 七牛的用户自己选插件，星火没有接口：模板里空着的就不补。
-      if (!t.quotaPlugin) continue;
-      set.run(t.quotaPlugin, now, t.suggestedId);
-    }
-    db.exec("COMMIT");
-  } catch (e) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* 事务可能已经没了 */
-    }
-    throw new Error(
-      `额度插件的迁移失败：${(e as Error)?.message ?? String(e)}。事务已整个回滚，没有平台的额度插件被改。`,
-    );
-  }
-}
 
 /**
  * 平台表补两列：kind 与 region。
@@ -521,43 +334,6 @@ function migratePlatformColumns(db: DatabaseSync): void {
   }
 }
 
-/**
- * 把那五个还没迁完的平台补成表里的行。
- *
- * 幂等：已经有的行不动（INSERT OR IGNORE）—— 用户改过的名字与地址不能被启动
- * 时的迁移顺手抹掉。额度插件填模板里那一个（三家插件的额度只有插件问得到，
- * 七牛与星火是空串）。
- *
- * 目录与 `models_auto` 在插入时一次写完：目录是播种用的那一份（代码挑的常量表，
- * 或者 cache 里现在正服务的那份），那一格按目录从哪来写（见 seededModelAuto）。
- * 插入之后 seedPlatformModels 不再碰这一格 —— 所以新库的初始值只有这一处。
- */
-function seedPlatformTemplates(db: DatabaseSync): void {
-  const insert = db.prepare(
-    "INSERT OR IGNORE INTO platform " +
-      "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  );
-  const now = Date.now();
-  for (const t of PLATFORM_TEMPLATES) {
-    // 目录与那一格同源：读一次，两处都用这一份。
-    const catalog = SEEDED_MODEL_IDS[t.kind]?.(db);
-    insert.run(
-      t.suggestedId,
-      t.label,
-      t.defaultBaseUrl,
-      // 与播种、createOpenPlatform 写进去的形状一样：auto 那一格在列上，JSON 里
-      // 只有模型名、上次拉的时刻与来源。
-      JSON.stringify({ items: catalog?.items ?? [], fetchedAt: 0, source: "auto" }),
-      seededModelAuto(catalog),
-      t.quotaPlugin,
-      t.kind,
-      t.region,
-      now,
-      now,
-    );
-  }
-}
 
 /**
  * 模拟客户端那一族的平台补成表里的行。

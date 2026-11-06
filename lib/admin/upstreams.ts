@@ -462,8 +462,8 @@ export async function refreshHealthSnapshot(): Promise<void> {
  * 问哪个插件由平台那一行说（七牛、开放平台是用户选的），读法由 kind 自己说。
  * 开放平台是数据，七牛云的额度在门户上、门户只认 cookie —— 两家都得由平台行
  * 说了算：没指名插件就是「不知道」，不该自己找个地方去问。三家插件是跟 kind
- * 一起登记的（SenseNova / TokenRhythm / 书生·端砚），模板行填的默认值就是它们
- * 的插件。
+ * 一起登记的（SenseNova / TokenRhythm / 书生·端砚），各自一个插件 id，由平台
+ * 行那一格指名。
  */
 const QUOTA_FROM_PLUGIN: ReadonlySet<string> = new Set([
   OPEN_PLATFORM_KIND_NAME,

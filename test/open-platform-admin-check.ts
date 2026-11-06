@@ -58,6 +58,7 @@ const { PLATFORM_KIND_OPTIONS, SIMULATED_CLIENTS, platformKindChoices } = await 
   "../lib/platform-catalog.ts"
 );
 const { addAccount } = await import("../lib/providers.ts");
+const { kindOf } = await import("../lib/provider-kinds.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { upstreamBaseUrl } = await import("../lib/admin/upstreams.ts");
 const { PLATFORMS } = await import("../lib/platform-templates.ts");
@@ -807,12 +808,12 @@ check(
   `${errCode()} / ${errDetail()}`,
 );
 check(
-  "细节里带着那个 kind 与能建的两种方言",
+  "细节里带着那个 kind 与能建的那几类",
   errDetail().includes("no-such-kind") &&
     errDetail().includes("openai") &&
     errDetail().includes("anthropic") &&
-    // 厂商那五家不是能建的一类：候选里没有它们。
-    !["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].some((kind) =>
+    // 厂商五家现在也是能建的一类：候选里列得出它们。
+    ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].every((kind) =>
       errDetail().includes(kind),
     ),
   errDetail(),
@@ -821,22 +822,29 @@ check("被拒的那一行没写进表", openPlatformOf("kind-bad") === null, sho
 // 这种「目录里根本没有这一类」的也不许指向预置列表：能建的那两种方言已经列出来了。
 check("没登记的 kind 不让人去选预置", !errDetail().includes("preset"), errDetail());
 
-// 厂商那几家不是能建的一类：它们是本仓预置的模板（迁移补出来的库行，kind 已经
-// 体现了协议差异）。
+// 厂商那几家也是能建的一类（模板表没了，平台行由用户在面板上自己建）：
+// 建出来的那一格「自动拉目录」跟着 kind 注册表走。
 for (const kind of ["sensenova"]) {
-  const rejected = await guard(() => addPlatform({
-    id: `kind-reject-${kind}`,
-    label: `Kind Reject ${kind}`,
+  const built = await guard(() => addPlatform({
+    id: `kind-build-${kind}`,
+    label: `Kind Build ${kind}`,
     baseUrl: "https://api.kind.test/v1",
     kind,
   }));
-  check(`厂商类型不可建：${kind}`, rejected === null, show(rejected));
+  check(`厂商类型可建：${kind}`, built !== null, show(built));
   check(
-    `${kind} 的机器码说的是没有这一类`,
-    errCode() === errorCodes.PLATFORM_KIND_UNKNOWN && errDetail().includes(kind),
+    `${kind} 的机器码不是「没有这一类」`,
+    errCode() !== errorCodes.PLATFORM_KIND_UNKNOWN,
     `${errCode()} / ${errDetail()}`,
   );
-  check(`${kind} 也没写进表`, openPlatformOf(`kind-reject-${kind}`) === null, show(openPlatformOf(`kind-reject-${kind}`)));
+  check(`${kind} 写进表了`, openPlatformOf(`kind-build-${kind}`)?.kind === kind, show(openPlatformOf(`kind-build-${kind}`)));
+  check(
+    `${kind}：自动拉目录跟着注册表走`,
+    openPlatformOf(`kind-build-${kind}`)?.models.auto === (kindOf(kind)?.modelsFromUpstream ?? true),
+    show(openPlatformOf(`kind-build-${kind}`)?.models),
+  );
+  // 收尾：这一行是这一节自己造的，后面按行数比的小节不留它。
+  await guard(() => deletePlatform({ id: `kind-build-${kind}` }));
 }
 
 // 建好之后换不了类型。
@@ -918,15 +926,16 @@ check(
 );
 
 // 方言那两条：与原来一样（id 由用户填，所以要占位地址，且能自己拉目录）。
+const pureDialects = dialectKinds.filter((k: any) => k.kind === "openai" || k.kind === "anthropic");
 check(
   "方言那两条就是 openai 与 anthropic",
-  dialectKinds.map((k: any) => k.kind).join(",") === "openai,anthropic",
-  show(dialectKinds.map((k: any) => k.kind)),
+  pureDialects.map((k: any) => k.kind).join(",") === "openai,anthropic",
+  show(pureDialects.map((k: any) => k.kind)),
 );
 check(
   "方言类的 preset_id 与 region 都是空串（id 由用户填）",
-  dialectKinds.every((k: any) => k.presetId === "" && k.region === ""),
-  show(dialectKinds.map((k: any) => [k.presetId, k.region])),
+  pureDialects.every((k: any) => k.presetId === "" && k.region === ""),
+  show(pureDialects.map((k: any) => [k.presetId, k.region])),
 );
 const openaiOption = dialectKinds.find((k: any) => k.kind === "openai");
 check("openai 的默认地址是空串", openaiOption?.defaultBaseUrl === "", show(openaiOption?.defaultBaseUrl));
@@ -960,14 +969,33 @@ check(
   !kindOptions.some((k: any) => k.kind === "zcode" || k.presetId === "zcode"),
   show(kindOptions.map((k: any) => k.presetId)),
 );
-// 厂商那五家是本仓预置的模板（迁移补出来的库行）—— 不在能选的两族里。
+// 厂商那五家也在能选的两族里（模板表没了，平台行由用户在面板上自己建）：
+// 它们的默认地址取自 kind 注册表，不是空串。
+const VENDOR_KINDS = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
 check(
-  "厂商类型不在里面",
-  ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].every(
-    (kind) => !kindOptions.some((k: any) => k.kind === kind),
-  ),
+  "厂商类型在里面",
+  VENDOR_KINDS.every((kind) => kindOptions.some((k: any) => k.kind === kind)),
   show(kindOptions.map((k: any) => k.kind)),
 );
+for (const kind of VENDOR_KINDS) {
+  const option = kindOptions.find((k: any) => k.kind === kind);
+  const registryBase = kindOf(kind)?.defaultBaseUrl ?? "";
+  check(
+    `${kind}：默认地址不是空串`,
+    typeof option?.defaultBaseUrl === "string" && option.defaultBaseUrl !== "",
+    show(option?.defaultBaseUrl),
+  );
+  check(
+    `${kind}：默认地址等于 kind 注册表那一格`,
+    option?.defaultBaseUrl === registryBase,
+    `${option?.defaultBaseUrl} / ${registryBase}`,
+  );
+  check(
+    `${kind}：能不能拉目录与注册表一致`,
+    option?.modelsFromUpstream === (kindOf(kind)?.modelsFromUpstream ?? true),
+    show(option?.modelsFromUpstream),
+  );
+}
 
 /* ------------------------------------------------------------------ *
  * 4d. 建预置的模拟客户端
@@ -1256,6 +1284,15 @@ section("模型目录归不归上游");
 
 // 六个厂商/方言平台 + 一个模拟客户端。opencode-go 不在代码模板里（它是用户自己
 // 建的那类），所以现建一个。
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要比的那几行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("qiniu");
+insertVendorPlatform("xinghuo", "xinghuo", { modelsAuto: false });
+insertVendorPlatform("sensenova");
+insertVendorPlatform("intern-ai");
+insertVendorPlatform("tokenrhythm");
+
 const catalogOwner = await guard(() => addPlatform({
   id: "opencode-go",
   kind: "openai",

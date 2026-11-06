@@ -145,6 +145,10 @@ process.env.TOKENRHYTHM_INFER_BASE = `http://127.0.0.1:${inferencePort}/v1`;
  * 是它自己的。前两个先建，后面的测试再往上加。
  * ------------------------------------------------------------------ */
 
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("tokenrhythm", "tokenrhythm", { quotaPlugin: "tokenrhythm-wallet" });
 const { addAccount, provider: accountRow } = await import("../lib/providers.ts");
 const { saveSession, saveTokenRhythmCredential } = await import("../lib/tokenrhythm/accounts.ts");
 

@@ -924,6 +924,11 @@ check("H28 它是一次 404", deleteMissing.httpStatus === 404, String(deleteMis
 // H29：改一条目录里原有的模型（只改显示名）—— 落库在 override 表，不动代码表与平台行。
 // 用七牛：它平台行的 models 是非空的一份代码常量，
 //「行里的清单没变」这一条才看得见（模拟客户端与 workbuddy 那几行本来就是空的）。
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("qiniu");
+
 const qiniuAcc = addAccount({ platform: "qiniu", alias: "e2e-qiniu" });
 check("H29 前提：加一个七牛账号", qiniuAcc.ok && !!qiniuAcc.id, qiniuAcc.message);
 const qiniuBase: any[] = (await rpc("ListModels", { upstreamId: "qiniu" })).models ?? [];
@@ -964,6 +969,13 @@ section("I 模型目录归不归上游：逐平台看 modelsFromUpstream");
 // 正是面板上「刷新模型目录」该露出来的那一类。
 const madeOpencode = await rpc("AddPlatform", { id: "opencode-go", label: "OpenCode Go", baseUrl: `${upBase}/v1`, kind: "openai" });
 check("I31 建 opencode-go 成功", madeOpencode.platform?.id === "opencode-go" && !errorCodeOf(madeOpencode), JSON.stringify(madeOpencode).slice(0, 200));
+
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要看的几行，
+// 测试自己造一行。
+insertVendorPlatform("sensenova");
+insertVendorPlatform("intern-ai");
+insertVendorPlatform("xinghuo");
+insertVendorPlatform("tokenrhythm");
 
 const upstreamDistribution: [string, boolean][] = [
   ["opencode-go", true],

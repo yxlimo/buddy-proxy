@@ -10,7 +10,8 @@
 import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
-import { TOKENRHYTHM_INFER_BASE, tokenRhythmCredentialOf, type TokenRhythmCredential } from "./accounts.ts";
+import { tokenRhythmCredentialOf, type TokenRhythmCredential } from "./accounts.ts";
+import { TOKENRHYTHM_INFER_BASE } from "./config.ts";
 
 /**
  * Put the thinking back into the assistant messages.

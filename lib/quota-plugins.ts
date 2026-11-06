@@ -15,9 +15,9 @@
 // —— 它在 router-proxy.ts 里，assertLoginFlows() 旁边，app.listen 之前。
 
 import type { QuotaView } from "./provider-kinds.ts";
+import { kindOf } from "./provider-kinds.ts";
 import type { ProviderRow } from "./providers.ts";
 import { listOpenPlatforms, openPlatformOf } from "./open-platforms.ts";
-import { platformTemplateOf } from "./platform-catalog.ts";
 import type { QuotaState } from "./quota-state.ts";
 
 /** 面板按它渲染的一个输入框。 */
@@ -109,8 +109,8 @@ function sameBase(a: string, b: string): boolean {
  * 「这个平台在跟谁说话」—— 用户把地址指到别处（自建端点、自测端点）时，额度
  * 也该问同一台，否则那个平台的额度永远问不到，自测只能靠改写主机名绕过去。
  *
- * 模板平台的默认地址不算「指到别处」：表里那些行是迁移按模板补出来的，地址等于
- * 模板的默认值，照它去问会把额度请求糊到推理端点上。
+ * 「默认那台」由适配器自己说（ProviderKind.defaultBaseUrl）：行上的地址还等于
+ * 它时，额度问插件自己那台 —— 那一格说的是这一类平台默认指哪台，不是平台清单。
  *
  * 返回的是行上那个地址原文：路径怎么拼是调用方的事（`new URL(路径, 它)`）。
  */
@@ -119,11 +119,34 @@ export function quotaEndpointBase(account: ProviderRow, vendorBase: string): str
   if (!row) return vendorBase;
   const base = String(row.baseUrl ?? "").trim();
   if (!base) return vendorBase;
-  // kind 认不出模板（比如开放平台的 openai）就没有「默认地址」这一说：行上写的
-  // 那个地址就是用户要的地址。
-  const template = platformTemplateOf(account.kind || row.kind);
-  if (template && sameBase(base, template.defaultBaseUrl)) return vendorBase;
+  // 认不出这一类（或者它没有默认地址，比如开放平台的 openai）：行上写的那个
+  // 地址就是用户要的地址。
+  const kind = account.kind || row.kind;
+  const defaultBase = kindOf(kind)?.defaultBaseUrl ?? "";
+  if (!defaultBase) {
+    // 这一类没有默认地址，额度只能问行上那台 —— 插件自己那台（门户、控制台）
+    // 问不到。说一声：额度请求打到了推理端点时，这里是唯一说得清为什么的地方。
+    warnNoDefaultBase(kind);
+    return base;
+  }
+  if (sameBase(base, defaultBase)) return vendorBase;
   return base;
+}
+
+/** 已经说过「这一类没有默认地址」的那些 kind：一个进程只说一次。 */
+const warnedNoDefaultBase = new Set<string>();
+
+/**
+ * 这一类没有默认地址：额度按行上的地址问。
+ *
+ * 静默降级会让人以为额度问的是门户，其实是推理端点 —— 问回来的多半是错误页，
+ * 面板上就成了「额度未知」。说一句就够，不必每次问都刷。
+ */
+function warnNoDefaultBase(kind: string): void {
+  const id = String(kind ?? "").trim();
+  if (!id || warnedNoDefaultBase.has(id)) return;
+  warnedNoDefaultBase.add(id);
+  console.warn(`[QUOTA] 这一类没有默认地址，额度按行上的地址问：${id}`);
 }
 
 /**

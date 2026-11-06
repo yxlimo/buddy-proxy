@@ -152,15 +152,18 @@ async function call(
 }
 
 /* ------------------------------------------------------------------ *
- * 0. 播种：平台行自己的模型目录
+ * 0. 平台表：厂商那几行不再由代码补
  * ------------------------------------------------------------------ */
 
-section("0. 播种平台行的模型目录");
+section("0. 平台表里的厂商行");
 
-const { store, seedPlatformModels, setCached } = await import("../lib/store.ts");
+const { store, closeStore } = await import("../lib/store.ts");
 const { QINIU_MODELS } = await import("../lib/qiniu/models.ts");
-const { XINGHUO_MODELS } = await import("../lib/xinghuo/models.ts");
 const { TOKENRHYTHM_MODELS } = await import("../lib/tokenrhythm/models.ts");
+const { QINIU_PORTAL_BASE } = await import("../lib/qiniu/config.ts");
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：后面几节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
 
 /**
  * 一个最小的账号行：这几家的 models() 只看 kind（只有开放平台那一类看平台行）。
@@ -196,9 +199,9 @@ function kindIds(platform: string): string[] {
 /**
  * 直接写一行平台。
  *
- * 不走 createOpenPlatform：它的 kind 要过「能建哪几种」那张选单，而这张选单
- * 正在改成方言（OpenAI / Anthropic）。这里要的是「表里有一行 kind=tokenrhythm
- * 的平台」——那是代码里的模板，不是用户在面板上选的类型。
+ * 不走 createOpenPlatform：它的 kind 要过「能建哪几种」那张选单（只有两种
+ * 方言与预置的模拟客户端）。这里要的是「表里有一行 kind=tokenrhythm 的平台」
+ * —— 那是代码里的适配器，不是用户在面板上选的类型。
  */
 function insertPlatform(id: string, kind: string, baseUrl: string): void {
   const now = Date.now();
@@ -210,227 +213,89 @@ function insertPlatform(id: string, kind: string, baseUrl: string): void {
     .run(id, id, baseUrl, JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }), kind, now, now);
 }
 
-// 代码里有目录的三家：播种后非空，且与 kind.models() 逐条一致。
-const CODE_CATALOGS: [string, { id: string }[]][] = [
+// 全新库启动后厂商那几行不在表里：平台行是用户在面板上自己建的，代码这边只
+// 提供适配器（那一类怎么说话、默认指哪台）。
+const VENDOR_ROWS = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
+check(
+  "全新库启动后厂商那几行不在表里",
+  VENDOR_ROWS.every((id) => openPlatformOf(id) === null),
+  VENDOR_ROWS.filter((id) => openPlatformOf(id) !== null).join(","),
+);
+
+// 后面几节要用的四行：测试自己造（生产里是用户在面板上建的）。
+insertVendorPlatform("qiniu");
+insertVendorPlatform("tokenrhythm");
+insertVendorPlatform("sensenova");
+insertVendorPlatform("intern-ai");
+check(
+  "造出来的四行厂商平台在表里",
+  ["qiniu", "tokenrhythm", "sensenova", "intern-ai"].every((id) => openPlatformOf(id) !== null),
+);
+
+// 代码里挑过目录的那几家：行里带着代码那一份（上游那份更宽，盖上来会出现被
+// 上游拒的模型），「自动拉」那一格也关着。
+for (const [id, table] of [
   ["qiniu", QINIU_MODELS],
-  ["xinghuo", XINGHUO_MODELS],
   ["tokenrhythm", TOKENRHYTHM_MODELS],
-];
-for (const [id, table] of CODE_CATALOGS) {
-  check(`${id}：模板行在表里`, Boolean(openPlatformOf(id)), String(openPlatformOf(id)));
-  check(`${id}：播种后非空`, rowIds(id).length > 0, JSON.stringify(rowIds(id)));
-  check(
-    `${id}：代码目录有 ${table.length} 个模型`,
-    table.length > 0,
-    String(table.length),
-  );
+] as [string, { id: string }[]][]) {
+  check(`${id}：行里的目录非空`, rowIds(id).length > 0, JSON.stringify(rowIds(id)));
   check(
     `${id}：与代码目录逐条一致`,
     rowIds(id).join(",") === kindIds(id).join(","),
     `${rowIds(id).join(",")} / ${kindIds(id).join(",")}`,
   );
   check(
-    `${id}：来源是 auto、拉的时刻是 0（不是从上游拉的）`,
-    openPlatformOf(id)?.models.source === "auto" && openPlatformOf(id)?.models.fetchedAt === 0,
+    `${id}：不自动拉目录（代码挑的那一份）`,
+    openPlatformOf(id)?.models.auto === false,
     JSON.stringify(openPlatformOf(id)?.models),
   );
+  check(`${id}：代码目录有 ${table.length} 个模型`, table.length > 0, String(table.length));
 }
 
-// SenseNova 与书生·端砚没有代码里的目录：目录是问上游要来的，落在 cache 表里。
-// 全新库里还没有那一行 —— 留空，不报错、不造数据。
-for (const id of ["sensenova", "intern-ai"]) {
-  check(
-    `${id}：cache 里还没有目录时留空（全新库的正常形态）`,
-    rowIds(id).length === 0,
-    JSON.stringify(rowIds(id)),
-  );
-}
-let seedThrew = "";
-let seedFilled = -1;
-try {
-  seedFilled = seedPlatformModels(store());
-} catch (e) {
-  seedThrew = String((e as Error)?.message ?? e);
-}
-check("cache 缺席时播种不报错", seedThrew === "", seedThrew);
-check("cache 缺席时一行都没填", seedFilled === 0, String(seedFilled));
-
-// 塞一份 cache（就是上游抓到过一份之后库里的样子），再播一次。
-const SENSENOVA_CATALOG = [
-  { id: "SenseChat-5", name: "SenseChat 5", contextLength: 32768, maxOutputLength: 4096, inputModalities: ["text"], outputModalities: ["text"], features: ["tools"] },
-  { id: "SenseNova-V6-Pro", name: "SenseNova V6 Pro", contextLength: 131072, maxOutputLength: 8192, inputModalities: ["text"], outputModalities: ["text"], features: [] },
-];
-const INTERN_AI_CATALOG = [
-  { id: "intern-s1", name: "Intern S1", reasoning: true, toolCall: true, contextLength: 262144 },
-  { id: "internlm3-latest", name: "InternLM3", reasoning: false, toolCall: true, contextLength: 32768 },
-];
-setCached("sensenova:catalog", { items: SENSENOVA_CATALOG, at: Date.now() });
-setCached("intern-ai:catalog", { items: INTERN_AI_CATALOG, at: Date.now() });
-const primed = seedPlatformModels(store());
-check("cache 有了目录之后播种填了两家", primed === 2, String(primed));
-for (const id of ["sensenova", "intern-ai"]) {
-  check(`${id}：播种后非空`, rowIds(id).length > 0, JSON.stringify(rowIds(id)));
-  check(
-    `${id}：与 kind.models() 逐条一致`,
-    rowIds(id).join(",") === kindIds(id).join(","),
-    `${rowIds(id).join(",")} / ${kindIds(id).join(",")}`,
-  );
-}
-
-// 幂等：再跑一次，五行的目录一动不动。
-const FIVE = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
-const before = FIVE.map((id) => JSON.stringify(openPlatformOf(id)?.models));
-const again = seedPlatformModels(store());
-check("再跑一次一行都不填", again === 0, String(again));
-const after = FIVE.map((id) => JSON.stringify(openPlatformOf(id)?.models));
-check("再跑一次目录没变", before.join("|") === after.join("|"), after.join("|"));
-
-// 插入一行时那一格写什么：目录从哪来，这一格就写谁。上游缓存里那一份 → 1（以后
-// 跟着上游走）；代码常量表那一份 → 0（上游报得更宽，盖上来会用到没权限的模型，
-// 要拉就由人在面板上把这一格打开）；没有目录 → 1。
-//
-// 这五家各自从哪来目录是已知事实，写死在这里：判据被改成「一律 1」或者又按 kind
-// 另写一张表，这里就该红。
-//
-// 这几行是 store() 建库时插进来的，中间没有 `UPDATE platform SET models_auto`
-// 动过它，所以这里读到的就是插入时的值。
-const SEEDED_AUTO: Record<string, boolean> = {
-  qiniu: false,
-  xinghuo: false,
-  tokenrhythm: false,
-  sensenova: true,
-  "intern-ai": true,
-};
-const { PLATFORM_TEMPLATES } = await import("../lib/platform-catalog.ts");
-for (const t of PLATFORM_TEMPLATES) {
-  const expected = SEEDED_AUTO[t.key];
-  check(
-    `${t.key}：插进来时那一格是 ${expected ? 1 : 0}（目录从哪来就写谁）`,
-    expected !== undefined && openPlatformOf(t.key)?.models.auto === expected,
-    JSON.stringify(openPlatformOf(t.key)?.models),
-  );
-}
-
-// 播种填目录不碰那一格：目录归谁管是**面板上那个开关**（说的是「以后允不允许自动
-// 拉覆盖」），播种只填目录，没有资格替人回答它。
-//
-// 先逐条清成「空目录、那一格开着」再播一次：播完目录回来了，那一格还是开着 ——
-// 反过来（播种写 0）就是老库里方言行、星火、SenseNova 与端砚被冻住的那条回归。
-const autoBefore = new Map(PLATFORM_TEMPLATES.map((t) => [t.key, openPlatformOf(t.key)?.models.auto]));
-const clearTemplateRow = store().prepare(
-  "UPDATE platform SET models = ?, models_auto = 1 WHERE id = ?",
-);
-for (const t of PLATFORM_TEMPLATES) {
-  clearTemplateRow.run(JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }), t.key);
-}
-const reseeded = seedPlatformModels(store());
+// 已有库的行不被任何启动逻辑改写：插一行目录空着的厂商行，重启之后它还是那样
+// （以前那一轮播种会把它按来源填一遍）。
+insertPlatform("vendor-keep", "qiniu", "https://vendor-keep.test/v1");
+const vendorKeepBefore = JSON.stringify(openPlatformOf("vendor-keep"));
+closeStore();
+store();
 check(
-  "五条模板行都重新播上了",
-  reseeded === PLATFORM_TEMPLATES.length,
-  String(reseeded),
+  "已有库的行没被启动改写",
+  JSON.stringify(openPlatformOf("vendor-keep")) === vendorKeepBefore,
+  JSON.stringify(openPlatformOf("vendor-keep")),
 );
-for (const t of PLATFORM_TEMPLATES) {
-  const row = openPlatformOf(t.key)!;
-  check(
-    `${t.key}：填目录不动那一格（还是 1）`,
-    row.models.auto === true,
-    JSON.stringify(row.models),
-  );
-  check(
-    `${t.key}：行说拉就去拉（这一格是唯一判据，不看 kind）`,
-    openPlatformCatalogRefreshable(row) === true,
-    String(openPlatformCatalogRefreshable(row)),
-  );
-  check(
-    `${t.key}：把那一格关掉之后就不拉`,
-    openPlatformCatalogRefreshable({ ...row, models: { ...row.models, auto: false } }) === false,
-    JSON.stringify(row.models),
-  );
-}
-// 收尾：那一格放回这一节开始前的值（后面几节按插进来时的样子验刷新）。
-const restoreAuto = store().prepare("UPDATE platform SET models_auto = ? WHERE id = ?");
-for (const [key, auto] of autoBefore) restoreAuto.run(auto ? 1 : 0, key);
 
-// 老库里的行：目录是早先播种写进去的那一份，models_auto 还是 1（旧口径把它拨成 0
-// 之前写进去的）。行说拉就拉 —— 没有第二道按 kind 的闸；播种也不再把它拨成 0。
-insertPlatform("qiniu-legacy", "qiniu", upstreamBase);
+/* ------------------------------------------------------------------ *
+ * 0.1 额度请求打哪台
+ * ------------------------------------------------------------------ */
+
+section("0.1 额度请求打哪台");
+
+// 判据是「这一类平台默认指哪台」（适配器自己声明的 defaultBaseUrl）：行上的
+// 地址还等于它时，额度问插件自己那台（门户、控制台、钱包）；用户把行指到别处
+// 时，跟着行走。
+const { quotaEndpointBase } = await import("../lib/quota-plugins.ts");
+const qiniuRow = { ...bareRow("qiniu"), platform: "qiniu" };
+const qiniuBase = String(openPlatformOf("qiniu")?.baseUrl ?? "");
+check(
+  "前提：这一类声明的默认地址就是行上的地址",
+  kindOf("qiniu")?.defaultBaseUrl === qiniuBase,
+  `${kindOf("qiniu")?.defaultBaseUrl} / ${qiniuBase}`,
+);
+check(
+  "行上的地址还是默认那台：额度问插件自己那台",
+  quotaEndpointBase(qiniuRow as any, QINIU_PORTAL_BASE) === QINIU_PORTAL_BASE,
+  quotaEndpointBase(qiniuRow as any, QINIU_PORTAL_BASE),
+);
 store()
-  .prepare("UPDATE platform SET models = ? WHERE id = ?")
-  .run(JSON.stringify({ items: ["legacy-1"], fetchedAt: 0, source: "auto" }), "qiniu-legacy");
-const legacyRow = openPlatformOf("qiniu-legacy")!;
-check("老库的行还是自动拉", legacyRow.models.auto === true, JSON.stringify(legacyRow.models));
+  .prepare("UPDATE platform SET base_url = ? WHERE id = ?")
+  .run("https://self-hosted.test/v1", "qiniu");
 check(
-  "老库的行：行说拉就去拉（不再按 kind 另挡一道）",
-  openPlatformCatalogRefreshable(legacyRow) === true,
-  String(openPlatformCatalogRefreshable(legacyRow)),
+  "行上的地址被改成自建端点：额度跟着行走",
+  quotaEndpointBase(qiniuRow as any, QINIU_PORTAL_BASE) === "https://self-hosted.test/v1",
+  quotaEndpointBase(qiniuRow as any, QINIU_PORTAL_BASE),
 );
-const legacySeeded = seedPlatformModels(store());
-check("老库的厂商行：播种没填", legacySeeded === 0, String(legacySeeded));
-check(
-  "老库的厂商行：播种没把那一格拨成 0（已有目录的行不动它）",
-  openPlatformOf("qiniu-legacy")?.models.auto === true,
-  JSON.stringify(openPlatformOf("qiniu-legacy")?.models),
-);
-check(
-  "老库的厂商行：目录没被动",
-  rowIds("qiniu-legacy").join(",") === "legacy-1",
-  JSON.stringify(openPlatformOf("qiniu-legacy")?.models),
-);
-
-// 人写的目录不动。
-const manualSeed = createOpenPlatform({ id: "seed-manual", label: "Seed Manual", baseUrl: upstreamBase });
-check("手工目录的平台建得起来", manualSeed.ok === true, manualSeed.message);
-updateOpenPlatform("seed-manual", { models: ["hand-1"] });
-// 人清空的目录也不填回来：models_auto 关着说的是「以后别自动往里写」。
-//
-// 地址用一个**目录表里有**的厂商（lib/model-catalog.json）：拿一个不认识的
-// 地址，播种本来就是空的，这条判断删掉也不会红 —— 那就不算在查这件事。
-const clearedSeed = createOpenPlatform({
-  id: "seed-cleared",
-  label: "Seed Cleared",
-  baseUrl: "https://api.deepseek.com/v1",
-});
-check("清空目录的平台建得起来", clearedSeed.ok === true, clearedSeed.message);
-updateOpenPlatform("seed-cleared", { models: [] });
-seedPlatformModels(store());
-check(
-  "人写的目录没被播种改",
-  rowIds("seed-manual").join(",") === "hand-1",
-  JSON.stringify(openPlatformOf("seed-manual")?.models),
-);
-check(
-  "人清空的目录没被填回来",
-  rowIds("seed-cleared").length === 0,
-  JSON.stringify(openPlatformOf("seed-cleared")?.models),
-);
-
-// 通用开放平台：这一行背后是哪家厂商由地址说明。
-const deepseekSeed = createOpenPlatform({
-  id: "seed-deepseek",
-  label: "Seed DeepSeek",
-  baseUrl: "https://api.deepseek.com/v1",
-});
-check("按地址认厂商的平台建得起来", deepseekSeed.ok === true, deepseekSeed.message);
-const unknownSeed = createOpenPlatform({
-  id: "seed-unknown",
-  label: "Seed Unknown",
-  baseUrl: "https://no-such-vendor.invalid/v1",
-});
-check("认不出厂商的平台建得起来", unknownSeed.ok === true, unknownSeed.message);
-seen.length = 0;
-const vendorFilled = seedPlatformModels(store());
-check("按地址播种填了一行", vendorFilled === 1, String(vendorFilled));
-check(
-  "deepseek 的地址播种出两个模型",
-  rowIds("seed-deepseek").length === 2,
-  JSON.stringify(rowIds("seed-deepseek")),
-);
-check(
-  "认不出的地址留空，不报错",
-  rowIds("seed-unknown").length === 0,
-  JSON.stringify(rowIds("seed-unknown")),
-);
-check("播种没碰网络", seen.length === 0, JSON.stringify(seen));
+// 改回去：后面几节还要用这一行。
+store().prepare("UPDATE platform SET base_url = ? WHERE id = ?").run(qiniuBase, "qiniu");
 
 /* ------------------------------------------------------------------ *
  * 一个开放平台：一个账号，一把 key，一份手写的目录
@@ -1693,6 +1558,91 @@ check(
   JSON.stringify(kindOf("openai")!.models(bareRow(OVER))) === JSON.stringify(rowBefore),
   JSON.stringify(kindOf("openai")!.models(bareRow(OVER))),
 );
+
+/* ------------------------------------------------------------------ *
+ * 14. 新建平台：目录能不能自动拉，由 kind 说了算
+ * ------------------------------------------------------------------ */
+
+section("14. 新建平台的 models_auto 跟着 kind");
+
+// 这一格是 kind 注册表里的能力（ProviderKind.modelsFromUpstream），不是平台行
+// 自己决定的：七牛与 TokenRhythm 的上游目录不归它管，别的家归它管。
+const VENDOR_AUTO: { kind: string; auto: boolean }[] = [
+  { kind: "qiniu", auto: false },
+  { kind: "tokenrhythm", auto: false },
+  { kind: "xinghuo", auto: true },
+  { kind: "sensenova", auto: true },
+  { kind: "intern-ai", auto: true },
+];
+for (const one of VENDOR_AUTO) {
+  const id = `new-${one.kind}`;
+  const created = createOpenPlatform({
+    id,
+    label: one.kind,
+    baseUrl: upstreamBase,
+    kind: one.kind,
+  });
+  check(`${one.kind}：平台建得起来`, created.ok === true, created.message);
+  const auto = openPlatformOf(id)?.models.auto;
+  check(
+    `${one.kind}：models_auto=${one.auto ? 1 : 0}`,
+    auto === one.auto,
+    `auto=${auto}`,
+  );
+  check(
+    `${one.kind}：与注册表那一格一致`,
+    (kindOf(one.kind)?.modelsFromUpstream ?? true) === one.auto,
+    String(kindOf(one.kind)?.modelsFromUpstream),
+  );
+}
+
+// 方言：目录能自动拉。
+for (const kind of ["openai", "anthropic"]) {
+  const id = `new-dialect-${kind}`;
+  const created = createOpenPlatform({
+    id,
+    label: kind,
+    baseUrl: upstreamBase,
+    ...(kind === "openai" ? {} : { kind }),
+  });
+  check(`${kind}：平台建得起来`, created.ok === true, created.message);
+  check(
+    `${kind}：models_auto=1`,
+    openPlatformOf(id)?.models.auto === true,
+    JSON.stringify(openPlatformOf(id)?.models),
+  );
+}
+
+// 模拟客户端：目录是代码挑过的那一份，不自动拉（不变）。
+check(
+  "模拟客户端：models_auto=0",
+  openPlatformOf("minimax")?.models.auto === false,
+  JSON.stringify(openPlatformOf("minimax")?.models),
+);
+
+/* ------------------------------------------------------------------ *
+ * 15. 面板的 kind 清单：默认地址取自注册表
+ * ------------------------------------------------------------------ */
+
+section("15. ListPlatformKinds 的默认地址");
+
+const kindsAnswer = await adminService.listPlatformKinds!({} as any, {} as any);
+const kindsListed = (kindsAnswer.kinds ?? []) as any[];
+for (const one of VENDOR_AUTO) {
+  const row = kindsListed.find((k) => k.kind === one.kind);
+  const registryBase = kindOf(one.kind)?.defaultBaseUrl ?? "";
+  check(`${one.kind}：清单里有这一格`, Boolean(row), String(row));
+  check(
+    `${one.kind}：默认地址不是空串`,
+    typeof row?.defaultBaseUrl === "string" && row.defaultBaseUrl !== "",
+    String(row?.defaultBaseUrl),
+  );
+  check(
+    `${one.kind}：默认地址等于注册表那一格`,
+    row?.defaultBaseUrl === registryBase,
+    `${row?.defaultBaseUrl} / ${registryBase}`,
+  );
+}
 
 /* ------------------------------------------------------------------ *
  * 收尾

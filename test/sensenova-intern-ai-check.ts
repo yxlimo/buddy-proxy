@@ -579,6 +579,23 @@ async function enableUpstream(id: string): Promise<void> {
 // 账号模型下凭据挂在账号行上，所以先建这两个账号行，再打开它们。
 // 账号 id 是自增整数：凭据、开关、登录都揣它，不再拿平台名顶替。建行走面板
 // 自己的那一条路（AddAccount）—— 网关那个进程才是这个库的主人。
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的两行，
+// 测试自己写进网关那个库（额度插件也指名 —— 额度是插件问回来的）。
+{
+  const conn = db();
+  const now = Date.now();
+  const insert = conn.prepare(
+    "INSERT OR IGNORE INTO platform " +
+      "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+  );
+  // 地址与网关那边一样（那一类默认指哪台）：额度请求认得「行上的地址还是默认
+  // 那台」，于是问控制台（假上游）而不是推理端点。
+  insert.run("sensenova", "sensenova", `${fakeBase}/sensenova/v1`, "[]", 1, "sensenova-pools", "sensenova", now, now);
+  insert.run("intern-ai", "intern-ai", `${fakeBase}/intern-ai/v1`, "[]", 1, "intern-ai-credits", "intern-ai", now, now);
+  conn.close();
+}
+
 const senseAdded = await admin("AddAccount", { platform: "sensenova" });
 const internAdded = await admin("AddAccount", { platform: "intern-ai" });
 const SENSE_ID = String(senseAdded?.id ?? "");

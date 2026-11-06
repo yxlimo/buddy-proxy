@@ -10,12 +10,12 @@
 // a dead session looks like.
 
 import {
-  TOKENRHYTHM_API_BASE,
   TokenRhythmError,
   forgetSession as forgetAccountSession,
   writeHeaders,
   type TokenRhythmSession,
 } from "./accounts.ts";
+import { TOKENRHYTHM_API_BASE } from "./config.ts";
 import { retryAfterMs } from "../upstream-status.ts";
 
 /** How to ask: which method, and what to send. */

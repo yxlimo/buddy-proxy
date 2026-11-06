@@ -209,6 +209,11 @@ const poolUsage = {
 // 这里用插件自己的翻译函数把答复摆成那一份 —— 与网关真跑一轮的结果同一个形状，
 // 下面的数字断言才是对着真口径的。
 const { senseNovaPoolsViews } = await import("../lib/sensenova/quota-plugin.ts");
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("sensenova", "sensenova", { quotaPlugin: "sensenova-pools" });
+
 const SENSE_ROW = {
   id: "sensenova",
   platform: "sensenova",

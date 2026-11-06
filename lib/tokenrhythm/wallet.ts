@@ -16,10 +16,10 @@ import {
   sessionId,
   tokenRhythmCredentialOf,
   TokenRhythmError,
-  TOKENRHYTHM_API_BASE,
   type TokenRhythmErrorKind,
   type TokenRhythmSession,
 } from "./accounts.ts";
+import { TOKENRHYTHM_API_BASE } from "./config.ts";
 import { accountsOfPlatform, provider } from "../providers.ts";
 import { platformOf } from "../platforms.ts";
 import { quotaEndpointBase } from "../quota-plugins.ts";

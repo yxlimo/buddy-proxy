@@ -47,6 +47,14 @@ export interface CompatiblePlatform {
   inferWith: ProviderKind["inferWith"];
   /** 要不要区域。 */
   needsRegion?: boolean;
+  /**
+   * 这一类平台默认的推理地址（不给就是没有）。
+   *
+   * 跟其它能力格一起登记进注册表：额度请求靠它分辨「行上的地址还是默认那台」
+   * （lib/quota-plugins.ts 的 quotaEndpointBase）。行上的地址还等于它时，额度问
+   * 插件自己那台（门户、控制台、钱包）；用户把行指到别处时，跟着行走。
+   */
+  defaultBaseUrl?: string;
   /** 支持的生效策略。默认 ["single", "fallback"]。 */
   policies?: ProviderKind["policies"];
   /** 推理端点的基础地址（`/chat/completions` 由工厂接上）。 */
@@ -93,6 +101,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     // 平台直接转发：agent 写的请求原样过去，会话相关的头也跟着过去。
     openPlatform: true,
     policies: platform.policies ?? ["single", "fallback"],
+    ...(platform.defaultBaseUrl ? { defaultBaseUrl: platform.defaultBaseUrl } : {}),
     baseUrl: platform.baseUrl,
     inferWith: platform.inferWith,
     // 明文 key 也登记到注册表上：转发层与「问上游要模型目录」要的是同一把，

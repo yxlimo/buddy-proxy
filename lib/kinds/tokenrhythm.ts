@@ -6,7 +6,10 @@
 
 import { catalogModelsFromRow, tokenRhythmCatalogModels } from "../catalog-models.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
-import { TOKENRHYTHM_API_BASE, tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
+import { tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
+// 地址在叶子模块里：这一层与 accounts.ts 互相引着，从那边读常量会在模块求值
+// 期撞上「还在初始化」。
+import { TOKENRHYTHM_API_BASE, TOKENRHYTHM_INFER_BASE } from "../tokenrhythm/config.ts";
 import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balance.ts";
 // 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
 // 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
@@ -28,6 +31,9 @@ registerKind({
   // 一个账号一个钱包。赠金会过期，所以它还能按到期先后挑。
   policies: ["single", "fallback", "expiry_first"],
   baseUrl: () => TOKENRHYTHM_API_BASE,
+  // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）：额度请求靠它
+  // 分辨「行上的地址还是默认那台」。
+  defaultBaseUrl: TOKENRHYTHM_INFER_BASE,
   // 推理用的是钱包里的那把 api key：会话只用来登录与查余额。
   inferWith: "api_key",
   modelsFromUpstream: false,
@@ -50,3 +56,4 @@ registerKind({
   // The hook of expiry_first: the platform says this account has no money left.
   isRequestMissingBalance: (error) => isRequestMissingBalance(error),
 });
+
