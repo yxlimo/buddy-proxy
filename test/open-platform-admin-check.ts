@@ -1267,12 +1267,12 @@ check("opencode-go 建得起来", catalogOwner !== null, show(catalogOwner));
 const ownerListed = await listUpstreams();
 const fromUpstreamOf = (id: string): unknown => ownerListed.find((u) => u.id === id)?.modelsFromUpstream;
 
-// 一个平台一个答案：方言类与 SenseNova / 端砚 的目录归上游，七牛 / 星火 /
+// 一个平台一个答案：方言类、SenseNova / 端砚、星火 的目录归上游，七牛 /
 // TokenRhythm 与模拟客户端的目录是代码挑过的一份。
 const catalogOwners: Array<[string, boolean, string]> = [
   ["opencode-go", true, "openai 方言：目录是上游报的那份"],
   ["qiniu", false, "代码挑过的一份（上游那份更宽）"],
-  ["xinghuo", false, "代码挑过的一份"],
+  ["xinghuo", true, "上游报得出来（/v2/models，一个参数也不带）"],
   ["sensenova", true, "没有代码目录，只有上游报得出来"],
   ["intern-ai", true, "没有代码目录，只有上游报得出来"],
   ["tokenrhythm", false, "代码挑过的一份"],

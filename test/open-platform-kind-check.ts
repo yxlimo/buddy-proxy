@@ -285,60 +285,90 @@ check("再跑一次一行都不填", again === 0, String(again));
 const after = FIVE.map((id) => JSON.stringify(openPlatformOf(id)?.models));
 check("再跑一次目录没变", before.join("|") === after.join("|"), after.join("|"));
 
-// 厂商模板行的目录是代码挑过的一份（lib/qiniu/models.ts 这些常量表），不是
-// 「上游报什么就收什么」：上游那份更宽（七牛报 78 个模型），盖上来会出现被上游
-// 拒的模型。所以播种同时把「自动拉」那一格关掉 —— 那一格是面板上那个开关，同步
-// 的闸门也看它（lib/open-platforms.ts 的 syncPlatformModels）。
-for (const id of ["qiniu", "xinghuo", "tokenrhythm"]) {
+// 插入一行时那一格写什么：目录从哪来，这一格就写谁。上游缓存里那一份 → 1（以后
+// 跟着上游走）；代码常量表那一份 → 0（上游报得更宽，盖上来会用到没权限的模型，
+// 要拉就由人在面板上把这一格打开）；没有目录 → 1。
+//
+// 这五家各自从哪来目录是已知事实，写死在这里：判据被改成「一律 1」或者又按 kind
+// 另写一张表，这里就该红。
+//
+// 这几行是 store() 建库时插进来的，中间没有 `UPDATE platform SET models_auto`
+// 动过它，所以这里读到的就是插入时的值。
+const SEEDED_AUTO: Record<string, boolean> = {
+  qiniu: false,
+  xinghuo: false,
+  tokenrhythm: false,
+  sensenova: true,
+  "intern-ai": true,
+};
+const { PLATFORM_TEMPLATES } = await import("../lib/platform-catalog.ts");
+for (const t of PLATFORM_TEMPLATES) {
+  const expected = SEEDED_AUTO[t.key];
   check(
-    `${id}：播种后不自动拉（目录是代码挑的）`,
-    openPlatformOf(id)?.models.auto === false,
-    JSON.stringify(openPlatformOf(id)?.models),
+    `${t.key}：插进来时那一格是 ${expected ? 1 : 0}（目录从哪来就写谁）`,
+    expected !== undefined && openPlatformOf(t.key)?.models.auto === expected,
+    JSON.stringify(openPlatformOf(t.key)?.models),
   );
-  const row = openPlatformOf(id)!;
+}
+
+// 播种填目录不碰那一格：目录归谁管是**面板上那个开关**（说的是「以后允不允许自动
+// 拉覆盖」），播种只填目录，没有资格替人回答它。
+//
+// 先逐条清成「空目录、那一格开着」再播一次：播完目录回来了，那一格还是开着 ——
+// 反过来（播种写 0）就是老库里方言行、星火、SenseNova 与端砚被冻住的那条回归。
+const autoBefore = new Map(PLATFORM_TEMPLATES.map((t) => [t.key, openPlatformOf(t.key)?.models.auto]));
+const clearTemplateRow = store().prepare(
+  "UPDATE platform SET models = ?, models_auto = 1 WHERE id = ?",
+);
+for (const t of PLATFORM_TEMPLATES) {
+  clearTemplateRow.run(JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }), t.key);
+}
+const reseeded = seedPlatformModels(store());
+check(
+  "五条模板行都重新播上了",
+  reseeded === PLATFORM_TEMPLATES.length,
+  String(reseeded),
+);
+for (const t of PLATFORM_TEMPLATES) {
+  const row = openPlatformOf(t.key)!;
   check(
-    `${id}：说不用去拉目录`,
-    openPlatformCatalogRefreshable(row) === false,
+    `${t.key}：填目录不动那一格（还是 1）`,
+    row.models.auto === true,
+    JSON.stringify(row.models),
+  );
+  check(
+    `${t.key}：行说拉就去拉（这一格是唯一判据，不看 kind）`,
+    openPlatformCatalogRefreshable(row) === true,
     String(openPlatformCatalogRefreshable(row)),
   );
-}
-
-// SenseNova 与书生·端砚相反：它们没有代码目录，目录只有上游报得出来。播种把
-// 自动拉开着，否则同步的闸门（models_auto === 1）会把它们自己那条路堵死。
-for (const id of ["sensenova", "intern-ai"]) {
   check(
-    `${id}：播种后允许自动拉（目录归上游管）`,
-    openPlatformOf(id)?.models.auto === true,
-    JSON.stringify(openPlatformOf(id)?.models),
-  );
-  // 面板上那个「刷新模型目录」按钮走的是另一条路（lib/open-platform-catalog.ts）：
-  // 它按厂商模板一律拒，因为那一条会把上游那份更宽的目录直接盖上来。两家不是
-  // 同一道闸：同步走的是缓存里已经按平台分好的那一份。
-  check(
-    `${id}：面板手刷仍被拒（厂商行那条路不变）`,
-    openPlatformCatalogRefreshable(openPlatformOf(id)!) === false,
-    String(openPlatformCatalogRefreshable(openPlatformOf(id)!)),
+    `${t.key}：把那一格关掉之后就不拉`,
+    openPlatformCatalogRefreshable({ ...row, models: { ...row.models, auto: false } }) === false,
+    JSON.stringify(row.models),
   );
 }
+// 收尾：那一格放回这一节开始前的值（后面几节按插进来时的样子验刷新）。
+const restoreAuto = store().prepare("UPDATE platform SET models_auto = ? WHERE id = ?");
+for (const [key, auto] of autoBefore) restoreAuto.run(auto ? 1 : 0, key);
 
-// 老库里的厂商行：目录是早先播种写进去的那一份，models_auto 还是 1。播种要补上
-// 那一格，目录本身不动 —— 挡的是「下次启动被上游那份盖掉」。
+// 老库里的行：目录是早先播种写进去的那一份，models_auto 还是 1（旧口径把它拨成 0
+// 之前写进去的）。行说拉就拉 —— 没有第二道按 kind 的闸；播种也不再把它拨成 0。
 insertPlatform("qiniu-legacy", "qiniu", upstreamBase);
 store()
   .prepare("UPDATE platform SET models = ? WHERE id = ?")
   .run(JSON.stringify({ items: ["legacy-1"], fetchedAt: 0, source: "auto" }), "qiniu-legacy");
 const legacyRow = openPlatformOf("qiniu-legacy")!;
-check("老库的厂商行还是自动拉", legacyRow.models.auto === true, JSON.stringify(legacyRow.models));
+check("老库的行还是自动拉", legacyRow.models.auto === true, JSON.stringify(legacyRow.models));
 check(
-  "老库的厂商行：说不去拉（第二道闸，不靠播种）",
-  openPlatformCatalogRefreshable(legacyRow) === false,
+  "老库的行：行说拉就去拉（不再按 kind 另挡一道）",
+  openPlatformCatalogRefreshable(legacyRow) === true,
   String(openPlatformCatalogRefreshable(legacyRow)),
 );
 const legacySeeded = seedPlatformModels(store());
 check("老库的厂商行：播种没填", legacySeeded === 0, String(legacySeeded));
 check(
-  "老库的厂商行：自动拉关掉了",
-  openPlatformOf("qiniu-legacy")?.models.auto === false,
+  "老库的厂商行：播种没把那一格拨成 0（已有目录的行不动它）",
+  openPlatformOf("qiniu-legacy")?.models.auto === true,
   JSON.stringify(openPlatformOf("qiniu-legacy")?.models),
 );
 check(
@@ -1414,20 +1444,54 @@ check(
 
 // 七、同步的闸门、拉取时刻与幂等。
 //
-// 上游目录到手以后写平台行的那条路（lib/router/catalog-cache.ts）只在「目录归
-// 上游管」的两家、人没写死（source=manual）、且面板上自动拉开着的时候写。三道闸
-// 少一道就会把不该动的目录盖掉。
-const { UPSTREAM_CATALOG_KINDS } = await import("../lib/store.ts");
-check(
-  "目录归上游管的只有 SenseNova 与书生·端砚",
-  [...UPSTREAM_CATALOG_KINDS].join(",") === "sensenova,intern-ai",
-  [...UPSTREAM_CATALOG_KINDS].join(","),
-);
+// 上游目录到手以后写平台行的那条路（lib/router/catalog-cache.ts）只在人没写死
+// （source=manual）、且行上那一格「自动拉」开着的时候写。目录归谁管是**行自己
+// 的数据**（models_auto）：代码里没有名单，新增一家平台不需要改这里。
 
 /** 把一行的「自动拉」翻成开或关：那一格就是面板上那个开关。 */
 function setRowAuto(platform: string, auto: boolean): void {
   store().prepare("UPDATE platform SET models_auto = ? WHERE id = ?").run(auto ? 1 : 0, platform);
 }
+
+// 播种写进去的目录是代码挑的：那一格是 0，上游那份盖不上来。反过来把那一格
+// 打开就盖得上 —— 同一行、同一份上游目录，只换这一格。
+const safety = createOpenPlatform({ id: "gate-probe", label: "Gate Probe", baseUrl: upstreamBase });
+check("闸门那行的平台建得起来", safety.ok === true, safety.message);
+putRowModels("gate-probe", ["code-pick-1"]);
+setRowAuto("gate-probe", false);
+syncPlatformModels("gate-probe", ["upstream-1", "upstream-2"]);
+check(
+  "models_auto 为 0：同步不做事",
+  rowItems("gate-probe").join(",") === "code-pick-1",
+  JSON.stringify(openPlatformOf("gate-probe")?.models),
+);
+check(
+  "models_auto 为 0：也不去拉目录",
+  openPlatformCatalogRefreshable(openPlatformOf("gate-probe")!) === false,
+  JSON.stringify(openPlatformOf("gate-probe")?.models),
+);
+setRowAuto("gate-probe", true);
+syncPlatformModels("gate-probe", ["upstream-1", "upstream-2"]);
+check(
+  "models_auto 为 1：同步写进去了",
+  rowItems("gate-probe").join(",") === "upstream-1,upstream-2",
+  JSON.stringify(openPlatformOf("gate-probe")?.models),
+);
+check(
+  "models_auto 为 1：说要去拉目录",
+  openPlatformCatalogRefreshable(openPlatformOf("gate-probe")!) === true,
+  JSON.stringify(openPlatformOf("gate-probe")?.models),
+);
+setRowAuto("gate-probe", false);
+
+// 代码里不再有按厂商写死的名单：加一家平台不需要动 store（模板表加一条就行）。
+// 只查那一句真删干净了 —— 判据从此只存在库里（models_auto 那一列）。
+const storeSource = fs.readFileSync(new URL("../lib/store.ts", import.meta.url), "utf8");
+check(
+  "store.ts 里没有按 kind 写死的目录名单",
+  !storeSource.includes("UPSTREAM_CATALOG_KINDS"),
+  storeSource.split("\n").filter((line) => line.includes("UPSTREAM_CATALOG_KINDS")).join(" | "),
+);
 
 // 人清空的不会被填回来：manual 是明确的意思，含「我把目录清空了」。
 putRowModels("sensenova", [], "manual");
@@ -1491,26 +1555,16 @@ check(
 );
 setRowAuto("intern-ai", true);
 
-// 厂商行的护标（七牛）：就算以后给它接上 CatalogCache，上游那份 78 个模型也不
-// 许盖掉代码挑过的这一份。
+// 播种搬进来的那一份（七牛云这些常量表）写的就是 0：上游那份 78 个模型盖不上
+// 来。这不是按 kind 挡的 —— 挡的是行自己那一格，人把它打开就盖得上（同一格、
+// 同一份上游目录，在上面的 gate-probe 那一对里验过）。
 putRowModels("qiniu", [], "auto");
-setRowAuto("qiniu", true);
+setRowAuto("qiniu", false);
 syncPlatformModels("qiniu", ["qiniu-upstream-1"]);
 check(
-  "厂商行（七牛）：即使自动拉开着，同步也不写",
+  "播种后的那一行（models_auto=0）：同步不写",
   rowItems("qiniu").length === 0,
   JSON.stringify(openPlatformOf("qiniu")?.models),
-);
-setRowAuto("qiniu", false);
-
-// 方言行的目录归面板那条路（lib/open-platform-catalog.ts）管，缓存同步不碰它。
-putRowModels("auto-cat", [], "auto");
-setRowAuto("auto-cat", true);
-syncPlatformModels("auto-cat", ["dialect-should-not-land"]);
-check(
-  "方言行：同步不写（目录由面板那条路管）",
-  rowItems("auto-cat").length === 0,
-  JSON.stringify(openPlatformOf("auto-cat")?.models),
 );
 
 // 八、端到端：上游答了目录 -> 落到 cache -> 行跟着出现 -> kind 读得到元数据。
@@ -1525,9 +1579,11 @@ check("SenseNova：账号加得起来", senseAccount.ok === true && senseAccount
 const senseKey = setProviderKeys(senseAccountId, ["sk-sense-test"]);
 check("SenseNova：推理 key 写进去了", senseKey.ok === true && senseKey.count === 1, senseKey.message);
 
-// 播种早就把 cache 里那一份搬进过行（见第 0 节）。先把行清成空的自动来源，
-// 才看得出后续那一步是「上游答了 → 行被填上」。
+// 播种早就把 cache 里那一份搬进过行（见第 0 节），而且写的是 0（代码挑的那一份
+// 不归上游盖）。先在面板上把那个开关打开 —— 这一节验的正是「打开了就跟着上游
+// 走」—— 再把行清成空的自动来源，才看得出后续那一步是「上游答了 → 行被填上」。
 putRowModels("sensenova", []);
+setRowAuto("sensenova", true);
 check(
   "SenseNova：动手之前行里是空的",
   rowItems("sensenova").length === 0,

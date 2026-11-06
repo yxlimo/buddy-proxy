@@ -243,6 +243,17 @@ function givenText(value: string | undefined): string | undefined {
 }
 
 /**
+ * 面板送来的可选开关：没给与给了 false 是两件事。
+ *
+ * 契约里带 presence 的 bool 没给时是 undefined。只改别的字段的调用方不能把一个
+ * 打开着的开关顺手关掉，所以这一格保持 undefined 往下传（那一层拿 undefined 当
+ * 「别动」）。
+ */
+function givenBool(value: boolean | undefined): boolean | undefined {
+  return value === undefined ? undefined : value;
+}
+
+/**
  * 一个额度摘要。
  *
  * 三格结论（状态、恢复时刻、一句话）与数字一起走：面板靠它们回答「为什么这里
@@ -394,8 +405,11 @@ function platformMessage(
   availability: PlatformAvailability | null,
   accounts: Map<string, AccountView>,
   open: OpenPlatformRow | null,
-  fromRow: boolean,
+  row: OpenPlatformRow | null,
 ) {
+  // 表里有没有属于它的那一行：有行的平台面板才能改与删。不跟着 open 走 ——
+  // 模拟客户端那一族有行，但它们不是开放平台。
+  const fromRow = row !== null;
   const credential = availability ? upstreamCredentialOf(availability) : upstreamCredential(id);
   // 名下的账号行：判定那一份已经读过表了，没判定就现读。额度与账号两处都要它。
   const rows = availability ? availability.rows : accountsOfPlatform(id);
@@ -453,6 +467,9 @@ function platformMessage(
     // 额度插件与模型目录：只有开放平台有这几格（模板平台是空串、false 与空目录）。
     quotaPlugin: open?.quotaPlugin ?? "",
     modelsAuto: open?.models.auto ?? false,
+    // 共性表那个开关（面板上的一个勾）：模拟客户端那一族的行也有，所以照表里的
+    // 那一行报，不跟着 open（open 把那一族滤掉了）。
+    traitsFromCommon: row?.traitsFromCommon ?? false,
     // 模型目录三格：目录本身、哪来的、上次拉的时刻。模板平台没有这一份
     // 目录，所以是空 / 空串 / 0（0 的意思是「没拉过」，不是「没有模型」）。
     models: open?.models.items ?? [],
@@ -608,10 +625,10 @@ function platformMessages() {
   // 的行长得一样，但它们不是开放平台 —— 判别按 kind，不按「在不在代码模板里」
   // （模板名单已经空了）。
   //
-  // 全部行另存一份：openRows 已经把模拟客户端滤掉了，而「有没有行」（fromRow）
-  // 问的是表里有没有那一行，不分族。两件事一张 map 说不完。
+  // 全部行另存一份：openRows 已经把模拟客户端滤掉了，而「有没有行」与共性表
+  // 那个开关问的是表里的那一行，不分族。两件事一张 map 说不完。
   const allRows = listOpenPlatforms();
-  const rowExists = new Set(allRows.map((row) => row.id));
+  const rowById = new Map(allRows.map((row) => [row.id, row]));
   const openRows = new Map(
     allRows.filter((row) => !isSimulatedClientKind(row.kind)).map((row) => [row.id, row]),
   );
@@ -622,7 +639,7 @@ function platformMessages() {
       availabilities.get(platform.id) ?? null,
       accounts,
       openRows.get(platform.id) ?? null,
-      rowExists.has(platform.id),
+      rowById.get(platform.id) ?? null,
     );
     return message ? [message] : [];
   });
@@ -835,11 +852,14 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       models?: string[];
       modelsAuto?: boolean;
       source?: "auto" | "manual";
+      traitsFromCommon?: boolean;
     } = {
       label: givenText(request.label),
       baseUrl: givenText(request.baseUrl),
       // 没给 = 别动这一格；空串 = 不选插件。
       quotaPlugin: givenText(request.quotaPlugin),
+      // 带 presence 的开关：没给 = 别动（只改名字的单子不能把它清零）。
+      traitsFromCommon: givenBool(request.traitsFromCommon),
     };
     // 模拟客户端的目录是代码挑过的一份，数据层对那两格不认（updateOpenPlatform）：
     // 这里照常把面板送的值递下去就行，规矩只有一处。

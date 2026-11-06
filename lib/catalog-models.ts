@@ -12,7 +12,9 @@ import { TOKENRHYTHM_MODELS } from "./tokenrhythm/models.ts";
 import type { SenseNovaModel } from "./sensenova/models.ts";
 import type { InternAiCatalogModel } from "./intern-ai/models.ts";
 // 目录是平台那一行的（见 catalogModelsFromRow）：这里只读行，不写行。
-import { openPlatformOf } from "./open-platforms.ts";
+import { openPlatformOf, type ModelTraits } from "./open-platforms.ts";
+// 共性表：平台自己报不出参数时那一层「人工整理过的答案」。叶子模块，不引别处。
+import { commonTraitsOf } from "./common-model-traits.ts";
 
 /** A model, the same whatever the shape the client wants it in. */
 export interface CatalogModel {
@@ -28,7 +30,12 @@ export interface CatalogModel {
   contextWindow?: number;
   /** Absent when the platform does not say how much the model may answer. */
   maxOutputTokens?: number;
-  /** The thinking levels the model accepts, if it has a choice. */
+  /**
+   * The thinking levels the model accepts, if it has a choice.
+   *
+   * An empty list is not the same as a missing one: it says the model has no
+   * choice at all, which is an answer, not a gap.
+   */
   effortOptions?: string[];
   /** The model the gateway actually ran, when it is not the one that was asked for. */
   backend?: string;
@@ -156,11 +163,67 @@ export function minimalCatalogModel(id: string): CatalogModel {
 }
 
 /**
+ * 行里报的参数盖在不知道的那一份上。
+ *
+ * 行里有的字段用行里的（那是上游/人明确说的），没有的字段继续用传进来的那一份
+ * （代码表或上游缓存的元数据）。`defaultEffort` 还没有消费者（CatalogModel 没有
+ * 这一格），只存在行里。
+ */
+function withTraits(model: CatalogModel, traits: ModelTraits | undefined): CatalogModel {
+  if (!traits) return model;
+  const out: CatalogModel = { ...model };
+  if (traits.contextWindow !== undefined) out.contextWindow = traits.contextWindow;
+  if (traits.maxOutputTokens !== undefined) out.maxOutputTokens = traits.maxOutputTokens;
+  if (traits.reasoning !== undefined) out.reasoning = traits.reasoning;
+  if (traits.toolCall !== undefined) out.toolCall = traits.toolCall;
+  if (traits.credits !== undefined) out.credits = traits.credits;
+  // 空档位照收：上游明确说「不能选档」，丢掉它下一层（代码表）的档位就会回来 ——
+  // 客户端又被告诉这个模型有档可选。
+  if (traits.efforts !== undefined) out.effortOptions = [...traits.efforts];
+  return out;
+}
+
+/**
+ * 只补还没有的字段：前几层说过的那几格一个字也不动。
+ *
+ * 判据是「这个键在不在」，不是「是不是真值」：`reasoning: false`、`toolCall:
+ * false`、`efforts: []` 都是明确的结论，与缺键（谁也不说话）不是同一件事。
+ */
+function withUnknownTraits(model: CatalogModel, traits: ModelTraits | undefined): CatalogModel {
+  if (!traits) return model;
+  const out: CatalogModel = { ...model };
+  if (out.contextWindow === undefined && traits.contextWindow !== undefined) {
+    out.contextWindow = traits.contextWindow;
+  }
+  if (out.maxOutputTokens === undefined && traits.maxOutputTokens !== undefined) {
+    out.maxOutputTokens = traits.maxOutputTokens;
+  }
+  if (out.reasoning === undefined && traits.reasoning !== undefined) out.reasoning = traits.reasoning;
+  if (out.toolCall === undefined && traits.toolCall !== undefined) out.toolCall = traits.toolCall;
+  if (out.credits === undefined && traits.credits !== undefined) out.credits = traits.credits;
+  if (out.effortOptions === undefined && traits.efforts !== undefined) {
+    out.effortOptions = [...traits.efforts];
+  }
+  return out;
+}
+
+/**
  * 平台的目录：平台那一行说了算。
  *
  * 行里的 id 与**顺序**就是公布的 id 与顺序（顺序决定面板与路由里的模型次序）。
- * 元数据按 id 去 `known` 里查：七牛云、讯飞星火、TokenRhythm 查代码里的元数据
- * 表，SenseNova 与书生·端砚查上游缓存；查不到就给最小形状。
+ * 元数据按字段一层一层盖上，前一层说过的算数：
+ *
+ *   人工元数据（最外层 applyModelOverrides 已经做过，这一层看不见）
+ *   → 行里的参数（`row.models.traits`，问上游时要回来的那一份）
+ *   → 代码表 `known`
+ *   → 共性表（仅当行里的 traitsFromCommon 开着且命中，只补仍然没有的字段）
+ *   → 最小形状
+ *
+ * 按**字段**取，不是整条替换：上游报了窗口而没报档位时，档位仍然是代码表的唯一
+ * 事实。共性表是人工整理的近似，排在最后：它只补前几层都没说的字段，不盖明确的
+ * 结论（上游说 `reasoning: false` 就是不能思考，近似说 true 也是它错）。
+ *
+ * 它不造模型：命中与否都不影响 items 里有哪些模型（那是行的事）。
  *
  * 两种「空」不是一个意思，别混：
  *
@@ -187,7 +250,13 @@ export function catalogModelsFromRow(
 ): CatalogModel[] {
   const row = openPlatformOf(provider.platform);
   if (!row) return codeCatalog();
-  return row.models.items.map((id) => known?.(id) ?? minimalCatalogModel(id));
+  return row.models.items.map((id) => {
+    const merged = withTraits(known?.(id) ?? minimalCatalogModel(id), row.models.traits[id]);
+    // 共性表排在最后，只补前几层都没说的字段。开关关着就完全不看它（同样的 id
+    // 在开关前后必须一模一样）。
+    if (!row.traitsFromCommon) return merged;
+    return withUnknownTraits(merged, commonTraitsOf(id) ?? undefined);
+  });
 }
 
 /* ------------------------------------------------------------------ *

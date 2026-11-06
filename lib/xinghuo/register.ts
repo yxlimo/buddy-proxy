@@ -17,9 +17,11 @@ import { XINGHUO_INFER_BASE } from "./config.ts";
 import { XINGHUO_MODELS, xinghuoCatalogModels } from "./models.ts";
 
 /**
- * 代码里那一份目录：元数据表的出处，也是行读不到时的兜底。
+ * 代码里那一份目录：元数据表的出处。
  *
- * 星火没有可查的模型目录接口，能调的那个写在 lib/xinghuo/models.ts 里。
+ * 星火的 /v2/models 报得出来，但参数一个也不带（只有 id / object / created /
+ * owned_by / permission / root）：上下文长度与输出上限只有这张表里有。所以行里
+ * 的 id 去这里查，行里自己记着的参数优先。
  */
 const CODE_CATALOG = xinghuoCatalogModels(XINGHUO_MODELS);
 const CODE_BY_ID = new Map(CODE_CATALOG.map((model) => [model.id, model]));
@@ -34,11 +36,13 @@ export const xinghuoKind = registerCompatiblePlatform({
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
-  modelsFromUpstream: false,
+  // 目录能从上游拉（GET /v2/models，base_url 就是 …/v2，拼 {base}/models 正好）。
+  modelsFromUpstream: true,
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),
-  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查。
-  // 行读不到（模板行本该由迁移补出）才退回代码目录 —— 那是兜底，不是常态。
-  models: (provider) => catalogModelsFromRow(provider, () => [...CODE_CATALOG], (id) => CODE_BY_ID.get(id)),
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查
+  // （行里记着的参数优先）。行读不到不退回代码目录：目录归上游之后，代码表只剩
+  // 「按 id 取元数据」这一个用途，拿它当目录会把上游没报的模型报出去。
+  models: (provider) => catalogModelsFromRow(provider, () => [], (id) => CODE_BY_ID.get(id)),
 });
 
 // 只有一把 API Key：没有会话，也没有额度接口要登。

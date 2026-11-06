@@ -103,6 +103,9 @@ export function useAddPlatform() {
  * 模拟客户端的地址与额度插件两格归代码：那种平台调用方整格不给（`undefined`）
  * —— 给空串在这条 RPC 上就是「清空那一格」（合同里 string 没有 presence 位，
  * 约定写在 `UpdatePlatformRequest` 的注释里）。不给的两格这里不往消息里放。
+ *
+ * `traitsFromCommon` 同理：它是 optional bool，不给 = 别动这一格。只有用户动过
+ * 开关才带。
  */
 export function useUpdatePlatform() {
   const client = useAdminClient()
@@ -113,6 +116,7 @@ export function useUpdatePlatform() {
       label: string
       baseUrl?: string
       quotaPlugin?: string
+      traitsFromCommon?: boolean
       modelsAuto: boolean
       models: string[]
     }) => {
@@ -124,6 +128,10 @@ export function useUpdatePlatform() {
       }
       if (input.baseUrl !== undefined) init.baseUrl = input.baseUrl
       if (input.quotaPlugin !== undefined) init.quotaPlugin = input.quotaPlugin
+      // optional bool：不放就是「别动这一格」。关掉时给的是 false，与不放不一样。
+      if (input.traitsFromCommon !== undefined) {
+        init.traitsFromCommon = input.traitsFromCommon
+      }
       return await client.updatePlatform(
         create(UpdatePlatformRequestSchema, init)
       )

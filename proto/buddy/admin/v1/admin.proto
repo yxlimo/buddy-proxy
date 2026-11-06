@@ -112,6 +112,9 @@ message Upstream {
   // 面板别看 ListPlatformKinds 里那一格：那个清单只有能新建的那几类，厂商模板
   // 与模拟客户端都不在里面，照它判就永远没有刷新按钮。
   bool models_from_upstream = 30;
+  // 平台自己给的信息不足时，从共性表（模型 id → 能力参数）里补。
+  // 默认关：只有用户明确打开才用。人工元数据仍然优先于它。
+  bool traits_from_common = 31;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -607,6 +610,10 @@ message UpdatePlatformRequest {
   optional string quota_plugin = 4;
   bool models_auto = 5;
   repeated string models = 6;
+  // 平台自己给的信息不足时，从共性表（模型 id → 能力参数）里补。
+  // 默认关：只有用户明确打开才用。人工元数据仍然优先于它。
+  // 没给 = 别动这一格；给了就照给的值写。
+  optional bool traits_from_common = 7;
 }
 
 message UpdatePlatformResponse {

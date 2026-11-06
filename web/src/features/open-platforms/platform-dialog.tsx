@@ -118,6 +118,13 @@ export type UpdatePlatformSubmit = {
   baseUrl?: string
   /** 模拟客户端不带这一格（额度插件归代码）。 */
   quotaPlugin?: string
+  /**
+   * 用共性表补模型参数。
+   *
+   * 没动过这一格就不带：后端「没给 = 别动这一格」，带一个默认值是错的（那是
+   * 明确写了一遍）。关掉这一格要带 `false`，它与「没给」不是一回事。
+   */
+  traitsFromCommon?: boolean
   modelsAuto: boolean
   models: string[]
 }
@@ -144,6 +151,15 @@ type Draft = {
   modelsAuto: boolean
   /** 模型目录：一行一个模型名。 */
   models: string
+  /** 用共性表补模型参数这一格现在开着没有（这一格缺失时按关显示）。 */
+  traitsFromCommon: boolean
+  /**
+   * 用户动过这一格吗。
+   *
+   * 没动过就不往请求里放（后端「没给 = 别动」）：面板不替用户把现在的值再写
+   * 一遍。
+   */
+  traitsFromCommonEdited: boolean
 }
 
 /**
@@ -441,15 +457,21 @@ export function PlatformDialog({
       }
       // 模拟客户端的地址与额度插件归代码：这两格整格不出现。发空串是「清空
       // 那一格」的意思，会把库里原来那份抹掉。
-      onSubmit(
-        simulated
-          ? shared
-          : {
-              ...shared,
-              baseUrl: draft.baseUrl.trim(),
-              quotaPlugin: draft.quotaPlugin,
-            }
-      )
+      if (simulated) {
+        onSubmit(shared)
+        return
+      }
+      const update: UpdatePlatformSubmit = {
+        ...shared,
+        baseUrl: draft.baseUrl.trim(),
+        quotaPlugin: draft.quotaPlugin,
+      }
+      // 只有用户动过这一格才带：契约里它是 optional bool，没给就是「别动这一格」。
+      // 带一个默认值等于替用户写一遍，把它自己改过的值盖回去。
+      if (draft.traitsFromCommonEdited) {
+        update.traitsFromCommon = draft.traitsFromCommon
+      }
+      onSubmit(update)
       return
     }
     onSubmit({
@@ -761,6 +783,32 @@ export function PlatformDialog({
                   </p>
                 </div>
               )}
+
+              {/* 共性表：只有目录归上游的开放平台才有「平台没报的参数」这回事。
+                  模拟客户端的参数归代码，不摆这一格。 */}
+              {simulated ? null : (
+                <div className='grid gap-2'>
+                  <div className='flex items-center gap-2'>
+                    <Switch
+                      id='platform-traits-from-common'
+                      checked={draft.traitsFromCommon}
+                      onCheckedChange={(checked) =>
+                        patch({
+                          traitsFromCommon: checked,
+                          // 动过一次就算动过：再拨回来也是「明确关掉」，带 false。
+                          traitsFromCommonEdited: true,
+                        })
+                      }
+                    />
+                    <Label htmlFor='platform-traits-from-common'>
+                      用共性表补模型参数
+                    </Label>
+                  </div>
+                  <p className='text-xs text-muted-foreground'>
+                    平台没报的能力参数按模型 id 从共性表取
+                  </p>
+                </div>
+              )}
             </>
           ) : null}
 
@@ -820,6 +868,9 @@ function toDraft(platform?: Upstream): Draft {
       quotaPlugin: '',
       modelsAuto: false,
       models: '',
+      // 新增没有平台行，这一格没有意义（界面上也不摆）。
+      traitsFromCommon: false,
+      traitsFromCommonEdited: false,
     }
   }
   return {
@@ -833,5 +884,18 @@ function toDraft(platform?: Upstream): Draft {
     quotaPlugin: platform.quotaPlugin,
     modelsAuto: platform.modelsAuto,
     models: platform.models.join('\n'),
+    // 还没动过：提交时不带这一格。
+    traitsFromCommon: traitsFromCommonOf(platform),
+    traitsFromCommonEdited: false,
   }
+}
+
+/**
+ * 平台上这一格现在开着没有。
+ *
+ * 老服务端（或老库）的平台上没有这一格：那时按关显示 —— 这一格说是 true 才是
+ * 开着，其余（false、缺失）都算关。
+ */
+function traitsFromCommonOf(platform: Upstream): boolean {
+  return platform.traitsFromCommon === true
 }

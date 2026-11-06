@@ -13,12 +13,19 @@
 // 它不碰额度：额度是那个额度插件的事，还没接。
 
 import { randomUUID } from "node:crypto";
-import { openPlatformOf, updateOpenPlatform, type OpenPlatformRow } from "./open-platforms.ts";
+import {
+  mergeModelTraits,
+  openPlatformOf,
+  traitNumber,
+  updateOpenPlatform,
+  type ModelTraits,
+  type OpenPlatformRow,
+} from "./open-platforms.ts";
 // 归因头跟推理那条路用同一个名字：两个地方各写一遍，改一处就会走样。
 import { REQUEST_ID_HEADER } from "./router/upstreams/open-platform.ts";
 // 模拟客户端那一族的平台行长得跟开放平台一样，区别在 kind：它们的目录归各 kind
 // 自己的代码目录，不从上游拉。判别函数只在一个地方定义（lib/platform-catalog.ts）。
-import { isSimulatedClientKind, isVendorTemplateKind } from "./platform-catalog.ts";
+import { isSimulatedClientKind } from "./platform-catalog.ts";
 import { kindOf } from "./provider-kinds.ts";
 import { accountsOfPlatform } from "./providers.ts";
 // 引用即登记：问目录要拿各家的推理 key，而登记发生在各平台模块的求值期。环上
@@ -91,22 +98,15 @@ export function openPlatformCatalogStale(row: OpenPlatformRow, now = Date.now())
 /**
  * 这个平台的目录要不要去拉。
  *
- * 人写死的目录不动（那是明确的意思，不是默认值）。模拟客户端那一族也不拉：
- * 它们是那个封闭客户端的平台，目录是各 kind 自己的代码目录（lib/minimax/models.ts
- * 这一些），去问上游要来的那份不是给网关用的。
+ * 只看行自己那一格（`models_auto`）：人写死的目录不动（那是明确的意思，不是默认
+ * 值），关着的那一行也不拉。目录归谁管是**行自己的数据**，不是代码里的名单 ——
+ * 播种给代码挑的那一份写 0，模拟客户端那几行也是 0，它们自然落到不拉。
  *
  * 启动时与请求路径上的刷新用同一套口径：写成两份就会走样 —— 一边跳过了，另一
  * 边还在每 5 分钟带真 key 打一次上游。
  */
 export function openPlatformCatalogRefreshable(row: OpenPlatformRow): boolean {
-  // 厂商模板行（七牛云、讯飞星火、SenseNova、书生·端砚、TokenRhythm）的目录是
-  // 代码挑过的一份：上游那份更宽（七牛上游报 78 个模型），盖上来会出现被上游
-  // 拒的模型。它们不属于「可以拿上游那份盖掉」的那一类。
-  //
-  // 播种已经把这些行的 models_auto 关了（新库），这一句管的是老库：那些行是
-  // 播种改口径之前写进去的，models_auto 还是 1。两处都要 —— 只靠播种，老库
-  // 里那几行照样每次启动都被上游那份盖一次。
-  return row.models.auto && !isSimulatedClientKind(row.kind) && !isVendorTemplateKind(row.kind);
+  return row.models.auto;
 }
 
 /**
@@ -144,14 +144,169 @@ export function openPlatformHasKey(platform: string): boolean {
 }
 
 /**
+ * 上游报的一个模型：名字 + 它自己说的参数。
+ *
+ * traits 里只出现取到了的那几格 —— 没取到与「0」「false」「空档位」不是一回事，
+ * 所以不能写成 `?? 0` / `?? false`。
+ */
+export interface ParsedModel {
+  id: string;
+  traits: ModelTraits;
+}
+
+/**
+ * 参数 → 上游可能用的键路径，按优先级排；第一个取到的胜出。
+ *
+ * 各家上游同一件事用不同的名字报（`context_length` / `limit.context` /
+ * `input_modalities[].supported_inputs.max_context_length.value`……）。这里不按平台
+ * 写分支：新家多报一个名字，本来也只需要往列表里加一条路径。
+ *
+ * 路径里 `a[].b` 是「数组任一条取到就算」：平台把上下文长度塞在模态列表里，
+ * 我们只关心那几个位置里第一个说得出的值。
+ *
+ * 倍率（credits）**不在这张表里**：上游把三种不同单位的东西都叫「价格」—
+ * 倍率（`pricing: "8.00000000"`）、每百万 token 的钱、积分 — 差三个数量级，
+ * 塞进同一格就是猜。宁可没有。
+ */
+export const TRAIT_PATHS = {
+  contextWindow: [
+    "context_length",
+    "max_context_length",
+    "limit.context",
+    "input_modalities[].supported_inputs.max_context_length.value",
+    "context_window",
+    "max_input_tokens",
+  ],
+  maxOutputTokens: [
+    "max_output_tokens",
+    "max_output_length",
+    "max_completion_tokens",
+    "max_tokens",
+    "limit.output",
+  ],
+  reasoning: ["supports_reasoning", "capabilities.reasoning.supported"],
+  toolCall: ["supports_tools", "capabilities.tools.supported"],
+  efforts: ["capabilities.reasoning.effort", "supported_efforts", "supportedEfforts"],
+  defaultEffort: ["default_effort", "reasoning.effort"],
+} as const satisfies TraitPathTable;
+
+/**
+ * 一张路径表：写了的那几格才从上游取。
+ *
+ * 没写的格（现在只有 credits）意思跟空数组一样：这一格不从上游取。写成可选
+ * 而不是要求每格都有，是因为「不取」是一张表里的一等状态 —— 不是忘了写，是
+ * 故意不取，不该靠一个空数组去猜。
+ */
+export type TraitPathTable = { readonly [K in keyof ModelTraits]?: readonly string[] };
+
+/** JSON 里可能出现的东西：路径逐段走的就是它。 */
+type JsonNode = string | number | boolean | null | JsonNode[] | { [key: string]: JsonNode };
+
+/**
+ * 沿一条路径取值。
+ *
+ * `a[].b` 里的 `[]` 表示「数组里任一条」：展开成多条候选，后面的段逐条走。
+ * 走到空、null、类型不对就是没取到 —— 不拿一个占位值顶上去。
+ */
+function valueAtPath(root: unknown, path: string): JsonNode | undefined {
+  let current: JsonNode[] = [root as JsonNode];
+  for (const segment of path.split(".")) {
+    const wildcard = segment.endsWith("[]");
+    const key = wildcard ? segment.slice(0, -2) : segment;
+    const next: JsonNode[] = [];
+    for (const node of current) {
+      if (node === null || typeof node !== "object") continue;
+      const value = (node as { [key: string]: JsonNode })[key];
+      if (wildcard) {
+        if (Array.isArray(value) && value.length) next.push(...value);
+      } else if (value !== undefined && value !== null) {
+        next.push(value);
+      }
+    }
+    if (!next.length) return undefined;
+    current = next;
+  }
+  return current[0];
+}
+
+/** 数：0 照收（上游明确说的），非数、负数、null 算没有。 */
+function firstNumber(root: unknown, paths: readonly string[] | undefined): number | undefined {
+  for (const path of paths ?? []) {
+    const value = traitNumber(valueAtPath(root, path));
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/** 布尔：false 照收，非布尔算没有。 */
+function firstBoolean(root: unknown, paths: readonly string[] | undefined): boolean | undefined {
+  for (const path of paths ?? []) {
+    const value = valueAtPath(root, path);
+    if (typeof value === "boolean") return value;
+  }
+  return undefined;
+}
+
+/** 字符串：空的算没有。 */
+function firstString(root: unknown, paths: readonly string[] | undefined): string | undefined {
+  for (const path of paths ?? []) {
+    const value = valueAtPath(root, path);
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** 字符串列表：空数组照收（上游明确说没有档位），去掉空的与重号的。 */
+function firstStringList(root: unknown, paths: readonly string[] | undefined): string[] | undefined {
+  for (const path of paths ?? []) {
+    const value = valueAtPath(root, path);
+    if (!Array.isArray(value)) continue;
+    const out: string[] = [];
+    for (const raw of value) {
+      const name = String(raw ?? "").trim();
+      if (!name || out.includes(name)) continue;
+      out.push(name);
+    }
+    return out;
+  }
+  return undefined;
+}
+
+/**
+ * 一条模型清单条目里的参数。
+ *
+ * 路径表可以换进来（测试用：拿掉一条路，对应那一格就该是空的）—— 取的是表，
+ * 不是另写的分支。
+ */
+export function traitsFromEntry(entry: unknown, paths: TraitPathTable = TRAIT_PATHS): ModelTraits {
+  const traits: ModelTraits = {};
+  const contextWindow = firstNumber(entry, paths.contextWindow);
+  if (contextWindow !== undefined) traits.contextWindow = contextWindow;
+  const maxOutputTokens = firstNumber(entry, paths.maxOutputTokens);
+  if (maxOutputTokens !== undefined) traits.maxOutputTokens = maxOutputTokens;
+  const reasoning = firstBoolean(entry, paths.reasoning);
+  if (reasoning !== undefined) traits.reasoning = reasoning;
+  const toolCall = firstBoolean(entry, paths.toolCall);
+  if (toolCall !== undefined) traits.toolCall = toolCall;
+  const efforts = firstStringList(entry, paths.efforts);
+  if (efforts !== undefined) traits.efforts = efforts;
+  const defaultEffort = firstString(entry, paths.defaultEffort);
+  if (defaultEffort !== undefined) traits.defaultEffort = defaultEffort;
+  return traits;
+}
+
+/**
  * 上游的模型清单：两种形状都认。
  *
- *   { data: [{ id }] }     OpenAI 的形状
- *   { models: [{ name }] } 另一种常见写法
+ *   { data: [{ id, …}] }     OpenAI 的形状
+ *   { models: [{ name, …}] } 另一种常见写法
+ *
+ * 名字以外的东西也一起取（见 TRAIT_PATHS）：参数就在同一份答复里，丢掉它就得
+ * 再问一次上游，而很多家根本没有第二个问得清参数的端点。
  *
  * 都不认就是 null：宁可没有目录，也不要一份猜的。
  */
-function parseModelList(payload: unknown): string[] | null {
+export function parseModelList(payload: unknown): ParsedModel[] | null {
   const body = payload as { data?: unknown; models?: unknown } | null;
   const list = Array.isArray(body?.data)
     ? body.data
@@ -159,13 +314,13 @@ function parseModelList(payload: unknown): string[] | null {
       ? body.models
       : null;
   if (!list) return null;
-  const out: string[] = [];
+  const out: ParsedModel[] = [];
   for (const entry of list) {
     const item = entry as { id?: unknown; name?: unknown } | null;
     const raw = typeof entry === "string" ? entry : String(item?.id ?? item?.name ?? "");
     const id = raw.trim();
-    if (!id || out.includes(id)) continue;
-    out.push(id);
+    if (!id || out.some((model) => model.id === id)) continue;
+    out.push({ id, traits: traitsFromEntry(entry) });
   }
   return out;
 }
@@ -182,7 +337,7 @@ function parseModelList(payload: unknown): string[] | null {
 export async function fetchOpenPlatformModels(
   row: OpenPlatformRow,
   key?: string,
-): Promise<string[] | null> {
+): Promise<ParsedModel[] | null> {
   const base = String(row.baseUrl ?? "").trim();
   if (!base) return null;
   const apiKey = key ?? accountKeyOf(row.id);
@@ -241,6 +396,9 @@ export interface RefreshCatalogOptions {
    * 目录」是明确的意思：他要的是现在就去问一次，退避说的「刚问过」在这个语境
    * 里不是答案。
    *
+   * 它只跳退避：目录归谁管（models_auto）不由它决定 —— 那一格关着就拒，跟有没有
+   * 人点过无关。
+   *
    * 去重仍然生效：同一时刻只拉一轮，后来的跟着这一轮走 —— 点两下不该发两份。
    */
   force?: boolean;
@@ -277,7 +435,17 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
   try {
     const row = openPlatformOf(id);
     if (!row) return { ok: false, message: `没有这个平台：${id}` };
+    // 目录归谁管就查那一格（models_auto）：关着就是用户说了算（或是播种写进去的
+    // 代码目录 —— 七牛云那份是代码挑过的，上游报 78 个模型，盖上来会出现被上游
+    // 拒的模型）。人手动点的那一下也不穿这一道：force 说的是「别等退避」，不是
+    // 「重新决定这份目录归谁管」。
     if (!row.models.auto) return { ok: false, message: "目录为手工维护，不自动获取" };
+    // 人写的那份（source=manual）后台不碰：开关开着只说明「以后允许自动拉覆盖」，
+    // 不等于这份目录也算自动拉的（见 lib/open-platforms.ts 的 updatePlatform）。
+    // 只有面板上那一下（force）才盖它 —— 那一次是明确的意思。
+    if (row.models.source === "manual" && !force) {
+      return { ok: false, message: "目录是手写的，自动刷新不覆盖" };
+    }
     // 模拟客户端那一族：目录是各 kind 自己的代码目录，不从上游拉。与退避一样
     // 只看 row 与内存里的状态，不读库 —— 放在查 key 前面，请求路径上就不用为了
     // 判别去读 provider 表与凭据。
@@ -313,9 +481,20 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
     catalogState.set(id, state);
     const models = await fetchOpenPlatformModels(row, key);
     if (!models) return { ok: false, message: "无法获取模型目录，保留原有的一份" };
+    const ids = models.map((model) => model.id);
+    // 只收这次真报了的参数：「不知道」不占一格，没报的那几个模型由
+    // mergeModelTraits 留着行里原来那份。
+    const reported: Record<string, ModelTraits> = {};
+    for (const model of models) {
+      if (Object.keys(model.traits).length) reported[model.id] = model.traits;
+    }
     const written = updateOpenPlatform(id, {
-      models,
-      modelsAuto: true,
+      models: ids,
+      traits: mergeModelTraits(row.models.traits, ids, reported),
+      // 写回时保持行里原值：这一格说的是「以后允不允许自动拉覆盖」，只有用户在
+      // 面板上开关它才该变。刷新的时候把它固定成 1，就把用户关掉的开关又拨开了
+      // （而那个开关正是后台那条路的闸）。
+      modelsAuto: row.models.auto,
       source: "auto",
       fetchedAt: Date.now(),
     });

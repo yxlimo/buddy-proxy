@@ -173,17 +173,6 @@ export function simulatedClientPresetsOfKind(kind: string): SimulatedClientPrese
 }
 
 /**
- * 这个 kind 是不是本仓预置的那五家厂商模板。
- *
- * 它们的模型目录是**代码挑过的一份**（lib/qiniu/models.ts 这些常量表），不是
- * 上游报什么就收什么：上游那份更宽（七牛报 78 个模型，比我们分组的那份宽），
- * 盖上来会出现被上游拒的模型。所以这一类平台的目录不归自动拉管。
- */
-export function isVendorTemplateKind(kind: string): boolean {
-  return PLATFORM_TEMPLATES.some((t) => t.kind === kind);
-}
-
-/**
  * 用户能自己建的一类平台：面板上「新增平台」的那个下拉，一格一条。
  *
  * 与模板表的分工：模板表说的是「代码里预置了哪些平台行」，这一张说的是

@@ -9,12 +9,7 @@
 // 它不引 lib/platforms.ts —— 那一层要引它（平台列表从这张表出），反过来引就
 // 成环。
 
-import {
-  forgetPlatformPresetRemoved,
-  rememberPlatformPresetRemoved,
-  store,
-  UPSTREAM_CATALOG_KINDS,
-} from "./store.ts";
+import { forgetPlatformPresetRemoved, rememberPlatformPresetRemoved, store } from "./store.ts";
 // 能建的平台种类：建的时候要照着它校验，拒绝时要把可选的列出来。
 import {
   isSimulatedClientId,
@@ -55,12 +50,44 @@ export const OPEN_PLATFORM_KIND_NAME = "openai";
 export interface OpenPlatformModels {
   /** 模型名。 */
   items: string[];
+  /**
+   * 模型的参数，按模型 id 存。
+   *
+   * 与 items 一起写、一起读：items 是「这个平台有哪些模型」的唯一来源，参数只是
+   * 那些模型各自的能力。老行（JSON 里没有这一格）读成空对象 —— 空的意思是我们
+   * 不知道，不是「什么都不能」。
+   */
+  traits: Record<string, ModelTraits>;
   /** 以后允不允许自动拉覆盖这一份目录。 */
   auto: boolean;
   /** 上次拉目录的时刻（毫秒）。0 = 没拉过（手写的目录）。 */
   fetchedAt: number;
   /** 现在这份目录是哪来的：自动拉的，还是人写的。 */
   source: "auto" | "manual";
+}
+
+/**
+ * 一个模型的参数：上游报的（或者人写在行里的），不是我们猜的。
+ *
+ * 每一格都可能没有。没有与「0」「false」是两件事：false 会被客户端读成「不支持
+ * 这个模型调工具」，0 会被读成「免费」。所以这里全是可选字段，写进来的值一定来自
+ * 上游的明确答复，取不到就不写这一格（见 lib/open-platform-catalog.ts 那张路径表）。
+ */
+export interface ModelTraits {
+  /** 上下文窗口（token）。 */
+  contextWindow?: number;
+  /** 输出上限（token）。上游没报就没有，客户端问多少就发多少。 */
+  maxOutputTokens?: number;
+  /** 能不能思考。 */
+  reasoning?: boolean;
+  /** 能选的思考档位。空数组是上游明确说「没有档位」，不是不知道。 */
+  efforts?: string[];
+  /** 默认档位。列表那一层还没有这一格（CatalogModel），先存在行里。 */
+  defaultEffort?: string;
+  /** 能不能调工具。 */
+  toolCall?: boolean;
+  /** 按什么倍率计费：0 是免费。单位不明的那一份不取（见路径表）。 */
+  credits?: number;
 }
 
 /** 表里的一行。 */
@@ -79,6 +106,13 @@ export interface OpenPlatformRow {
   kind: string;
   /** 区域（空串就是没有）。 */
   region: string;
+  /**
+   * 平台自己给的信息不足时，从共性表（lib/common-model-traits.ts）里补参数。
+   *
+   * 默认关：共性表是人工整理的近似，只有用户明确打开才用。它只补字段、不造
+   * 模型 —— 命中与不命中都不影响 items 里有哪些模型。
+   */
+  traitsFromCommon: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -110,7 +144,7 @@ const RESERVED_IDS = new Set(["v1", "admin", "health", "healthz", "metrics"]);
 export function listOpenPlatforms(): OpenPlatformRow[] {
   const rows = store()
     .prepare(
-      "SELECT id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at " +
+      "SELECT id, label, base_url, models, models_auto, traits_from_common, quota_plugin, kind, region, created_at, updated_at " +
         "FROM platform ORDER BY id",
     )
     .all() as any[];
@@ -121,7 +155,7 @@ export function listOpenPlatforms(): OpenPlatformRow[] {
 export function openPlatformOf(id: string): OpenPlatformRow | null {
   const row = store()
     .prepare(
-      "SELECT id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at " +
+      "SELECT id, label, base_url, models, models_auto, traits_from_common, quota_plugin, kind, region, created_at, updated_at " +
         "FROM platform WHERE id = ?",
     )
     .get(id) as any;
@@ -205,7 +239,7 @@ export function createOpenPlatform(input: {
   }
 
   const now = Date.now();
-  const models: OpenPlatformModels = { items: [], auto: modelsAuto, fetchedAt: 0, source: "auto" };
+  const models: OpenPlatformModels = { items: [], traits: {}, auto: modelsAuto, fetchedAt: 0, source: "auto" };
   const db = store();
   // 行与墓碑的清除在同一个事务里：只清墓碑而没写进行，播种就会把这个 id 当成
   // 「用户没删过但也不存在」—— 下次启动补回一个空平台，用户刚建的配置没了。
@@ -265,6 +299,13 @@ export function updateOpenPlatform(
     baseUrl?: string;
     quotaPlugin?: string;
     models?: string[];
+    /**
+     * 各模型的参数，跟 models 一起写。
+     *
+     * 不给就按 id 留着行里原来那些（清单里不再有的丢掉）：面板只改清单时不该把
+     * 上游报回来的参数一起抹掉，而对同一个 id 来说那些参数仍然是同一份事实。
+     */
+    traits?: Record<string, ModelTraits>;
     modelsAuto?: boolean;
     /**
      * 这份目录是哪来的：自动拉的（auto）还是人写的（manual）。
@@ -274,6 +315,13 @@ export function updateOpenPlatform(
     source?: "auto" | "manual";
     /** 上次拉目录的时刻（毫秒）。0 = 没拉过。 */
     fetchedAt?: number;
+    /**
+     * 平台自己给的信息不足时从共性表里补参数。不给 = 别动这一格。
+     *
+     * 它不管哪一族平台：模板行与模拟客户端的行也有这一格（它们的目录同样是
+     * 上游不报参数的那一种）。
+     */
+    traitsFromCommon?: boolean;
     /**
      * 想改类型。只收「跟现在一样」与空串，别的都拒。
      *
@@ -323,8 +371,13 @@ export function updateOpenPlatform(
   // 这里才拦得住所有调用方（面板、脚本、迁移）；放在面板那层只能拦住面板。
   if (!simulated) {
     if (patch.models !== undefined) {
+      const items = normalizeModels(patch.models);
       models = {
-        items: normalizeModels(patch.models),
+        items,
+        traits:
+          patch.traits === undefined
+            ? normalizeTraitsMap(models.traits, items)
+            : normalizeTraitsMap(patch.traits, items),
         // 人写的目录就不是自动拉的：写死了就别再让它被覆盖（显式说了要自动的
         // 除外 —— 那是明确的意思，不是默认值）。
         auto: patch.modelsAuto === undefined ? false : patch.modelsAuto === true,
@@ -343,8 +396,8 @@ export function updateOpenPlatform(
 
   store()
     .prepare(
-      "UPDATE platform SET label = ?, base_url = ?, models = ?, models_auto = ?, quota_plugin = ?, updated_at = ? " +
-        "WHERE id = ?",
+      "UPDATE platform SET label = ?, base_url = ?, models = ?, models_auto = ?, quota_plugin = ?, " +
+        "traits_from_common = ?, updated_at = ? WHERE id = ?",
     )
     .run(
       label,
@@ -352,6 +405,7 @@ export function updateOpenPlatform(
       modelsJson(models),
       models.auto ? 1 : 0,
       quotaPlugin,
+      patch.traitsFromCommon === undefined ? (row.traitsFromCommon ? 1 : 0) : patch.traitsFromCommon ? 1 : 0,
       Date.now(),
       id,
     );
@@ -365,38 +419,62 @@ export function updateOpenPlatform(
  * SenseNova 与书生·端砚的目录只落在 cache 表 —— 两处不一起走，「上游答了、
  * 面板上还是空」就成了常态。
  *
- * 三道闸，缺一道就会把不该动的目录盖掉：
+ * 两道闸，缺一道就会把不该动的目录盖掉：
  *
- *   1. 只有目录归上游管的那两家（UPSTREAM_CATALOG_KINDS）。七牛云、讯飞星火、
- *      TokenRhythm 的目录是代码挑过的一份，上游那份更宽（七牛报 78 个模型），
- *      盖上来会出现被上游拒的模型；方言类（openai / anthropic）的目录由面板那条
- *      路管。只判前两道而没有这一道，等于「谁接上 Cache 谁就被盖」。
- *   2. 人写死的那一份不同步（source=manual）：那是明确的意思，含「我把目录清空
+ *   1. 人写死的那一份不同步（source=manual）：那是明确的意思，含「我把目录清空
  *      了」。
- *   3. 面板上把「自动拉模型目录」关掉的那一行不同步：那一格就是那个开关，后台替
- *      人把它打开，开关就成了摆设。
+ *   2. 行上那一格「自动拉」关着就不同步：目录归谁管是**行自己的数据**
+ *      （models_auto）。播种给代码挑的那一份写的是 0，所以七牛云、TokenRhythm
+ *      这几家（上游那份更宽，七牛报 78 个模型）默认就盖不上来；人打开开关就是
+ *      明确要上游那份。
  *
  * 行不存在也不同步：没有行可写。
+ *
+ * 参数按 id 保留：这次没报参数的那几个模型，行里原来那份留着（见
+ * mergeModelTraits）。
  *
  * `fetchedAt` 跟着写成现在：它是「上次拉取的时刻」，面板拿它显示「上次拉取」；
  * 不写就等于说「从来没拉过」，而目录明明是刚拉回来的。`updated_at` 只在目录内容
  * 变了的时候动 —— 面板上那个「最后修改」说的是目录改过，不是每次问上游都算改。
  */
-export function syncPlatformModels(platform: string, items: readonly unknown[]): void {
+export function syncPlatformModels(
+  platform: string,
+  items: readonly unknown[],
+  traits?: Record<string, ModelTraits>,
+): void {
   const row = openPlatformOf(platform);
   if (!row) return;
-  if (!UPSTREAM_CATALOG_KINDS.has(row.kind)) return;
   if (row.models.source === "manual") return;
   if (!row.models.auto) return;
   const next = normalizeModels(items);
   // 空的不写：把行清空会让人以为模型没了，而上游答一个空清单多半是没答好（与
   // lib/router/catalog-cache.ts 拒收空清单同一件事）。
   if (!next.length) return;
-  const same = next.length === row.models.items.length && next.every((id, i) => id === row.models.items[i]);
+  // 参数跟着清单走：这次报了的用这次的，没报的按 id 留着行里原来那些。
+  const keptTraits = mergeModelTraits(row.models.traits, next, traits ?? row.models.traits);
+  const same =
+    next.length === row.models.items.length &&
+    next.every((id, i) => id === row.models.items[i]) &&
+    sameTraits(keptTraits, row.models.traits);
   const now = Date.now();
   store()
     .prepare("UPDATE platform SET models = ?, updated_at = ? WHERE id = ?")
-    .run(modelsJson({ ...row.models, items: next, fetchedAt: now }), same ? row.updatedAt : now, platform);
+    .run(
+      modelsJson({ ...row.models, items: next, traits: keptTraits, fetchedAt: now }),
+      same ? row.updatedAt : now,
+      platform,
+    );
+}
+
+/** 两份参数表说的是不是同一件事（键序不算）。 */
+function sameTraits(a: Record<string, ModelTraits>, b: Record<string, ModelTraits>): boolean {
+  const canon = (traits: Record<string, ModelTraits>): string =>
+    JSON.stringify(
+      Object.keys(traits)
+        .sort()
+        .map((id) => [id, Object.entries(traits[id]).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))]),
+    );
+  return canon(a) === canon(b);
 }
 
 /**
@@ -553,15 +631,19 @@ function normalizeBaseUrl(value: string): string {
 /**
  * 目录存进库里的样子。
  *
- * 整个目录是一个 JSON：模型名、上次什么时候拉的、哪来的。
+ * 整个目录是一个 JSON：模型名、各模型参数、上次什么时候拉的、哪来的。
  *
  * 自动不自动**不在**这个 JSON 里：那一格在 models_auto 列上（能查的那一格），
  * JSON 里再存一份，两份迟早会走样。早期存过的 JSON 里带着 auto，读的时候
  * 当它不存在。
+ *
+ * 参数跟着清单一起写：`traits: { "<modelId>": { contextWindow: 256000 } }`。
+ * 只写取到过的那几格，取不到的字段不出现 —— 写成 0 或 false 是另一份意思。
  */
 function modelsJson(models: OpenPlatformModels): string {
   return JSON.stringify({
     items: models.items,
+    traits: models.traits,
     fetchedAt: models.fetchedAt,
     source: models.source,
   });
@@ -575,7 +657,7 @@ function modelsJson(models: OpenPlatformModels): string {
  * 的 JSON 里带着 auto，忽略它就是。
  */
 function parseModels(raw: unknown, auto: boolean): OpenPlatformModels {
-  const empty: OpenPlatformModels = { items: [], auto, fetchedAt: 0, source: "auto" };
+  const empty: OpenPlatformModels = { items: [], traits: {}, auto, fetchedAt: 0, source: "auto" };
   let parsed: any;
   try {
     parsed = JSON.parse(String(raw ?? ""));
@@ -584,11 +666,14 @@ function parseModels(raw: unknown, auto: boolean): OpenPlatformModels {
   }
   if (Array.isArray(parsed)) {
     // 早期存的是单纯的模型名数组。
-    return { items: normalizeModels(parsed), auto, fetchedAt: 0, source: "auto" };
+    return { items: normalizeModels(parsed), traits: {}, auto, fetchedAt: 0, source: "auto" };
   }
   if (!parsed || typeof parsed !== "object") return empty;
+  const items = normalizeModels(Array.isArray(parsed.items) ? parsed.items : []);
   return {
-    items: normalizeModels(Array.isArray(parsed.items) ? parsed.items : []),
+    items,
+    // 老行没有这一格：空对象 —— 我们不知道这些模型的参数，不是「什么都没」。
+    traits: normalizeTraitsMap(parsed.traits, items),
     auto,
     fetchedAt: Number(parsed.fetchedAt ?? 0) || 0,
     source: parsed.source === "manual" ? "manual" : "auto",
@@ -606,6 +691,90 @@ function normalizeModels(items: readonly unknown[]): string[] {
   return out;
 }
 
+/**
+ * 参数里认的数。
+ *
+ * 0 照收：那是上游明确说的（上下文 0 罕见，倍率 0 就是免费）。负数、非数、
+ * null 都算没有 —— 不拿一个猜的数去顶一个没报的数。
+ */
+export function traitNumber(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : undefined;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/** 一个模型的参数：只留认得的键，类型不对的当没写。 */
+function normalizeTraits(raw: unknown): ModelTraits {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const out: ModelTraits = {};
+  const contextWindow = traitNumber(src.contextWindow);
+  if (contextWindow !== undefined) out.contextWindow = contextWindow;
+  const maxOutputTokens = traitNumber(src.maxOutputTokens);
+  if (maxOutputTokens !== undefined) out.maxOutputTokens = maxOutputTokens;
+  const credits = traitNumber(src.credits);
+  if (credits !== undefined) out.credits = credits;
+  if (typeof src.reasoning === "boolean") out.reasoning = src.reasoning;
+  if (typeof src.toolCall === "boolean") out.toolCall = src.toolCall;
+  if (typeof src.defaultEffort === "string" && src.defaultEffort.trim()) {
+    out.defaultEffort = src.defaultEffort.trim();
+  }
+  if (Array.isArray(src.efforts)) {
+    // 空数组照收：上游明确说「没有档位」，与「不知道有没有」不是同一件事。
+    const efforts: string[] = [];
+    for (const level of src.efforts) {
+      const name = String(level ?? "").trim();
+      if (!name || efforts.includes(name)) continue;
+      efforts.push(name);
+    }
+    out.efforts = efforts;
+  }
+  return out;
+}
+
+/**
+ * 一行的参数表：只留清单里还在的模型。
+ *
+ * 不在清单里的那几条是死数据（那是清目录之前的模型），留着只会让人以为它们
+ * 还在服务。
+ */
+function normalizeTraitsMap(raw: unknown, ids: readonly string[]): Record<string, ModelTraits> {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const out: Record<string, ModelTraits> = {};
+  for (const id of ids) {
+    const traits = normalizeTraits(src[id]);
+    if (Object.keys(traits).length) out[id] = traits;
+  }
+  return out;
+}
+
+/**
+ * 新目录的参数：这次说了的用这次的，没说的按 id 留着行里原来那份。
+ *
+ * 上游这次没报某个模型的参数，意思是「它没说话」，不是「参数变成了空」—— 把旧值
+ * 一起擦掉等于一次抓取就把已知的事实丢掉。刷新目录（lib/open-platform-catalog.ts）
+ * 与 cache 同步（syncPlatformModels）对这件事同一个口径。
+ *
+ * `reported` 只放上游真报了的：键不在、或者是个空对象，都当没说话。
+ */
+export function mergeModelTraits(
+  previous: Record<string, ModelTraits>,
+  ids: readonly string[],
+  reported: Record<string, ModelTraits>,
+): Record<string, ModelTraits> {
+  const out: Record<string, ModelTraits> = {};
+  for (const id of ids) {
+    const said = reported[id];
+    const traits = said && Object.keys(said).length ? said : previous[id];
+    // 空对象就是一个参数也不知道：留一条空的只会让参数表看起来有内容。
+    if (!traits || !Object.keys(traits).length) continue;
+    out[id] = traits;
+  }
+  return out;
+}
+
 /** 一行变一个对象。 */
 function toRow(row: any): OpenPlatformRow {
   const auto = Number(row.models_auto ?? 1) !== 0;
@@ -617,6 +786,7 @@ function toRow(row: any): OpenPlatformRow {
     quotaPlugin: String(row.quota_plugin ?? ""),
     kind: String(row.kind ?? "openai"),
     region: String(row.region ?? ""),
+    traitsFromCommon: Number(row.traits_from_common ?? 0) !== 0,
     createdAt: Number(row.created_at ?? 0),
     updatedAt: Number(row.updated_at ?? 0),
   };

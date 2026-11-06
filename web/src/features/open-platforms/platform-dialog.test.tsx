@@ -906,3 +906,125 @@ describe('正常操作点不出的错：提交前就拦住', () => {
     expect(screen.getByText('还差：名字、地址')).toBeInTheDocument()
   })
 })
+
+describe('用共性表补模型参数', () => {
+  /** 改一个平台的弹窗。 */
+  function renderEdit(platformMessage: Upstream, submitted: unknown[] = []) {
+    render(
+      <PlatformDialog
+        open
+        platform={platformMessage}
+        existing={[]}
+        kinds={allKinds}
+        registry={{ status: 'ready', plugins }}
+        pending={false}
+        onSubmit={(input) => submitted.push(input)}
+        onOpenChange={() => {}}
+      />
+    )
+    return submitted
+  }
+
+  /** 开关：判据是它的名字，不看位置。 */
+  const toggle = () =>
+    screen.getByRole('switch', { name: '用共性表补模型参数' })
+
+  it('编辑开放平台：开关摆着、默认关，没动过就不带这一格', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderEdit(platform)
+
+    expect(toggle()).not.toBeChecked()
+    expect(
+      screen.getByText('平台没报的能力参数按模型 id 从共性表取')
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(submitted).toHaveLength(1)
+    // 没动过就不带：后端「没给 = 别动这一格」，带一个当前值是替用户写一遍。
+    expect(submitted[0]).not.toHaveProperty('traitsFromCommon')
+  })
+
+  it('打开开关再保存：带 true，别的格照旧（不多带一格）', async () => {
+    const user = userEvent.setup({ delay: null })
+    const submitted = renderEdit(platform)
+
+    await user.click(toggle())
+    expect(toggle()).toBeChecked()
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(submitted[0]).toEqual({
+      id: 'my-gateway',
+      label: '我的中转站',
+      baseUrl: 'https://api.example.com/v1',
+      quotaPlugin: 'qiniu-portal',
+      modelsAuto: true,
+      models: [],
+      traitsFromCommon: true,
+    })
+    expect(submitted[0]).not.toHaveProperty('kind')
+  })
+
+  it('关掉开关再保存：带 false（明确关掉与「没给」不是一回事）', async () => {
+    const user = userEvent.setup({ delay: null })
+    // 服务端说这个平台开着这一格：开关得照着它显示。
+    const submitted = renderEdit(
+      create(UpstreamSchema, {
+        id: 'my-gateway',
+        kind: 'openai',
+        label: '我的中转站',
+        baseUrl: 'https://api.example.com/v1',
+        quotaPlugin: 'qiniu-portal',
+        modelsAuto: true,
+        models: [],
+        isOpenPlatform: true,
+        fromRow: true,
+        traitsFromCommon: true,
+        accounts: [],
+      })
+    )
+
+    expect(toggle()).toBeChecked()
+    await user.click(toggle())
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(submitted[0]).toHaveProperty('traitsFromCommon', false)
+  })
+
+  it('模拟客户端的编辑弹窗：没有这个开关', () => {
+    renderEdit(simulatedPlatform)
+
+    // 那一族的参数归代码，摆一个改了也不算数的开关只会让人以为要选。
+    expect(
+      screen.queryByRole('switch', { name: '用共性表补模型参数' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('平台没报的能力参数按模型 id 从共性表取')
+    ).not.toBeInTheDocument()
+  })
+
+  it('服务端没报这一格：按关显示，不报错，提交也不带', async () => {
+    const user = userEvent.setup({ delay: null })
+    const message = create(UpstreamSchema, {
+      id: 'my-gateway',
+      kind: 'openai',
+      label: '我的中转站',
+      baseUrl: 'https://api.example.com/v1',
+      modelsAuto: true,
+      models: [],
+      isOpenPlatform: true,
+      fromRow: true,
+      accounts: [],
+    })
+    delete (message as { traitsFromCommon?: boolean }).traitsFromCommon
+
+    const submitted = renderEdit(message)
+
+    // 老服务端不报这一格：按关显示，不摆「还在加载」这类话。
+    expect(toggle()).not.toBeChecked()
+    expect(screen.queryByText(/还在加载/)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    expect(submitted[0]).not.toHaveProperty('traitsFromCommon')
+  })
+})

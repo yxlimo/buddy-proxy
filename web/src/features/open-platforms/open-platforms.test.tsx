@@ -540,6 +540,40 @@ describe('面板上的开放平台', () => {
     })
   })
 
+  it('改平台：开关没动过就不发这一格，动了才带', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: (boolean | undefined)[] = []
+    const client = clientWith([openPlatform()], {
+      UpdatePlatform: (input) => {
+        // optional bool 的「没给」与「给了 false」不是一回事：这里抄原值，不补默认。
+        sent.push(input.traitsFromCommon)
+        return create(UpdatePlatformResponseSchema, {
+          platform: create(OpenPlatformSchema, {
+            id: input.id ?? '',
+            label: input.label ?? '',
+          }),
+        })
+      },
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    // 第一次：只改名字，开关没碰过。
+    const dialog = await openEdit(user, '我的中转站')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toBeUndefined()
+
+    // 第二次：拨开开关。
+    const again = await openEdit(user, '我的中转站')
+    await user.click(
+      within(again).getByRole('switch', { name: '用共性表补模型参数' })
+    )
+    await user.click(within(again).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(sent).toHaveLength(2))
+    expect(sent[1]).toBe(true)
+  })
+
   it('改平台：请求里没有 kind（整份入参逐字段对）', async () => {
     const user = userEvent.setup({ delay: null })
     // 把 UpdatePlatform 的入参整份抄下来逐字段对：契约里没有 kind 这一格，

@@ -23,7 +23,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
 // 平台模板表（叶子模块，不引任何东西）：迁移要把那几行补进 platform 表。
-import { isVendorTemplateKind, PLATFORM_TEMPLATES, SIMULATED_CLIENTS } from "./platform-catalog.ts";
+import { PLATFORM_TEMPLATES, SIMULATED_CLIENTS } from "./platform-catalog.ts";
 // 播种用的模型目录：与各 kind 的代码目录同一个来源（见 seedPlatformModels）。
 import { knownCatalogForBaseUrl } from "./model-catalog.ts";
 import { QINIU_MODELS } from "./qiniu/models.ts";
@@ -150,6 +150,9 @@ export function store(): DatabaseSync {
   // `models` 存的是整个目录（模型名、上次什么时候拉的、哪来的），
   // `models_auto` 是「以后允不允许自动拉覆盖」那一格 —— 自动不自动不在 JSON
   // 里（早期存过的那一份，忽略就是）。
+  //
+  // `traits_from_common` 是「上游与代码都没说清时从共性表补参数」那个开关。
+  // 默认关：共性表是人工整理的近似，只有用户明确要才用。
   db.exec(
     `CREATE TABLE IF NOT EXISTS platform (
       id           TEXT PRIMARY KEY,
@@ -157,6 +160,7 @@ export function store(): DatabaseSync {
       base_url     TEXT NOT NULL,
       models       TEXT NOT NULL DEFAULT '[]',
       models_auto  INTEGER NOT NULL DEFAULT 1,
+      traits_from_common INTEGER NOT NULL DEFAULT 0,
       quota_plugin TEXT NOT NULL DEFAULT '',
       kind         TEXT NOT NULL DEFAULT 'openai',
       region       TEXT NOT NULL DEFAULT '',
@@ -326,22 +330,6 @@ export function migratePlatforms(db: DatabaseSync): void {
 const OPEN_PLATFORM_KIND = "openai";
 
 /**
- * 目录归上游管的 kind：它们的模型清单只有上游报得出来，缓存表是按平台存的那一份。
- *
- * 这是**启动播种时**用的名单，不是「谁能从上游拉」的唯一事实 —— 那一格在 kinds
- * 登记表里（ProviderKind.modelsFromUpstream，面板报的 Upstream.models_from_upstream
- * 就是它）。写在这里是因为播种在最低层跑：引注册表会把各家平台模块拖进来，绕成
- * 环。两份名单不一致时以登记表为准，这一格要跟着改。
- *
- * 拿上游那份覆盖平台行的闸门（lib/open-platforms.ts 的 syncPlatformModels）也问
- * 同一件事：它同样在最低层，只能读这一份。
- *
- * 其余几家不在名单里：七牛云、讯飞星火、TokenRhythm 的目录是代码挑过的一份（上游
- * 那份更宽，七牛报 78 个模型），方言类（openai / anthropic）的目录由面板那条路管。
- */
-export const UPSTREAM_CATALOG_KINDS: ReadonlySet<string> = new Set(["sensenova", "intern-ai"]);
-
-/**
  * 播种用的目录：按 kind 分，与各 kind 的**代码目录**同一个来源。
  *
  * 不调 kindOf(kind).models()：注册表要靠各平台模块求值才登记，而这一层是最低
@@ -349,16 +337,26 @@ export const UPSTREAM_CATALOG_KINDS: ReadonlySet<string> = new Set(["sensenova",
  * 模块自己的常量表 —— 同一份数据，换个入口读。测试对着 kind.models() 逐条比，
  * 两边走样就会红。
  *
+ * 每一项除了模型名，还带着这份目录从哪来：代码常量表，还是 cache 表里上游缓存
+ * 的那一份。插平台行时 `models_auto` 由这一格决定（见 seededModelAuto）——
+ * 「目录归谁管」这件事只有这一个来源，不再另立一张按 kind 写的表。
+ *
  * SenseNova 与书生·端砚没有代码里的目录：它们的目录是从上游拉的，落在 cache
  * 表里。那两家就读 cache 那一行 —— 搬的是「现在正在服务的那份」，不是另造
  * 一份事实。cache 里还没有就是空（全新库的正常形态），不报错、不告警。
  */
-const SEEDED_MODEL_IDS: Record<string, (db: DatabaseSync) => string[]> = {
-  qiniu: () => QINIU_MODELS.map((model) => model.id),
-  xinghuo: () => XINGHUO_MODELS.map((model) => model.id),
-  tokenrhythm: () => TOKENRHYTHM_MODELS.map((model) => model.id),
-  sensenova: (db) => cachedModelIds(db, "sensenova:catalog"),
-  "intern-ai": (db) => cachedModelIds(db, "intern-ai:catalog"),
+interface SeededCatalog {
+  items: string[];
+  /** 这份目录是不是 cache 表里上游缓存的那一份。 */
+  fromCache: boolean;
+}
+
+const SEEDED_MODEL_IDS: Record<string, (db: DatabaseSync) => SeededCatalog> = {
+  qiniu: () => ({ items: QINIU_MODELS.map((model) => model.id), fromCache: false }),
+  xinghuo: () => ({ items: XINGHUO_MODELS.map((model) => model.id), fromCache: false }),
+  tokenrhythm: () => ({ items: TOKENRHYTHM_MODELS.map((model) => model.id), fromCache: false }),
+  sensenova: (db) => ({ items: cachedModelIds(db, "sensenova:catalog"), fromCache: true }),
+  "intern-ai": (db) => ({ items: cachedModelIds(db, "intern-ai:catalog"), fromCache: true }),
 };
 
 /** cache 表里那一份目录的模型 id。没有那一行、读不出来都是空数组。 */
@@ -406,21 +404,15 @@ function seededCurrentIds(raw: unknown): string[] {
 }
 
 /**
- * 这一行的目录是不是播种写进去的那一份：`source` 不是 manual，`fetchedAt` 是 0。
+ * 一条模板行插进去时 `models_auto` 写什么：目录从哪来，这一格就写谁。
  *
- * 区分「代码搬进去的」与「人写的 / 从上游拉的」：只有前者可以被播种顺手改成
- * 「不自动拉」。
+ * 上游缓存里那一份 → 1（以后跟着上游走）。代码常量表那一份 → 0（上游报得更
+ * 宽，盖上来会用到没有权限的模型；要拉就由人在面板上把这一格打开）。没有目录
+ * → 1（宁可被上游覆盖一次，也不要冻住一份谁都不管的目录）。
  */
-function isSeededCatalog(raw: unknown): boolean {
-  try {
-    const parsed = JSON.parse(String(raw ?? "")) as any;
-    // 早期存的是单纯的模型名数组：读出来就是 auto + 没拉过。
-    if (Array.isArray(parsed)) return true;
-    if (!parsed || typeof parsed !== "object") return false;
-    return parsed.source !== "manual" && Number(parsed.fetchedAt ?? 0) === 0;
-  } catch {
-    return false;
-  }
+function seededModelAuto(catalog: SeededCatalog | undefined): number {
+  if (!catalog?.items.length) return 1;
+  return catalog.fromCache ? 1 : 0;
 }
 
 /**
@@ -438,15 +430,11 @@ function isSeededCatalog(raw: unknown): boolean {
  * 写的不是从上游拉的那一份：`source` 记 auto、`fetchedAt` 留 0（没拉过）—— 0
  * 就是「没拉过」的意思，写成现在会让目录看起来刚拉过，半小时内不再去问上游。
  *
- * `models_auto` 按「这一行的目录归谁管」写（见 UPSTREAM_CATALOG_KINDS）：
- *
- *   七牛云、讯飞星火、TokenRhythm  关掉。它们的目录是代码挑过的一份，上游那份
- *     更宽（七牛报 78 个模型），拿它盖上来会出现被上游拒的模型。
- *   SenseNova、书生·端砚           开着。这两家没有代码目录，目录只有上游报得
- *     出来 —— 关掉就等于永远停在播种那一刻的那份。
- *   方言类（openai / anthropic）    开着，它们的目录本来就是上游（或人）说了算。
- *
- * 那一格是**面板上那个开关**，写错就是开关说了不算：人关掉它，后台照写。
+ * `models_auto` 一格不碰：那一格是**面板上那个开关**（「这一行的目录归谁管」），
+ * 说的是「以后允不允许自动拉覆盖」，播种没有资格替人回答它。新行的那一格由插进
+ * 去的两处写（seedPlatformTemplates 按目录从哪来给初始值，createOpenPlatform 由
+ * 建的人定）；老库那几行保持现值 —— 播种把它们拨成 0 会冻住本该跟着上游走的那几
+ * 行（方言行，以及自己把那一格打开过的厂商行）。
  *
  * 幂等：填过的行目录非空，再跑一次连 updated_at 都不动。返回填了几行。
  */
@@ -454,9 +442,8 @@ export function seedPlatformModels(db: DatabaseSync): number {
   const rows = db
     .prepare("SELECT id, kind, base_url, models, models_auto FROM platform")
     .all() as { id?: string; kind?: string; base_url?: string; models?: unknown; models_auto?: unknown }[];
-  const fill = db.prepare("UPDATE platform SET models = ?, models_auto = ?, updated_at = ? WHERE id = ?");
-  // 只翻那一格：目录不动 —— 已经有内容的是人写的或从上游拉回来的，不能碰。
-  const stopAuto = db.prepare("UPDATE platform SET models_auto = 0, updated_at = ? WHERE id = ?");
+  // 只写目录：models_auto 不在这一句里（见上面的说明）。
+  const fill = db.prepare("UPDATE platform SET models = ?, updated_at = ? WHERE id = ?");
   const now = Date.now();
   let seeded = 0;
   for (const row of rows) {
@@ -464,25 +451,16 @@ export function seedPlatformModels(db: DatabaseSync): number {
     if (!id) continue;
     if (Number(row.models_auto ?? 1) === 0) continue;
     const kind = String(row.kind ?? "").trim() || OPEN_PLATFORM_KIND;
-    const vendor = isVendorTemplateKind(kind);
-    if (seededCurrentIds(row.models).length) {
-      // 已有目录：人写的或上游拉的，不动。
-      //
-      // 例外是厂商模板行上**播种自己写进去的**那一份（source=auto、没拉过）：
-      // 老库里那几行是播种改口径之前写进去的，models_auto 还是 1 —— 补上这一格，
-      // 它们就不必等下一次「目录被上游那份盖掉」才被发现。
-      if (vendor && !UPSTREAM_CATALOG_KINDS.has(kind) && isSeededCatalog(row.models)) stopAuto.run(now, id);
-      continue;
-    }
+    // 已有目录：人写的或上游拉的，不动。
+    if (seededCurrentIds(row.models).length) continue;
     // 通用开放平台：这一行背后是哪家厂商由地址说明（lib/model-catalog.ts）。
     // 表里没有这家厂商就是空 —— 用户在面板上手填，不是错误。
     const items =
       kind === OPEN_PLATFORM_KIND
         ? normalizeSeedIds(knownCatalogForBaseUrl(String(row.base_url ?? ""))?.models.map((m) => m.id) ?? [])
-        : (SEEDED_MODEL_IDS[kind]?.(db) ?? []);
+        : (SEEDED_MODEL_IDS[kind]?.(db)?.items ?? []);
     if (!items.length) continue;
-    const auto = vendor && !UPSTREAM_CATALOG_KINDS.has(kind) ? 0 : 1;
-    fill.run(JSON.stringify({ items, fetchedAt: 0, source: "auto" }), auto, now, id);
+    fill.run(JSON.stringify({ items, fetchedAt: 0, source: "auto" }), now, id);
     seeded++;
   }
   return seeded;
@@ -537,30 +515,41 @@ function migratePlatformColumns(db: DatabaseSync): void {
   const has = (name: string) => columns.some((c) => c.name === name);
   if (!has("kind")) db.exec("ALTER TABLE platform ADD COLUMN kind TEXT NOT NULL DEFAULT 'openai'");
   if (!has("region")) db.exec("ALTER TABLE platform ADD COLUMN region TEXT NOT NULL DEFAULT ''");
+  // 共性表那个开关也是后来加的：老库没有这一列，补成关（与新建的库一样）。
+  if (!has("traits_from_common")) {
+    db.exec("ALTER TABLE platform ADD COLUMN traits_from_common INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 /**
  * 把那五个还没迁完的平台补成表里的行。
  *
  * 幂等：已经有的行不动（INSERT OR IGNORE）—— 用户改过的名字与地址不能被启动
- * 时的迁移顺手抹掉。模型目录是空的（自动拉，让上游自己报）；额度插件填模板里
- * 那一个（三家插件的额度只有插件问得到，七牛与星火是空串）。
+ * 时的迁移顺手抹掉。额度插件填模板里那一个（三家插件的额度只有插件问得到，
+ * 七牛与星火是空串）。
+ *
+ * 目录与 `models_auto` 在插入时一次写完：目录是播种用的那一份（代码挑的常量表，
+ * 或者 cache 里现在正服务的那份），那一格按目录从哪来写（见 seededModelAuto）。
+ * 插入之后 seedPlatformModels 不再碰这一格 —— 所以新库的初始值只有这一处。
  */
 function seedPlatformTemplates(db: DatabaseSync): void {
   const insert = db.prepare(
     "INSERT OR IGNORE INTO platform " +
       "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
-      "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
   const now = Date.now();
   for (const t of PLATFORM_TEMPLATES) {
+    // 目录与那一格同源：读一次，两处都用这一份。
+    const catalog = SEEDED_MODEL_IDS[t.kind]?.(db);
     insert.run(
       t.suggestedId,
       t.label,
       t.defaultBaseUrl,
-      // 空的目录（跟 createOpenPlatform 写进去的形状一样：auto 那一格在列上，
-      // JSON 里只有模型名、上次拉的时刻与来源）。
-      JSON.stringify({ items: [], fetchedAt: 0, source: "auto" }),
+      // 与播种、createOpenPlatform 写进去的形状一样：auto 那一格在列上，JSON 里
+      // 只有模型名、上次拉的时刻与来源。
+      JSON.stringify({ items: catalog?.items ?? [], fetchedAt: 0, source: "auto" }),
+      seededModelAuto(catalog),
       t.quotaPlugin,
       t.kind,
       t.region,
