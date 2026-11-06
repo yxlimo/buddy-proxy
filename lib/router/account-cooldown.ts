@@ -1,6 +1,7 @@
 // lib/router/account-cooldown.ts — 一次失败值多少冷却。
 //
-// 各类失败各记什么：
+// 记冷却的只有三类：限流、凭据被拒、额度见底。别的失败都不记 —— 它们说的
+// 不是「这个账号不能用了」。
 //
 //   限流（rate-limit：超了 RPM/TPM）
 //       固定 1 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来。
@@ -20,10 +21,18 @@
 //       额度是一次性的（等窗口），限流是分钟级的（等一分钟）—— 两者的等待
 //       不是一回事，所以分开算。
 //
+//   凭据被拒与余额见底（credential、no-balance）
+//       固定 5 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来
+//       —— 那时候一个短的等待是对的。套餐窗口说的是额度，跟这两类没关系，
+//       不参与。
+//
+// 不记账的：
+//
 //   连接（connection）
-//       固定 1 分钟。连接断掉不是账号的错 —— 一个只有单个账号的平台会被
-//       自己断掉的连接下线好几分钟。上游自己说了「过多久再来」（retry-after），
-//       就照它说的来。
+//       连接被上游掐断不是「这个账号不能用了」：同一个账号的下一个请求很可能
+//       就通了（上游抽了一下、复用的连接被断掉、中间的代理掐了）。
+//       记 1 分钟的话，只有一个账号的平台那一分钟里一个上游请求都不打 ——
+//       一次连接重置把整个平台下线一分钟，比这个故障本身还严重。
 //
 //   超时不记账（timeout）
 //       超时说的是「这一条请求等太久了」，不是「这个账号不能用了」。记冷却会
@@ -36,11 +45,6 @@
 //       （见 policy.ts 的 stop）：它的语义是「这个限流是我们替它等过的」，不是
 //       「这个账号这一轮里等过什么」—— 贴在被拒（401）、额度见底（402）上，
 //       下面这条就变成「坏凭据永不冷却」。
-//
-//   凭据被拒与额度见底（credential、no-balance）
-//       固定 5 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来
-//       —— 那时候一个短的等待是对的。套餐窗口说的是额度，跟这两类没关系，
-//       不参与。
 //
 //   上游 5xx（server）不记账
 //       —— 它说的是「这个请求这次没成事」，不是「这个账号不能用了」。算到账号
@@ -61,7 +65,6 @@
 
 import {
   MAX_COOLDOWN_MS,
-  networkCooldownMs,
   rateCooldownMs,
   unavailableCooldownMs,
 } from "../cooldown.ts";
@@ -120,7 +123,7 @@ export function rateWaitedOf(error: unknown): boolean {
  * 这次失败要让那个账号冷却多久。
  *
  * 不可降级的失败没有冷却：换一个账号也是一样的结果，把账号放下去只会让可用
- * 的账号更少；超时与等过限流的也不记（理由见文件顶上）。
+ * 的账号更少；超时、连接断掉与等过限流的也不记（理由见文件顶上）。
  */
 export function cooldownForFailure(
   accountId: string,
@@ -131,6 +134,9 @@ export function cooldownForFailure(
   const failure = classifyUpstreamError(error);
   // 超时不记账：这一条请求等得太久了，不是这个账号不能用了（见文件顶上的分类）。
   if (failure.kind === "timeout") return null;
+  // 连接被上游掐断也不记账：它说的不是「这个账号不能用了」，下一个请求很可能
+  // 就通了。记 1 分钟的话，只有一个账号的平台那一分钟里一个上游请求都不打。
+  if (failure.kind === "connection") return null;
   // 等过了限流的账号正在等自己的窗口恢复：它接不了不是因为坏了。
   if (rateWaitedOf(error)) return null;
   // 上游 5xx 不是账号的错。
@@ -180,11 +186,9 @@ export function cooldownForFailure(
       };
     }
   }
-  // 没有上游给的恢复时间：用固定值。连接是 1 分钟 —— 那不是账号的错，按 5 分钟
-  // 算的话一个只有单个账号的平台会被自己断掉的连接下线好几分钟。
-  // 额度用完也是固定值：额度是真的用完了，等窗口（5 分钟）。
-  const fixed = failure.kind === "connection" ? networkCooldownMs() : unavailableCooldownMs();
-  return { untilMs: now + fixed, reason: failure.kind, source: "fixed" };
+  // 没有上游给的恢复时间：用固定值 —— 凭据被拒与余额见底是 5 分钟（额度用完
+  // 落到这里时也是 5 分钟）。
+  return { untilMs: now + unavailableCooldownMs(), reason: failure.kind, source: "fixed" };
 }
 
 /**

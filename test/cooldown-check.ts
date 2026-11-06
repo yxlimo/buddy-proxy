@@ -16,8 +16,8 @@
 //   1. 短冷却不能盖掉长冷却；
 //   2. 额度见底的窗口说了算（周额度见底就等周窗口，不等 5 小时那个）；
 //   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个；
-//   4. 连接只冷却 1 分钟（不是 5 分钟），但上游自己说了就照它说的来；
-//      超时相反，一个也不记（而凭据被拒照旧记 5 分钟）。
+//   4. 连接断掉不记账（上游自己说了 retry-after 也不记）：连接被掐断不是
+//      「这个账号不能用了」；超时同理，而凭据被拒照旧记 5 分钟。
 
 import fs from "node:fs";
 import http from "node:http";
@@ -67,6 +67,8 @@ interface Plan {
   body: unknown;
   /** 流式答复：写完第一帧就断（socket destroy），模拟中途断流。 */
   breakStream?: boolean;
+  /** 前几次调用把连接掐了（socket destroy），模拟上游自己断连接。 */
+  resetTimes?: number;
 }
 
 let plans: Record<string, Plan> = {};
@@ -156,6 +158,12 @@ const upstream = http.createServer((req, res) => {
     if (!plan) {
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: `没有这个账号：${who}` } }));
+      return;
+    }
+    // 连接被上游掐了：一个字节都没答就断（网关那边看到的是 ECONNRESET）。
+    if (plan.resetTimes && plan.resetTimes > 0) {
+      plan.resetTimes -= 1;
+      req.socket.destroy();
       return;
     }
     // 流式请求答的是帧，不是整块 JSON。
@@ -547,7 +555,7 @@ console.log("场景五：单一策略 —— 冷却的时候直接说，不去�
 }
 
 console.log("");
-console.log("场景六：流式答复 —— 流完了才算成功，中途断了要记冷却");
+console.log("场景六：流式答复 —— 流完了才算成功，中途断了不记冷却");
 
 {
   // 6a：流正常结束 → 冷却被清掉（成功才清）。
@@ -586,15 +594,17 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
 }
 
 {
-  // 6b：流在第一帧之后断了 → 那个账号要记冷却，而且原来那行冷却不能被清掉。
+  // 6b：流在第一帧之后断了 → 连接断掉不是账号的错：不记冷却，而且原来那行
+  //     已经过了期的冷却也不能被清掉（失败不清账）。
   plans = { 1: { status: 200, body: {}, breakStream: true }, 2: { status: 200, body: {} } };
   calls.length = 0;
 
   const gw = await startGateway();
   try {
     await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
-    // 一行已经过了期的冷却：断流不能把它清掉。
-    writeCooldown(gw.dataDir, gw.accounts[0], Date.now() - 1000, "test");
+    // 一行已经过了期的冷却：断流既不能写新的一行，也不能把它清掉。
+    const expired = Date.now() - 1000;
+    writeCooldown(gw.dataDir, gw.accounts[0], expired, "test");
     const answered = await chatStream(gw);
     check(
       "断流：客户端看到的是错误事件",
@@ -603,14 +613,61 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
     );
     const row = cooldownRow(gw.dataDir, gw.accounts[0]);
     check(
-      "断流：那个账号记了冷却，理由看得出是失败",
-      row !== null && row.reason === "connection",
+      "断流：没有给这个账号记冷却（连接断掉不是账号的错）",
+      row !== null && row.untilMs === expired && row.reason === "test",
       JSON.stringify(row),
     );
+    await new Promise((r) => setTimeout(r, 200));
     check(
-      "断流：日志里看得见冷却",
-      /cooling down until/.test(gw.log()),
+      "断流：日志里写的是「不冷却」",
+      /not cooling down/.test(gw.log()),
       gw.log().slice(-600),
+    );
+  } finally {
+    await gw.stopAndWait();
+    fs.rmSync(gw.dataDir, { recursive: true, force: true });
+  }
+}
+
+console.log("");
+console.log("场景七：连接断掉 —— 不记冷却，紧接着的下一个请求照旧打上游");
+
+{
+  // 账号 1 的上游把前三次连接掐了，之后照旧答。账号 2 是好的。
+  //
+  // 降级下有人可换：账号 1 只被叫三次（首次 + 两档退避），三次都断就换人 ——
+  // 不能把一个账号打满 180 秒才轮到下一个。
+  plans = {
+    1: { status: 200, body: answerBody("first account"), resetTimes: 3 },
+    2: { status: 200, body: answerBody("second account") },
+  };
+  calls.length = 0;
+
+  const gw = await startGateway();
+  try {
+    await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
+
+    const first = await chat(gw);
+    check(
+      "客户端拿到的是成功（降级到了第二个账号）",
+      first.status === 200,
+      `${first.status} ${first.text.slice(0, 200)}`,
+    );
+    check(
+      "第一个账号被叫了三次就换人（有人可换就不用把它打满）",
+      calls.join(",") === "1,1,1,2",
+      calls.join(","),
+    );
+
+    const row = cooldownRow(gw.dataDir, gw.accounts[0]);
+    check("冷却表里没有这个账号的行（连接断掉不记账）", row === null, JSON.stringify(row));
+
+    const second = await chat(gw);
+    check("第二个请求也成功了", second.status === 200, `${second.status} ${second.text.slice(0, 200)}`);
+    check(
+      "第二个请求还是先打第一个账号（它没有被冷却）",
+      calls.join(",") === "1,1,1,2,1",
+      calls.join(","),
     );
   } finally {
     await gw.stopAndWait();
@@ -698,15 +755,14 @@ console.log("算法：冷却的四条规矩");
   // 冷却的话，同一平台上别的模型会跟着下线，fallback 的第二个目标也被跳过。
   check("上游 5xx → 不冷却账号（哪怕它给了 retry-after）", serverDecision === null, JSON.stringify(serverDecision));
 
-  // 4. 连接不是账号的错：只冷却 1 分钟（不是 5 分钟）；上游自己说了就照它说的来。
-  //    超时相反 —— 它一个也不记，见下面那段。
+  // 4. 连接不是账号的错：一个也不记。上游自己说了 retry-after 也不记 ——
+  //    连接被掐断说的是「这一次没成事」，不是「这个账号不能用了」。
+  //    超时同理，见下面那段。
   const connectionError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
   const connectionDecision = cooldownForFailure("acct-connection", connectionError, now);
   check(
-    "连接类失败 → 固定 1 分钟（不是 5 分钟）",
-    connectionDecision !== null &&
-      connectionDecision.source === "fixed" &&
-      Math.abs(connectionDecision.untilMs - (now + 60_000)) <= 1000,
+    "连接类失败 → 不记账（没有冷却）",
+    connectionDecision === null,
     JSON.stringify(connectionDecision),
   );
 
@@ -743,10 +799,8 @@ console.log("算法：冷却的四条规矩");
     now,
   );
   check(
-    "连接类失败但上游说了 40 秒 → 用上游的 40 秒（不是 1 分钟）",
-    attachedConnectionDecision !== null &&
-      attachedConnectionDecision.source === "the upstream's answer" &&
-      Math.abs(attachedConnectionDecision.untilMs - (now + 40_000)) <= 1000,
+    "连接类失败但上游说了 40 秒 → 还是不记账",
+    attachedConnectionDecision === null,
     JSON.stringify(attachedConnectionDecision),
   );
 }

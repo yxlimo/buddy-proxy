@@ -1,22 +1,23 @@
 // lib/cooldown.ts — 账号的冷却：失败之后一段时间不再路由到那个账号。
 //
-// 各类失败各记什么（超时、上游 5xx 都不记账，见下）：
+// 记冷却的只有三类（超时、上游 5xx、连接断掉都不记，见下）：
 //
 //   限流（RPM/TPM）      固定 1 分钟（ACCOUNT_RATE_COOLDOWN_MS 可以改）。
 //                        限流的窗口是分钟级的 —— 超了一分钟，等一分钟就够；
 //                        按 5 分钟算会把同平台别的模型一起挡掉。
+//   凭据被拒、余额见底    固定 5 分钟（ACCOUNT_COOLDOWN_MS 可以改）；上游自己
+//                        说了「过多久再来」（retry-after），就照它说的来。
 //   额度用完             冷却到「恢复时间 + 1 分钟」。恢复时间从哪儿来，由
 //                        lib/router/account-cooldown.ts 去找（错误上带的、
 //                        正文里写的、账号当前的套餐窗口）。
-//   连接                  固定 1 分钟（ACCOUNT_NETWORK_COOLDOWN_MS 可以改）。
-//                        连接断掉不是账号的错 —— 按 5 分钟算的话，一个只有
-//                        一个账号的平台会被自己断掉的连接下线好几分钟。
-//   凭据被拒、额度见底    固定 5 分钟（ACCOUNT_COOLDOWN_MS 可以改）；上游自己
-//                        说了「过多久再来」（retry-after），就照它说的来。
 //
 // 超时不记账：超时说的是「这一条请求等得太久」，不是「这个账号不能用了」。记冷却
 // 会把一个好账号挡在门外好几分钟，而同一条请求慢，换哪个账号都可能一样慢；答复
 // 照旧是那条超时错误，客户端自己会重试。判据在 lib/router/account-cooldown.ts。
+//
+// 连接断掉也不记账：连接被上游掐断不是「这个账号不能用了」—— 同一个账号的下
+// 一个请求很可能就通了。记 1 分钟的话，只有一个账号的平台那一分钟里一个上游请
+// 求都不打：一次连接重置把整个平台下线一分钟，比这个故障本身还严重。
 //
 // 上游 5xx 也不记账：它说的是「这个请求这次没成事」，不是「这个账号不能用了」。
 // 算到账号头上，同一个平台上别的模型会跟着下线五分钟，fallback 的第二个目标也
@@ -35,9 +36,6 @@ import { store } from "./store.ts";
 
 /** 不可用时的固定冷却时长（毫秒）。 */
 export const UNAVAILABLE_COOLDOWN_MS = 5 * 60_000;
-
-/** 连接断掉或超时时的固定冷却时长（毫秒）。 */
-export const NETWORK_COOLDOWN_MS = 60_000;
 
 /**
  * 限流（RPM/TPM）的固定冷却时长（毫秒）。
@@ -58,11 +56,6 @@ export const MAX_COOLDOWN_MS = 7 * 24 * 60 * 60_000;
 /** 固定冷却时长，可以由设置改。 */
 export function unavailableCooldownMs(): number {
   return configNumber("ACCOUNT_COOLDOWN_MS", UNAVAILABLE_COOLDOWN_MS);
-}
-
-/** 连接断掉的固定冷却时长，可以由设置改。 */
-export function networkCooldownMs(): number {
-  return configNumber("ACCOUNT_NETWORK_COOLDOWN_MS", NETWORK_COOLDOWN_MS);
 }
 
 /** 限流的固定冷却时长，可以由设置改。 */

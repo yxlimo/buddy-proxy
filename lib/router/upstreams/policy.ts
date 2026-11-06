@@ -9,6 +9,7 @@ import { AuthError } from "../../credential.ts";
 import type { WorkBuddyModel } from "../../workbuddy/models.ts";
 import { TokenRhythmNoBalanceError } from "../../tokenrhythm/transport.ts";
 import { byOrder, classifyUpstreamError, describeUpstreamError, isDegradableUpstreamError, isNoBalanceFailure, selectProvider } from "../provider-selection.ts";
+import { byWeight } from "../selection.ts";
 import {
   businessCodeOf,
   businessCodeOfBody,
@@ -20,7 +21,8 @@ import {
 } from "../../upstream-status.ts";
 import { clearCooldown, setCooldown } from "../../cooldown.ts";
 import { scrubForLog } from "../../log-scrub.ts";
-import { cooldownForFailure, cooldownStamp, errorTextOf, rateWaitedOf, withRateWaited } from "../account-cooldown.ts";
+import { cooldownForFailure, cooldownStamp, errorTextOf, rateWaitedOf, withRateWaited, type RateWaited } from "../account-cooldown.ts";
+import { readEnvNumber } from "../../env.ts";
 import { type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { credentialFaultError, platformWithoutAccount } from "../routes.ts";
@@ -98,6 +100,9 @@ export interface UpstreamContext {
  * (a 402 means this account is out of credit, a 400 means the request is
  * wrong and every account would fail the same way).
  *
+ * The upstream's own body stays on the error too: when the retries run out,
+ * that answer is what the client gets (see upstreamAnswerError).
+ *
  * `retryAfterMs` is what the upstream said about its own window ("come back
  * in two seconds"). It is put on the error so the routing layer can wait
  * instead of failing the client — see rateLimitWaitMs. It is *not* the
@@ -122,6 +127,9 @@ export function upstreamStatusError(
     502,
   );
   withUpstreamStatus(error, status);
+  // 上游自己的正文，原样留在错误上：重试试完了要把这份答复交给客户端（见
+  // upstreamAnswerError），那时候上游的正文已经不在手边了。
+  withUpstreamBody(error, text);
   const code = businessCodeOfBody(text);
   if (code !== null) withBusinessCode(error, code);
   // 上游说的「过多久再来」：挂到错误上，等得起的时候网关自己等。
@@ -153,38 +161,51 @@ const DEFAULT_RATE_WAIT_MS = 30_000;
 /**
  * 一次最多等多久（毫秒）。
  *
- * 超过一分钟就不等了：客户端等不了那么久，那种情况照旧报错 + 降级。
+ * 超过两分钟就不等了：客户端等不了那么久，那种情况照旧报错 + 降级。
  */
-const MAX_RATE_WAIT_MS = 60_000;
+const MAX_RATE_WAIT_MS = 120_000;
 
 /**
  * 一个账号上这一轮总共最多花多久（毫秒）。
  *
- * 等的（限流窗口、重试间隔）与上游自己算的时间都算在里面。超过就停手：客户端
- * 等不了更久，再等下去只是把它挂在那里。
+ * 这是**无限重试**那条路的唯一刹车：没有别人可换时瞬时失败没有次数上限（上游
+ * 抽一下的时候，多试几次就好了），停手看的是时间 —— 客户端等不了更久，再等下
+ * 去只是把它挂在那里。
+ *
+ * 有人可换的时候不用等这么久：试三次就换人（见 BOUNDED_ATTEMPTS）。
+ *
+ * 等的（限流窗口、重试间隔）与上游自己算的时间都算在里面。
+ *
+ * 环境变量能改小（ROUTER_RETRY_BUDGET_MS）：自测不能真等三分钟。
  */
-const ATTEMPT_BUDGET_MS = 60_000;
+const ATTEMPT_BUDGET_MS = readEnvNumber("ROUTER_RETRY_BUDGET_MS", 180_000);
 
 /**
- * 瞬时重试的间隔（毫秒）：第 1 档 300ms，第 2 档 900ms。
+ * 有人可换的时候，一个账号最多打几次上游。
+ *
+ * 三次（首次 + 两次重试，间隔 300ms、900ms）：够躲开上游那一下抖动，又不至于
+ * 把降级拖成一分半钟 —— 以前就是这个数。打完就交给策略换下一个账号。
+ *
+ * 没有人可换的时候不用这个上限：一直试到总时限（见 ATTEMPT_BUDGET_MS）。
+ */
+const BOUNDED_ATTEMPTS = 3;
+
+/**
+ * 限流最多等几回。
+ *
+ * 上游说「过 N 秒再来」就等 N 秒 —— 那是它自己的窗口，等得到就等。三回都等
+ * 不到，说明这个账号是真的被限住了（不是抖一下），交出去让策略照常记冷却。
+ */
+const MAX_RATE_WAITS = 3;
+
+/**
+ * 瞬时重试的间隔（毫秒）：第 1 档 300ms，第 2 档 900ms，第 3 档 2700ms。
  *
  * 300ms 之后再来，是等上游那一下抖动过去（回滚、单实例重启、某个节点抽了）。
- * 再失败就 900ms —— 还没好就是真有事，第三次之后交给策略。
+ * 900ms 还不行就是真有事。2700ms 之后再放大间隔也没有意义（上游不是越等越久
+ * 就越好），所以之后就一直用 2700ms —— 次数没有上限，刹车是总时限。
  */
-const TRANSIENT_RETRY_DELAYS_MS = [300, 900];
-
-/**
- * 一个账号上最多打几次上游：首次 + 每一档退避各一次。
- *
- * 「等限流窗口再来」与「隔一会儿再试」是同一件事的两种说法 —— 都是一次上游
- * 调用，都从这一格预算里出。两套计数各数各的话，最坏是五次（等两次 + 试
- * 两次）：客户端在那一分钟里等，上游那边被打了五遍。
- *
- * 次数上限由间隔档数算出来：间隔档数 = 次数上限 - 1。不另写一个数字 —— 两个
- * 数字各改各的时候会出现「上限 4 而间隔只有两档」，第 4 档静默复用 900ms，那
- * 正是以前 `.at(-1)` 兜底把配置错误藏起来的地方。
- */
-const MAX_ATTEMPTS_PER_ACCOUNT = TRANSIENT_RETRY_DELAYS_MS.length + 1;
+const TRANSIENT_RETRY_DELAYS_MS = [300, 900, 2700];
 
 /**
  * 一个等过了的错误：冷却不写它（见 lib/router/account-cooldown.ts）。
@@ -208,12 +229,14 @@ function isTokenRateLimit(error: unknown): boolean {
  * 等多久（毫秒）。null = 等不起，照旧报错。
  *
  * 等多久：上游自己说的（retry-after，挂在错误上）；没说的话按一分钟窗口的
- * 一半。上游说了「过两分钟再来」就是等不起 —— 客户端等不了那么久。
+ * 一半。上游说了「过两分半再来」就是等不起 —— 客户端等不了那么久。
+ *
+ * `now` 是钟：测试要能把「等多久」算准（注入的钟与真钟差几毫秒，断言就飘）。
  */
-export function rateLimitWaitMs(error: unknown): number | null {
+export function rateLimitWaitMs(error: unknown, now: () => number = Date.now): number | null {
   if (!isTokenRateLimit(error)) return null;
   const until = cooldownUntilOf(error);
-  const wait = until === null ? DEFAULT_RATE_WAIT_MS : until - Date.now();
+  const wait = until === null ? DEFAULT_RATE_WAIT_MS : until - now();
   if (wait <= 0 || wait > MAX_RATE_WAIT_MS) return null;
   return wait;
 }
@@ -226,30 +249,24 @@ function sleep(ms: number): Promise<void> {
 /**
  * 瞬时重试的下一次间隔（毫秒）。
  *
- * 越界不做兜底：档数是从次数上限那边算出来的，正常路径上取不到 undefined。
- * 取到了就是有人把次数上限抬到阶梯之外（opts.maxAttempts 是测试用的口子）——
- * 那就报出来，而不是静默复用最后一档：静默复用把配置错误藏起来，而 0 毫秒
- * （`sleep(undefined)`）是连打上游的紧圈。
+ * 阶梯走完就一直是最后一档：没有人可换时次数没有上限（唯一的刹车是总时限），
+ * 放大间隔只是把客户端挂在那里，不换来上游的好转。有人可换时阶梯只走前两
+ * 档：第三次就换人（见 BOUNDED_ATTEMPTS）。
  */
 function retryDelayMs(retries: number): number {
-  const delay = TRANSIENT_RETRY_DELAYS_MS[retries];
-  if (delay === undefined) {
-    throw new Error(
-      `transient retry ${retries + 1} has no delay: the schedule has ` +
-        `${TRANSIENT_RETRY_DELAYS_MS.length} step(s), so the attempt cap is ${MAX_ATTEMPTS_PER_ACCOUNT}`,
-    );
-  }
-  return delay;
+  const steps = TRANSIENT_RETRY_DELAYS_MS;
+  return steps[Math.min(retries, steps.length - 1)];
 }
 
 /**
- * 退避阶梯与次数上限：给测试核对「间隔档数 = 次数上限 - 1」。
+ * 退避阶梯：给测试核对间隔。
  *
- * 两个数字绑在一个不变量里之后，配置错误写不出来 —— 这条访问器就是那个不变
- * 量本身，测试照着它断言，不照着两个数各断言一遍。
+ * 只报间隔，不报次数上限 —— 无限重试那条路没有次数上限（刹车是总时限
+ * ATTEMPT_BUDGET_MS），有人可换时的次数上限是 BOUNDED_ATTEMPTS。
  */
-export function transientRetryPlan(): { maxAttempts: number; delaysMs: readonly number[] } {
-  return { maxAttempts: MAX_ATTEMPTS_PER_ACCOUNT, delaysMs: TRANSIENT_RETRY_DELAYS_MS };
+export function transientRetryPlan(): { delaysMs: readonly number[]; repeatLastMs: number } {
+  const delaysMs = TRANSIENT_RETRY_DELAYS_MS;
+  return { delaysMs, repeatLastMs: delaysMs[delaysMs.length - 1] };
 }
 
 /**
@@ -299,14 +316,16 @@ function whyNotCooling(error: unknown): string {
  * 「这一次没成事，过一会儿再来」。分成两层的话，一个 TPM 限流过的账号会先等
  * 完窗口、再把瞬时重试的次数从头数一遍，最坏打到五次，日志也会出现两套说法。
  *
- *   - TPM 限流：等上游说的那个窗口（一分钟以内）再来一次。客户端这时候只是在
- *     等答复，不该看到 429/503 —— 等发生在拿到答复之前，连接一直开着，不会写
- *     出半截答复。等过的这个账号带一个标记：但只贴在「最终抛出的那个错误本身
- *     还是限流」时 —— 那样冷却不写它（见 cooldownForFailure），它只是在等自己
- *     的窗口恢复。等过窗口之后又失败于凭据被拒/额度见底/连接断，那个失败仍照
- *     旧记账。
- *   - 瞬时失败（5xx、连接）：隔 300ms、900ms 各再试一次，同一个账号。换账号
- *     没有用 —— 上游自己抽了一下，换谁都可能抽。
+ *   - TPM 限流：等上游说的那个窗口（两分钟以内）再来一次，最多等三回。客户端
+ *     这时候只是在等答复，不该看到 429/503 —— 等发生在拿到答复之前，连接一直
+ *     开着，不会写出半截答复。等过的这个账号带一个标记：但只贴在「最终抛出的
+ *     那个错误本身还是限流」时 —— 那样冷却不写它（见 cooldownForFailure），它
+ *     只是在等自己的窗口恢复。三回都等不到就不是这个意思了（那个账号确实被限
+ *     住了），那种情况下标记不贴，冷却照记。等过窗口之后又失败于凭据被拒/额度
+ *     见底/连接断，那个失败仍照旧记账。
+ *   - 瞬时失败（5xx、连接）：同一个账号再试，隔 300ms、900ms、2700ms。有人可
+ *     换的时候试三次就停手（把机会让给下一个账号）；没有人可换的时候次数没有
+ *     上限，刹车是总时限。换账号没有用 —— 上游自己抽了一下，换谁都可能抽。
  *   - 超时：不在这里重试。它说的是这一条请求等太久了，再等一次只是再久一次；
  *     答复就是那条超时错误，客户端自己决定要不要重发。
  *
@@ -316,25 +335,35 @@ function whyNotCooling(error: unknown): string {
  * 都是「发请求、拿到答复的头」为止（老协议的 chunks 也是拿到迭代器就返回），
  * 读正文、转发给客户端都是 `run` 返回之后的事。
  *
- * 次数与时间各有一格预算：一个账号最多打 MAX_ATTEMPTS_PER_ACCOUNT 次上游
- * （等窗口之后那一次也算），整轮加起来不超过 budgetMs。用完了就停手，把最后
- * 一个错误原样抛出去：记冷却、换不换账号都由策略（onAttempt）照旧决定 ——
- * 重试成功那条路走的是返回值，onAttempt 看到的是成功。
+ * 次数与时间各有一格预算。有人可换的时候次数是三次（见 BOUNDED_ATTEMPTS）：
+ * 打完就把机会让给下一个账号 —— 降级要在几秒内换人，不是把一个账号打满整个
+ * 时限。没有人可换的时候没有次数上限，刹车是时间：整轮加起来不超过 budgetMs。
+ * 到点停手，把最后一个错误原样抛出去：记冷却、换不换账号都由策略（onAttempt）
+ * 照旧决定 —— 重试成功那条路走的是返回值，onAttempt 看到的是成功。
+ *
+ * 停手的时候，客户端看到的是**上游自己的答复**（状态码与正文）：网关自己编
+ * 的一句话（“上游在冷却”）会把上游真的发生了什么盖掉。见 upstreamAnswerError。
  *
  * 预算要算上上游自己花的时间，不然它只是「等待时间」的预算：一次 30s 的超时
  * 不算账，三次就能花掉 90s。所以每轮尝试**开始前**先看还剩多少，没了就不打了。
  *
- * `opts` 只为测试：次数、时限与钟都能单独看出来，不然验一次预算要真等一分钟。
+ * `opts` 里时限与钟只为测试：不然验一次预算要真等三分钟。`unbounded` 不是为
+ * 测试：它说的是「还有没有别的账号可换」—— 那是调用点答的。
  */
 export interface RetryBudget {
   /** 这一轮的总时限（毫秒）。 */
   budgetMs?: number;
-  /** 一个账号上最多打几次上游。 */
-  maxAttempts?: number;
   /** 时间从哪儿来。 */
   now?: () => number;
   /** 等待。 */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * 没有别人可换的时候才为 true：瞬时失败一直试到总时限。
+   *
+   * 默认 false：试三次就停手，把机会让给下一个账号 —— 降级要在几秒内换人，
+   * 不是把一个账号打满 180 秒。
+   */
+  unbounded?: boolean;
 }
 
 export async function runWithRetries<A extends { id: string }, T>(
@@ -344,15 +373,20 @@ export async function runWithRetries<A extends { id: string }, T>(
   opts: RetryBudget = {},
 ): Promise<T> {
   const budgetMs = opts.budgetMs ?? ATTEMPT_BUDGET_MS;
-  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS_PER_ACCOUNT;
+  // 没有别人可换的时候才无限重试：有人可换时试三次就换人（见 BOUNDED_ATTEMPTS）。
+  const unbounded = opts.unbounded === true;
   const clock = opts.now ?? Date.now;
   const nap = opts.sleep ?? sleep;
   // 时限从第一次上游调用之前算起：等的、试的、上游自己算的都算在里面。
   const deadline = clock() + budgetMs;
   // 打了几次上游：等完窗口之后的那一次也算一次。
   let attempts = 0;
-  // 瞬时重试的间隔用第几个（等窗口不占这个阶梯）。
+  // 瞬时重试的间隔用第几档（等窗口不占这个阶梯）。
   let retries = 0;
+  // 这个账号这一轮替上游的限流等过几回窗口。
+  let rateWaits = 0;
+  // 三回都等不到：这个账号是真的被限住了 —— 标记不贴，冷却照记。
+  let rateWaitsExhausted = false;
   // 这个账号这一轮替上游的限流等过窗口。整轮只算一次，最终抛错时由 stop 决定
   // 贴不贴：只有**最终那个错误本身还是限流**时才贴。
   let rateWaited = false;
@@ -360,22 +394,32 @@ export async function runWithRetries<A extends { id: string }, T>(
   // 什么，不是一句新造的「超时了」）。
   let lastFailure: unknown = null;
   /**
-   * 停手：最终这个错误还是限流、而且我们替它等过窗口，就把标记附上，再原样抛。
+   * 停手：把最后那个错误交出去。
+   *
+   * `gaveUp` 说的是「我们是试过之后才停手的」：那种情况下客户端该看到上游
+   * 自己的答复（状态码与正文），不是网关编的一句话。
    *
    * 标记的语义是「这个限流是我们替它等过的」，不是「这个账号这一轮里等过什
    * 么」。它只对限流有意义：记账那一层（cooldownForFailure）见到它就当「它在等
    * 自己的窗口」，提前 return null 不写冷却。贴在凭据被拒（401）、额度见底
-   * （402）、连接断上，坏凭据的账号就永不冷却、一直被选中重试。
+   * （402）、连接断上，坏凭据的账号就永不冷却、一直被选中重试。三回都等不到
+   * 就不是这个意思了（那个账号确实被限住了），那种情况下不贴 —— 冷却照记。
    */
-  const stop = (error: unknown): never => {
-    if (
-      rateWaited &&
+  const stop = (error: unknown, gaveUp = false): never => {
+    const isLimit =
       error &&
       typeof error === "object" &&
-      classifyUpstreamError(error).kind === "rate-limit"
-    ) {
-      withRateWaited(error as Record<string, unknown>);
+      classifyUpstreamError(error).kind === "rate-limit";
+    const mark = rateWaited && !rateWaitsExhausted && Boolean(isLimit);
+    if (gaveUp) {
+      const answered = upstreamAnswerOf(error);
+      if (answered) {
+        const shaped = upstreamAnswerError(answered, error);
+        if (mark) withRateWaited(shaped);
+        throw shaped;
+      }
     }
+    if (mark) withRateWaited(error as Record<string, unknown>);
     throw error;
   };
   for (;;) {
@@ -385,54 +429,150 @@ export async function runWithRetries<A extends { id: string }, T>(
       console.log(
         `[ROUTE] ${what} account=${account.id} out of time (${Math.round(budgetMs / 1000)}s), not trying again`,
       );
-      stop(lastFailure);
+      stop(lastFailure, true);
     }
     attempts += 1;
     try {
       return await run(account);
     } catch (e) {
       lastFailure = e;
-      const wait = rateLimitWaitMs(e);
+      const wait = rateLimitWaitMs(e, clock);
       const transient = wait === null && isTransientFailure(e);
       // 这一次不值得再试：请求本身的问题、账号接不了、客户端走了、说不清的错。
       if (wait === null && !transient) stop(e);
-      // 次数用完了：不再等也不再试，交给策略。
-      if (attempts >= maxAttempts) {
-        console.log(
-          `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no attempt left (${attempts}/${maxAttempts})`,
-        );
-        stop(e);
-      }
       if (wait !== null) {
-        rateWaited = true;
+        // 限流：等上游说的那个窗口，最多等 MAX_RATE_WAITS 回。
+        if (rateWaits >= MAX_RATE_WAITS) {
+          // 等够了还是限流：这个账号是真的被限住了。标记摘掉 —— 冷却照记，
+          // 下一个请求不用再拿一个坏窗口试它。
+          rateWaitsExhausted = true;
+          if (e && typeof e === "object") withoutRateWaited(e);
+          console.log(
+            `[ROUTE] ${what} account=${account.id} is still rate limited after ${rateWaits} waits, not waiting again`,
+          );
+          stop(e, true);
+        }
         // 等到手也过了这一轮的总时限：不再等，也不再试。
         if (clock() + wait > deadline) {
           console.log(
             `[ROUTE] ${what} account=${account.id} is rate limited on tokens, no time left for a ${Math.ceil(wait / 1000)}s wait, not waiting`,
           );
-          stop(e);
+          stop(e, true);
         }
+        rateWaits += 1;
+        rateWaited = true;
         console.log(
-          `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying`,
+          `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying (wait ${rateWaits}/${MAX_RATE_WAITS})`,
         );
         await nap(wait);
         continue;
       }
-      // 瞬时失败：同一个账号再试。隔完这一段也过了这一轮的总时限就不等了。
+      // 瞬时失败：同一个账号再试。
+      //
+      // 有人可换的时候：试三次就停手，把机会让给下一个账号 —— 降级要在几秒内
+      // 换人，不是把一个账号打满整个时限。没有人可换的时候：一直试到总时限
+      // （上游抽一下，多试几次就通）。
+      if (!unbounded && attempts >= BOUNDED_ATTEMPTS) {
+        console.log(
+          `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no attempt left (${attempts}/${BOUNDED_ATTEMPTS})`,
+        );
+        stop(e, true);
+      }
+      // 隔完这一段也过了这一轮的总时限就不等了。
       const delay = retryDelayMs(retries);
       if (clock() + delay > deadline) {
         console.log(
           `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no time left for a ${delay}ms retry`,
         );
-        stop(e);
+        stop(e, true);
       }
       retries += 1;
       console.log(
-        `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, retry ${retries}/${maxAttempts - 1} in ${delay}ms`,
+        `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, retry ${retries} in ${delay}ms`,
       );
       await nap(delay);
     }
   }
+}
+
+/**
+ * 把「等过了限流窗口」这个标记摘掉：这个失败要照常记冷却。
+ *
+ * 三回都等不到的时候用：那个账号确实被限住了，把它放下去一会儿是对的。
+ */
+function withoutRateWaited<T extends object>(error: T): T {
+  delete (error as T & RateWaited).rateWaited;
+  return error;
+}
+
+/**
+ * 上游自己的正文，留在错误上。
+ *
+ * 客户端要看到的是上游的原话（503 就是 503 + 上游自己那句「服务暂不可用」），
+ * 不是网关编的一句话。正文跟着错误走：重试试完了要交出这份答复的时候，上游
+ * 那边已经不会再答一次了。
+ */
+export interface UpstreamBody {
+  /** 上游自己的正文（原样）。 */
+  upstreamBody?: string;
+}
+
+/** 把上游的正文留在错误上。 */
+function withUpstreamBody<T extends object>(error: T, body: string): T {
+  (error as T & UpstreamBody).upstreamBody = body;
+  return error;
+}
+
+/** 错误里带着的上游正文（没有就是 null）。 */
+function upstreamBodyOf(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const body = (error as UpstreamBody).upstreamBody;
+  return typeof body === "string" && body ? body : null;
+}
+
+/**
+ * 上游自己的答复：状态码与正文。没有就是 null（那是网关自己编的错）。
+ */
+function upstreamAnswerOf(error: unknown): { status: number; body: string } | null {
+  const status = upstreamSaidStatus(error);
+  if (status === null) return null;
+  return { status, body: upstreamBodyOf(error) ?? "" };
+}
+
+/**
+ * 上游自己的答复，原样交给客户端。
+ *
+ * 状态码用上游那个（503 就是 503），正文用上游自己的那句话：网关自己编的
+ * 「上游在冷却」会把上游真的发生了什么盖掉 —— 客户端拿到的答复要能看出上游
+ * 说了什么，排查时也一样。
+ *
+ * 上游的状态与业务码仍留在错误上（keepUpstreamTruth）：路由层要靠它们分清
+ * 「换个账号也许行」与「换谁都一样」。
+ */
+function upstreamAnswerError(answered: { status: number; body: string }, original: unknown): AuthError {
+  const error = new AuthError(
+    `upstream HTTP ${answered.status}`,
+    answered.body.slice(0, 4000) || `上游返回 ${answered.status}。`,
+    answered.status,
+    answerTypeOf(answered.status),
+  );
+  // 上游说的「过多久再来」也跟着走：冷却要照上游说的那个时刻算，不是照固定的
+  // 一分钟（那会把一个只限流一分钟的账号下线五分钟）。
+  const until = cooldownUntilOf(original);
+  if (until !== null) withCooldownUntil(error, until);
+  return keepUpstreamTruth(error, original);
+}
+
+/**
+ * 客户端看到的错误类型：跟着上游的状态走。
+ *
+ * 503 默认会被说成「凭据不对」（sendError 的老规矩），那对上游的 503 是错的
+ * 说法：上游挂了不是网关的 key 不对。
+ */
+function answerTypeOf(status: number): string {
+  if (status === 429) return "rate_limit_error";
+  if (status === 402) return "usage_limit_error";
+  return "api_error";
 }
 
 /**
@@ -564,6 +704,9 @@ export function keepUpstreamTruth<T extends object>(error: T, original: unknown)
   if (status !== null) withUpstreamStatus(error, status);
   const code = businessCodeOf(original);
   if (code !== null) withBusinessCode(error, code);
+  // 上游自己的正文也留着：客户端要看到的是上游的原话（见 upstreamAnswerError）。
+  const body = upstreamBodyOf(original);
+  if (body !== null) withUpstreamBody(error, body);
   return error;
 }
 
@@ -666,6 +809,8 @@ export function settlement(): Settlement {
  *
  * `availability` 是这一轮已经算好的可用性：上层算过一次就传下来，别再读一遍
  * 那几张表。没给就自己算（答案一样，只是多读一次表）。
+ *
+ * `retry` 是重试的那一格预算：只为测试（时限与钟都能单独看）。生产上不传。
  */
 export async function underPolicy<T>(
   platform: string,
@@ -673,6 +818,12 @@ export async function underPolicy<T>(
   run: (account: ProviderRow) => Promise<T>,
   settle?: Settlement,
   availability?: PlatformAvailability,
+  /**
+   * 重试的那一格预算：只为测试（时限与钟都能单独看）。
+   *
+   * 生产上不传：重试走默认的总时限与真的等待。
+   */
+  retry?: RetryBudget,
 ): Promise<T> {
   // 判定：平台现在能不能接请求、有哪些账号能接。判定住在 admin 层
   // （lib/admin/platform-state.ts），派发只取它的答案 —— 判定与派发必须是同一
@@ -793,9 +944,32 @@ export async function underPolicy<T>(
     usable.map((account) => ({
       id: account.id,
       weight: account.weight,
-      run: () => runWithRetries(account, what, run),
+      run: () =>
+        runWithRetries(account, what, run, {
+          ...retry,
+          // 无限重试只在「没有别的账号可换」时才有意义（见 unboundedFor）。
+          unbounded: unboundedFor(account.id),
+        }),
     })),
   );
+  // 试的次序：权重大的先试（select 里也是这个次序，byWeight）。
+  const tryOrder = byWeight(candidates);
+
+  /**
+   * 这个账号要不要无限重试（试到总时限）。
+   *
+   * 无限重试只在**没有别的账号可换**时才有意义：换账号要快，把第一个账号打
+   * 满 180 秒不是降级，是把整轮都耗在这一个账号上。
+   *
+   *   - 降级：只有最后一个候选无限重试 —— 它后面没人可换。
+   *   - 单一与余额到期优先：不换账号（到期优先只在「没钱」时换，那不是这次的
+   *     失败），没人可换 → 一样无限重试。
+   */
+  function unboundedFor(id: string): boolean {
+    if (policy !== "fallback") return true;
+    return tryOrder.findIndex((candidate) => candidate.id === id) === tryOrder.length - 1;
+  }
+
   return selectProvider(policy, candidates, {
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {

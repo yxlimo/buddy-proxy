@@ -8,7 +8,8 @@
 //
 //   1. 上游说了 retry-after 2 秒 → 网关自己等，到点重试**同一个**账号。客户端
 //      拿到的是 200（不该看到 429/503），上游被打了两次，冷却表里没有这个账号；
-//   2. 控制组 A：retry-after 120 秒（等不起）→ 客户端拿到失败，走原有的冷却；
+//   2. 控制组 A：retry-after 200 秒（等不起，上限是两分钟）→ 客户端拿到失败，
+//      走原有的冷却；
 //   3. 控制组 B：429 + retry-after 2 秒，但正文说的是 RPM（不是 TPM）→ 不等，
 //      照旧失败 + 冷却。
 //
@@ -111,8 +112,8 @@ const fake = http.createServer(async (req, res) => {
     const key = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
     calls.push(key);
     if (mode === "tpm-long") {
-      // 等不起：上游说了「过两分钟再来」。
-      limited(TPM_BODY, "120");
+      // 等不起：上游说了「过三分多钟再来」（上限是两分钟）。
+      limited(TPM_BODY, "200");
       return;
     }
     if (mode === "rpm") {
@@ -309,7 +310,7 @@ section("场景一：TPM 限流（retry-after 2 秒）—— 网关自己等，�
   );
 }
 
-section("场景二（控制组 A）：retry-after 120 秒 —— 等不起，照旧报错 + 冷却");
+section("场景二（控制组 A）：retry-after 200 秒 —— 等不起，照旧报错 + 冷却");
 {
   mode = "tpm-long";
   calls.length = 0;
@@ -323,8 +324,8 @@ section("场景二（控制组 A）：retry-after 120 秒 —— 等不起，照
   check("走了原有的冷却路径", row !== null, "库里没有那一行");
   check("冷却的理由是限流", row?.reason === "rate-limit", String(row?.reason));
   check(
-    "冷却到上游说的时间（120 秒上下）",
-    row !== null && Math.abs(row.untilMs - (Date.now() + 120_000)) <= 5_000,
+    "冷却到上游说的时间（200 秒上下）",
+    row !== null && Math.abs(row.untilMs - (Date.now() + 200_000)) <= 5_000,
     row ? String(row.untilMs) : "没有那一行",
   );
 }
@@ -360,11 +361,21 @@ section("算法：等多久（单元）");
   const wait = rateLimitWaitMs(withRetry);
   check("上游说了 5 秒 → 等 5 秒上下", wait !== null && wait >= 4_000 && wait <= 5_000, String(wait));
 
-  const tooLong = withCooldownUntil(
+  const twoMinutes = withCooldownUntil(
     withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：tpm 超了", 502), 429),
     Date.now() + 120_000,
   );
-  check("上游说了 120 秒 → 等不起（null）", rateLimitWaitMs(tooLong) === null, String(rateLimitWaitMs(tooLong)));
+  check(
+    "上游说了 120 秒 → 等得起（上限就是两分钟）",
+    rateLimitWaitMs(twoMinutes) !== null,
+    String(rateLimitWaitMs(twoMinutes)),
+  );
+
+  const tooLong = withCooldownUntil(
+    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：tpm 超了", 502), 429),
+    Date.now() + 200_000,
+  );
+  check("上游说了 200 秒 → 等不起（null）", rateLimitWaitMs(tooLong) === null, String(rateLimitWaitMs(tooLong)));
 
   const rpm = withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：requests per minute", 502), 429);
   check("RPM → 不等（null）", rateLimitWaitMs(rpm) === null, String(rateLimitWaitMs(rpm)));

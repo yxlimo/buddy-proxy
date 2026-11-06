@@ -660,8 +660,14 @@ check(
   /upstream|上游|HTTP/i.test(String(dead.json?.error?.message ?? "")),
   JSON.stringify(dead.json),
 );
-// 每个目标都回 500：瞬时重试三次（首次 + 2 次）之后才轮到换目标。
-check("两个目标都试过了", inferCalls().length === 6, JSON.stringify(inferCalls()));
+// 每个目标都回 500：瞬时失败没有次数上限 —— 在同一个账号上一直重试到这一轮
+// 的总时限，才轮到换目标。所以这里数的是「两个目标都被试过、各自都重试过」。
+const bothTargets = inferCalls();
+check(
+  "两个目标都试过了（每个都重试过）",
+  bothTargets.length > 2 && new Set(bothTargets.map((c) => c.model)).size === 2,
+  JSON.stringify(bothTargets),
+);
 
 section("single：只走权重最大的那个");
 
@@ -698,9 +704,9 @@ fake.reset();
 const singleFail = await chat("e2e-single-fail");
 check(
   "single 不该退到第二个目标",
-  // 第一个目标回 500，瞬时重试一共三次（首次 + 2 次重试）—— 重试是同一个账号，
-  // 不是换目标：所以第二个目标一次也不该被叫到。
-  inferCalls().length === 3 && inferCalls().every((c) => c.model === "kmodel"),
+  // 第一个目标回 500，瞬时失败在同一个账号上一直重试到这一轮的总时限 —— 重试
+  // 是同一个账号，不是换目标：所以第二个目标一次也不该被叫到。
+  inferCalls().length > 1 && inferCalls().every((c) => c.model === "kmodel"),
   `HTTP ${singleFail.status} ${JSON.stringify(inferCalls())}`,
 );
 
@@ -831,7 +837,7 @@ check(
 check("503 一次后成功：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
 check(
   "503 一次后成功：日志里看得见重试",
-  /retry 1\/2 in 300ms/.test(retryGw.log()),
+  /retry 1 in 300ms/.test(retryGw.log()),
   retryGw.log().split("\n").filter((l) => l.includes("retry")).slice(0, 2).join(" | "),
 );
 
@@ -853,16 +859,26 @@ check(
 );
 check("500 两次后成功：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
 
-// 3. 503 三次都失败：三次为止，客户端拿到失败。
-await publishScripted("e2e-retry-thrice", "xmodel");
-scripts.xmodel = [503, 503, 503];
+// 3. 503 一直失败：没有次数上限，一路重试到这一轮的总时限才停手。
+//    客户端拿到的是上游那份答复（503 + 上游的正文），不是网关自己编的一句。
+await publishScripted("e2e-retry-always", "xmodel");
+scripts.xmodel = new Array(50).fill(503);
 scriptCalls.length = 0;
-const alwaysFailing = await chat("e2e-retry-thrice");
-check("503 三次都失败：客户端拿到失败", alwaysFailing.status >= 500, `HTTP ${alwaysFailing.status}`);
-check("503 三次都失败：上游被调了三次（不多不少）", scriptCalls.join(",") === "xmodel,xmodel,xmodel", scriptCalls.join(","));
-// 5xx 不是账号的错（见 lib/router/account-cooldown.ts）：三次都失败也不写冷却。
+const alwaysFailing = await chat("e2e-retry-always");
+check("503 一直失败：客户端拿到失败", alwaysFailing.status >= 500, `HTTP ${alwaysFailing.status}`);
 check(
-  "503 三次都失败：账号仍然没有冷却（5xx 不写冷却）",
+  "503 一直失败：客户端拿到的是上游那个 503（不是网关的 502）",
+  alwaysFailing.status === 503,
+  `HTTP ${alwaysFailing.status}`,
+);
+check(
+  "503 一直失败：上游被重试了很多次（不是一次就放弃）",
+  scriptCalls.length > 1 && scriptCalls.every((m) => m === "xmodel"),
+  scriptCalls.join(","),
+);
+// 5xx 不是账号的错（见 lib/router/account-cooldown.ts）：一直失败也不写冷却。
+check(
+  "503 一直失败：账号仍然没有冷却（5xx 不写冷却）",
   cooldownOf(qoderAccount?.id ?? "qoder") === null,
   JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")),
 );

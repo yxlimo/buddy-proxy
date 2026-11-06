@@ -76,7 +76,7 @@ let workbuddyAborted = false;
 let workbuddyHits = 0;
 
 /** MiniMax Code 这一轮怎么答。 */
-type MinimaxMode = "think" | "reset" | "reject401";
+type MinimaxMode = "think" | "reject401";
 let minimaxMode: MinimaxMode = "think";
 
 /** 还没有答复的 MiniMax 请求。 */
@@ -193,12 +193,6 @@ const upstream = http.createServer((req, res) => {
           res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "token rejected" } }));
         }, 100);
         res.on("close", () => clearTimeout(timer));
-        return;
-      }
-      if (minimaxMode === "reset") {
-        // 客户端还在，上游自己把连接断了（生产里那个 ECONNRESET）：这是真的
-        // 上游失败，账号照旧要记冷却。
-        req.socket.destroy();
         return;
       }
       const entry: MinimaxPending = { res, forced: false, abortedByGateway: false };
@@ -563,25 +557,27 @@ async function askMiniMax(gw: Gateway, stream = false): Promise<{ status: number
 }
 
 {
-  // 3. 控制组：客户端还在，上游自己回 5xx。这一次必须照旧记冷却，不然就是拿
+  // 3. 控制组：客户端还在，上游真的拒了凭据。这一次必须照旧记冷却，不然就是拿
   //    「客户端走了」去豁免真的故障。
+  //
+  //    判据用「凭据被拒」而不是「连接断掉」：连接断掉本来就不算到账号头上
+  //    （lib/router/account-cooldown.ts），拿它当判据证明不了任何事。
   const gw = await startGateway();
   try {
     const policy = await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
     check("MiniMax：能设成降级（控制组）", policy.body?.ok === true, JSON.stringify(policy.body));
     await clearMinimaxCooldowns(gw);
 
-    // 客户端还在，上游自己断了连接。5xx 不用来当判据：上游的 5xx 本来就不
-    // 算到账号头上（lib/router/account-cooldown.ts），断连接才记账。
-    freshMinimaxUpstream("reset");
+    // 客户端还在，上游拒了这个凭据（401）。
+    freshMinimaxUpstream("reject401");
     const answered = await askMiniMax(gw);
     await sleep(300);
 
-    check("MiniMax 控制组：客户端拿到的是失败", answered.status >= 500, `${answered.status} ${answered.text.slice(0, 120)}`);
+    check("MiniMax 控制组：客户端拿到的是失败", answered.status >= 400, `${answered.status} ${answered.text.slice(0, 120)}`);
     const cooled = minimaxCooldowns(gw);
     check(
-      "MiniMax 控制组：账号照旧记「连接」冷却（判据没被放宽）",
-      cooled.length > 0 && cooled.every((row) => row.reason === "connection"),
+      "MiniMax 控制组：账号照旧记「凭据被拒」冷却（判据没被放宽）",
+      cooled.length > 0 && cooled.every((row) => row.reason === "credential"),
       JSON.stringify(cooled),
     );
   } finally {
@@ -602,7 +598,7 @@ console.log("开放平台：客户端走了也要停上游、不记冷却、不�
  * 开放平台的假上游。按路径前缀决定行为：
  *
  *   /think/…     上游在想：一个字节都还没发（客户端在这个窗口里走）
- *   /reset/…     上游自己把连接断了（生产里那个 ECONNRESET）
+ *   /refuse/…    上游把凭据拒了（401，正文马上就完）
  *   /reject401/… 上游先说 401，正文迟迟不完
  */
 interface OpenPending {
@@ -640,8 +636,8 @@ function freshOpenUpstream(): Promise<void> {
  * 上游对一条没人要的请求放弃了。
  *
  * 不接信号的时候，生产里看到的就是这个：客户端早走了，上游过了一会儿把那条
- * 连接断了，网关看到 ECONNRESET —— 于是给账号记一笔「连接」冷却。接了信号
- * 的话，这个时候网关已经先把上游停了，这里一下也掐不到。
+ * 连接断了，网关看到 ECONNRESET —— 连接被掐断不是账号的错，不记冷却。接了信
+ * 号的话，这个时候网关已经先把上游停了，这里一下也掐不到。
  */
 function upstreamGivesUp(): void {
   for (const entry of openPending) {
@@ -659,9 +655,10 @@ const openUpstream = http.createServer((req, res) => {
     openHits++;
     openAccounts.push(String(req.headers["x-account-id"] ?? ""));
     openGotIt();
-    if (url.pathname.startsWith("/reset/")) {
-      // 上游把这条连接断了：网关那边看到的是 ECONNRESET。
-      req.socket.destroy();
+    if (url.pathname.startsWith("/refuse/")) {
+      // 上游把凭据拒了，正文马上就完：这是真的故障，该记的账必须照记。
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "token rejected" } }));
       return;
     }
     const entry: OpenPending = { res, forced: false, abortedByGateway: false };
@@ -747,11 +744,11 @@ function clearCooldowns(): void {
 
 const openaiIds = seedOpenPlatform("opencode-go", "openai", "/think/v1");
 const anthropicIds = seedOpenPlatform("claude-compat", "anthropic", "/think/v1");
-const resetIds = seedOpenPlatform("walkaway-reset", "openai", "/reset/v1");
+const refusedIds = seedOpenPlatform("walkaway-refused", "anthropic", "/refuse/v1");
 check(
   "开放平台与账号都建好了",
-  openaiIds.length === 2 && anthropicIds.length === 2 && resetIds.length === 2,
-  JSON.stringify({ openaiIds, anthropicIds, resetIds }),
+  openaiIds.length === 2 && anthropicIds.length === 2 && refusedIds.length === 2,
+  JSON.stringify({ openaiIds, anthropicIds, refusedIds }),
 );
 
 {
@@ -804,11 +801,14 @@ check(
 }
 
 {
-  // 4. 反过来的反证：客户端还在，上游自己断了。这一次必须照旧记「连接」冷却，
+  // 4. 反过来的反证：客户端还在，上游真的拒了凭据。这一次必须照旧记冷却，
   //    不然就是拿「客户端走了」去豁免真的故障。
+  //
+  //    判据用「凭据被拒」而不是「连接断掉」：连接断掉本来就不算到账号头上
+  //    （lib/router/account-cooldown.ts），拿它当判据证明不了任何事。
   clearCooldowns();
   freshOpenUpstream();
-  const res = await fetch(`${openBase}/walkaway-reset/v1/chat/completions`, {
+  const res = await fetch(`${openBase}/walkaway-refused/v1/messages`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer public" },
     body: JSON.stringify({ model: MODEL, max_tokens: 32, messages: [{ role: "user", content: "say ok" }] }),
@@ -816,11 +816,11 @@ check(
   const text = await res.text();
   await sleep(500);
 
-  check("客户端还在：上游断了一个 5xx 给客户端", res.status >= 500, `HTTP ${res.status} ${text.slice(0, 120)}`);
+  check("客户端还在：上游拒了凭据，客户端拿到的是失败", res.status >= 400, `HTTP ${res.status} ${text.slice(0, 120)}`);
   const cooled = cooldownsNow();
   check(
-    "客户端还在：账号照旧记「连接」冷却",
-    cooled.length > 0 && cooled.every((row) => row.reason === "connection"),
+    "客户端还在：账号照旧记「凭据被拒」冷却",
+    cooled.length > 0 && cooled.every((row) => row.reason === "credential"),
     JSON.stringify(cooled),
   );
 }

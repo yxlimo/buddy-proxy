@@ -286,9 +286,6 @@ const { addAccount, accountsOfPlatform, updateProvider, provider: providerRow } 
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { setSecret, getSecret, listSecrets, store, platformPresetRemoved } = await import("../lib/store.ts");
 const { listCooldowns, setCooldown } = await import("../lib/cooldown.ts");
-// 瞬时失败会在同一个账号上再试：断言次数照它算，不写死 1。
-const { transientRetryPlan } = await import("../lib/router/upstreams/policy.ts");
-const retryPlan = transientRetryPlan();
 
 const users = [{ role: "user", content: "say ok" }];
 
@@ -582,13 +579,13 @@ check("E19 切 single", !errorCodeOf(singlePolicy), JSON.stringify(singlePolicy)
     headers: { "x-api-key": "client-key", "anthropic-version": "2023-06-01" },
   });
   const hits = seen.slice(beforeSingle).filter((s) => s.path.endsWith("/messages"));
-  // 瞬时失败（上游 500）在同一个账号上再试：一个账号最多被打 retryPlan.maxAttempts 次，
-  // 次数用完才交给策略。single 的判据是「只用了权重最高的那个账号」。
+  // 瞬时失败（上游 500）在同一个账号上再试：没有次数上限，刹车是这一轮的总时限。
+  // single 的判据是「只用了权重最高的那个账号」。
   check("E19 single 只打了一个账号", hits.every((h) => h.xApiKey === keyE1), hits.map((h) => h.xApiKey).join(","));
   check(
-    "E19 single 在这个账号上把重试次数用完了",
-    hits.length === retryPlan.maxAttempts,
-    `${hits.length} 次（上限 ${retryPlan.maxAttempts}）`,
+    "E19 single 在这个账号上重试过（不止一次）",
+    hits.length > 1,
+    `${hits.length} 次`,
   );
   check("E19 single 用的是权重最高的账号", hits[0]?.xApiKey === keyE1, hits[0]?.xApiKey ?? "空");
   check("E19 single 失败就是失败（没换人）", attempt.status >= 400, String(attempt.status));
@@ -605,12 +602,12 @@ check("C14 切 fallback", !errorCodeOf(fallbackPolicy), JSON.stringify(fallbackP
     headers: { "x-api-key": "client-key", "anthropic-version": "2023-06-01" },
   });
   const hits = seen.slice(beforeFallback).filter((s) => s.path.endsWith("/messages"));
-  // 第一个账号先被重试用完（500 是瞬时失败），才轮到第二个账号。
+  // 第一个账号先被重试到这一轮的总时限（500 是瞬时失败），才轮到第二个账号。
   const firstAccountHits = hits.filter((h) => h.xApiKey === keyE1).length;
   check(
-    "C14 第一个账号先被打到重试上限",
-    firstAccountHits === retryPlan.maxAttempts,
-    `${firstAccountHits} 次（上限 ${retryPlan.maxAttempts}）`,
+    "C14 第一个账号先被重试过（不止一次）",
+    firstAccountHits > 1,
+    `${firstAccountHits} 次`,
   );
   check("C14 换到第二个账号只试了一次", hits.at(-1)?.xApiKey === keyE2 && hits.filter((h) => h.xApiKey === keyE2).length === 1, hits.map((h) => h.xApiKey).join(","));
   check("C14 先试权重最高的", hits[0]?.xApiKey === keyE1, hits[0]?.xApiKey ?? "空");
@@ -973,7 +970,7 @@ const upstreamDistribution: [string, boolean][] = [
   ["sensenova", true],
   ["intern-ai", true],
   ["qiniu", false],
-  ["xinghuo", false],
+  ["xinghuo", true],
   ["tokenrhythm", false],
   ["minimax", false],
   ["qoder", false],

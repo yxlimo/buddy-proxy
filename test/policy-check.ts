@@ -12,17 +12,24 @@
 //   5. 降级的分类：服务不可用/429/402/401/403 降级，400/404/413 不降级，
 //      以及平台自己的业务码；
 //   6. 七牛云的 403「模型不在这个 key 的分组里」：不换账号、不写冷却。
-//   7. 瞬时重试与限流等待共用一格预算：一个账号最多三次上游调用，总时限管着
-//      所有等待；超时不重试、也不写冷却（那条错误原样交给客户端）。
-//   8. 「哪种失败记冷却」只有一处（lib/router/account-cooldown.ts）：派发失败
-//      与流式结算对同一个超时是同一种待遇；预算算上上游花掉的时间；退避阶梯与
-//      次数上限绑在一个不变量里（超出阶梯直接报错，不做静默兜底）。
-//   9. 「等过限流」那个标记只贴到「最终那个错误本身还是限流」的错误上：先 429
-//      后 401 的账号要按凭据被拒记冷却，不能因为等过一次窗口就永不冷却。
+//   7. 重试：瞬时失败（5xx、连接）在**没有人可换时**没有次数上限 —— 唯一的刹车
+//      是总时限；有人可换时试三次就换人；限流按上游说的那个窗口等，最多三回，
+//      三回都等不到就停手抛错（那个账号确实被限住了，冷却照记）；超时不重试、
+//      也不写冷却（那条错误原样交给客户端）；客户端走了不重试、不再打上游、
+//      不记冷却。
+//   8. 重试用完以后，客户端拿到的是上游自己的答复（状态码与正文），不是网关
+//      编的一句话；上游 5xx 不写冷却（它不是「这个账号不能用了」）。
+//   9. 「哪种失败记冷却」只有一处（lib/router/account-cooldown.ts）：派发失败
+//      与流式结算对同一个超时是同一种待遇；连接断掉同样不记冷却（它不是
+//      「这个账号不能用了」）；预算算上上游花掉的时间。
+//  10. 「等过限流」那个标记只贴到「最终那个错误本身还是限流」的错误上，而且
+//      只在没等满三回时贴：等满了说明那个账号真的被限住了，冷却要照记。
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { PlatformAvailability } from "../lib/router/availability.ts";
+import type { ProviderRow } from "../lib/providers.ts";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "policy-check-"));
 process.env.BUDDY_DATA_DIR = tmp;
@@ -36,7 +43,7 @@ const {
   isNoBalanceFailure,
   selectProvider,
 } = await import("../lib/router/provider-selection.ts");
-const { withBusinessCode, withCooldownUntil, withUpstreamStatus } = await import("../lib/upstream-status.ts");
+const { withBusinessCode, withCooldownUntil, withUpstreamStatus, upstreamStatusOf } = await import("../lib/upstream-status.ts");
 const { tokenRhythmAccounts } = await import("../lib/router/upstreams/index.ts");
 
 let pass = 0;
@@ -554,10 +561,12 @@ console.log("日志里说得清");
 }
 
 console.log("");
-console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超时）");
+console.log("重试：没有人可换时无限重试，有人可换时试三次就换人；限流最多等三回");
 
 {
-  const { runWithRetries, settlement, transientRetryPlan } = await import("../lib/router/upstreams/policy.ts");
+  const { runWithRetries, settlement, transientRetryPlan, upstreamStatusError } = await import(
+    "../lib/router/upstreams/policy.ts"
+  );
   const { cooldownForFailure, rateWaitedOf } = await import("../lib/router/account-cooldown.ts");
   const { cooldownUntil, listCooldowns } = await import("../lib/cooldown.ts");
   const { ClientGoneError } = await import("../lib/router/deliver.ts");
@@ -570,10 +579,11 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
    * 一个 TPM 限流：正文里有 tpm 那个标记，上游说了「等这么多毫秒再来」。
    *
    * 引擎要的是毫秒级的 retry-after 而不是分钟：测试不能真的等一分钟。
+   * `at` 是钟：注入的钟下「等多久」才算得准（真钟差几毫秒，断言就会飘）。
    */
-  const tpmLimit = (waitMs: number): Error => {
+  const tpmLimit = (waitMs: number, at: () => number = Date.now): Error => {
     const error = statusError(429, " rate_limit_tpm_exceeded");
-    return withCooldownUntil(error, Date.now() + waitMs);
+    return withCooldownUntil(error, at() + waitMs);
   };
 
   /** 一个网络错误：名字与 code 是分类器认得的那种。 */
@@ -582,6 +592,25 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     error.name = name;
     if (code) (error as any).code = code;
     return error;
+  };
+
+  /** 一个假钟：sleep 不真的等，只把时间推过去。 */
+  const fakeClock = () => {
+    let t = 0;
+    const slept: number[] = [];
+    return {
+      now: () => t,
+      sleep: async (ms: number) => {
+        slept.push(ms);
+        t += ms;
+      },
+      /** 上游自己花掉的时间。 */
+      spent: (ms: number) => {
+        t += ms;
+      },
+      slept,
+      at: () => t,
+    };
   };
 
   /** 记下这期间 console.log 打出来的 [ROUTE] 行，其他的照旧打出来。 */
@@ -626,23 +655,107 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     check("500 两次后成功：间隔 300ms + 900ms", elapsed >= 1150, `${elapsed}ms`);
   }
 
-  // 3. 503 三次都失败：三次为止，抛出去的是最后那个错误。
+  // 3. 连续四次 503 之后成功：没有人可换时瞬时失败**没有次数上限**。
+  //
+  //    上游抽一下就好了，所以一直试到成功为止 —— 唯一的刹车是总时限。
   {
+    const clock = fakeClock();
+    let calls = 0;
+    const value = await runWithRetries(
+      { id: "acct-503-four" },
+      "瞬时",
+      async () => {
+        calls += 1;
+        if (calls < 5) throw statusError(503);
+        return "answer";
+      },
+      { budgetMs: 60_000, now: clock.now, sleep: clock.sleep, unbounded: true },
+    );
+    check("连续四次 503 后成功：答案是第五次的", value === "answer", String(value));
+    check("连续四次 503 后成功：上游被叫了五次", calls === 5, String(calls));
+    check(
+      "连续四次 503 后成功：间隔是 300ms、900ms、2700ms、2700ms",
+      JSON.stringify(clock.slept) === JSON.stringify([300, 900, 2700, 2700]),
+      JSON.stringify(clock.slept),
+    );
+  }
+
+  // 4. 连续十二次 503 之后成功：还是没有次数上限。
+  {
+    const clock = fakeClock();
+    let calls = 0;
+    const value = await runWithRetries(
+      { id: "acct-503-twelve" },
+      "瞬时",
+      async () => {
+        calls += 1;
+        if (calls < 13) throw statusError(503);
+        return "answer";
+      },
+      { budgetMs: 60_000, now: clock.now, sleep: clock.sleep, unbounded: true },
+    );
+    check("连续十二次 503 后成功：答案是第十三次的", value === "answer", String(value));
+    check("连续十二次 503 后成功：上游被叫了十三次", calls === 13, String(calls));
+  }
+
+  // 5. 一直失败到总时限：停手，客户端拿到的是**上游那份**答复。
+  //
+  //    网关自己编的一句话（「上游在冷却」）会把上游真的发生了什么盖掉：状态码
+  //    与正文都照上游的说。
+  {
+    const clock = fakeClock();
     let calls = 0;
     let caught: any = null;
     try {
-      await runWithRetries({ id: "acct-503-thrice" }, "瞬时", async () => {
-        calls += 1;
-        throw statusError(503);
-      });
+      await runWithRetries(
+        { id: "acct-until-deadline" },
+        "瞬时",
+        async () => {
+          calls += 1;
+          throw upstreamStatusError(503, '{"error":{"message":"upstream is down"}}', "假上游 ");
+        },
+        { budgetMs: 5_000, now: clock.now, sleep: clock.sleep, unbounded: true },
+      );
     } catch (e) {
       caught = e;
     }
-    check("503 三次都失败：上游被叫了三次", calls === 3, String(calls));
-    check("503 三次都失败：抛的是上游那个错", caught?.message === "upstream HTTP 503", String(caught?.message));
+    check("一直失败到总时限：停手了（没有再打上游）", calls > 1 && clock.at() <= 5_000, `${calls} 次，${clock.at()}ms`);
+    check("一直失败到总时限：客户端拿到的是上游的状态码 503", caught?.status === 503, String(caught?.status));
+    check(
+      "一直失败到总时限：客户端拿到的是上游自己的正文",
+      String(caught?.hint ?? "").includes("upstream is down"),
+      String(caught?.hint),
+    );
+    check(
+      "一直失败到总时限：不是网关自己编的「cooling down」",
+      !String(caught?.hint ?? "").includes("cooling down") && !String(caught?.message ?? "").includes("cooling down"),
+      `${caught?.message} / ${caught?.hint}`,
+    );
+    check("一直失败到总时限：上游自己的状态还留在错误上", upstreamStatusOf(caught) === 503, String(upstreamStatusOf(caught)));
+    // 上游 5xx 不是账号的错：冷却表里不该有这个账号的行。
+    const settle = settlement();
+    settle.bind("acct-until-deadline", "瞬时");
+    settle.failure(caught);
+    check(
+      "一直失败到总时限：冷却表里没有这个账号的行",
+      listCooldowns().every((row: any) => row.providerId !== "acct-until-deadline"),
+      JSON.stringify(listCooldowns()),
+    );
   }
 
-  // 4. 连接断掉：与 5xx 同一类，重试同一个账号。
+  // 6. 退避阶梯：300ms、900ms、2700ms；走完以后一直是 2700ms。
+  {
+    const plan = transientRetryPlan();
+    check(
+      "阶梯是三档：300ms、900ms、2700ms",
+      JSON.stringify(plan.delaysMs) === JSON.stringify([300, 900, 2700]),
+      JSON.stringify(plan.delaysMs),
+    );
+    check("阶梯走完以后一直是最后一档", plan.repeatLastMs === 2700, String(plan.repeatLastMs));
+    check("阶梯里没有次数上限了（唯一的刹车是总时限）", !("maxAttempts" in plan), JSON.stringify(plan));
+  }
+
+  // 7. 连接断掉：与 5xx 同一类，重试同一个账号。
   {
     let calls = 0;
     const value = await runWithRetries({ id: "acct-conn" }, "瞬时", async () => {
@@ -654,7 +767,7 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     check("连接断了之后重试：两次", calls === 2, String(calls));
   }
 
-  // 5. 超时：不重试，一次就结束。超时说的是这一条请求等太久了，再等一次只是
+  // 8. 超时：不重试，一次就结束。超时说的是这一条请求等太久了，再等一次只是
   //    再久一次 —— 答复就是那条超时错误，客户端自己决定要不要重发。
   {
     let calls = 0;
@@ -677,7 +790,7 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     );
   }
 
-  // 6. 不重试的那几类：请求本身的问题、凭据被拒、限流、客户端走了。
+  // 9. 不重试的那几类：请求本身的问题、凭据被拒、限流、客户端走了。
   {
     const noRetry: [string, Error][] = [
       ["400 请求本身的问题", statusError(400)],
@@ -703,11 +816,11 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     }
   }
 
-  // 7. 上游说了「120 秒后再来」的 TPM 限流：等不起，也不是瞬时失败 —— 一次就结束。
+  // 10. 上游说了「过两分半再来」的 TPM 限流：等不起，也不是瞬时失败 —— 一次就结束。
   {
     let calls = 0;
     let caught: any = null;
-    const tpm = withCooldownUntil(statusError(429), Date.now() + 120_000);
+    const tpm = withCooldownUntil(statusError(429), Date.now() + 200_000);
     withBusinessCode(tpm, "rate_limit_tpm_exceeded");
     try {
       await runWithRetries({ id: "acct-tpm-long" }, "瞬时", async () => {
@@ -717,115 +830,140 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     } catch (e) {
       caught = e;
     }
-    check("429 + 120 秒：只叫了一次（不叠瞬时重试）", calls === 1, String(calls));
-    check("429 + 120 秒：抛的就是那个错", caught === tpm, String(caught?.message));
+    check("429 + 200 秒：只叫了一次（等不起，也不叠瞬时重试）", calls === 1, String(calls));
+    check("429 + 200 秒：抛的就是那个错", caught === tpm, String(caught?.message));
   }
 
-  // 8. 一个账号上一共就打三次上游：「等限流窗口再来」也算一次尝试。
+  // 11. 429 + retry-after 5 秒：等三回，第四次成功。
   //
-  //    两套计数各数各的话，这个剧本（限流、5xx、限流、5xx、限流）会打到五次。
+  //     等多久照上游说的：不取整、不加秒。累计 15 秒。
   {
+    const clock = fakeClock();
     let calls = 0;
-    let caught: any = null;
-    const plan = ["tpm", "server", "tpm", "server", "tpm"];
-    try {
-      await runWithRetries({ id: "acct-budget" }, "预算", async () => {
+    const value = await runWithRetries(
+      { id: "acct-tpm-three-waits" },
+      "限流",
+      async () => {
         calls += 1;
-        throw plan[calls - 1] === "tpm" ? tpmLimit(20) : statusError(503);
-      });
-    } catch (e) {
-      caught = e;
-    }
-    check("总次数：上游被叫了恰好三次（不是五次）", calls === 3, String(calls));
-    check("总次数：抛出去的是第三次那个错", caught !== null, String(caught?.message));
-  }
-
-  // 9. 先限流、后凭据被拒：最终那个错误**不是**限流，标记就不该贴上去。
-  //
-  //    贴上去的话，记账那一层会把它当成「在等自己的窗口」→ 不写冷却 → 坏凭据
-  //    的账号永远被选中重试。这条是这次修复的判别力所在。
-  {
-    let calls = 0;
-    let caught: any = null;
-    try {
-      await runWithRetries({ id: "acct-waited-then-refused" }, "预算", async () => {
-        calls += 1;
-        if (calls === 1) throw tpmLimit(20);
-        throw statusError(401);
-      });
-    } catch (e) {
-      caught = e;
-    }
-    check("先限流后被拒：上游被叫了两次（等完窗口的那一次也算）", calls === 2, String(calls));
-    check("先限流后被拒：抛的是最后那个错", caught?.message === "upstream HTTP 401", String(caught?.message));
-    check("先限流后被拒：标记没贴到被拒那个错上", rateWaitedOf(caught) === false, "标记贴错了");
-    check(
-      "先限流后被拒：按凭据被拒记账（结论不是 null）",
-      cooldownForFailure("acct-waited-then-refused", caught) !== null,
-      JSON.stringify(cooldownForFailure("acct-waited-then-refused", caught)),
+        if (calls < 4) throw tpmLimit(5_000, clock.now);
+        return "answer";
+      },
+      { budgetMs: 60_000, now: clock.now, sleep: clock.sleep },
     );
-    // 落到冷却表这一步：结算那条路写下去的理由必须是 credential。
+    check("限流等三回：第四次成功了", value === "answer", String(value));
+    check("限流等三回：上游被叫了四次", calls === 4, String(calls));
+    check("限流等三回：等了恰好三次", clock.slept.length === 3, JSON.stringify(clock.slept));
+    check(
+      "限流等三回：每次照上游说的等 5 秒（不取整、不加秒）",
+      JSON.stringify(clock.slept) === JSON.stringify([5_000, 5_000, 5_000]),
+      JSON.stringify(clock.slept),
+    );
+    check(
+      "限流等三回：一共等了 15 秒",
+      clock.slept.reduce((sum, ms) => sum + ms, 0) === 15_000,
+      String(clock.slept.reduce((sum, ms) => sum + ms, 0)),
+    );
+  }
+
+  // 12. 连续四次 429：第四回不再等，抛错。
+  //
+  //     三回都等不到 —— 这个账号是真的被限住了，不是抖一下。所以「等过了」
+  //     那个标记不贴：冷却照记（不记的话它会被一直选中重试）。
+  {
+    const clock = fakeClock();
+    let calls = 0;
+    let caught: any = null;
+    try {
+      await runWithRetries(
+        { id: "acct-tpm-four" },
+        "限流",
+        async () => {
+          calls += 1;
+          throw tpmLimit(5_000, clock.now);
+        },
+        { budgetMs: 60_000, now: clock.now, sleep: clock.sleep },
+      );
+    } catch (e) {
+      caught = e;
+    }
+    check("连续四次 429：上游被叫了四次", calls === 4, String(calls));
+    check("连续四次 429：只等了三次", clock.slept.length === 3, JSON.stringify(clock.slept));
+    check(
+      "连续四次 429：抛的是 429",
+      String(caught?.message ?? "").startsWith("upstream HTTP 429"),
+      String(caught?.message),
+    );
+    check("连续四次 429：标记不在错误上（冷却要照记）", rateWaitedOf(caught) === false, "标记贴错了");
+    check(
+      "连续四次 429：冷却照记",
+      cooldownForFailure("acct-tpm-four", caught) !== null,
+      JSON.stringify(cooldownForFailure("acct-tpm-four", caught)),
+    );
+    // 落到冷却表这一步：理由是限流。
     const settle = settlement();
-    settle.bind("acct-waited-then-refused", "预算");
+    settle.bind("acct-tpm-four", "限流");
     settle.failure(caught);
-    const row = listCooldowns().find((r: any) => r.providerId === "acct-waited-then-refused");
-    check("先限流后被拒：冷却表里记了这个账号", row !== undefined, JSON.stringify(listCooldowns()));
-    check("先限流后被拒：理由是按凭据被拒（credential）", row?.reason === "credential", String(row?.reason));
-    // 对照组：没被跟过的 401 本来就要记冷却 —— 说明上面的结论不是「一律不记」。
-    check(
-      "先限流后被拒：没等过的 401 照旧记冷却（对照组）",
-      cooldownForFailure("acct-refused-alone", statusError(401)) !== null,
-      "对照组不成立",
-    );
+    const row = listCooldowns().find((r: any) => r.providerId === "acct-tpm-four");
+    check("连续四次 429：冷却表里记了这个账号", row !== undefined, JSON.stringify(listCooldowns()));
+    check("连续四次 429：理由是限流", row?.reason === "rate-limit", String(row?.reason));
   }
 
-  // 10. 回归：等过窗口之后仍然是限流 → 最终那个 429 贴着标记，不记冷却。
-  //     这是标记本来的语义（这个限流是我们替它等过的），不能因为上面的修复丢掉。
+  // 13. 429 + retry-after 200 秒：等不起，立刻抛错（一次也不多等）。
   {
+    const clock = fakeClock();
     let calls = 0;
     let caught: any = null;
     try {
-      await runWithRetries({ id: "acct-tpm-thrice" }, "预算", async () => {
-        calls += 1;
-        throw tpmLimit(20);
-      });
+      await runWithRetries(
+        { id: "acct-tpm-too-long" },
+        "限流",
+        async () => {
+          calls += 1;
+          throw tpmLimit(200_000, clock.now);
+        },
+        { budgetMs: 60_000, now: clock.now, sleep: clock.sleep },
+      );
     } catch (e) {
       caught = e;
     }
-    check("限流三次：上游被叫了三次", calls === 3, String(calls));
-    check("限流三次：抛的是 429", caught?.message?.startsWith("upstream HTTP 429") === true, String(caught?.message));
-    check("限流三次：标记贴上了", rateWaitedOf(caught) === true, "标记丢了");
+    check("429 + 200 秒：只叫了一次", calls === 1, String(calls));
+    check("429 + 200 秒：一次也没等", clock.slept.length === 0, JSON.stringify(clock.slept));
     check(
-      "限流三次：不写冷却",
-      cooldownForFailure("acct-tpm-thrice", caught) === null,
-      JSON.stringify(cooldownForFailure("acct-tpm-thrice", caught)),
-    );
-    // 对照组：同一个 429 没有标记时是要记冷却的（限流一分钟）。
-    check(
-      "限流三次：不贴标记的话本来会记冷却（对照组）",
-      cooldownForFailure("acct-tpm-thrice", tpmLimit(20)) !== null,
-      "对照组不成立",
+      "429 + 200 秒：抛的就是那个错",
+      String(caught?.message ?? "").startsWith("upstream HTTP 429"),
+      String(caught?.message),
     );
   }
 
-  // 11. 总时限管着所有等待：等到手也过了一分钟，就不等也不再试。
+  // 14. 总时限管着所有等待：等到手也过了这一轮的总时限，就不等也不再试。
   {
+    const clock = fakeClock();
     let calls = 0;
     let caught: any = null;
     try {
-      await runWithRetries({ id: "acct-deadline" }, "预算", async () => {
-        calls += 1;
-        // 第一次先花掉 1 秒，第二次上游说「等 59.8 秒」—— 等到手就过了一分钟。
-        throw tpmLimit(calls === 1 ? 1_000 : 59_800);
-      });
+      await runWithRetries(
+        { id: "acct-deadline" },
+        "预算",
+        async () => {
+          calls += 1;
+          // 第一次先花掉 1 秒，第二次上游说「等 59.8 秒」—— 等到手就过了时限。
+          throw tpmLimit(calls === 1 ? 1_000 : 59_800, clock.now);
+        },
+        { budgetMs: 60_000, now: clock.now, sleep: clock.sleep },
+      );
     } catch (e) {
       caught = e;
     }
     check("总时限：不再等第二次（上游被叫了两次）", calls === 2, String(calls));
-    check("总时限：抛的是第二次那个 429", caught?.message?.startsWith("upstream HTTP 429") === true, String(caught?.message));
+    check(
+      "总时限：抛的是第二次那个 429",
+      String(caught?.message ?? "").startsWith("upstream HTTP 429"),
+      String(caught?.message),
+    );
+    check("总时限：只等了那一次", clock.slept.length === 1, JSON.stringify(clock.slept));
   }
 
-  // 11. 流式结算那条路：同一个超时也是不写冷却。
+  // 15. 流式结算那条路：同一个超时也是不写冷却。
   //
   //     判据以前只挂在派发的那一处（onAttempt），流式答复在 underPolicy 返回之后
   //     才结算（Settlement.failure），它走的是另一个调用点 —— 同一个超时在那里会
@@ -842,39 +980,28 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
       cooldownUntil("acct-stream-timeout") === null,
       String(cooldownUntil("acct-stream-timeout")),
     );
-    // 对照组：同一个结算句柄（换了账号）遇到连接断掉，该记的还是记 ——
-    // 别把「不写冷却」做成一律不写。
+    // 连接断掉也不记账：连接被上游掐断不是「这个账号不能用了」。
     const broke = networkError("Error", "ECONNRESET");
     const settle2 = settlement();
     settle2.bind("acct-stream-connection", "流式");
     settle2.failure(broke);
     check(
-      "流式结算：连接断掉照旧记冷却（对照组）",
-      cooldownUntil("acct-stream-connection") !== null,
+      "流式结算：连接断掉之后冷却表里没有这个账号的行",
+      cooldownUntil("acct-stream-connection") === null,
       String(cooldownUntil("acct-stream-connection")),
+    );
+    // 对照组：凭据被拒照旧记冷却 —— 别把「不写冷却」做成一律不写。
+    const settle3 = settlement();
+    settle3.bind("acct-stream-refused", "流式");
+    settle3.failure(statusError(401));
+    check(
+      "流式结算：凭据被拒照旧记冷却（对照组）",
+      cooldownUntil("acct-stream-refused") !== null,
+      String(cooldownUntil("acct-stream-refused")),
     );
   }
 
-  /** 一个假锟：sleep 不真的等，只把时间推过去。 */
-  const fakeClock = () => {
-    let t = 0;
-    const slept: number[] = [];
-    return {
-      now: () => t,
-      sleep: async (ms: number) => {
-        slept.push(ms);
-        t += ms;
-      },
-      /** 上游自己花掉的时间。 */
-      spent: (ms: number) => {
-        t += ms;
-      },
-      slept,
-      at: () => t,
-    };
-  };
-
-  // 12. 预算要算上上游自己花掉的时间。
+  // 16. 预算要算上上游自己花掉的时间。
   //
   //     只看「等之前会不会超时限」的话，一次 30s 的超时不算账，三次就能花掉
   //     90s：60s 的预算名不副实。每轮尝试开始前看剩余多少，没了就不打了。
@@ -902,70 +1029,189 @@ console.log("瞬时失败：同一个账号上再试一次（5xx / 连接 / 超�
     check("预算算上上游的时间：抛的还是上游那个错", caught?.message === "upstream HTTP 503", String(caught?.message));
   }
 
-  // 13. 间隔档数与次数上限绑在一个不变量里：档数 = 次数上限 - 1。
-  //
-  //     次数被抬到阶梯之外时不做静默兜底（以前 .at(-1) 会复用 900ms，把配
-  //     置错误藏起来）；正常路径上取不到 undefined，因为上限是从档数算出来的。
+  // 17. 客户端走了：不重试、不再打上游、不记冷却。
   {
-    const plan = transientRetryPlan();
-    check("间隔档数 = 次数上限 - 1", plan.delaysMs.length === plan.maxAttempts - 1, JSON.stringify(plan));
-
-    const clock = fakeClock();
     let calls = 0;
     let caught: any = null;
     try {
-      await runWithRetries(
-        { id: "acct-more-attempts" },
-        "退界",
-        async () => {
-          calls += 1;
-          throw statusError(503);
-        },
-        { maxAttempts: plan.maxAttempts + 1, now: clock.now, sleep: clock.sleep },
-      );
+      await runWithRetries({ id: "acct-client-gone" }, "瞬时", async () => {
+        calls += 1;
+        throw new ClientGoneError();
+      });
     } catch (e) {
       caught = e;
     }
+    check("客户端走了：上游只被叫了一次（不再打）", calls === 1, String(calls));
+    check("客户端走了：抛的就是那个错", caught instanceof ClientGoneError, String(caught?.message));
     check(
-      "超出阶梯：退避的每一档都来自阶梯（没有静默复用）",
-      JSON.stringify(clock.slept) === JSON.stringify([...plan.delaysMs]),
-      JSON.stringify(clock.slept),
+      "客户端走了：不记冷却",
+      cooldownForFailure("acct-client-gone", caught) === null,
+      JSON.stringify(cooldownForFailure("acct-client-gone", caught)),
     );
+    const settle = settlement();
+    settle.bind("acct-client-gone", "瞬时");
+    settle.failure(caught);
     check(
-      "超出阶梯：报的是配置错误，不是静默 sleep",
-      String(caught?.message).includes("has no delay"),
-      String(caught?.message),
+      "客户端走了：冷却表里没有这个账号的行",
+      listCooldowns().every((row: any) => row.providerId !== "acct-client-gone"),
+      JSON.stringify(listCooldowns()),
     );
-    check("超出阶梯：没有 sleep(0)", clock.slept.every((ms) => Number.isFinite(ms) && ms > 0), JSON.stringify(clock.slept));
-    check("超出阶梯：阶梯用完就停（上游被叫了三次）", calls === 3, String(calls));
+  }
+
+  // 19. 无限重试只在「没有别的账号可换」时启用。
+  //
+  //     单账号的平台（opencode-go 那种）：上游抽一下，多试几次就通 → 无限重试。
+  //     降级的平台：第一个账号一直 5xx 时要尽快换人，不能把它打满 180 秒。
+  {
+    const { underPolicy } = await import("../lib/router/upstreams/policy.ts");
+    const { addAccount, provider, updateProvider } = await import("../lib/providers.ts");
+    const { setPlatformPolicy } = await import("../lib/platforms.ts");
+
+    // 降级策略：这个平台的生效策略存在 platform_policy 表里。
+    setPlatformPolicy("qoder", "fallback");
+
+    const madeA = addAccount({ platform: "qoder", alias: "重试用的甲" });
+    const madeB = addAccount({ platform: "qoder", alias: "重试用的乙" });
+    if (!madeA.ok || !madeA.id || !madeB.ok || !madeB.id) {
+      throw new Error(`加不了 Qoder 的账号：${madeA.message} ${madeB.message}`);
+    }
+    // 权重决定谁先试：甲先。
+    updateProvider(String(madeA.id), { weight: 900 });
+    updateProvider(String(madeB.id), { weight: 100 });
+    const rowA = provider(String(madeA.id));
+    const rowB = provider(String(madeB.id));
+    if (!rowA || !rowB) throw new Error("找不到刚建的两个 Qoder 账号");
+
+    /** 一份算好的可用性：这几个账号现在就能接。 */
+    function availabilityOf(rows: ProviderRow[]): PlatformAvailability {
+      return {
+        platform: "qoder",
+        kind: "qoder",
+        state: "ready",
+        usable: rows,
+        serving: rows,
+        cooling: new Map<string, number>(),
+        spent: new Map<string, number | null>(),
+        accounts: rows.length,
+        rows,
+        on: rows.length,
+        advice: "测试用的可用性",
+        catalog: [],
+        ids: [],
+        untilMs: null,
+        reason: "测试用的可用性",
+      };
+    }
+
+    // 19.1 单账号：上游连着十二次 503，第十三次成功。
+    //      没有人可换 → 无限重试（上游抽一下，多试几次就通）。
+    {
+      const clock = fakeClock();
+      let calls = 0;
+      const value = await underPolicy(
+        "qoder",
+        "单账号",
+        async () => {
+          calls += 1;
+          if (calls < 13) throw statusError(503);
+          return "answer";
+        },
+        undefined,
+        availabilityOf([rowA]),
+        { now: clock.now, sleep: clock.sleep },
+      );
+      check("单账号：连续十二次 503 之后成功", value === "answer", String(value));
+      check("单账号：上游被叫了十三次（无限重试仍生效）", calls === 13, String(calls));
+    }
+
+    // 19.2 降级：第一个账号一直 503 → 只试三次就换人。
+    {
+      const clock = fakeClock();
+      const calls: string[] = [];
+      const value = await underPolicy(
+        "qoder",
+        "降级",
+        async (account) => {
+          calls.push(account.id);
+          if (account.id === rowA.id) throw statusError(503);
+          return "answer from b";
+        },
+        undefined,
+        availabilityOf([rowA, rowB]),
+        { now: clock.now, sleep: clock.sleep },
+      );
+      const aCalls = calls.filter((id) => id === rowA.id).length;
+      const bCalls = calls.filter((id) => id === rowB.id).length;
+      check("降级：第一个账号只被叫了三次", aCalls === 3, String(aCalls));
+      check("降级：换到第二个账号并成功", value === "answer from b", String(value));
+      check("降级：第二个账号只被叫了一次", bCalls === 1, String(bCalls));
+      check("降级：整轮不到三秒", clock.at() < 3_000, `${clock.at()}ms`);
+    }
+
+    // 19.3 有人可换的时候：试三次就停手，客户端拿到的是上游自己的答复。
+    {
+      const clock = fakeClock();
+      let calls = 0;
+      let caught: any = null;
+      try {
+        await runWithRetries(
+          { id: "acct-bounded" },
+          "瞬时",
+          async () => {
+            calls += 1;
+            throw upstreamStatusError(503, '{"error":{"message":"upstream is down"}}', "假上游 ");
+          },
+          { budgetMs: 60_000, now: clock.now, sleep: clock.sleep },
+        );
+      } catch (e) {
+        caught = e;
+      }
+      check("有人可换：只试了三次", calls === 3, String(calls));
+      check(
+        "有人可换：等的间隔是 300ms、900ms",
+        JSON.stringify(clock.slept) === JSON.stringify([300, 900]),
+        JSON.stringify(clock.slept),
+      );
+      check("有人可换：客户端拿到的是上游的状态码 503", caught?.status === 503, String(caught?.status));
+      check(
+        "有人可换：正文也是上游自己的",
+        String(caught?.hint ?? "").includes("upstream is down"),
+        String(caught?.hint),
+      );
+    }
   }
 
   stopLogging();
 
-  // 7. 日志：每次重试一行，最后一次失败照旧交给策略。
+  // 18. 日志：每次重试一行，最后一次失败照旧交给策略。
   {
     const said = logs.filter((line) => line.includes("retry"));
-    check("日志里数得清重试了几次", said.some((line) => line.includes("retry 1/2 in 300ms")), said.join(" | "));
+    check("日志里数得清重试了几次", said.some((line) => line.includes("retry 1 in 300ms")), said.join(" | "));
     check("日志里说了是哪个账号", said.every((line) => line.includes("account=")), said.join(" | "));
     check(
       "日志里说了上游答的什么（server HTTP 503）",
       said.some((line) => line.includes("server HTTP 503")),
       said.join(" | "),
     );
-    check("第二次重试也在日志里（2/2）", said.some((line) => line.includes("retry 2/2")), said.join(" | "));
-    // 只数那个三次都失败、账号默认上限的场景：退界那条测试（上限 4）自己会
-    // 走到第三次重试，它的那几行不在这里数。
-    const thrice = said.filter((line) => line.includes("account=acct-503-thrice"));
-    check("那个账号只重试了两次", thrice.length === 2, thrice.join(" | "));
-    check("没有第三次重试", !thrice.some((line) => line.includes("retry 3/")), thrice.join(" | "));
+    check("第二次重试也在日志里（900ms）", said.some((line) => line.includes("retry 2 in 900ms")), said.join(" | "));
     check(
-      "日志里说了这一次的预算用完了（3/3）",
-      logs.some((line) => line.includes("no attempt left (3/3)")),
+      "日志里说了这一轮的总时限用完了",
+      logs.some((line) => line.includes("out of time")),
       logs.join(" | "),
     );
     check(
       "日志里说了等不到头（总时限）就不等",
       logs.some((line) => line.includes("no time left for a")),
+      logs.join(" | "),
+    );
+    check(
+      "日志里说了限流等的是第几回",
+      logs.some((line) => line.includes("waiting 5s then retrying (wait 1/3)")),
+      logs.join(" | "),
+    );
+    check(
+      "日志里说了三回都等不到就不等了",
+      logs.some((line) => line.includes("is still rate limited after 3 waits")),
       logs.join(" | "),
     );
   }
