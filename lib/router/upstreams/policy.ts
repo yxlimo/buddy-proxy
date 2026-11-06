@@ -515,10 +515,10 @@ function tenantLevelFailure(
   return {
     message: `upstream account cannot serve the request${because}`,
     hint:
-      `网关这边的账号接不了这个请求${because}：${upstreamDetail(error)}。` +
+      `网关侧的账号无法处理这个请求${because}：${upstreamDetail(error)}。` +
       (kind === "quota"
-        ? "额度用尽了：充值或者等额度回来就能再试。"
-        : "凭据或配额是网关这边的事，客户端处理不了；等网关换好账号或额度恢复后再试。"),
+        ? "额度已用尽：充值或等额度恢复后即可重试。"
+        : "凭据或配额属于网关侧，客户端无法处理；待网关更换账号或额度恢复后重试。"),
     // 额度用尽是 402：客户端看到的是「充值/等额度」。其余的租户级错误是网关
     // 自己的事，客户端处理不了，503。
     status: kind === "quota" ? 402 : 503,
@@ -862,9 +862,9 @@ export function coolingError(accountId: string, untilMs: number, all = false, wh
   const error = new AuthError(
     all ? "every upstream account is cooling down" : "upstream account is cooling down",
     all
-      ? `网关这边所有账号都在${why}，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试。`
-      : `网关这边的账号 ${accountId} 在${why}，${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；` +
-        `要别的账号接手，把上游的生效策略改成「降级」。`,
+      ? `网关侧所有账号都处于${why}，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试。`
+      : `网关侧的账号 ${accountId} 处于${why}，${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；` +
+        `如需其他账号接手，请把上游的生效策略改成「降级」。`,
     503,
   );
   return withRetryAfter(error, untilMs);
@@ -891,7 +891,7 @@ export function spentError(untilMs: number | null): AuthError {
   if (untilMs === null) {
     return new AuthError(
       "every upstream account is out of credits",
-      "网关这边所有账号的额度都用尽了。额度回来之前接不了这个请求；能做的就是充值或者等额度。",
+      "网关侧所有账号的额度都已用尽。额度恢复之前无法处理这个请求；可以充值或等待额度恢复。",
       402,
       "usage_limit_error",
     );
@@ -900,7 +900,7 @@ export function spentError(untilMs: number | null): AuthError {
   const when = cooldownStamp(untilMs);
   const error = new AuthError(
     "every upstream account is out of credits",
-    `网关这边所有账号的额度都用尽了，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；急的话只能给这个上游充值。`,
+    `网关侧所有账号的额度都已用尽，最早 ${when} 恢复（约 ${minutes} 分钟后）。到点自动重试；如需立即恢复，只能为该上游充值。`,
     402,
     "usage_limit_error",
   );

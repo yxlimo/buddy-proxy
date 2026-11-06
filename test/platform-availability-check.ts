@@ -573,7 +573,7 @@ async function seedQoderAccount(): Promise<void> {
   // 把会话写进去。
   const made = await admin("AddAccount", { platform: "qoder", alias: "测试 Qoder" });
   seededQoderId = String(made?.id ?? "");
-  if (made?.ok !== true || !seededQoderId) throw new Error(`qoder 的账号建不出来：${JSON.stringify(made)}`);
+  if (!/^\d+$/.test(seededQoderId)) throw new Error(`qoder 的账号建不出来：${JSON.stringify(made)}`);
   const now = Date.now();
   withDb((db) => {
     db.prepare("INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?)").run(
@@ -635,7 +635,7 @@ function addOpenPlatform(id: string): void {
 // 账号与会话。
 await seedQoderAccount();
 const added = await admin("AddAccount", { platform: "qiniu", alias: "测试七牛" });
-check("面板能加一个七牛云的账号", added.ok === true, JSON.stringify(added));
+check("面板能加一个七牛云的账号", typeof added?.id === "string" && Boolean(added.id), JSON.stringify(added));
 // 账号 id 是面板起的（自增数）：开关、冷却都挂在它上面，不是平台 id。
 const qiniuAccountId = String(added.id ?? "");
 check("七牛账号的 id 拿到了", /^\d+$/.test(qiniuAccountId), qiniuAccountId);
@@ -653,11 +653,11 @@ const publish = async (id: string, groupName: string, upstreamModel: string): Pr
   });
 check(
   "面板能发布一个指向 Qoder 的模型",
-  (await publish("avail-qoder", "qoder", "glm-5.3")).ok === true,
+  (await publish("avail-qoder", "qoder", "glm-5.3"))?.id === "avail-qoder",
 );
 check(
   "面板能发布一个指向七牛云的模型",
-  (await publish("avail-qiniu", "qiniu", "deepseek/deepseek-v4.1-flash-1017")).ok === true,
+  (await publish("avail-qiniu", "qiniu", "deepseek/deepseek-v4.1-flash-1017"))?.id === "avail-qiniu",
 );
 
 section("没有账号 / 账号都关着 / 没有凭据");

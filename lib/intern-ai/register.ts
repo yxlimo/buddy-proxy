@@ -27,6 +27,7 @@ export const internAiKind = registerCompatiblePlatform({
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => internAiInferenceKey(accountId ?? provider.id),
+  modelsFromUpstream: true,
   credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),
   // 目录是平台那一行说了算：行里的 id 与顺序就是公布的。元数据在上游缓存里
   // （推理端那份清单 + 控制台补的能力与上下文），行里查不到的 id 只给名字。

@@ -79,7 +79,7 @@ export const qiniuQuotaPlugin = registerQuotaPlugin({
   probe: async (account) => {
     // 没填门户 cookie：用户还没填，不是门户拒绝了什么。
     const cookie = qiniuPortalCookie(account.id);
-    if (!cookie) return quotaProbe("missing", "账号上没有门户 cookie，查不了资源包");
+    if (!cookie) return quotaProbe("missing", "账号上没有门户 cookie，无法查询资源包");
 
     const answer = await fetchQiniuQuota(cookie, quotaEndpointBase(account, QINIU_PORTAL_BASE));
     if (!answer.ok) {
@@ -93,7 +93,7 @@ export const qiniuQuotaPlugin = registerQuotaPlugin({
     const quota = answer.quota;
     const remaining = quota.respacks.reduce((sum, pack) => sum + pack.remaining, 0);
     const unit = quota.respacks[0]?.unit ?? "";
-    const summary = `资源包：${quota.respacks.length} 项，剩 ${remaining} ${unit}`;
+    const summary = `资源包：${quota.respacks.length} 项，剩余 ${remaining} ${unit}`;
     // 所有包都见底才算用尽 —— 还有一包剩着就还能走。
     if (quota.respacks.every((pack) => pack.remaining <= 0)) {
       // 数字全零，说的是「一包都不剩」：这时候面板要的是一句话，不是那几行零。

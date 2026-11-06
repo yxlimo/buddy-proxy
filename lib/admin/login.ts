@@ -275,7 +275,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       "no account",
       accountId
         ? `没有这个账号：${accountId}。`
-        : `这个平台还没有账号，先在面板上新增一个。`,
+        : `这个平台还没有账号，请先在面板上新增一个。`,
       400,
     );
   }
@@ -297,12 +297,12 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
         return startInternAi({ accountId: row.id, platform: row.kind, region: row.region });
       case "qiniu":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
-        throw new AuthError("no login", "七牛云不扫码登录，用「API Key」按钮贴一把 key。", 400);
+        throw new AuthError("no login", "七牛云不扫码登录，请用「API Key」按钮保存一把 key。", 400);
       case "xinghuo":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
-        throw new AuthError("no login", "讯飞星火不扫码登录，用「API Key」按钮贴一把 key。", 400);
+        throw new AuthError("no login", "讯飞星火不扫码登录，请用「API Key」按钮保存一把 key。", 400);
       default:
-        throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${upstreamId}`, 400);
+        throw new AuthError("unknown upstream", `这个上游没有登录方式：${upstreamId}`, 400);
     }
   });
   const session: StoredLogin = {
@@ -534,7 +534,7 @@ export function cancelLogin(loginId: string): { ok: boolean; message: string } {
   const current = loadLogin(loginId);
   if (!current) return { ok: false, message: `没有这次登录：${loginId}` };
   if (current.status !== "pending") {
-    return { ok: false, message: `这次登录已经结束了（${current.status}）。` };
+    return { ok: false, message: `这次登录已结束（${current.status}）。` };
   }
   updateLogin(loginId, { status: "cancelled", message: "登录已取消。" });
   return { ok: true, message: "登录已取消。" };
@@ -586,7 +586,7 @@ export async function loginWithPassword(input: {
   if (!row) {
     return {
       ok: false,
-      message: input.accountId ? `没有这个账号：${input.accountId}` : "这个平台还没有账号，先在面板上新增一个。",
+      message: input.accountId ? `没有这个账号：${input.accountId}` : "这个平台还没有账号，请先在面板上新增一个。",
       credentialId: "",
       accountId: "",
     };
@@ -654,7 +654,7 @@ export async function loginWithPassword(input: {
         };
       }
       default: {
-        const message = `这个账号不用账号密码登录：${row.alias || row.id}`;
+        const message = `这个账号不支持账号密码登录：${row.alias || row.id}`;
         closePendingLogins(row.id, { ok: false, message });
         return {
           ok: false,
@@ -711,7 +711,7 @@ export async function exchangeLoginCode(input: {
   code: string;
 }): Promise<PasswordLoginResult> {
   if (input.upstreamId !== "intern-ai") {
-    return { ok: false, message: `这个上游不用授权码：${input.upstreamId}`, credentialId: "", accountId: "" };
+    return { ok: false, message: `这个平台不使用授权码：${input.upstreamId}`, credentialId: "", accountId: "" };
   }
   if (!input.code.trim()) {
     return { ok: false, message: "缺少授权码。", credentialId: "", accountId: "" };
@@ -741,7 +741,7 @@ export async function importLoginToken(input: {
   token: string;
 }): Promise<PasswordLoginResult> {
   if (input.upstreamId !== "intern-ai") {
-    return { ok: false, message: `这个上游不用回填 token：${input.upstreamId}`, credentialId: "", accountId: "" };
+    return { ok: false, message: `这个平台不使用回填 token：${input.upstreamId}`, credentialId: "", accountId: "" };
   }
   if (!input.token.trim()) {
     return { ok: false, message: "缺少 token。", credentialId: "", accountId: "" };

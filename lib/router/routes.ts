@@ -137,7 +137,7 @@ export function platformUnavailable(
   // 再试，答复里用同一套词说清是什么状态、该做什么 —— 不另造第四套说法。
   const error = new AuthError(
     `upstream ${platform} cannot serve the request`,
-    `上游 ${platform} 现在接不了这个请求：${STATE_TEXT[state]}（${state}）—— ${remedyOf(state)}`,
+    `上游 ${platform} 当前无法处理这个请求：${STATE_TEXT[state]}（${state}）—— ${remedyOf(state)}`,
     503,
   );
   return untilMs === null ? error : withRetryAfter(error, untilMs);
@@ -156,7 +156,7 @@ function platformOutOfCredits(platform: string, untilMs: number | null): AuthErr
   const when = untilMs === null ? "" : `，${cooldownStamp(untilMs)} 恢复`;
   const error = new AuthError(
     `upstream ${platform} is out of credits`,
-    `上游 ${platform} 的额度用尽了${when}。额度回来之前接不了这个请求；能做的就是充值或者等额度。`,
+    `上游 ${platform} 的额度用尽${when}。额度恢复之前无法处理这个请求；可以充值或等待额度恢复。`,
     402,
     "usage_limit_error",
   );
@@ -173,7 +173,7 @@ function platformCooling(platform: string, untilMs: number | null): AuthError {
   const when = untilMs === null ? "" : `，${cooldownStamp(untilMs)} 再试`;
   const error = new AuthError(
     `upstream ${platform} is cooling down`,
-    `上游 ${platform} 的账号在冷却${when}。到点自动重试。`,
+    `上游 ${platform} 的账号处于冷却${when}。到点自动重试。`,
     503,
   );
   return untilMs === null ? error : withRetryAfter(error, untilMs);
@@ -189,7 +189,7 @@ export function catalogueNotReady(platforms: string[]): AuthError {
   const names = platforms.join("、");
   return new AuthError(
     `upstream catalogue not ready (${names})`,
-    `上游 ${names} 的模型目录还没拿到，过一会儿再试。`,
+    `上游 ${names} 的模型目录尚未获取，请稍后重试。`,
     503,
   );
 }
@@ -310,13 +310,13 @@ const STATE_TEXT: Record<PlatformState, string> = {
 function remedyOf(state: PlatformState): string {
   switch (state) {
     case "no_account":
-      return "在面板的「上游」页加一个账号并登录";
+      return "在面板的「上游」页新增一个账号并登录";
     case "accounts_off":
-      return "在面板的「上游」页打开一个账号";
+      return "在面板的「上游」页启用一个账号";
     case "no_credential":
-      return "在面板的「上游」页填 API Key 或者登录";
+      return "在面板的「上游」页填写 API Key 或登录";
     case "credential_expired":
-      return "等它自动刷新，或者重新登录";
+      return "等待自动刷新，或重新登录";
     case "credential_unknown":
       return "看日志";
     case "out_of_credits":
@@ -375,7 +375,7 @@ export function publishedModelUnavailable(
     const when = u.untilMs === null ? "" : `，最早 ${cooldownStamp(u.untilMs)} 恢复`;
     return `  ${u.platform}：${STATE_TEXT[u.state]}（${u.state}）${when} —— ${remedyOf(u.state)}`;
   });
-  const hint = `这个模型（${modelId}）发布着，但它的上游现在都接不了：\n${lines.join("\n")}`;
+  const hint = `这个模型（${modelId}）已发布，但它依赖的上游当前都不可用：\n${lines.join("\n")}`;
   return new AuthError(`model "${modelId}" has no usable upstream`, hint, 400);
 }
 

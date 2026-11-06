@@ -426,11 +426,11 @@ check("账号加得起来", portalAccountId !== "", portalAccountId);
   check("短的数组被拒了", result.ok === false, result.message);
   check("一段都没写", result.count === 0, String(result.count));
   check(
-    "说的是这个插件要几段",
-    result.message.includes("2 段凭据") && result.message.includes("只发来 1 段"),
-    result.message,
+    "机器码说的是段数不够，细节里说清要几段、发来几段",
+    result.code === "ACCOUNT_KEY_COUNT_SHORT" && result.message.includes("got 1"),
+    JSON.stringify(result),
   );
-  check("说了什么都没改", result.message.includes("什么都没改"), result.message);
+  check("细节里说了没有任何改动", result.message.includes("nothing written"), result.message);
   check(
     "推理 key 还是原来那把",
     openPlatformKeyOf(portalAccountId)?.apiKey === "sk-portal-1",
@@ -475,7 +475,7 @@ section("控制组：别的平台不收");
 {
   const result = setProviderKeys("zcode", ["x"]);
   check("被拒了", result.ok === false, result.message);
-  check("说的是不接受", result.message.includes("不接受"), result.message);
+  check("机器码说的是没有这个账号", result.code === "ACCOUNT_NOT_FOUND", JSON.stringify(result));
   check("一段都没写", result.count === 0, String(result.count));
 }
 

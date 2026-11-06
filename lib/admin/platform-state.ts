@@ -323,9 +323,9 @@ function reasonOf(
       case "credential_unknown":
         return `平台 ${platformId} 的凭据读不出来`;
       case "out_of_credits":
-        return `平台 ${platformId} 的额度用尽了`;
+        return `平台 ${platformId} 的额度用尽`;
       case "cooling":
-        return `平台 ${platformId} 现在没有能接的账号（有账号在冷却）`;
+        return `平台 ${platformId} 当前没有可用的账号（有账号处于冷却）`;
       case "ready":
         return `平台 ${platformId} 有 ${usable} 个账号能接请求`;
     }
@@ -349,19 +349,19 @@ function reasonOf(
 function adviceOf(state: PlatformState, refused: boolean): string {
   switch (state) {
     case "no_account":
-      return "这个平台还没有账号：在「上游」页加一个账号并登录";
+      return "这个平台还没有账号：在「上游」页新增一个账号并登录";
     case "accounts_off":
-      return "这个平台的账号都关着：在「上游」页打开一个";
+      return "这个平台的账号均已关闭：在「上游」页启用一个";
     case "no_credential":
-      return "没有可用凭据：在「上游」页填 API Key 或登录";
+      return "没有可用凭据：在「上游」页填写 API Key 或登录";
     case "credential_expired":
-      return refused ? "凭据被拒了：重新登录" : "凭据过期了：等它自动刷新，或者重新登录";
+      return refused ? "凭据被拒绝：重新登录" : "凭据已过期：等待自动刷新，或重新登录";
     case "credential_unknown":
       return "凭据读不出来：看日志";
     case "out_of_credits":
-      return "额度用尽了：等额度回来，或者换个账号";
+      return "额度用尽：等待额度恢复，或更换账号";
     case "cooling":
-      return "账号都在冷却里：等一会儿再试";
+      return "账号均处于冷却中：请稍后重试";
     case "ready":
       return "";
   }

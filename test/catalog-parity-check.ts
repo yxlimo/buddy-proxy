@@ -98,7 +98,7 @@ async function rootModel(id: string): Promise<any> {
  * 新账号是开着的，所以加完平台就是开着的 —— 面板上的开关改的也是这一行。
  */
 const qoderOn = await call("AddAccount", { platform: "qoder", alias: "测试 Qoder" });
-check("Qoder 的账号加出来了", qoderOn.body?.ok === true, JSON.stringify(qoderOn.body));
+check("Qoder 的账号加出来了", typeof qoderOn.body?.id === "string" && Boolean(qoderOn.body.id), JSON.stringify(qoderOn.body));
 const platformOn = await call("ListUpstreams");
 check(
   "Qoder 打开了",
@@ -121,7 +121,7 @@ const save = await call("SavePublishedModel", {
     targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, position: 0, enabled: true }],
   },
 });
-check("模型存得进去", save.status === 200 && save.body?.ok === true, JSON.stringify(save.body));
+check("模型存得进去", save.status === 200 && Boolean(save.body?.id), JSON.stringify(save.body));
 
 const model = await panelModel("parity-inherit");
 check("模型列得出来", Boolean(model), JSON.stringify(model));

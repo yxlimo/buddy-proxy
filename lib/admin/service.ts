@@ -51,6 +51,7 @@ import {
   ListModelOverridesResponseSchema,
   EffortListSchema,
   SetModelOverridesResponseSchema,
+  DeleteModelOverrideResponseSchema,
   ModelOverrideSchema,
   PlatformKindSchema,
   ListUpstreamsResponseSchema,
@@ -109,6 +110,7 @@ import {
   type UpstreamId,
 } from "./upstreams.ts";
 import { platformAvailabilities, type PlatformAvailability } from "./platform-state.ts";
+import { adminError } from "./error-codes.ts";
 import { coolingOf } from "./upstream-state.ts";
 import {
   deleteAccount,
@@ -131,8 +133,9 @@ import {
 } from "./login.ts";
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
 import {
+  deleteModelOverride,
   listModelOverrides,
-  replaceModelOverrides,
+  upsertModelOverrides,
   type ModelOverrideRow,
 } from "../model-overrides.ts";
 import {
@@ -166,7 +169,7 @@ import {
   setPlatformPolicy as writePlatformPolicy,
   type Platform,
 } from "../platforms.ts";
-import { selectableKinds } from "../provider-kinds.ts";
+import { kindOf, selectableKinds } from "../provider-kinds.ts";
 import { policyEnum, policyErrorText, policyFromEnum } from "./policy.ts";
 import { usageEvents, usageSummary, type UsageTotals } from "./usage.ts";
 import { tailLog } from "./log.ts";
@@ -413,6 +416,10 @@ function platformMessage(
     enabled,
     // 名下的多个账号怎么选。策略在平台层。
     policy: upstreamPolicy(id),
+    // 这个平台的目录归不归上游：值来自 kind 登记，一个平台一个答案。面板照这一格
+    // 给刷新按钮 —— 别拿 ListPlatformKinds 里那一格判：那个清单只有能新建的
+    // 那几类，厂商模板与模拟客户端都不在里面。
+    modelsFromUpstream: kindOf(platform?.kind ?? "")?.modelsFromUpstream === true,
     // 这个平台支持哪几个策略：面板只给它支持的那几个。
     policies: platformPolicies(id).map(policyEnum),
     // 名下有几个账号。面板用它判「策略有没有用」。
@@ -708,7 +715,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     }, 500);
     return create(RestartSystemResponseSchema, {
       accepted: true,
-      message: "进程正在退出，容器会把它拉起来。前端稍后重连。",
+      message: "进程正在退出，容器会自动重启。前端稍后重连。",
     });
   },
 
@@ -742,12 +749,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       platform: String(request.platform ?? ""),
       alias: String(request.alias ?? ""),
     });
-    if (result.ok) console.log(`[ADMIN] 在 ${request.platform} 下加了账号 ${result.id}`);
-    return create(AddAccountResponseSchema, {
-      ok: result.ok,
-      message: result.message,
-      id: result.id ?? "",
-    });
+    if (!result.ok) throw adminError(result.code, result.message);
+    console.log(`[ADMIN] 在 ${request.platform} 下加了账号 ${result.id}`);
+    return create(AddAccountResponseSchema, { id: result.id ?? "" });
   },
 
   async updateProvider(request) {
@@ -805,23 +809,17 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async addPlatform(request) {
     const id = String(request.id ?? "");
     // 校验与归一都在那一层（id 的规矩、地址的归一、模板与账号的重名，还有
-    // kind 在不在能建的那张表里）。
+    // kind 在不在能建的那张表里）。失败带机器码，细节只说事实。
     const result = createOpenPlatform({
       id,
       label: String(request.label ?? ""),
       baseUrl: String(request.baseUrl ?? ""),
       kind: String(request.kind ?? ""),
     });
-    if (!result.ok) {
-      return create(AddPlatformResponseSchema, { ok: false, message: result.message });
-    }
+    if (!result.ok) throw adminError(result.code, result.message);
     console.log(`[ADMIN] 加了开放平台 ${id}`);
     const row = openPlatformOf(id.trim());
-    return create(AddPlatformResponseSchema, {
-      ok: true,
-      message: result.message,
-      platform: row ? openPlatformMessage(row) : undefined,
-    });
+    return create(AddPlatformResponseSchema, { platform: row ? openPlatformMessage(row) : undefined });
   },
 
   async updatePlatform(request) {
@@ -843,25 +841,50 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       // 没给 = 别动这一格；空串 = 不选插件。
       quotaPlugin: givenText(request.quotaPlugin),
     };
-    if (!request.modelsAuto && models.length) {
-      // 手工目录：写死的那一份，自动拉不许覆盖它。
-      patch.models = models;
-      patch.modelsAuto = false;
-      patch.source = "manual";
+    // 模拟客户端的目录是代码挑过的一份：要改目录的那两格就说不行，而且一分钱
+    // 都不落库 —— 别的格（名字、地址、额度插件）照样存得进去，那种「存了一半
+    // 再说一声」在面板上分不清成功还是失败。
+    //
+    // 判据是「与现值不同」，不是「带了没有」：面板编辑模拟客户端时会把
+    // models_auto 一起送过来，只看有没有送，用户改个名字就保存不了。
+    //
+    // 为什么在这一层而不是数据层（updateOpenPlatform）：数据层是唯一写入口，规矩
+    // 放在它那里才拦得住所有调用方 —— 这里只能拦住面板这一条路。落在 RPC 边界是
+    // 有意的取舍（本轮的文件边界）；将来第二个调用方（脚本、迁移）冒出来时，这条
+    // 要沉到数据层去，否则他们递上来的 modelsAuto 会直接盖上去。
+    const current = openPlatformOf(id);
+    const simulated = current !== null && isSimulatedClientKind(current.kind);
+    if (simulated) {
+      const askedModels =
+        models.length > 0 &&
+        (models.length !== current.models.items.length ||
+          models.some((one, at) => one !== current.models.items[at]));
+      const askedAuto = (request.modelsAuto === true) !== current.models.auto;
+      if (askedModels || askedAuto) {
+        // 细节只说哪一格：模型清单是用户填的内容，不往日志里搬。
+        throw adminError(
+          "PLATFORM_MODELS_FIXED",
+          `platform ${id} (${current.kind}) takes its catalogue from the code: ` +
+            `models ${askedModels ? "given" : "unchanged"}, models_auto ${askedAuto ? "given" : "unchanged"}`,
+        );
+      }
     } else {
-      // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
-      // 只翻自动那一格。
-      patch.modelsAuto = request.modelsAuto === true;
+      if (!request.modelsAuto && models.length) {
+        // 手工目录：写死的那一份，自动拉不许覆盖它。
+        patch.models = models;
+        patch.modelsAuto = false;
+        patch.source = "manual";
+      } else {
+        // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
+        // 只翻自动那一格。
+        patch.modelsAuto = request.modelsAuto === true;
+      }
     }
     const result = updateOpenPlatform(id, patch);
-    if (!result.ok) {
-      return create(UpdatePlatformResponseSchema, { ok: false, message: result.message });
-    }
+    if (!result.ok) throw adminError(result.code, result.message);
     console.log(`[ADMIN] 开放平台 ${id} 改了`);
     const row = openPlatformOf(id.trim());
     return create(UpdatePlatformResponseSchema, {
-      ok: true,
-      message: result.message,
       platform: row ? openPlatformMessage(row) : undefined,
     });
   },
@@ -869,9 +892,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async deletePlatform(request) {
     const id = String(request.id ?? "").trim();
     const row = openPlatformOf(id);
-    if (!row) {
-      return create(DeletePlatformResponseSchema, { ok: false, message: `没有这个平台：${id}` });
-    }
+    if (!row) throw adminError("PLATFORM_NOT_FOUND", `no platform ${id}`);
     // 名下的账号：连凭据、冷却、健康快照里它的那一段一起删（走删账号那条路，
     // 它知道每个平台的凭据放在哪）。
     const accounts = accountsOfPlatform(id);
@@ -883,18 +904,16 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       model.targets.some((target) => target.group === id),
     );
     const deleted = deleteOpenPlatform(id);
-    if (!deleted.ok) {
-      return create(DeletePlatformResponseSchema, { ok: false, message: deleted.message });
-    }
+    if (!deleted.ok) throw adminError(deleted.code, deleted.message);
     // 平台自己的策略也清掉：平台没了，那一行就是一根没人认的指针（下次用
     // 同一个 id 建回来，它会凭空继承旧策略）。
     forgetPlatformPolicy(id);
-    const notes = [`删掉了 ${row.label}`, `清了 ${accounts.length} 个账号`];
-    if (affected.length) {
-      notes.push(`${affected.length} 个已发布模型指向它，现在接不了（面板上写着平台已停用）`);
-    }
-    console.log(`[ADMIN] 删了开放平台 ${id}（连 ${accounts.length} 个账号一起）`);
-    return create(DeletePlatformResponseSchema, { ok: true, message: notes.join("，") });
+    // 连带删掉的东西写进日志：答复里没有 message 了，出过什么事就只剩这一处。
+    console.log(
+      `[ADMIN] 删了开放平台 ${id}（${row.label}）：连 ${accounts.length} 个账号一起，` +
+        `${affected.length} 个已发布模型指向它（现在显示平台已停用）`,
+    );
+    return create(DeletePlatformResponseSchema, {});
   },
 
   async refreshPlatformModels(request) {
@@ -905,7 +924,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // 那些没人看着的调用）。
     const outcome = await refreshOpenPlatformCatalog(id, { force: true }).catch((e) => ({
       ok: false,
-      message: `拉不到模型目录：${(e as Error)?.message ?? String(e)}`,
+      message: `无法获取模型目录：${(e as Error)?.message ?? String(e)}`,
     }));
     const row = openPlatformOf(id);
     return create(RefreshPlatformModelsResponseSchema, {
@@ -965,15 +984,26 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // 就说到这里，别让 `.map` 的 TypeError 冒成 500。
     const sent: unknown = request.overrides;
     if (!Array.isArray(sent)) {
-      return create(SetModelOverridesResponseSchema, { ok: false, message: "overrides 要是一个列表" });
+      throw adminError("MODEL_OVERRIDE_LIST_INVALID", `overrides is ${typeof sent}, not an array`);
     }
-    // 发来的就是全部：「没发来的」就是删掉，所以是整体替换，不是逐条合并。
-    const result = replaceModelOverrides(
+    // 发来的每一条按 id 覆盖，没发来的原封不动：删走 DeleteModelOverride。
+    const result = upsertModelOverrides(
       String(request.platformId ?? ""),
       sent.map((one) => modelOverrideRow(one as ModelOverride)),
     );
-    if (result.ok) console.log(`[ADMIN] ${request.platformId} 的人工模型元数据：${result.message}`);
-    return create(SetModelOverridesResponseSchema, { ok: result.ok, message: result.message });
+    if (!result.ok) throw adminError(result.code, result.message);
+    console.log(`[ADMIN] ${request.platformId} 的人工模型元数据：${result.message}`);
+    return create(SetModelOverridesResponseSchema, {});
+  },
+
+  async deleteModelOverride(request) {
+    const result = deleteModelOverride(
+      String(request.platformId ?? ""),
+      String(request.modelId ?? ""),
+    );
+    if (!result.ok) throw adminError(result.code, result.message);
+    console.log(`[ADMIN] ${request.platformId} 的人工模型元数据：${result.message}`);
+    return create(DeleteModelOverrideResponseSchema, {});
   },
 
   /* ---------------- 配置 ---------------- */
@@ -1001,13 +1031,13 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   async setConfig(request) {
     const key = String(request.key ?? "").trim();
     if (!key) {
-      return create(SetConfigResponseSchema, { ok: false, pendingRestart: pendingRestart(), message: "得有键" });
+      return create(SetConfigResponseSchema, { ok: false, pendingRestart: pendingRestart(), message: "需要提供键名" });
     }
     if (!knownConfigKeys().has(key)) {
       return create(SetConfigResponseSchema, {
         ok: false,
         pendingRestart: pendingRestart(),
-        message: `不认识的配置项：${key}`,
+        message: `无法识别的配置项：${key}`,
       });
     }
     const result = setConfigValue(key, String(request.value ?? ""), request.clear === true);
@@ -1015,7 +1045,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     return create(SetConfigResponseSchema, {
       ok: result.ok,
       pendingRestart: pendingRestart(),
-      message: result.ok ? `${result.message}，已经生效` : result.message,
+      message: result.ok ? `${result.message}，已生效` : result.message,
     });
   },
 
@@ -1102,11 +1132,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // 各分支自己决定怎么处理空串。
     const keys = (request.keys ?? []).map((k) => String(k).trim());
     const result = setProviderKeys(upstreamId, keys);
-    return create(SetProviderKeysResponseSchema, {
-      ok: result.ok,
-      message: result.message,
-      count: result.count,
-    });
+    if (!result.ok) throw adminError(result.code, result.message);
+    console.log(`[ADMIN] 账号 ${upstreamId} 的凭据：${result.message}`);
+    return create(SetProviderKeysResponseSchema, { count: result.count });
   },
 
   async refreshCredential(request) {
@@ -1257,9 +1285,7 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async savePublishedModel(request) {
     const model = request.model;
-    if (!model) {
-      return create(SavePublishedModelResponseSchema, { ok: false, id: "", message: "需要提供模型" });
-    }
+    if (!model) throw adminError("MODEL_NOT_GIVEN", "request has no model");
     const result = savePublishedModel({
       id: model.id,
       displayName: model.displayName || model.id,
@@ -1278,12 +1304,12 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
         enabled: target.enabled,
       })),
     });
+    if (!result.ok) {
+      console.log(`[MODEL] 保存 ${result.id} 失败：${result.message}`);
+      throw adminError(result.code, result.message);
+    }
     console.log(`[MODEL] 保存 ${result.id}：${result.message}`);
-    return create(SavePublishedModelResponseSchema, {
-      ok: result.ok,
-      id: result.id,
-      message: result.ok ? `${result.message}，已经生效` : result.message,
-    });
+    return create(SavePublishedModelResponseSchema, { id: result.id });
   },
 
   async deletePublishedModel(request) {

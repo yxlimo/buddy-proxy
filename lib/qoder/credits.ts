@@ -148,7 +148,7 @@ export async function checkAccountHealth(providerId = "qoder"): Promise<QoderAcc
       userId,
       userType,
       reason: "the account may not be used from this IP",
-      hint: "Qoder 拒绝了当前出口 IP（NoIpPermission）。换一个出口再试。",
+      hint: "Qoder 拒绝了当前出口 IP（NoIpPermission）。请更换出口后重试。",
     };
   }
   if (whitelistStatus === "AppDisable") {

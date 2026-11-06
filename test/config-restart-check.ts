@@ -326,7 +326,7 @@ const saved = await admin("SavePublishedModel", {
     targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, enabled: true }],
   },
 });
-check("面板能保存一个模型", saved.ok === true, JSON.stringify(saved));
+check("面板能保存一个模型", Boolean(saved.id), JSON.stringify(saved));
 
 const rootModels = await publishedOnRoot();
 check("根路由公布了它", rootModels.includes("hot"), JSON.stringify(rootModels));
@@ -466,7 +466,7 @@ section("拒绝");
 
 const unknown = await admin("SetConfig", { key: "NO_SUCH_SETTING", value: "1" });
 check("不认识的键被拒绝", unknown.ok === false, JSON.stringify(unknown));
-check("拒绝的话说得清", /不认识/.test(String(unknown.message ?? "")), JSON.stringify(unknown));
+check("拒绝的话说得清", /无法识别/.test(String(unknown.message ?? "")), JSON.stringify(unknown));
 check(
   "不认识的键没有进数据库",
   !configRows().some((r) => r.key === "NO_SUCH_SETTING"),

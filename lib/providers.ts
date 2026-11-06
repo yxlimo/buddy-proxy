@@ -20,6 +20,8 @@
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
 import { allPlatforms, platformOfAny, platformPolicy } from "./platforms.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧，这一层只说哪个平台不存在。
+import type { AdminResult } from "./admin/error-codes.ts";
 
 /** 一个账号。 */
 export interface ProviderRow {
@@ -150,7 +152,7 @@ export function updateProvider(
   store()
     .prepare("UPDATE provider SET alias = ?, enabled = ?, weight = ?, updated_at = ? WHERE id = ?")
     .run(alias, enabled ? 1 : 0, weight, Date.now(), id);
-  return { ok: true, message: "改好了" };
+  return { ok: true, message: "已保存" };
 }
 
 /**
@@ -162,13 +164,17 @@ export function updateProvider(
 export function addAccount(input: {
   platform: string;
   alias?: string;
-}): { ok: boolean; message: string; id?: string } {
+}): AdminResult & { id?: string } {
   const platform = String(input.platform ?? "").trim();
   // 平台有两个数据源：代码里的模板与表里的开放平台。可选的那些从两处合起来
   // 拿 —— 只认模板的话，用户自己加的平台在面板上就没法选。
   const platforms = allPlatforms();
   if (!platforms.some((p) => p.id === platform)) {
-    return { ok: false, message: `没有这个平台：${platform}。可选：${platforms.map((p) => p.id).join("、")}` };
+    return {
+      ok: false,
+      code: "ACCOUNT_PLATFORM_NOT_FOUND",
+      message: `no platform ${platform || "(empty)"}, known: ${platforms.map((p) => p.id).join(", ")}`,
+    };
   }
   const id = nextAccountId();
   const now = Date.now();
@@ -182,7 +188,7 @@ export function addAccount(input: {
       "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?)",
     )
     .run(id, platform, alias, weight, now, now);
-  return { ok: true, message: `加好了：${alias}`, id };
+  return { ok: true, message: `已新增：${alias}`, id };
 }
 
 /**
@@ -241,7 +247,7 @@ export function deleteProviderRow(id: string): { ok: boolean; message: string } 
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}` };
   store().prepare("DELETE FROM provider WHERE id = ?").run(id);
-  return { ok: true, message: "删掉了" };
+  return { ok: true, message: "已删除" };
 }
 
 /** 开关。 */

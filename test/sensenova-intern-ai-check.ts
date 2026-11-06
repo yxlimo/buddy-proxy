@@ -583,7 +583,7 @@ const senseAdded = await admin("AddAccount", { platform: "sensenova" });
 const internAdded = await admin("AddAccount", { platform: "intern-ai" });
 const SENSE_ID = String(senseAdded?.id ?? "");
 const INTERN_ID = String(internAdded?.id ?? "");
-if (senseAdded?.ok !== true || internAdded?.ok !== true || !SENSE_ID || !INTERN_ID) {
+if (!/^\d+$/.test(SENSE_ID) || !/^\d+$/.test(INTERN_ID)) {
   throw new Error(`账号没建出来：${JSON.stringify([senseAdded, internAdded])}`);
 }
 

@@ -90,22 +90,22 @@ export const tokenRhythmWalletPlugin = registerQuotaPlugin({
       // 它自己会去问平台。
       statuses = await tokenRhythmStatuses(account.id);
     } catch (e) {
-      return quotaProbe("unknown", `问钱包时抛了：${describeThrow(e)}`);
+      return quotaProbe("unknown", `查询钱包时抛出异常：${describeThrow(e)}`);
     }
     const mine = statuses.find((status) => status.accountId === account.id) ?? null;
     // 账号不在表里说明问错了地方（这是代码的问题，不是平台说的）：不知道。
-    if (!mine) return quotaProbe("unknown", "这个账号不在 TokenRhythm 的账号表里，问不到钱包");
+    if (!mine) return quotaProbe("unknown", "这个账号不在 TokenRhythm 的账号表中，无法查询钱包");
     if (!mine.wallet) return stateOfFailure(mine);
 
     const available = Number(mine.wallet.availableCny ?? 0);
     const currency = mine.wallet.currency || "CNY";
     // 余额读到了、而且是空的：这才叫没钱。读不到是另一回事（上面那个分支）。
     if (available <= 0) {
-      return quotaProbe("no_quota", `钱包见底：剩 ${available} ${currency}`, {
+      return quotaProbe("no_quota", `钱包已见底：剩余 ${available} ${currency}`, {
         recoverAt: tokenRhythmRecoverAt(mine),
       });
     }
-    return quotaProbe("ok", `钱包剩 ${available} ${currency}`, {
+    return quotaProbe("ok", `钱包剩余 ${available} ${currency}`, {
       views: tokenRhythmWalletViews(account, mine),
     });
   },
@@ -118,10 +118,10 @@ export const tokenRhythmWalletPlugin = registerQuotaPlugin({
  * 问不到（不知道）。混成一句话，面板就只能一律说「不知道」。
  */
 function stateOfFailure(status: TokenRhythmAccountStatus): QuotaProbe {
-  const message = status.error ?? "平台没答上来";
+  const message = status.error ?? "平台没有返回结果";
   switch (status.errorKind) {
     case "missing":
-      return quotaProbe("missing", "账号上没有账号密码，查不了钱包");
+      return quotaProbe("missing", "账号上没有账号密码，无法查询钱包");
     case "unauthorized":
       return quotaProbe("unauthorized", message);
     case "rate_limited":
@@ -129,7 +129,7 @@ function stateOfFailure(status: TokenRhythmAccountStatus): QuotaProbe {
         recoverAt: status.errorRetryAfterMs == null ? null : Date.now() + status.errorRetryAfterMs,
       });
     default:
-      return quotaProbe("unknown", `钱包没问到：${message}`);
+      return quotaProbe("unknown", `未能查询钱包：${message}`);
   }
 }
 

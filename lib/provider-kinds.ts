@@ -217,6 +217,17 @@ export interface ProviderKind {
    * 样子重建请求的 —— 多余的头直接无视。
    */
   openPlatform?: boolean;
+  /**
+   * 这个种类的模型目录归上游吗。
+   *
+   * 归上游 = 「自动拉目录」与「刷新目录」对它有意义：目录是上游报的那一份。
+   * 不归上游 = 目录是代码挑过的一份（模拟客户端、七牛云、讯飞星火、
+   * TokenRhythm）：上游那份更宽，盖上来会出现被上游拒的模型。
+   *
+   * 面板只读这一处（面板上的 Upstream.models_from_upstream 就是它）：别看
+   * ListPlatformKinds 里那一格 —— 那个清单只有能新建的那几类。
+   */
+  modelsFromUpstream: boolean;
   /** 区域都有哪些。 */
   regions?: string[];
   /**

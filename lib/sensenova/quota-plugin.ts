@@ -114,7 +114,7 @@ export const senseNovaPoolsPlugin = registerQuotaPlugin({
   probe: async (account) => {
     // 没有会话：用户还没登录。那不是控制台拒了什么，是没人去问。
     const session = loadSession(account.id);
-    if (!session) return quotaProbe("missing", "账号上没有控制台会话，查不了积分池");
+    if (!session) return quotaProbe("missing", "账号上没有控制台会话，无法查询积分池");
 
     let usage: SenseNovaPoolUsage;
     // 积分池在控制台上；平台行把地址指到别处时问那一台。
@@ -130,11 +130,11 @@ export const senseNovaPoolsPlugin = registerQuotaPlugin({
     // 所有能服务模型的池子都扣不动了，才是「用尽」：还有一个池子剩着，请求就还能
     // 走到那个池子上去。
     if (pools.length && pools.every((pool) => totalRemaining(pool) <= 0)) {
-      return quotaProbe("no_quota", `积分池全部用尽：${pools.length} 个池子都扣不动了`, {
+      return quotaProbe("no_quota", `积分池全部用尽：${pools.length} 个池子均无可用额度`, {
         recoverAt: senseNovaRecoverAt(usage),
       });
     }
-    return quotaProbe("ok", `积分池 ${pools.length} 个，活动积分剩 ${grantTotal}`, {
+    return quotaProbe("ok", `积分池 ${pools.length} 个，活动积分剩余 ${grantTotal}`, {
       views: senseNovaPoolsViews(account, usage),
     });
   },
@@ -158,9 +158,9 @@ function stateOfError(error: unknown): QuotaProbe {
         recoverAt: error.retryAfterMs === null ? null : Date.now() + error.retryAfterMs,
       });
     }
-    return quotaProbe("unknown", `控制台没答上来：${error.message}`);
+    return quotaProbe("unknown", `控制台没有返回结果：${error.message}`);
   }
-  return quotaProbe("unknown", `问额度时抛了：${describeThrow(error)}`);
+  return quotaProbe("unknown", `查询额度时抛出异常：${describeThrow(error)}`);
 }
 
 /** 一句人类能读的「抛了什么」。 */

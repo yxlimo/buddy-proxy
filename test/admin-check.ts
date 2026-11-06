@@ -42,12 +42,12 @@ function check(name: string, ok: boolean, detail = ""): void {
 
 let base = "";
 
-/** 打一个 Connect 方法。 */
+/** 打一个 Connect 方法。答复里的 headers 是原样的响应头（失败的机器码就在那）。 */
 async function call(
   method: string,
   body: unknown = {},
   token?: string,
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: any; headers: Headers }> {
   const res = await fetch(`${base}${SERVICE}/${method}`, {
     method: "POST",
     headers: {
@@ -63,7 +63,13 @@ async function call(
   } catch {
     parsed = text;
   }
-  return { status: res.status, body: parsed };
+  return { status: res.status, body: parsed, headers: res.headers };
+}
+
+/** 响应头里我们要的那几个（打印用）。 */
+function showHeaders(headers: Headers): string {
+  const wanted = ["buddy-error", "content-type"];
+  return JSON.stringify(Object.fromEntries(wanted.map((key) => [key, headers.get(key)])));
 }
 
 /** 列表字段：proto3 的 JSON 会省略空数组。 */
@@ -219,7 +225,8 @@ check(
 // 推理用的 key 与门户 cookie。
 const qiniuAccountId = created["qiniu"];
 const keys = await call("SetProviderKeys", { upstreamId: qiniuAccountId, keys: ["sk-qiniu-test-one", "portal=pc"] }, token);
-check("key 写进去了", keys.body?.ok === true && Number(keys.body?.count) === 2, JSON.stringify(keys.body));
+check("key 写进去了", Number(keys.body?.count) === 2, JSON.stringify(keys.body));
+check("答复里没有 ok 与 message 两格", !("ok" in (keys.body ?? {})) && !("message" in (keys.body ?? {})), JSON.stringify(keys.body));
 const afterKeys = await call("ListCredentials", { accountId: qiniuAccountId }, token);
 check(
   "一个账号下有推理 key 与门户 cookie",
@@ -231,7 +238,18 @@ const afterKeysUp = await call("ListUpstreams", {}, token);
 const qiniuUpstream = list(afterKeysUp.body?.upstreams).find((u: any) => u.id === "qiniu");
 check("七牛云下就是一个账号", qiniuUpstream?.accountCount === 1, String(qiniuUpstream?.accountCount));
 const badKeys = await call("SetProviderKeys", { upstreamId: "no-such-account", keys: ["x"] }, token);
-check("别的 Provider 不收 key", badKeys.body?.ok === false, JSON.stringify(badKeys.body));
+check(
+  "没有这个账号：404 + ACCOUNT_NOT_FOUND",
+  badKeys.status === 404 && badKeys.headers.get("buddy-error") === "ACCOUNT_NOT_FOUND",
+  `${badKeys.status} ${showHeaders(badKeys.headers)}`,
+);
+check(
+  "失败答复是 Connect 的错误形状（没有 ok，code 是 not_found，消息只有事实）",
+  !("ok" in (badKeys.body ?? {})) &&
+    badKeys.body?.code === "not_found" &&
+    !/[\u4e00-\u9fa5]/.test(String(badKeys.body?.message ?? "")),
+  JSON.stringify(badKeys.body),
+);
 await call("SetProviderKeys", { upstreamId: qiniuAccountId, keys: [] }, token);
 
 const config = await call("ListConfig", {}, token);
@@ -382,7 +400,7 @@ for (const platform of ["qoder", "qoder-cn", "tokenrhythm", "qiniu", "workbuddy-
 
 // 加一个账号，账号数跟着加一；平台本身删不掉。
 const secondRhythm = await call("AddAccount", { platform: "tokenrhythm", alias: "中转站二号" }, token);
-check("中转站能加第二个账号", secondRhythm.body?.ok === true, JSON.stringify(secondRhythm.body));
+check("中转站能加第二个账号", /^\d+$/.test(String(secondRhythm.body?.id ?? "")), JSON.stringify(secondRhythm.body));
 const withSecond = list((await call("ListUpstreams", {}, token)).body?.upstreams).find(
   (u: any) => u.id === "tokenrhythm",
 );
@@ -505,7 +523,7 @@ console.log("凭据的 id：现行格式");
 // 认得这些 id（形状对不对），但不真的去问上游。
 //
 // 「试一下」会真的去问上游，所以这里的 id 都指向一个不存在的上游：形状对
-// 的话得到的是「没有这个 Provider」，形状不对才是「不认识的凭据」。这样
+// 的话得到的是「没有这个 Provider」，形状不对才是「无法识别的凭据」。这样
 // 一个字也不出机器。
 const knownIds = [
   "session:provider:no-such-upstream",
@@ -515,12 +533,12 @@ const knownIds = [
 for (const id of knownIds) {
   const tried = await call("TestCredential", { credentialId: id }, token);
   const message = String(tried.body?.message ?? "");
-  check(`认得 ${id}`, !message.includes("不认识的凭据"), message);
+  check(`认得 ${id}`, !message.includes("无法识别的凭据"), message);
 }
 for (const id of knownIds) {
   const refreshed = await call("RefreshCredential", { credentialId: id }, token);
   const message = String(refreshed.body?.message ?? "");
-  check(`刷新也认得 ${id}`, !message.includes("不认识的凭据"), message);
+  check(`刷新也认得 ${id}`, !message.includes("无法识别的凭据"), message);
 }
 // 一个真的存在的上游，但会话不在：识得出这个 id，而「试一下」问的是本地的
 // 会话，读不到就答「没有登录」——一个字也不出机器。
@@ -528,7 +546,7 @@ for (const id of knownIds) {
 const knownKind = await call("TestCredential", { credentialId: "session:provider:no-such-upstream" }, token);
 check(
   "认得形状对的 id",
-  !String(knownKind.body?.message ?? "").includes("不认识的凭据"),
+  !String(knownKind.body?.message ?? "").includes("无法识别的凭据"),
   String(knownKind.body?.message),
 );
 const unknownProvider = await call("TestCredential", { credentialId: "session:provider:no-such-upstream" }, token);
@@ -541,14 +559,14 @@ check(
 const legacyId = await call("TestCredential", { credentialId: "session:minimax" }, token);
 check(
   "旧格式不认了",
-  String(legacyId.body?.message ?? "").includes("不认识的凭据"),
+  String(legacyId.body?.message ?? "").includes("无法识别的凭据"),
   String(legacyId.body?.message),
 );
 // 旧的 plan 后缀也不认了：MiniMax Code 的额度只走会话。
 const legacyPlanId = await call("TestCredential", { credentialId: "key:provider:no-such-upstream:plan" }, token);
 check(
   "旧的 plan 后缀不认了",
-  String(legacyPlanId.body?.message ?? "").includes("不认识的凭据"),
+  String(legacyPlanId.body?.message ?? "").includes("无法识别的凭据"),
   String(legacyPlanId.body?.message),
 );
 
@@ -557,10 +575,14 @@ console.log("MiniMax Code：只用会话");
 
 // 面板不再问这个 key。
 const codeKeys = await call("SetProviderKeys", { upstreamId: "minimax", keys: ["sk-cp-nope"] }, token);
-check("MiniMax Code 不收 key", codeKeys.body?.ok === false, JSON.stringify(codeKeys.body));
 check(
-  "说的是它用会话",
-  String(codeKeys.body?.message ?? "").includes("会话"),
+  "MiniMax Code 不收 key：ACCOUNT_TAKES_NO_KEY",
+  codeKeys.status === 400 && codeKeys.headers.get("buddy-error") === "ACCOUNT_TAKES_NO_KEY",
+  `${codeKeys.status} ${showHeaders(codeKeys.headers)}`,
+);
+check(
+  "细节说的是它用会话（英文事实，不是中文文案）",
+  String(codeKeys.body?.message ?? "").includes("logs in"),
   String(codeKeys.body?.message),
 );
 
@@ -609,7 +631,7 @@ const save = await call(
   },
   token,
 );
-check("模型存得进去", save.body?.ok === true, JSON.stringify(save.body));
+check("模型存得进去", save.status === 200 && save.body?.id === "from-the-panel", JSON.stringify(save.body));
 check("存完给了 id", save.body?.id === "from-the-panel");
 
 const listed = await call("ListPublishedModels", {}, token);
@@ -620,7 +642,110 @@ check(
 );
 
 const badSave = await call("SavePublishedModel", { model: { id: "" } }, token);
-check("没有 id 的模型不收", badSave.body?.ok !== true);
+check(
+  "没有 id 的模型不收：MODEL_ID_MISSING",
+  badSave.status === 400 && badSave.headers.get("buddy-error") === "MODEL_ID_MISSING",
+  `${badSave.status} ${showHeaders(badSave.headers)}`,
+);
+
+console.log("");
+console.log("失败怎么表达");
+
+// 失败不是「200 + ok:false + 一句中文」，而是一次 Connect 错误：状态码按语义，
+// 机器码在响应头 buddy-error 上，错误消息里只有排查用的事实。
+//
+// 这一节打真的 HTTP：面板拿到的是这两个东西，不是服务方法的返回值。
+
+const dupPlatform = await call(
+  "AddPlatform",
+  { id: "dup-check", label: "Dup Check", baseUrl: "https://api.dup.test/v1" },
+  token,
+);
+check("平台加得进去", dupPlatform.status === 200, JSON.stringify(dupPlatform.body));
+check(
+  "成功答复里没有 ok 与 message 两格",
+  !("ok" in (dupPlatform.body ?? {})) && !("message" in (dupPlatform.body ?? {})),
+  JSON.stringify(dupPlatform.body),
+);
+
+const dupAgain = await call(
+  "AddPlatform",
+  { id: "dup-check", label: "Dup Check", baseUrl: "https://api.dup.test/v1" },
+  token,
+);
+// 这一行就是交付记录里要贴的那一条：同一次失败的响应头。
+console.log(`  (一个真实失败的响应头) ${dupAgain.status} ${showHeaders(dupAgain.headers)} ${JSON.stringify(dupAgain.body)}`);
+check(
+  "重名：409 + PLATFORM_ALREADY_EXISTS 在响应头上",
+  dupAgain.status === 409 && dupAgain.headers.get("buddy-error") === "PLATFORM_ALREADY_EXISTS",
+  `${dupAgain.status} ${showHeaders(dupAgain.headers)}`,
+);
+check(
+  "失败答复是 Connect 的错误形状（没有 ok，code 是 already_exists）",
+  !("ok" in (dupAgain.body ?? {})) && dupAgain.body?.code === "already_exists",
+  JSON.stringify(dupAgain.body),
+);
+check(
+  "错误消息里没有中文文案（只有事实）",
+  /[\u4e00-\u9fa5]/.test(String(dupAgain.body?.message ?? "")) === false,
+  String(dupAgain.body?.message),
+);
+
+const renamedMiss = await call("UpdatePlatform", { id: "no-such-platform", label: "x" }, token);
+check(
+  "改不存在的平台：404 + PLATFORM_NOT_FOUND",
+  renamedMiss.status === 404 && renamedMiss.headers.get("buddy-error") === "PLATFORM_NOT_FOUND",
+  `${renamedMiss.status} ${showHeaders(renamedMiss.headers)}`,
+);
+
+const deletedMiss = await call("DeletePlatform", { id: "no-such-platform" }, token);
+check(
+  "删不存在的平台：404 + PLATFORM_NOT_FOUND",
+  deletedMiss.status === 404 && deletedMiss.headers.get("buddy-error") === "PLATFORM_NOT_FOUND",
+  `${deletedMiss.status} ${showHeaders(deletedMiss.headers)}`,
+);
+
+const droppedPlatform = await call("DeletePlatform", { id: "dup-check" }, token);
+check("建的那个平台删得掉", droppedPlatform.status === 200, JSON.stringify(droppedPlatform.body));
+
+const missAccount = await call("AddAccount", { platform: "no-such-platform" }, token);
+check(
+  "账号加在不存在的平台上：404 + ACCOUNT_PLATFORM_NOT_FOUND",
+  missAccount.status === 404 && missAccount.headers.get("buddy-error") === "ACCOUNT_PLATFORM_NOT_FOUND",
+  `${missAccount.status} ${showHeaders(missAccount.headers)}`,
+);
+
+const badOverrides = await call("SetModelOverrides", { platformId: "qoder", overrides: [{ id: "" }] }, token);
+check(
+  "人工条目的模型 id 空着：400 + MODEL_ID_MISSING",
+  badOverrides.status === 400 && badOverrides.headers.get("buddy-error") === "MODEL_ID_MISSING",
+  `${badOverrides.status} ${showHeaders(badOverrides.headers)}`,
+);
+
+const missOverride = await call("DeleteModelOverride", { platformId: "qoder", modelId: "no-such-model" }, token);
+check(
+  "删不存在的人工条目：404 + MODEL_OVERRIDE_NOT_FOUND",
+  missOverride.status === 404 && missOverride.headers.get("buddy-error") === "MODEL_OVERRIDE_NOT_FOUND",
+  `${missOverride.status} ${showHeaders(missOverride.headers)}`,
+);
+
+const noUpstream = await call(
+  "SavePublishedModel",
+  {
+    model: {
+      id: "no-upstream",
+      displayName: "No Upstream",
+      strategy: "single",
+      targets: [{ groupName: "qoder", upstreamModel: "", weight: 1, enabled: true }],
+    },
+  },
+  token,
+);
+check(
+  "目标没填上游模型：400 + MODEL_MISSING_UPSTREAM",
+  noUpstream.status === 400 && noUpstream.headers.get("buddy-error") === "MODEL_MISSING_UPSTREAM",
+  `${noUpstream.status} ${showHeaders(noUpstream.headers)}`,
+);
 
 const del = await call("DeletePublishedModel", { id: "from-the-panel" }, token);
 check("模型删得掉", del.body?.ok === true, JSON.stringify(del.body));
@@ -649,7 +774,7 @@ check(
 // 目录是**平台**的一组（路径里那一段是平台 id）：同一个平台下加第二个账号
 // 不会让同一批模型在列表里出现两遍。
 const added = await call("AddAccount", { platform: "qoder-cn", alias: "第二个 Qoder CN" }, token);
-check("用户加的账号加得进去", added.body?.ok === true, JSON.stringify(added.body));
+check("用户加的账号加得进去", /^\d+$/.test(String(added.body?.id ?? "")), JSON.stringify(added.body));
 const addedModels = await call("ListModels", { upstreamId: "qoder-cn" }, token);
 check(
   "同一个平台加第二个账号，目录还只有一组",
@@ -687,7 +812,7 @@ const inheritSave = await call(
   },
   token,
 );
-check("继承的模型存得进去", inheritSave.body?.ok === true, JSON.stringify(inheritSave.body));
+check("继承的模型存得进去", inheritSave.status === 200 && Boolean(inheritSave.body?.id), JSON.stringify(inheritSave.body));
 
 const inheritList = await call("ListPublishedModels", {}, token);
 const inheritModel = list(inheritList.body?.models).find((m: any) => m.id === "inherit-test");
@@ -707,7 +832,7 @@ check(
 
 // 原样存回去，还是继承。
 const echo = await call("SavePublishedModel", { model: inheritModel }, token);
-check("原样存回去不报错", echo.body?.ok === true, JSON.stringify(echo.body));
+check("原样存回去不报错", echo.status === 200 && Boolean(echo.body?.id), JSON.stringify(echo.body));
 const row2 = db.prepare("SELECT context_window FROM aggregate_model WHERE id = ?").get("inherit-test") as any;
 check("原样存回去库里还是 NULL", row2?.context_window === null, JSON.stringify(row2));
 
@@ -726,7 +851,7 @@ const inheritedSave = await call(
   },
   token,
 );
-check("继承有目录的上游也存得进去", inheritedSave.body?.ok === true, JSON.stringify(inheritedSave.body));
+check("继承有目录的上游也存得进去", inheritedSave.status === 200 && Boolean(inheritedSave.body?.id), JSON.stringify(inheritedSave.body));
 
 const withCatalog = await call("ListPublishedModels", {}, token);
 const catalogModel = list(withCatalog.body?.models).find((m: any) => m.id === "inherits-a-catalog");
@@ -749,7 +874,7 @@ check(
 );
 // 原样存回去，继承还在。
 const echoCatalog = await call("SavePublishedModel", { model: catalogModel }, token);
-check("原样存回去不报错", echoCatalog.body?.ok === true, JSON.stringify(echoCatalog.body));
+check("原样存回去不报错", echoCatalog.status === 200 && Boolean(echoCatalog.body?.id), JSON.stringify(echoCatalog.body));
 const rowCatalog = db
   .prepare("SELECT context_window, max_output_tokens FROM aggregate_model WHERE id = ?")
   .get("inherits-a-catalog") as any;
@@ -776,7 +901,7 @@ const explicit = await call(
   },
   token,
 );
-check("写死的模型存得进去", explicit.body?.ok === true, JSON.stringify(explicit.body));
+check("写死的模型存得进去", explicit.status === 200 && Boolean(explicit.body?.id), JSON.stringify(explicit.body));
 const row3 = db
   .prepare("SELECT context_window, reasoning FROM aggregate_model WHERE id = ?")
   .get("explicit-test") as any;

@@ -277,12 +277,12 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
   try {
     const row = openPlatformOf(id);
     if (!row) return { ok: false, message: `没有这个平台：${id}` };
-    if (!row.models.auto) return { ok: false, message: "目录是人写的，不自动拉" };
+    if (!row.models.auto) return { ok: false, message: "目录为手工维护，不自动获取" };
     // 模拟客户端那一族：目录是各 kind 自己的代码目录，不从上游拉。与退避一样
     // 只看 row 与内存里的状态，不读库 —— 放在查 key 前面，请求路径上就不用为了
     // 判别去读 provider 表与凭据。
     if (isSimulatedClientKind(row.kind)) {
-      return { ok: false, message: "这个平台不用从上游拉目录" };
+      return { ok: false, message: "这个平台不需要从上游获取目录" };
     }
     // 退避：上次成功之后失败过就先不再问。退避期内不告警 —— 同一个失败反复
     // 告警就是刷屏（请求路径上每个 /v1/models 都会走到这里）。
@@ -295,12 +295,12 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
       before.lastAttempt > before.lastSuccess &&
       Date.now() - before.at < FAILURE_BACKOFF_MS
     ) {
-      return { ok: false, message: "刚问过上游，先不再问" };
+      return { ok: false, message: "刚刚查询过上游，暂不重复查询" };
     }
     // 没有 key 是正常状态（平台刚建、还没填 key）：不问上游，也不吵。
     const key = accountKeyOf(id);
     if (!key) {
-      return { ok: false, message: "还没有能用的 API key，不去问上游要目录" };
+      return { ok: false, message: "还没有可用的 API key，不向上游获取目录" };
     }
     // 这一次尝试先记上：序号分出先后，时刻留给退避窗口。
     const seq = ++attemptSeq;
@@ -312,7 +312,7 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
     };
     catalogState.set(id, state);
     const models = await fetchOpenPlatformModels(row, key);
-    if (!models) return { ok: false, message: "拉不到模型目录，保留原来那份" };
+    if (!models) return { ok: false, message: "无法获取模型目录，保留原有的一份" };
     const written = updateOpenPlatform(id, {
       models,
       modelsAuto: true,
@@ -327,11 +327,11 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
     }
     // 成功：这一次的序号就是「上次成功」。
     catalogState.set(id, { ...state, lastSuccess: seq });
-    return { ok: true, message: `拉到 ${models.length} 个模型` };
+    return { ok: true, message: `已获取 ${models.length} 个模型` };
   } catch (e) {
     // 库开不了、SQLITE_BUSY：这一轮拉不成，但不该把整个网关带走。
     const message = (e as Error)?.message ?? String(e);
     console.warn(`[OPEN-PLATFORM] ${id} 的模型目录没拉到：${message}`);
-    return { ok: false, message: `拉不到模型目录：${message}` };
+    return { ok: false, message: `无法获取模型目录：${message}` };
   }
 }

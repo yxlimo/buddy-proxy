@@ -420,8 +420,8 @@ check("第一次删完墓碑在", tombstoneAt("minimax") !== null, String(tombst
 store().prepare("UPDATE platform_preset_removed SET removed_at = 1 WHERE id = ?").run("minimax");
 const twiceSecond = deleteOpenPlatform("minimax");
 check(
-  "第二次删不到东西：报没有这个平台",
-  twiceSecond.ok === false && twiceSecond.message.includes("没有这个平台"),
+  "第二次删不到东西：机器码是 PLATFORM_NOT_FOUND",
+  twiceSecond.ok === false && twiceSecond.code === "PLATFORM_NOT_FOUND",
   JSON.stringify(twiceSecond),
 );
 check("第二次没重写墓碑", tombstoneAt("minimax") === 1, String(tombstoneAt("minimax")));
@@ -437,8 +437,8 @@ check(
 );
 const qoderAgain = deleteOpenPlatform("qoder");
 check(
-  "再删一次仍报没有这个平台",
-  qoderAgain.ok === false && qoderAgain.message.includes("没有这个平台"),
+  "再删一次仍报没有这个平台（PLATFORM_NOT_FOUND）",
+  qoderAgain.ok === false && qoderAgain.code === "PLATFORM_NOT_FOUND",
   JSON.stringify(qoderAgain),
 );
 check("墓碑仍在", tombstoneAt("qoder") !== null, String(tombstoneAt("qoder")));

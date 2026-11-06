@@ -34,6 +34,7 @@ export const xinghuoKind = registerCompatiblePlatform({
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
+  modelsFromUpstream: false,
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),
   // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查。
   // 行读不到（模板行本该由迁移补出）才退回代码目录 —— 那是兜底，不是常态。

@@ -19,6 +19,8 @@ import { openPlatformOf, OPEN_PLATFORM_KIND_NAME, type OpenPlatformRow } from ".
 import { isSimulatedClientKind } from "../platform-catalog.ts";
 import { platformOfAny } from "../platforms.ts";
 import { provider, providerKindOf } from "../providers.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧。
+import type { AdminResult } from "./error-codes.ts";
 
 /**
  * 这个账号是不是开放平台的账号。
@@ -87,7 +89,7 @@ function kindNameOf(upstreamId: string): string {
 export function setProviderKeys(
   upstreamId: string,
   keys: string[],
-): { ok: boolean; message: string; count: number } {
+): AdminResult & { count: number } {
   // 开放平台的账号：第一把是推理用的 API key（空的那把表示清掉它），后面几把
   // 是额度插件要的那几段。这条先判：它看的是账号属于哪个平台，比「哪一类
   // 上游」更具体。
@@ -101,9 +103,9 @@ export function setProviderKeys(
     if (keys.length < 1 + fields.length) {
       return {
         ok: false,
-        message: fields.length
-          ? `${openPlatform.label}：额度插件要 ${fields.length} 段凭据（连推理 API key 一共要 ${1 + fields.length} 段），这次只发来 ${keys.length} 段：什么都没改。刷新页面再试。`
-          : `${openPlatform.label}：要 1 段凭据（推理 API key），这次只发来 ${keys.length} 段：什么都没改。刷新页面再试。`,
+        code: "ACCOUNT_KEY_COUNT_SHORT",
+        message:
+          `platform ${openPlatform.id} takes ${1 + fields.length} keys (1 inference key + ${fields.length} plugin fields), got ${keys.length}: nothing written`,
         count: 0,
       };
     }
@@ -124,12 +126,12 @@ export function setProviderKeys(
     // 平台没选插件（或插件没登记）却给了多于一把 key：多的那些没地方去，忽略
     // 掉，不报错 —— 用户可能刚改完插件，拦下来反而让人存不下去。
     let message = parts.length
-      ? `写了${openPlatform.label}的 ${parts.join(" 与 ")}`
+      ? `已保存${openPlatform.label}的 ${parts.join(" 与 ")}`
       : fields.length
-        ? `清掉了${openPlatform.label}的凭据`
-        : `清掉了${openPlatform.label}的 API key`;
+        ? `已清除${openPlatform.label}的凭据`
+        : `已清除${openPlatform.label}的 API key`;
     if (keys.length > 1 + fields.length) {
-      message += plugin ? "（多余的 key 没写）" : "（这个平台没有额度插件，多余的 key 没写）";
+      message += plugin ? "（多余的 key 未保存）" : "（这个平台没有额度插件，多余的 key 未保存）";
     }
     return { ok: true, message, count };
   }
@@ -138,7 +140,8 @@ export function setProviderKeys(
     // Code 网关只用会话：额度也走会话，没有要贴的 key。
     return {
       ok: false,
-      message: "MiniMax Code 用登录的会话，不用 key（套餐额度也跟着会话走）。",
+      code: "ACCOUNT_TAKES_NO_KEY",
+      message: `account ${upstreamId} is ${kind}: it logs in, there is no key to write`,
       count: 0,
     };
   }
@@ -150,12 +153,12 @@ export function setProviderKeys(
     const count = writeQiniuAccount(upstreamId, { apiKey, portalCookie });
     const message =
       count === 0
-        ? "清掉了七牛云的凭据"
+        ? "已清除七牛云的凭据"
         : count === 2
-          ? "写了 API key 与门户 cookie"
+          ? "已保存 API key 与门户 cookie"
           : apiKey
-            ? "只写了 API key（查不了额度）"
-            : "只写了门户 cookie（不能推理）";
+            ? "只保存了 API key（无法查询额度）"
+            : "只保存了门户 cookie（无法推理）";
     return { ok: true, message, count };
   }
   if (kind === "xinghuo") {
@@ -164,7 +167,7 @@ export function setProviderKeys(
     const count = writeXinghuoKey(upstreamId, apiKey);
     return {
       ok: true,
-      message: count ? "写了讯飞星火的 API key" : "清掉了讯飞星火的 API key",
+      message: count ? "已保存讯飞星火的 API key" : "已清除讯飞星火的 API key",
       count,
     };
   }
@@ -174,7 +177,7 @@ export function setProviderKeys(
     const count = writeSenseNovaKey(upstreamId, apiKey);
     return {
       ok: true,
-      message: count ? "写了 SenseNova 的 API key" : "清掉了 SenseNova 的 API key",
+      message: count ? "已保存 SenseNova 的 API key" : "已清除 SenseNova 的 API key",
       count,
     };
   }
@@ -188,8 +191,8 @@ export function setProviderKeys(
     if (discoveryKey) parts.push("Discovery key");
     if (chatKey) parts.push("Chat key");
     const message = parts.length
-      ? `写了书生·端砚的 ${parts.join(" 与 ")}`
-      : "清掉了书生·端砚的推理 key";
+      ? `已保存书生·端砚的 ${parts.join(" 与 ")}`
+      : "已清除书生·端砚的推理 key";
     return { ok: true, message, count };
   }
   if (kind === "tokenrhythm") {
@@ -198,12 +201,24 @@ export function setProviderKeys(
     const count = writeTokenRhythmKey(upstreamId, apiKey);
     return {
       ok: true,
-      message: count ? "写了 TokenRhythm 的 API key" : "清掉了 TokenRhythm 的 API key",
+      message: count ? "已保存 TokenRhythm 的 API key" : "已清除 TokenRhythm 的 API key",
       count,
     };
   }
   // 别的平台没有「贴一把 key」这一步：它们的凭据各有各的形状。
-  return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
+  //
+  // 分两种说：账号行不在（多半是面板拿了个别的 id）与账号在、但这一类不收 key。
+  // 混成一句话的话，面板只能显示一句「这个平台不接受」，而真正的原因是「没有
+  // 这个账号」。
+  const row = provider(upstreamId);
+  return row
+    ? {
+        ok: false,
+        code: "ACCOUNT_TAKES_NO_KEY",
+        message: `account ${upstreamId} is ${row.kind}: it has no api key to write`,
+        count: 0,
+      }
+    : { ok: false, code: "ACCOUNT_NOT_FOUND", message: `no account ${upstreamId}`, count: 0 };
 }
 
 /**

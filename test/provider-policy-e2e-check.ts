@@ -651,8 +651,8 @@ if (panelBuilt && !browserSkipped) {
     check("策略选择器点开了", openedSelect.code === 0, openedSelect.out.slice(-200));
     const picked = await ab(browserSession, ["find", "role", "option", "click", "--name", "降级"]);
     check("选了「降级」", picked.code === 0, picked.out.slice(-200));
-    const toasted = await ab(browserSession, ["wait", "--text", "策略改成了降级"]);
-    check("面板说策略改好了", toasted.code === 0, toasted.out.slice(-200));
+    const toasted = await ab(browserSession, ["wait", "--text", "策略已改为降级"]);
+    check("面板说策略已改为降级", toasted.code === 0, toasted.out.slice(-200));
 
     const shown = await abRetry(browserSession, ["find", "role", "combobox", "text", "--name", "生效策略（tokenrhythm）"], 5);
     check("面板上显示的是降级", shown.out.includes("降级"), shown.out.slice(-200));

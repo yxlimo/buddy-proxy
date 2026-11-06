@@ -113,6 +113,7 @@ registerKind({
   label: "MiniMax Code",
   login: "device",
   policies: ["single", "fallback"],
+  modelsFromUpstream: false,
   baseUrl: () => MINIMAX_UPSTREAM.replace(/\/messages$/, ""),
   // 推理用的就是登录会话：access token 本身是推理凭据，没有第二把 key。
   inferWith: "session",

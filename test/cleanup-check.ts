@@ -256,7 +256,7 @@ const made = await fetch(`${BASE}/buddy.admin.v1.AdminService/AddAccount`, {
   headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
   body: JSON.stringify({ platform: "qoder-cn", alias: "测试 Qoder CN" }),
 }).then((r) => r.json().catch(() => null));
-check("qoder-cn 的账号加出来了", made?.ok === true, JSON.stringify(made));
+check("qoder-cn 的账号加出来了", typeof made?.id === "string" && Boolean(made.id), JSON.stringify(made));
 const switched = await fetch(`${BASE}/buddy.admin.v1.AdminService/SetAccountEnabled`, {
   method: "POST",
   headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },

@@ -22,6 +22,8 @@ import { platformAvailabilities, type PlatformAvailability } from "./platform-st
 import { aggregateCatalog, type AggregateEntry } from "../router/catalog.ts";
 import type { HealthSnapshot } from "../provider-kinds.ts";
 import { UnpublishedReason } from "../gen/buddy/admin/v1/admin_pb.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧。
+import type { AdminResult } from "./error-codes.ts";
 
 /** 一个公布出来的模型。 */
 export interface PublishedModelView {
@@ -385,14 +387,16 @@ export interface PublishedModelInput {
  *
  * 目标的请求数与失败数是网关自己数的，保存时会被覆盖，客户端传什么都不算。
  */
-export function savePublishedModel(input: PublishedModelInput): { ok: boolean; id: string; message: string } {
+export function savePublishedModel(input: PublishedModelInput): AdminResult & { id: string } {
   const id = String(input.id ?? "").trim();
   if (!id) {
     // 契约里说「id 为空表示新建」，可新建的模型总得有个对外的 id：网关不替
     // 面板起名字，起了面板也不知道。
-    return { ok: false, id: "", message: "模型必须有 id（新建时先指定一个对外名称）" };
+    return { ok: false, id: "", code: "MODEL_ID_MISSING", message: "model id is empty" };
   }
-  if (!input.targets?.length) return { ok: false, id, message: "模型至少需要配置一个上游" };
+  if (!input.targets?.length) {
+    return { ok: false, id, code: "MODEL_HAS_NO_TARGET", message: `model ${id} has no target` };
+  }
   const strategy: AggregateStrategy = input.strategy === "fallback" ? "fallback" : "single";
   // 权重从大到小。权重一样时排序是稳定的，面板给的先后留着。
   const sorted = [...input.targets].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
@@ -404,7 +408,13 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
     enabled: target.enabled !== false,
   }));
   if (targets.some((t) => !t.upstreamModel)) {
-    return { ok: false, id, message: "每个目标都需要填写上游模型 id" };
+    const empty = targets.findIndex((t) => !t.upstreamModel);
+    return {
+      ok: false,
+      id,
+      code: "MODEL_MISSING_UPSTREAM",
+      message: `model ${id} target ${empty + 1} (${targets[empty].group}) has no upstream model`,
+    };
   }
   // 目录里没有这个名字，不拦。
   //
@@ -443,9 +453,9 @@ export function savePublishedModel(input: PublishedModelInput): { ok: boolean; i
   reloadAggregate();
   // 目录里没有的，回执里说一句 —— 存是存了，但可能是拼错了，也可能是目录漏了。
   const note = unlisted.length
-    ? `；目录里没有 ${unlisted.join("、")}，按填的原样存了`
+    ? `; not in the catalog: ${unlisted.join(", ")} (saved as given)`
     : "";
-  return { ok: true, id: model.id, message: `保存了 ${model.id}（${model.targets.length} 个目标）${note}` };
+  return { ok: true, id: model.id, message: `saved ${model.id} (${model.targets.length} targets)${note}` };
 }
 
 /** 删掉一个公布的模型。 */
@@ -453,7 +463,7 @@ export function deletePublishedModel(id: string): { ok: boolean; message: string
   if (!getAggregateModel(id)) return { ok: false, message: `没有这个模型：${id}` };
   deleteAggregateModel(id);
   reloadAggregate();
-  return { ok: true, message: `删掉了 ${id}` };
+  return { ok: true, message: `已删除 ${id}` };
 }
 
 /* ------------------------------------------------------------------ *

@@ -438,10 +438,11 @@ check(
 const badPluginId = updateOpenPlatform("acme", { quotaPlugin: "no-such-plugin" });
 check("没登记的插件 id 不收", badPluginId.ok === false, badPluginId.message);
 check(
-  "拒绝的话说的是那个 id 与登记过的插件",
-  badPluginId.message.includes("没有这个额度插件：no-such-plugin") &&
-    badPluginId.message.includes("七牛云资源包"),
-  badPluginId.message,
+  "拒绝的机器码是「没有这个额度插件」，细节里带着那个 id 与登记过的几个",
+  badPluginId.code === "QUOTA_PLUGIN_UNKNOWN" &&
+    badPluginId.message.includes("no-such-plugin") &&
+    badPluginId.message.includes("qiniu"),
+  JSON.stringify(badPluginId),
 );
 check(
   "库里那一格没被改",
@@ -560,13 +561,14 @@ const badKind = createOpenPlatform({
 });
 check("没登记的 kind 不收", badKind.ok === false, badKind.message);
 check(
-  "拒绝的话说的是那个 kind 与能建的两种方言（用 label）",
-  badKind.message.includes("没有这一类平台：no-such-kind") &&
-    badKind.message.includes("OpenAI 兼容") &&
-    badKind.message.includes("Anthropic 兼容") &&
+  "拒绝的机器码是「没有这一类」，细节里带着那个 kind 与能建的两种方言",
+  badKind.code === "PLATFORM_KIND_UNKNOWN" &&
+    badKind.message.includes("no-such-kind") &&
+    badKind.message.includes("openai") &&
+    badKind.message.includes("anthropic") &&
     // 厂商那五家不再列在候选里。
-    !["七牛云", "讯飞星火", "SenseNova", "书生·端砚", "TokenRhythm"].some((name) =>
-      badKind.message.includes(name),
+    !["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].some((kind) =>
+      badKind.message.includes(kind),
     ),
   badKind.message,
 );
@@ -582,7 +584,11 @@ for (const kind of ["sensenova"]) {
     kind,
   });
   check(`厂商类型不可建：${kind}`, rejected.ok === false, rejected.message);
-  check(`${kind} 说的是没有这一类`, rejected.message.includes(`没有这一类平台：${kind}`), rejected.message);
+  check(
+    `${kind} 的机器码说的是没有这一类`,
+    rejected.code === "PLATFORM_KIND_UNKNOWN" && rejected.message.includes(kind),
+    JSON.stringify(rejected),
+  );
   check(`${kind} 那一行也没写进表`, openPlatformOf(`kinds-${kind}`) === null);
 }
 
@@ -658,7 +664,7 @@ check("表里没有 qoder-xx", openPlatformOf("qoder-xx") === null);
 // 建好之后换不了类型：换类型要连它名下的凭据一起重算，那是另一件事。
 const switched = updateOpenPlatform("kinds-demo", { kind: "openai", label: "Kinds Demo 改" });
 check("换类型被拒", switched.ok === false, switched.message);
-check("说的是不能换类型", switched.message.includes("不能换类型"), switched.message);
+check("机器码说的是类型定死了", switched.code === "PLATFORM_KIND_FIXED", JSON.stringify(switched));
 check(
   "库里 kind 没变",
   openPlatformOf("kinds-demo")?.kind === "anthropic",
@@ -882,7 +888,7 @@ const onlyRun = spawnSync(
     `
       const { createOpenPlatform, listOpenPlatforms } = await import(${JSON.stringify(path.join(ROOT, "lib/open-platforms.ts"))});
       const res = createOpenPlatform({ id: "qoder", label: "撞播种", baseUrl: "https://only.test/v1" });
-      console.log(JSON.stringify({ ok: res.ok, message: res.message, rows: listOpenPlatforms().map((r) => r.id) }));
+      console.log(JSON.stringify({ ok: res.ok, code: res.ok ? "" : res.code, message: res.message, rows: listOpenPlatforms().map((r) => r.id) }));
     `,
   ],
   {
@@ -892,7 +898,7 @@ const onlyRun = spawnSync(
   },
 );
 check("只加载 open-platforms 的进程跑得起来", onlyRun.status === 0, onlyRun.stderr?.slice(-300) ?? "");
-let onlyBody: { ok?: boolean; message?: string; rows?: string[] } = {};
+let onlyBody: { ok?: boolean; code?: string; message?: string; rows?: string[] } = {};
 try {
   onlyBody = JSON.parse(onlyRun.stdout.trim().split("\n").pop() ?? "{}");
 } catch {
@@ -904,8 +910,8 @@ check(
   JSON.stringify(onlyBody.rows),
 );
 check(
-  "那个进程里撞已有行的 id 照样被拒",
-  onlyBody.ok === false && String(onlyBody.message ?? "").includes("已经有这个平台了"),
+  "那个进程里撞已有行的 id 照样被拒，机器码是「已有」",
+  onlyBody.ok === false && onlyBody.code === "PLATFORM_ALREADY_EXISTS",
   JSON.stringify(onlyBody),
 );
 fs.rmSync(ONLY_DIR, { recursive: true, force: true });
@@ -934,7 +940,7 @@ check(
 const simRefresh = await refreshOpenPlatformCatalog(simId);
 check(
   "说要拉的那一次被挡下了",
-  simRefresh.ok === false && simRefresh.message.includes("不用从上游拉目录"),
+  simRefresh.ok === false && simRefresh.message.includes("不需要从上游获取目录"),
   JSON.stringify(simRefresh),
 );
 // 对照：同一个判断在开放平台上放行（不然上面那条只能说「什么都不刷新」）。

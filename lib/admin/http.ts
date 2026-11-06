@@ -103,7 +103,9 @@ function cors(ctx: Koa.Context): void {
   if (!origin || !origins.includes(origin)) return;
   ctx.set("Access-Control-Allow-Origin", origin);
   ctx.set("Access-Control-Allow-Headers", "authorization, content-type, connect-protocol-version, connect-timeout-ms");
-  ctx.set("Access-Control-Expose-Headers", "connect-content-encoding");
+  // buddy-error：失败的机器码就在这个响应头上。跨域时不列出来，浏览器就不让
+  // 前端读它（读了也是 null），面板只能显示一句「出错了」。
+  ctx.set("Access-Control-Expose-Headers", "connect-content-encoding, buddy-error");
   ctx.set("Access-Control-Max-Age", "600");
 }
 

@@ -366,7 +366,7 @@ const saved = await publish({
   strategy: "single",
   targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 10 }],
 });
-check("面板能发布一个模型", saved.ok === true, JSON.stringify(saved));
+check("面板能发布一个模型（答复里没有 ok 与 message）", saved.id === "e2e-main", JSON.stringify(saved));
 
 const listed = await fetch(`${base}/v1/models`).then((r) => r.json());
 const ids = (listed.data ?? []).map((m: any) => m.id);
@@ -433,7 +433,7 @@ const changed = await publish({
   strategy: "single",
   targets: [{ groupName: "qoder", upstreamModel: "deepseek-v4-pro", weight: 10 }],
 });
-check("面板能改一个模型的目标", changed.ok === true, JSON.stringify(changed));
+check("面板能改一个模型的目标", changed.id === "e2e-main", JSON.stringify(changed));
 fake.reset();
 const afterChange = await chat("e2e-main");
 check("改完立刻生效（不用重启）", afterChange.status === 200, `HTTP ${afterChange.status}`);

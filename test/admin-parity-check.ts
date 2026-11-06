@@ -178,7 +178,7 @@ const off = platformAvailability("qiniu");
 check("判定 → accounts_off", off.state === "accounts_off", off.state);
 check("面板的状态 → UPSTREAM_STATE_DISABLED", upstreamState("qiniu") === UpstreamState.DISABLED, String(upstreamState("qiniu")));
 const offRow = await platformRow("qiniu");
-check("平台行说得出「账号都关着」", String(offRow?.stateReason ?? "").includes("都关着"), String(offRow?.stateReason));
+check("平台行说得出「账号均已关闭」", String(offRow?.stateReason ?? "").includes("账号均已关闭"), String(offRow?.stateReason));
 check("平台行说这个平台没有开着的账号", offRow?.hasEnabledAccount === false, String(offRow?.hasEnabledAccount));
 setProviderEnabled(accountId, true);
 

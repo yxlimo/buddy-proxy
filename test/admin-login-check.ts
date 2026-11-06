@@ -265,7 +265,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 const accountIdOf: Record<string, string> = {};
 for (const platform of ["minimax", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
-  if (made.body?.ok === true) accountIdOf[platform] = String(made.body.id ?? "");
+  if (typeof made.body?.id === "string" && made.body.id) accountIdOf[platform] = made.body.id;
   else console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
 

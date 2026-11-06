@@ -129,7 +129,7 @@ const tokenFile = path.join(DATA_DIR, "admin-token");
 const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
 
 /** 打一个 Connect 方法。 */
-async function call(method: string, body: unknown = {}): Promise<{ status: number; body: any }> {
+async function call(method: string, body: unknown = {}): Promise<{ status: number; body: any; headers: Headers }> {
   // The server closes an idle connection after a while and the client may
   // still be holding it: that shows up as "other side closed". It is a race,
   // not a failure, so try once more.
@@ -155,7 +155,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
   } catch {
     parsed = text;
   }
-  return { status: res.status, body: parsed };
+  return { status: res.status, body: parsed, headers: res.headers };
 }
 
 /** 打一次代理的请求。 */
@@ -298,7 +298,7 @@ const save = await call("SavePublishedModel", {
     targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, position: 0, enabled: true }],
   },
 });
-check("模型存得进去", save.body?.ok === true, JSON.stringify(save.body));
+check("模型存得进去", save.status === 200 && Boolean(save.body?.id), JSON.stringify(save.body));
 
 const publishedModels = await fetch(`${base}/v1/models`);
 const publishedBody = await publishedModels.json().catch(() => null);
@@ -375,7 +375,11 @@ const wrongKind = await call("SetProviderKeys", {
   upstreamId: "qoder",
   keys: ["sk-cp-nope"],
 });
-check("别的 Provider 不接受 key", wrongKind.body?.ok === false, JSON.stringify(wrongKind.body));
+check(
+    "别的 Provider 不接受 key（机器码在响应头上）",
+    wrongKind.status === 404 && wrongKind.headers.get("buddy-error") === "ACCOUNT_NOT_FOUND",
+    `${wrongKind.status} ${wrongKind.headers.get("buddy-error")} ${JSON.stringify(wrongKind.body)}`,
+  );
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);

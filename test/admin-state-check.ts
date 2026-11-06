@@ -437,7 +437,7 @@ async function saveModel(id: string, enabled: boolean, targets: any[]): Promise<
   const res = await admin("SavePublishedModel", {
     model: { id, displayName: id, strategy: "single", enabled, targets },
   });
-  if (res.ok !== true) throw new Error(`存 ${id} 失败：${JSON.stringify(res)}`);
+  if (res?.id !== id) throw new Error(`存 ${id} 失败：${JSON.stringify(res)}`);
 }
 
 const qoderTarget = { groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, enabled: true };

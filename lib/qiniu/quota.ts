@@ -138,7 +138,7 @@ export async function fetchQiniuQuota(
           retryAfterMs: retryAfterOf(res),
         };
       }
-      return { ok: false, reason: "unknown", status, message: `门户答了 HTTP ${status}`, retryAfterMs: null };
+      return { ok: false, reason: "unknown", status, message: `门户返回 HTTP ${status}`, retryAfterMs: null };
     }
     const body = await res.json().catch(() => null);
     if (!body || typeof body !== "object") {
@@ -164,7 +164,7 @@ export async function fetchQiniuQuota(
       ok: false,
       reason: "unknown",
       status: 0,
-      message: `门户没问到：${(e as Error)?.message ?? String(e)}`,
+      message: `门户查询失败：${(e as Error)?.message ?? String(e)}`,
       retryAfterMs: null,
     };
   }

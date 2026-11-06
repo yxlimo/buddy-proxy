@@ -221,7 +221,7 @@ export function legacyError(error: { code?: string; message?: string; status?: n
   if (error.status === 403 && /pricing/i.test(error.message ?? "")) {
     return new AuthError(
       "the qoder account has no credits left",
-      "Qoder 的额度用完了（套餐和加购都没了）。充值，或等额度重置后再试。",
+      "Qoder 的额度已用尽（套餐与加购额度均无）。请充值，或等额度重置后重试。",
       402,
       "usage_limit_error",
     );

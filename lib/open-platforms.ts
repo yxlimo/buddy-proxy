@@ -27,6 +27,8 @@ import {
 // 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
 // 那里也不在求值期读这边的东西。
 import { allQuotaPlugins, quotaPluginOf } from "./quota-plugins.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧，这里只说「哪一格不对」。
+import type { AdminFailure, AdminResult } from "./admin/error-codes.ts";
 
 /**
  * 开放平台的 kind 名字。
@@ -140,13 +142,15 @@ export function createOpenPlatform(input: {
   quotaPlugin?: string;
   /** 哪一类适配器。空串 = openai（OpenAI 兼容的通用平台）。 */
   kind?: string;
-}): { ok: boolean; message: string } {
+}): AdminResult {
   const id = String(input.id ?? "").trim();
   const problem = checkId(id);
-  if (problem) return { ok: false, message: problem };
-  if (openPlatformOf(id)) return { ok: false, message: "已经有这个平台了" };
+  if (problem) return problem;
+  if (openPlatformOf(id)) {
+    return { ok: false, code: "PLATFORM_ALREADY_EXISTS", message: `platform ${id} already exists` };
+  }
   const label = String(input.label ?? "").trim();
-  if (!label) return { ok: false, message: "得有个名字" };
+  if (!label) return { ok: false, code: "PLATFORM_LABEL_MISSING", message: "label is empty" };
   // 空串 = 通用那一类：契约里 AddPlatformRequest.kind 就是这么约定的（老面板
   // 不带这一格，建出来还是原来那个东西）。
   const kind = String(input.kind ?? "").trim() || OPEN_PLATFORM_KIND_NAME;
@@ -167,7 +171,11 @@ export function createOpenPlatform(input: {
       // 自相矛盾，用户会以为列表没刷新。目录里根本没有这一类的进不来
       // （isSimulatedClientKind 就是「含 hidden 的条目在不在」），它们在下面
       // checkKind 里被拒，答复里列得出能建的那几种。
-      return { ok: false, message: `${kind} 这一类由内部预置创建，面板上不提供新建` };
+      return {
+        ok: false,
+        code: "PLATFORM_KIND_NOT_CREATABLE",
+        message: `kind ${kind} is created by the internal preset only`,
+      };
     }
     const preset = presets.find((candidate) => candidate.id === id);
     if (!preset) {
@@ -175,7 +183,8 @@ export function createOpenPlatform(input: {
       // 建出来就是一个谁都不认识的平台。
       return {
         ok: false,
-        message: `${kind} 这一类的平台 id 只能是 ${presets.map((candidate) => candidate.id).join(" 或 ")}`,
+        code: "PLATFORM_ID_NOT_PRESET",
+        message: `kind ${kind} wants one of ${presets.map((candidate) => candidate.id).join(", ")}, got ${id}`,
       };
     }
     baseUrl = "";
@@ -188,11 +197,11 @@ export function createOpenPlatform(input: {
     modelsAuto = false;
   } else {
     const urlProblem = checkBaseUrl(baseUrl);
-    if (urlProblem) return { ok: false, message: urlProblem };
+    if (urlProblem) return urlProblem;
     const kindProblem = checkKind(kind);
-    if (kindProblem) return { ok: false, message: kindProblem };
+    if (kindProblem) return kindProblem;
     const pluginProblem = checkQuotaPlugin(quotaPlugin);
-    if (pluginProblem) return { ok: false, message: pluginProblem };
+    if (pluginProblem) return pluginProblem;
   }
 
   const now = Date.now();
@@ -234,15 +243,14 @@ export function createOpenPlatform(input: {
     // 回滚之后墓碑还在：这个 id 仍然是「用户删过」，播种不该把它插回来。
     const detail = (e as Error)?.message ?? String(e);
     // 事务外那句 openPlatformOf 只在本进程看得到：两个进程同时建同一个 id 时，
-    // 后一个撞在 INSERT 的唯一约束上。SQLite 的原话（UNIQUE constraint failed:
-    // platform.id）原样进答复，面板就显示一句英文 SQL —— 这一种翻成人话，其余
-    // 照旧拼原因（不回显 SQL 与参数）。
+    // 后一个撞在 INSERT 的唯一约束上 —— 那仍然是重名，有自己的码。其余照着
+    // 原样拼进细节（字库层的原话，排查时要看）。
     if (/UNIQUE/i.test(detail) && /platform/i.test(detail)) {
-      return { ok: false, message: "已经有这个平台了" };
+      return { ok: false, code: "PLATFORM_ALREADY_EXISTS", message: `platform ${id} already exists: ${detail}` };
     }
-    return { ok: false, message: `没加上：${detail}` };
+    return { ok: false, code: "PLATFORM_WRITE_FAILED", message: `insert platform ${id} failed: ${detail}` };
   }
-  return { ok: true, message: `加好了：${label}` };
+  return { ok: true, message: `已新增：${label}` };
 }
 
 /**
@@ -275,18 +283,22 @@ export function updateOpenPlatform(
      */
     kind?: string;
   },
-): { ok: boolean; message: string } {
+): AdminResult {
   const row = openPlatformOf(id);
-  if (!row) return { ok: false, message: `没有这个平台：${id}` };
+  if (!row) return { ok: false, code: "PLATFORM_NOT_FOUND", message: `no platform ${id}` };
   // 类型建完就定下：换类型不是改一个字段，它名下的凭据、地址、目录都得跟着
   // 重算（七牛云要两段凭据、书生·端砚要两段，通用平台只要一段）—— 那是另一件
   // 事，不在「改平台」里做。同一类与空串当没传。
   const askedKind = String(patch.kind ?? "").trim();
   if (askedKind && askedKind !== row.kind) {
-    return { ok: false, message: `平台建好之后不能换类型（现在是 ${row.kind}，要换只能删了重建）` };
+    return {
+      ok: false,
+      code: "PLATFORM_KIND_FIXED",
+      message: `platform ${id} is ${row.kind}, change to ${askedKind} needs a rebuild`,
+    };
   }
   const label = patch.label === undefined ? row.label : String(patch.label).trim();
-  if (!label) return { ok: false, message: "得有个名字" };
+  if (!label) return { ok: false, code: "PLATFORM_LABEL_MISSING", message: "label is empty" };
   // 模拟客户端的地址由预置定死（它是那个客户端的身份，改了会话就接不上）：
   // 面板上改个名字会送来空 base_url，那不是「把地址清空」而是要改别的格 —— 拿
   // 它去过非空校验，连改名都改不动。所以这一类不管请求里那一格，照库里存着。
@@ -298,12 +310,12 @@ export function updateOpenPlatform(
       : String(patch.baseUrl).trim();
   if (!simulated) {
     const urlProblem = checkBaseUrl(baseUrl);
-    if (urlProblem) return { ok: false, message: urlProblem };
+    if (urlProblem) return urlProblem;
   }
   // null 与没给是两回事：null 是「把这一格清空」，没给是「别动它」。
   const quotaPlugin = patch.quotaPlugin === undefined ? row.quotaPlugin : String(patch.quotaPlugin ?? "").trim();
   const pluginProblem = checkQuotaPlugin(quotaPlugin);
-  if (pluginProblem) return { ok: false, message: pluginProblem };
+  if (pluginProblem) return pluginProblem;
 
   let models = row.models;
   if (patch.models !== undefined) {
@@ -338,7 +350,7 @@ export function updateOpenPlatform(
       Date.now(),
       id,
     );
-  return { ok: true, message: "改好了" };
+  return { ok: true, message: "已保存" };
 }
 
 /**
@@ -401,18 +413,18 @@ export function syncPlatformModels(platform: string, items: readonly unknown[]):
  * 墓碑在删行成功之后写（同一个事务，原子性不受影响），没删到行就不写：一条都没删
  * 到却记「用户删过」，播种会永远跳开这个 id —— 记的是没发生过的事。
  */
-export function deleteOpenPlatform(id: string): { ok: boolean; message: string } {
+export function deleteOpenPlatform(id: string): AdminResult {
   const db = store();
   db.exec("BEGIN IMMEDIATE");
   try {
     if (!openPlatformOf(id)) {
       db.exec("ROLLBACK");
-      return { ok: false, message: `没有这个平台：${id}` };
+      return { ok: false, code: "PLATFORM_NOT_FOUND", message: `no platform ${id}` };
     }
     const removed = db.prepare("DELETE FROM platform WHERE id = ?").run(id);
     if (Number(removed.changes) === 0) {
       db.exec("ROLLBACK");
-      return { ok: false, message: `没有这个平台：${id}` };
+      return { ok: false, code: "PLATFORM_NOT_FOUND", message: `no platform ${id} (nothing deleted)` };
     }
     if (isSimulatedClientId(id)) rememberPlatformPresetRemoved(id);
     db.exec("COMMIT");
@@ -423,23 +435,29 @@ export function deleteOpenPlatform(id: string): { ok: boolean; message: string }
       /* 事务可能已经没了 */
     }
     throw new Error(
-      `删平台 ${id} 没删成：${(e as Error)?.message ?? String(e)}。` +
-        `事务已整个回滚，平台行与墓碑都还是删之前的样子。`,
+      `删除平台 ${id} 失败：${(e as Error)?.message ?? String(e)}。` +
+        `事务已全部回滚，平台行与墓碑仍保持删除前的状态。`,
     );
   }
-  return { ok: true, message: "删掉了" };
+  return { ok: true, message: "已删除" };
 }
 
 /* ------------------------------------------------------------------ *
  * 校验
  * ------------------------------------------------------------------ */
 
-/** 这个 id 能不能用。不能的话给一句人话。 */
-function checkId(id: string): string | null {
-  if (!id) return "得有个平台 id";
-  if (!ID_PATTERN.test(id)) return "平台 id 只能用小写字母、数字与连字符";
-  if (RESERVED_IDS.has(id)) return "这个 id 是网关自己用的，换一个";
-  if (isAccountId(id)) return "这个 id 已经是一个账号了，换一个";
+/** 这个 id 能不能用。不能的话给一个码。 */
+function checkId(id: string): AdminFailure | null {
+  if (!id) return { ok: false, code: "PLATFORM_ID_MISSING", message: "platform id is empty" };
+  if (!ID_PATTERN.test(id)) {
+    return { ok: false, code: "PLATFORM_ID_INVALID", message: `platform id ${id} is not [a-z0-9][a-z0-9-]{0,30}` };
+  }
+  if (RESERVED_IDS.has(id)) {
+    return { ok: false, code: "PLATFORM_ID_RESERVED", message: `platform id ${id} is reserved by the gateway` };
+  }
+  if (isAccountId(id)) {
+    return { ok: false, code: "PLATFORM_ID_TAKEN_BY_ACCOUNT", message: `platform id ${id} is an account id` };
+  }
   return null;
 }
 
@@ -465,41 +483,52 @@ function isAccountId(id: string): boolean {
  * 平台之后一条额度结论都不会有，而面板上看着「已选插件」—— 静默的不工作比
  * 拒绝保存更难查，所以拦在写库之前，一个字都不落库。
  *
- * 拒绝时要把登记过的插件列出来（用插件自己的 label：面板与答复里是同一个
- * 名字）：只说「不行」，调用方没法自己改对。
+ * 拒绝时要把登记过的插件列出来（用插件自己的 id：面板认得的就是这个 id）：
+ * 只说「不行」，调用方没法自己改对。
  */
-function checkQuotaPlugin(pluginId: string): string | null {
+function checkQuotaPlugin(pluginId: string): AdminFailure | null {
   if (!pluginId) return null;
   if (quotaPluginOf(pluginId)) return null;
-  const known = allQuotaPlugins().map((plugin) => `${plugin.label}（${plugin.id}）`);
-  const hint = known.length ? `登记过的有：${known.join("、")}` : "现在一个额度插件都没登记";
-  return `没有这个额度插件：${pluginId}。${hint}`;
+  const known = allQuotaPlugins().map((plugin) => plugin.id);
+  return {
+    ok: false,
+    code: "QUOTA_PLUGIN_UNKNOWN",
+    message: `no quota plugin ${pluginId}, registered: ${known.join(", ") || "(none)"}`,
+  };
 }
 
 /**
- * 这一类平台建不建得了。建不了的话给一句人话，并把能建的列出来。
+ * 这一类平台建不建得了。
  *
  * 收下去的 kind 一旦是注册表里没有的那一个，这个平台就彻底接不了请求（路由
  * 按 kind 分派，认不出就无路可走），而面板上看得见它 —— 所以拦在写库之前。
- * 只报「不行」，调用方不知道能选什么，所以列 label。
+ * 能建的那几个列进细节，排查时一眼看得见能选什么。
  */
-function checkKind(kind: string): string | null {
+function checkKind(kind: string): AdminFailure | null {
   if (platformKindOptionOf(kind)) return null;
-  const known = PLATFORM_KIND_OPTIONS.map((option) => `${option.label}（${option.kind}）`);
-  return `没有这一类平台：${kind}。能建的有：${known.join("、")}`;
+  const known = PLATFORM_KIND_OPTIONS.map((option) => option.kind);
+  return {
+    ok: false,
+    code: "PLATFORM_KIND_UNKNOWN",
+    message: `no platform kind ${kind}, creatable: ${known.join(", ")}`,
+  };
 }
 
-/** 地址能不能用。不能的话给一句人话。 */
-function checkBaseUrl(value: string): string | null {
-  if (!value) return "得有个地址";
+/** 地址能不能用。 */
+function checkBaseUrl(value: string): AdminFailure | null {
+  if (!value) return { ok: false, code: "PLATFORM_BASE_URL_MISSING", message: "base url is empty" };
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    return "地址不对，得是完整的网址";
+    return { ok: false, code: "PLATFORM_BASE_URL_INVALID", message: `base url ${value} is not a url` };
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return "地址只收 http 与 https";
-  if (!url.hostname) return "地址里得有个主机名";
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { ok: false, code: "PLATFORM_BASE_URL_INVALID", message: `base url ${value} is not http(s)` };
+  }
+  if (!url.hostname) {
+    return { ok: false, code: "PLATFORM_BASE_URL_INVALID", message: `base url ${value} has no host` };
+  }
   return null;
 }
 

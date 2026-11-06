@@ -317,7 +317,7 @@ async function raw(p: string, init: RequestInit = {}): Promise<{ status: number;
 }
 
 console.log("");
-console.log("契约：四十一个方法");
+console.log("契约：四十二个方法");
 
 // 每个方法配一个像样的请求。
 // 登录那六个：挑不会碰到网络的上游（密码流与回填流），不真的登录。
@@ -337,8 +337,20 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "GetUsageSummary", request: { upstreamId: "", window: "day" } },
   { method: "ListUsageEvents", request: { limit: 10 } },
   { method: "ListPublishedModels", request: {} },
-  { method: "SavePublishedModel", request: { model: { id: "", displayName: "x" } } },
-  { method: "DeletePublishedModel", request: { id: "nope" } },
+  // 存一个紧接着就删掉的模型：这一轮验的是答复的形状，失败是一种 Connect
+  // 错误（没有响应消息可查）。
+  {
+    method: "SavePublishedModel",
+    request: {
+      model: {
+        id: "contract-loop",
+        displayName: "契约循环",
+        strategy: "single",
+        targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, enabled: true }],
+      },
+    },
+  },
+  { method: "DeletePublishedModel", request: { id: "contract-loop" } },
   { method: "GetBenefitStatus", request: {} },
   { method: "RunBenefitNow", request: {} },
   { method: "ListModels", request: { upstreamId: "" } },
@@ -367,11 +379,14 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "ListPlatformKinds", request: {} },
   // 人工模型元数据：qoder 是模板平台，本来就一条人工条目也没有，发空列表
   // 等于把「本来就没有」再写一遍 —— 库里不留行，后面的断言读不到变化。
+  // （覆盖语义下空列表什么都不改，所以它仍然是一次无害的调用。）
   { method: "ListModelOverrides", request: { platformId: "qoder" } },
-  { method: "SetModelOverrides", request: { platformId: "qoder", overrides: [] } },
+  // 写一条紧接着就删掉的人工条目：同上，失败走 Connect 错误。
+  { method: "SetModelOverrides", request: { platformId: "qoder", overrides: [{ id: "contract-temp" }] } },
+  { method: "DeleteModelOverride", request: { platformId: "qoder", modelId: "contract-temp" } },
 ];
 
-check("契约里有四十一个方法", contract.methods.size === 41, String(contract.methods.size));
+check("契约里有四十二个方法", contract.methods.size === 42, String(contract.methods.size));
 // RestartSystem 会让进程退出，单独在最后试。
 check(
   "测的方法与契约一一对上（RestartSystem 单独试）",
@@ -413,6 +428,30 @@ check(
   "CatalogModel 的倍率是 optional double（缺格 ≠ 0）",
   catalogCredits?.optional === true && catalogCredits?.type === "double",
   JSON.stringify(catalogCredits),
+);
+
+// 平台这一层要报「目录归不归上游」：面板照这一格给刷新按钮，不再去能建的
+// 那几类里找（那个清单里没有厂商模板与模拟客户端）。
+const catalogOwnerField = contract.messages.get("Upstream")!.fields.find((f) => f.json === "modelsFromUpstream");
+check(
+  "Upstream 有 models_from_upstream（必填的 bool）",
+  catalogOwnerField?.type === "bool" && catalogOwnerField?.repeated === false && catalogOwnerField?.optional === false,
+  JSON.stringify(catalogOwnerField),
+);
+// 删一条人工条目要有自己的一条路：覆盖语义下「没发来」不再等于删。
+const deleteOverrideMethod = contract.methods.get("DeleteModelOverride");
+check(
+  "DeleteModelOverride 收发的那两条消息",
+  deleteOverrideMethod?.request === "DeleteModelOverrideRequest" &&
+    deleteOverrideMethod?.response === "DeleteModelOverrideResponse",
+  JSON.stringify(deleteOverrideMethod),
+);
+const deleteOverrideFields = contract.messages.get("DeleteModelOverrideRequest")!.fields;
+check(
+  "DeleteModelOverrideRequest 是 platform_id + model_id",
+  JSON.stringify(deleteOverrideFields.map((f) => [f.json, f.type])) ===
+    JSON.stringify([["platformId", "string"], ["modelId", "string"]]),
+  JSON.stringify(deleteOverrideFields.map((f) => [f.json, f.type])),
 );
 
 // 请求的字段名：契约里没有的名字要被拒（或者至少不能被当成值）。
@@ -475,7 +514,13 @@ const saveInherit = await call("SavePublishedModel", {
     targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, position: 0, enabled: true }],
   },
 });
-check("模型存得进去", saveInherit.body?.ok === true, JSON.stringify(saveInherit.body));
+check(
+  "模型存得进去（答复里没有 ok 与 message 两格）",
+  saveInherit.body?.id === "contract-inherit" &&
+    !("ok" in (saveInherit.body ?? {})) &&
+    !("message" in (saveInherit.body ?? {})),
+  JSON.stringify(saveInherit.body),
+);
 
 const saveExplicit = await call("SavePublishedModel", {
   model: {
@@ -491,7 +536,7 @@ const saveExplicit = await call("SavePublishedModel", {
     targets: [{ groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, position: 0, enabled: true }],
   },
 });
-check("带元数据的模型存得进去", saveExplicit.body?.ok === true, JSON.stringify(saveExplicit.body));
+check("带元数据的模型存得进去", saveExplicit.body?.id === "contract-explicit", JSON.stringify(saveExplicit.body));
 
 const listed = await call("ListPublishedModels");
 const models: any[] = Array.isArray(listed.body?.models) ? listed.body.models : [];
@@ -900,17 +945,16 @@ console.log("凭据：空串占位");
 // 不打网络。
 const qiniuAccount = await call("AddAccount", { platform: "qiniu", alias: "契约测试七牛" });
 const qiniuId = String(qiniuAccount.body?.id ?? "");
-check(
-  "加好了七牛云的账号",
-  qiniuAccount.body?.ok === true && qiniuId !== "",
-  JSON.stringify(qiniuAccount.body),
-);
+check("加好了七牛云的账号", /^\d+$/.test(qiniuId), JSON.stringify(qiniuAccount.body));
 const qiniuKeys = await call("SetProviderKeys", { upstreamId: qiniuId, keys: ["", "c=1"] });
-check("只填 cookie 写成功了", qiniuKeys.body?.ok === true, JSON.stringify(qiniuKeys.body));
+check("只填 cookie 写成功了", qiniuKeys.status === 200, JSON.stringify(qiniuKeys.body));
 check("只填 cookie 写进去一段", qiniuKeys.body?.count === 1, JSON.stringify(qiniuKeys.body));
-const qiniuMessage = String(qiniuKeys.body?.message ?? "");
-check("说的是门户 cookie", qiniuMessage.includes("cookie"), qiniuMessage);
-check("没说成 API key", !qiniuMessage.includes("API key"), qiniuMessage);
+// 答复里没有 message 了：写了哪几段只剩日志（服务那一侧打一行）。
+check(
+  "答复里只有 count（没有 ok 与 message）",
+  !("ok" in (qiniuKeys.body ?? {})) && !("message" in (qiniuKeys.body ?? {})),
+  JSON.stringify(qiniuKeys.body),
+);
 
 console.log("");
 console.log("权益：签到那一行写什么");

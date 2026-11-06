@@ -67,6 +67,7 @@ export interface CompatiblePlatform {
   catalogAuth?(key: string): Record<string, string>;
   /** 模型目录。 */
   models(provider: ProviderRow): CatalogModel[];
+  modelsFromUpstream: ProviderKind["modelsFromUpstream"];
   /** 额度视图。不给就是没有。 */
   quotas?(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[];
   /** 额度用尽了吗。不给就是不知道（false）。 */
@@ -100,6 +101,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     ...(platform.catalogAuth ? { catalogAuth: platform.catalogAuth } : {}),
     credential: platform.credential ?? (() => missingCredential()),
     models: platform.models,
+    modelsFromUpstream: platform.modelsFromUpstream,
     quotas: platform.quotas ?? (() => []),
     outOfCredits: platform.outOfCredits ?? (() => false),
     ...(platform.recoverAt ? { recoverAt: platform.recoverAt } : {}),

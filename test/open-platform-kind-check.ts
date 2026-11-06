@@ -684,8 +684,8 @@ check(
 const failSecond = await refreshOpenPlatformCatalog("cat-fail");
 check("第二次不再问上游", modelsHits() === 1, String(modelsHits()));
 check(
-  "第二次说先不再问",
-  failSecond.ok === false && failSecond.message.includes("先不再问"),
+  "第二次说暂不重复查询",
+  failSecond.ok === false && failSecond.message.includes("暂不重复查询"),
   failSecond.message,
 );
 
@@ -717,8 +717,8 @@ check("失败问了一次上游", modelsHits() === 2, String(modelsHits()));
 const backoffAgain = await refreshOpenPlatformCatalog("cat-backoff");
 check("失败之后不再问上游", modelsHits() === 2, String(modelsHits()));
 check(
-  "说的是先不再问",
-  backoffAgain.ok === false && backoffAgain.message.includes("先不再问"),
+  "说的是暂不重复查询",
+  backoffAgain.ok === false && backoffAgain.message.includes("暂不重复查询"),
   backoffAgain.message,
 );
 check(
@@ -732,7 +732,7 @@ modelsStatus = 200;
 // 手动点「刷新模型目录」：那一次要穿透退避。
 //
 // 退避是给没人看着的调用用的（定时器、启动、/v1/models 上顺手拉）；人点一次是
-// 明确的意思，答复「刚问过上游，先不再问」等于让他点了个寂寞。
+// 明确的意思，答复「刚刚查询过上游，暂不重复查询」等于让他点了个寂寞。
 const forceCreated = createOpenPlatform({
   id: "cat-force",
   label: "Cat Force",
@@ -752,8 +752,8 @@ check("问过一次上游", modelsHits() === 1, String(modelsHits()));
 const forceBackoff = await refreshOpenPlatformCatalog("cat-force");
 check("不带 force 的第二次不问上游", modelsHits() === 1, String(modelsHits()));
 check(
-  "不带 force 说的是先不再问",
-  forceBackoff.ok === false && forceBackoff.message.includes("先不再问"),
+  "不带 force 说的是暂不重复查询",
+  forceBackoff.ok === false && forceBackoff.message.includes("暂不重复查询"),
   forceBackoff.message,
 );
 
@@ -1233,7 +1233,7 @@ section("12. 厂商行的目录归人管");
 // 面板上那个「刷新模型目录」按钮走的就是这条路。
 const vendorRefresh = await adminService.refreshPlatformModels!({ platformId: "qiniu" } as any);
 check("厂商行：刷新被拒", vendorRefresh.ok === false, vendorRefresh.message);
-check("厂商行：说的是目录是人写的", /人写的/.test(vendorRefresh.message), vendorRefresh.message);
+check("厂商行：说的是目录为手工维护", /手工维护/.test(vendorRefresh.message), vendorRefresh.message);
 check(
   "厂商行：目录没动",
   rowIds("qiniu").join(",") === kindIds("qiniu").join(","),
@@ -1586,7 +1586,14 @@ check(
 const OVER = "override-probe";
 insertPlatform(OVER, "openai", "https://probe.example");
 putRowModels(OVER, ["row-one", "row-two"], "manual");
-const { replaceModelOverrides } = await import("../lib/model-overrides.ts");
+const { upsertModelOverrides, deleteModelOverride, listModelOverrides } = await import(
+  "../lib/model-overrides.ts"
+);
+/** 写入口是按 id 覆盖、不替人删；这一节要的是「换成这一份」，所以先删干净。 */
+const replaceModelOverrides = (platform: string, rows: { id: string; [key: string]: unknown }[]) => {
+  for (const row of listModelOverrides(platform)) deleteModelOverride(platform, row.id);
+  return upsertModelOverrides(platform, rows as never);
+};
 const rowBefore = kindOf("openai")!.models(bareRow(OVER));
 check(
   "开放平台：行里的目录就是发布的目录",

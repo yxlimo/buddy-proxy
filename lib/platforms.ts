@@ -161,7 +161,7 @@ export function setPlatformPolicy(
         "ON CONFLICT(platform) DO UPDATE SET policy = excluded.policy, updated_at = excluded.updated_at",
     )
     .run(platform, policy, Date.now());
-  return { ok: true, message: `策略改成了${POLICY_TEXT[policy] ?? policy}。` };
+  return { ok: true, message: `策略已改为${POLICY_TEXT[policy] ?? policy}。` };
 }
 
 /**

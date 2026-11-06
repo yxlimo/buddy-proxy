@@ -217,6 +217,9 @@ export interface PlatformKindOption {
  *
  * 两类都没有默认地址：一个讲 OpenAI、一个讲 Anthropic Messages，哪家中转站、
  * 哪个自建服务，只有用户知道。
+ *
+ * 那两个 `modelsFromUpstream` 与 kinds 登记表同源（ProviderKind.modelsFromUpstream）：
+ * 这一格只是新建下拉里的一列，事实在登记表那边。改一处就要改另一处。
  */
 export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
   {

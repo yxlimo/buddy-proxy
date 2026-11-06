@@ -412,7 +412,7 @@ check(
 section("C 模拟客户端（minimax）");
 
 // 播种是启动时做的事：minimax 那一行已经在库里了，所以「同 id 再建一次」必然
-// 回「已经有这个平台了」。要验的是「删掉之后同 id 能建回来，而且墓碑不把它改回
+// 回「这个平台已存在」。要验的是「删掉之后同 id 能建回来，而且墓碑不把它改回
 // 播种的名字」——先把播种出来的那一行删掉。
 check(
   "C10 库里已经有播种的 minimax",
@@ -420,7 +420,7 @@ check(
   listOpenPlatforms().map((p) => p.id).join(","),
 );
 const dupId = await rpc("AddPlatform", { id: "minimax", label: "MiniMax Code", baseUrl: "", kind: "minimax" });
-check("C10 同 id 再建被拒", dupId.ok === false && /已经有/.test(String(dupId.message ?? "")), JSON.stringify(dupId).slice(0, 200));
+check("C10 同 id 再建被拒", dupId.ok === false && /已存在/.test(String(dupId.message ?? "")), JSON.stringify(dupId).slice(0, 200));
 const dupMinimax = await rpc("AddPlatform", { id: "my-minimax", label: "我的 MiniMax", baseUrl: "", kind: "minimax" });
 check("C10 同 kind 换 id 被拒", dupMinimax.ok === false, JSON.stringify(dupMinimax).slice(0, 200));
 check(

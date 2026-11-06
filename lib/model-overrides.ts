@@ -19,6 +19,8 @@
 // CatalogModel carries (see the comment on its fields).
 
 import { store } from "./store.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧，这一层只说哪一格不对。
+import type { AdminFailure, AdminResult } from "./admin/error-codes.ts";
 // 只为形状：编译后这一行就没有了。catalog-models 引了开放平台那一层，从注册表
 // 走过来的链上不能再长（见 registerKind 的注释）。
 import type { CatalogModel } from "./catalog-models.ts";
@@ -57,9 +59,10 @@ export interface ModelOverrideRow {
  * （lib/router/upstreams/policy.ts → platformAvailability → kind.models()），
  * 按平台查就是每次渲染一次 SELECT。
  *
- * 缓存不会脏：这个进程独占这个库，写入口只有下面 replaceModelOverrides 一处，
- * 它写成功就把缓存清掉。将来若有第二个写者（外部进程直接改库），这里必须换成
- * 别的机制（按平台查，或者按 mtime / 通知失效），否则路由会按旧值走。
+ * 缓存不会脏：这个进程独占这个库，写入口只有下面 upsertModelOverrides 与
+ * deleteModelOverride 两处，写成功就把缓存清掉。将来若有第二个写者（外部进程
+ * 直接改库），这里必须换成别的机制（按平台查，或者按 mtime / 通知失效），
+ * 否则路由会按旧值走。
  */
 let cachedOverrides: Map<string, ModelOverrideRow[]> | null = null;
 
@@ -96,37 +99,47 @@ function overridesByPlatform(): Map<string, ModelOverrideRow[]> {
 }
 
 /**
- * 整体替换一个平台的人工条目。
+ * 按 id 覆盖一个平台的人工条目。
  *
- * 发来的就是全部：先 DELETE 再逐条 INSERT，**一个事务**。任何一条不合格就整份
- * 不写 —— 写一半比不写更糟：面板上看着存上了，目录里却是上一次的一半。
+ * 发来的每一条：同 id 的换掉、新 id 的加进来；**没发来的原封不动**。删走
+ * deleteModelOverride —— 覆盖语义下「没发来」与「删掉」不能再是同一件事，
+ * 否则面板想改一条就得先把整份念一遍，漏念一条就是静默删除。
+ *
+ * 一个事务：任何一条不合格就整份不写 —— 写一半比不写更糟：面板上看着存上了，
+ * 目录里却是上一次的一半。
  */
-export function replaceModelOverrides(
+export function upsertModelOverrides(
   platformId: string,
   overrides: readonly ModelOverrideRow[],
-): { ok: boolean; message: string } {
+): AdminResult {
   const id = String(platformId ?? "").trim();
-  if (!id) return { ok: false, message: "得指出是哪个平台" };
+  if (!id) return { ok: false, code: "PLATFORM_ID_MISSING", message: "platform id is empty" };
   // 走的可能是没经过契约解码的那条路：不是列表就说到这里，别让 TypeError 变成 500。
-  if (!Array.isArray(overrides)) return { ok: false, message: "overrides 要是一个列表" };
-  if (!platformExists(id)) return { ok: false, message: `没有这个平台：${id}` };
+  if (!Array.isArray(overrides)) {
+    return { ok: false, code: "MODEL_OVERRIDE_LIST_INVALID", message: "overrides is not an array" };
+  }
+  if (!platformExists(id)) {
+    return { ok: false, code: "PLATFORM_NOT_FOUND", message: `no platform ${id}` };
+  }
   // 先校验完再动库。
   const rows: ModelOverrideRow[] = [];
   // 小写 id → 第一次出现的序号（从 1 起，跟面板上数条目的口径一样）。
   const seen = new Map<string, number>();
   for (let index = 0; index < overrides.length; index++) {
     const checked = checkRow(index + 1, overrides[index], seen);
-    if ("message" in checked) return { ok: false, message: checked.message };
+    if ("code" in checked) return checked;
     rows.push(checked.row);
   }
   const db = store();
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare("DELETE FROM platform_model_override WHERE platform_id = ?").run(id);
-    const insert = db.prepare(
-      "INSERT INTO platform_model_override (platform_id, model_id, data) VALUES (?, ?, ?)",
+    // 一条 upsert 一句话：INSERT ON CONFLICT 才是「同 id 换掉」的表达，
+    // 先删再插在并发与回滚上都是另一件事（中间那一刻库里没有这条）。
+    const put = db.prepare(
+      "INSERT INTO platform_model_override (platform_id, model_id, data) VALUES (?, ?, ?) " +
+        "ON CONFLICT(platform_id, model_id) DO UPDATE SET data = excluded.data",
     );
-    for (const row of rows) insert.run(id, row.id, writeRow(row));
+    for (const row of rows) put.run(id, row.id, writeRow(row));
     db.exec("COMMIT");
   } catch (e) {
     try {
@@ -135,11 +148,45 @@ export function replaceModelOverrides(
       /* 事务可能已经没了 */
     }
     // 回滚了库就还是写之前的样子，缓存也就还是对的 —— 不清。
-    return { ok: false, message: `没存上：${(e as Error)?.message ?? String(e)}` };
+    return {
+      ok: false,
+      code: "MODEL_OVERRIDE_WRITE_FAILED",
+      message: `write overrides of ${id} failed: ${(e as Error)?.message ?? String(e)}`,
+    };
   }
-  // 写成功：这份缓存说的已经不是库里那件事了，读下一次时重建。
+  // 写成功：这份缓存说的已经不是库里那件事了，读下一次时重建。空列表那一次也
+  // 作废 —— 这一层独占这个库，一次成功的写入口调用之后不该留着「缓存比调用早」
+  // 的状态。
   cachedOverrides = null;
-  return { ok: true, message: rows.length ? `存了 ${rows.length} 个模型的人工元数据` : "人工元数据清空了" };
+  return { ok: true, message: rows.length ? `已保存 ${rows.length} 个模型的人工元数据` : "没有要写的条目" };
+}
+
+/**
+ * 删掉一条人工条目。
+ *
+ * 不存在就说清楚：静默成功会让人以为删掉了，而目录里那条其实还按人工写的走。
+ */
+export function deleteModelOverride(platformId: string, modelId: string): AdminResult {
+  const id = String(platformId ?? "").trim();
+  if (!id) return { ok: false, code: "PLATFORM_ID_MISSING", message: "platform id is empty" };
+  const model = String(modelId ?? "").trim();
+  if (!model) return { ok: false, code: "MODEL_ID_MISSING", message: "model id is empty" };
+  if (!platformExists(id)) {
+    return { ok: false, code: "PLATFORM_NOT_FOUND", message: `no platform ${id}` };
+  }
+  const removed = store()
+    .prepare("DELETE FROM platform_model_override WHERE platform_id = ? AND model_id = ?")
+    .run(id, model);
+  if (Number(removed.changes) === 0) {
+    return {
+      ok: false,
+      code: "MODEL_OVERRIDE_NOT_FOUND",
+      message: `platform ${id} has no override for ${model}`,
+    };
+  }
+  // 删成功了：缓存跟着作废，否则目录里那条会继续按人工写的走。
+  cachedOverrides = null;
+  return { ok: true, message: `已删除 ${model} 的人工元数据` };
 }
 
 /**
@@ -152,27 +199,35 @@ function checkRow(
   position: number,
   raw: Partial<ModelOverrideRow> | null | undefined,
   seen: Map<string, number>,
-): { row: ModelOverrideRow } | { message: string } {
+): { row: ModelOverrideRow } | AdminFailure {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return { message: `第 ${position} 条：要是一个对象` };
+    return { ok: false, code: "MODEL_OVERRIDE_ENTRY_INVALID", message: `entry ${position} is not an object` };
   }
   const written = String(raw.id ?? "");
   const modelId = written.trim();
-  if (!written) return { message: `第 ${position} 条：模型 id 是空的` };
-  if (!modelId) return { message: `第 ${position} 条：模型 id 只有空白` };
+  if (!written) {
+    return { ok: false, code: "MODEL_ID_MISSING", message: `entry ${position} has no model id` };
+  }
+  if (!modelId) {
+    return { ok: false, code: "MODEL_ID_MISSING", message: `entry ${position} has a blank model id` };
+  }
   // 路由匹配模型 id 不分大小写（lib/router/catalog.ts），两条只差大小写的 id
   // 说的是同一个模型，存下来会互相打架。
   const folded = modelId.toLowerCase();
   const earlier = seen.get(folded);
   if (earlier !== undefined) {
-    return { message: `第 ${position} 条与第 ${earlier} 条是同一个模型 id（只差大小写）：${modelId}` };
+    return {
+      ok: false,
+      code: "MODEL_ID_DUPLICATE",
+      message: `entry ${position} and entry ${earlier} are the same model id (case only): ${modelId}`,
+    };
   }
   const bad = [
-    int32Error(position, "contextWindow", raw.contextWindow),
-    int32Error(position, "maxOutputTokens", raw.maxOutputTokens),
+    numberError(position, "contextWindow", raw.contextWindow),
+    numberError(position, "maxOutputTokens", raw.maxOutputTokens),
     creditsError(position, raw.credits),
-  ].find((message) => message !== null);
-  if (bad) return { message: bad };
+  ].find((problem) => problem !== null);
+  if (bad) return bad;
   seen.set(folded, position);
   return { row: cleanRow({ ...raw, id: modelId }) };
 }
@@ -329,21 +384,36 @@ function cleanRow(row: ModelOverrideRow): ModelOverrideRow {
  * 负数与超过 int32 的数写进契约都会失真（int32 溢出、负数没有意义），所以在写入
  * 这一处挡掉，不让它落到库里变成一个「读回来不一样」的值。
  */
-function int32Error(position: number, field: string, value: unknown): string | null {
+function numberError(position: number, field: string, value: unknown): AdminFailure | null {
   if (value === undefined) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) return `第 ${position} 条：${field} 要是数字`;
-  if (!Number.isInteger(value)) return `第 ${position} 条：${field} 要是整数：${value}`;
-  if (value < 0) return `第 ${position} 条：${field} 不能是负数：${value}`;
-  if (value > INT32_MAX) return `第 ${position} 条：${field} 超过 ${INT32_MAX}：${value}`;
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+    return {
+      ok: false,
+      code: "MODEL_NUMBER_INVALID",
+      message: `entry ${position} ${field} is not an integer: ${String(value)}`,
+    };
+  }
+  if (value < 0 || value > INT32_MAX) {
+    return {
+      ok: false,
+      code: "MODEL_NUMBER_OUT_OF_RANGE",
+      message: `entry ${position} ${field} is out of 0..${INT32_MAX}: ${value}`,
+    };
+  }
   return null;
 }
 
 /**
  * 倍率那一格：不能是负数（负的价钱没有意义），其余由契约那一格（double）兜着。
  */
-function creditsError(position: number, value: unknown): string | null {
+function creditsError(position: number, value: unknown): AdminFailure | null {
   if (value === undefined) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) return `第 ${position} 条：credits 要是数字`;
-  if (value < 0) return `第 ${position} 条：credits 不能是负数：${value}`;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return {
+      ok: false,
+      code: "MODEL_CREDITS_INVALID",
+      message: `entry ${position} credits is not a non-negative number: ${String(value)}`,
+    };
+  }
   return null;
 }

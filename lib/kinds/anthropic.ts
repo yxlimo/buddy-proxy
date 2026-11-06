@@ -57,6 +57,7 @@ registerKind({
   baseUrl: (provider) => openPlatformOf(provider.platform)?.baseUrl ?? "",
   // 那一把 key 既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
+  modelsFromUpstream: true,
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => openPlatformKeyOf(accountId ?? provider.id)?.apiKey ?? "",
   // 问目录跟推理一个口径：这一类上游不认 Bearer，只认 x-api-key 加版本头。

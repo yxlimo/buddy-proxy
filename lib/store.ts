@@ -328,9 +328,13 @@ const OPEN_PLATFORM_KIND = "openai";
 /**
  * 目录归上游管的 kind：它们的模型清单只有上游报得出来，缓存表是按平台存的那一份。
  *
- * 写在这一层：播种要按它决定 `models_auto`（见 seedPlatformModels），而拿上游那份
- * 覆盖平台行的闸门（lib/open-platforms.ts 的 syncPlatformModels）也要问同一件事。
- * 两处各写一份名单，早晚会漂成一个写死、一个还能被盖。
+ * 这是**启动播种时**用的名单，不是「谁能从上游拉」的唯一事实 —— 那一格在 kinds
+ * 登记表里（ProviderKind.modelsFromUpstream，面板报的 Upstream.models_from_upstream
+ * 就是它）。写在这里是因为播种在最低层跑：引注册表会把各家平台模块拖进来，绕成
+ * 环。两份名单不一致时以登记表为准，这一格要跟着改。
+ *
+ * 拿上游那份覆盖平台行的闸门（lib/open-platforms.ts 的 syncPlatformModels）也问
+ * 同一件事：它同样在最低层，只能读这一份。
  *
  * 其余几家不在名单里：七牛云、讯飞星火、TokenRhythm 的目录是代码挑过的一份（上游
  * 那份更宽，七牛报 78 个模型），方言类（openai / anthropic）的目录由面板那条路管。

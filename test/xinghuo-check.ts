@@ -168,7 +168,7 @@ section("控制组");
 {
   const result = setProviderKeys("zcode", ["x"]);
   check("ZCode 仍然被拒", !result.ok, result.message);
-  check("说的是不接受", result.message.includes("不接受"), result.message);
+  check("机器码说的是没有这个账号", result.code === "ACCOUNT_NOT_FOUND", JSON.stringify(result));
   check("一段都没写", result.count === 0, String(result.count));
 }
 

@@ -30,6 +30,7 @@ registerKind({
   baseUrl: () => TOKENRHYTHM_API_BASE,
   // 推理用的是钱包里的那把 api key：会话只用来登录与查余额。
   inferWith: "api_key",
+  modelsFromUpstream: false,
   // 明文 key：转发与「问上游要模型目录」要的是同一把，各自去取一遍就是两份知识。
   keyOf: (provider, accountId) => tokenRhythmCredentialOf(accountId ?? provider.id)?.apiKey ?? "",
   credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session"),

@@ -574,13 +574,13 @@ export function listCredentials(accountId = ""): CredentialRow[] {
  */
 export function logoutAccount(accountId: string): { ok: boolean; message: string; removed: number } {
   const id = String(accountId ?? "").trim();
-  if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
+  if (!id) return { ok: false, message: "需要提供账号 id", removed: 0 };
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
   const removed = forgetAccountRecords(id, row.kind);
-  if (!removed) return { ok: true, message: "这个账号本来就没有凭据", removed: 0 };
+  if (!removed) return { ok: true, message: "这个账号没有凭据", removed: 0 };
   console.log(`[ADMIN] ${id} 注销了，删掉 ${removed} 条凭据`);
-  return { ok: true, message: `注销了，删掉 ${removed} 条凭据`, removed };
+  return { ok: true, message: `已注销，删除 ${removed} 条凭据`, removed };
 }
 
 /**
@@ -613,13 +613,13 @@ export function forgetAccountRecords(accountId: string, kind?: string): number {
  */
 export function deleteAccount(accountId: string): { ok: boolean; message: string; removed: number } {
   const id = String(accountId ?? "").trim();
-  if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
+  if (!id) return { ok: false, message: "需要提供账号 id", removed: 0 };
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
   const removed = forgetAccountRecords(id, row.kind);
   deleteProviderRow(id);
   console.log(`[ADMIN] ${id} 删了，连 ${removed} 条凭据一起`);
-  return { ok: true, message: removed > 0 ? `删掉了，连 ${removed} 条凭据一起` : "删掉了", removed };
+  return { ok: true, message: removed > 0 ? `已删除该账号及其 ${removed} 条凭据` : "已删除", removed };
 }
 
 /* ------------------------------------------------------------------ *
@@ -649,14 +649,14 @@ export async function testCredential(id: string): Promise<{ ok: boolean; message
   try {
     return await testTarget(target.value);
   } catch (e) {
-    return { ok: false, message: (e as Error)?.message ?? "试不了" };
+    return { ok: false, message: (e as Error)?.message ?? "无法测试这条凭据" };
   }
 }
 
 /** 凭据 id → 它指向的账号与形态。 */
 function targetOf(id: string): { ok: true; value: CredentialTarget } | { ok: false; message: string } {
   const ref = parseCredentialId(id);
-  if (!ref) return { ok: false, message: `不认识的凭据：${id}` };
+  if (!ref) return { ok: false, message: `无法识别的凭据：${id}` };
   const row = provider(ref.accountId);
   if (!row) return { ok: false, message: `没有这个账号：${ref.accountId}` };
   return {
@@ -683,7 +683,7 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
       const cred = await readCredential(p.id);
       return {
         ok: true,
-        message: `能用，第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟`,
+        message: `可用，第 ${cred.generation} 代，剩余 ${Math.round(cred.remainingMs / 60000)} 分钟`,
       };
     }
     case "qoder": {
@@ -695,16 +695,16 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
     case "workbuddy": {
       const credits = await fetchWorkBuddyCredits(p.id);
       return credits
-        ? { ok: true, message: `能用，今日已签到：${credits.checkedIn ? "是" : "否"}` }
+        ? { ok: true, message: `可用，今日已签到：${credits.checkedIn ? "是" : "否"}` }
         : { ok: false, message: "无法读取签到状态" };
     }
     case "zcode": {
       // ZCode 的令牌没有刷新通道，过期了只能重登，所以这里只能看它还在不在。
       const status = zcodeStatus(p.id);
       const state = String(status.status ?? "");
-      if (state === "authenticated") return { ok: true, message: "能用" };
-      if (state === "expired") return { ok: false, message: "令牌过期了，要重新登录" };
-      return { ok: false, message: "没有登录 ZCode" };
+      if (state === "authenticated") return { ok: true, message: "可用" };
+      if (state === "expired") return { ok: false, message: "令牌已过期，需要重新登录" };
+      return { ok: false, message: "未登录 ZCode" };
     }
     case "sensenova": {
       // 登录凭据、推理 key 与会话是三回事，说的也要是三回事：登录凭据说的是
@@ -713,44 +713,44 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
         const account = getSecret<{ user?: string }>(`key:provider:${p.id}:account`);
         return account?.user
           ? { ok: true, message: "登录账号已配置" }
-          : { ok: false, message: "没有配置登录账号" };
+          : { ok: false, message: "未配置登录账号" };
       }
       if (target.form === "session") {
         const session = getSecret<{ accessToken?: string }>(`session:provider:${p.id}`);
         return session?.accessToken
-          ? { ok: true, message: "登录会话还在" }
+          ? { ok: true, message: "登录会话仍然有效" }
           : { ok: false, message: "没有登录会话" };
       }
       const key = senseNovaInferenceKey(p.id);
       return key
         ? { ok: true, message: "推理 key 已配置" }
-        : { ok: false, message: "没有配置推理 key" };
+        : { ok: false, message: "未配置推理 key" };
     }
     case "intern-ai": {
       if (target.form === "login") {
         const account = getSecret<{ user?: string }>(`key:provider:${p.id}:account`);
         return account?.user
           ? { ok: true, message: "登录账号已配置" }
-          : { ok: false, message: "没有配置登录账号" };
+          : { ok: false, message: "未配置登录账号" };
       }
       if (target.form === "session") {
         const session = getSecret<{ sites?: unknown[] }>(`session:provider:${p.id}`);
         return session?.sites?.length
-          ? { ok: true, message: "登录会话还在" }
+          ? { ok: true, message: "登录会话仍然有效" }
           : { ok: false, message: "没有登录会话" };
       }
       const key = internAiInferenceKey(p.id);
       return key
         ? { ok: true, message: "推理 key（Discovery）已配置" }
-        : { ok: false, message: "没有配置推理 key（Discovery）" };
+        : { ok: false, message: "未配置推理 key（Discovery）" };
     }
     case "tokenrhythm": {
       const credential = tokenRhythmCredentialOf(p.id);
-      if (!credential) return { ok: false, message: "这个账号没有配置凭据" };
+      if (!credential) return { ok: false, message: "这个账号未配置凭据" };
       if (target.form === "api_key") {
         return credential.apiKey
           ? { ok: true, message: "推理 key 已配置" }
-          : { ok: false, message: "没有推理 key" };
+          : { ok: false, message: "未配置推理 key" };
       }
       if (target.form === "login") {
         return credential.account && credential.password
@@ -761,10 +761,10 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
       const session = loadTokenRhythmSession(p.id);
       if (!session) return { ok: false, message: "这个账号没有登录态" };
       const w = await tokenRhythmWallet(session);
-      return { ok: true, message: `能登录，可用余额 ${w.availableCny} ${w.currency}` };
+      return { ok: true, message: `可以登录，可用余额 ${w.availableCny} ${w.currency}` };
     }
     default:
-      return { ok: false, message: `这个账号不能试凭据：${p.id}` };
+      return { ok: false, message: `这个账号不支持测试凭据：${p.id}` };
   }
 }
 
@@ -780,7 +780,7 @@ export async function refreshCredential(
     const err = e as { message?: string; hint?: string };
     return {
       ok: false,
-      message: err?.hint ? `${err.message}：${err.hint}` : err?.message ?? "刷不了",
+      message: err?.hint ? `${err.message}：${err.hint}` : err?.message ?? "无法刷新这条凭据",
       generation: 0,
     };
   }
@@ -800,29 +800,29 @@ async function refreshTarget(
       // 失效了的会话只能重新授权。
       const cred = await readCredential(p.id);
       if (cred.status !== "authenticated") {
-        return { ok: false, message: "这份会话已经失效，需要重新登录（面板上登录一次）", generation: cred.generation };
+        return { ok: false, message: "这份会话已失效，需要重新登录（在面板上登录一次）", generation: cred.generation };
       }
-      return { ok: true, message: `会话由服务定时刷新（第 ${cred.generation} 代，还剩 ${Math.round(cred.remainingMs / 60000)} 分钟）`, generation: cred.generation };
+      return { ok: true, message: `会话由服务定时刷新（第 ${cred.generation} 代，剩余 ${Math.round(cred.remainingMs / 60000)} 分钟）`, generation: cred.generation };
     }
     case "qoder": {
       // 只读现在这一份：换令牌是定时器的事，这里换了就跟定时器撞上了。
       const session = loadQoderSession(p.id);
-      if (!session) return { ok: false, message: "没有登录，在面板上登录一次", generation: 0 };
+      if (!session) return { ok: false, message: "未登录，请在面板上登录一次", generation: 0 };
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "workbuddy": {
       const session = loadWorkBuddySession(p.id);
-      if (!session) return { ok: false, message: "没有登录，在面板上登录一次", generation: 0 };
+      if (!session) return { ok: false, message: "未登录，请在面板上登录一次", generation: 0 };
       return { ok: true, message: `会话由服务定时刷新（第 ${session.generation} 代）`, generation: session.generation };
     }
     case "zcode":
       // ZCode 的令牌是 JWT，没有刷新通道：过期了只能重登。
-      return { ok: false, message: "ZCode 的令牌没有刷新通道，过期了要重新登录", generation: 0 };
+      return { ok: false, message: "ZCode 的令牌没有刷新通道，过期后需要重新登录", generation: 0 };
     case "tokenrhythm": {
       await loginTokenRhythm(p.id);
-      return { ok: true, message: "重新登录完成", generation: 0 };
+      return { ok: true, message: "重新登录已完成", generation: 0 };
     }
     default:
-      return { ok: false, message: `这条凭据不能刷新：${id}`, generation: 0 };
+      return { ok: false, message: `这条凭据不支持刷新：${id}`, generation: 0 };
   }
 }

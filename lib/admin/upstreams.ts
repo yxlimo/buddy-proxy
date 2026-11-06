@@ -98,7 +98,7 @@ export function setAccountEnabled(id: string, enabled: boolean): { ok: boolean; 
   const row = provider(id);
   return {
     ok: true,
-    message: `${row?.alias || id} ${enabled ? "开着" : "关了"}，已经生效`,
+    message: `${row?.alias || id} 已${enabled ? "启用" : "关闭"}，已生效`,
   };
 }
 
@@ -498,7 +498,7 @@ async function refreshPluginQuota(snapshot: HealthSnapshot, row: ProviderRow): P
     // 插件不许 reject（翻不动的都归 unknown）。真 reject 了是插件的错：这一轮当
     // 「问不到」，但要说出来 —— 否则面板上它就是个没有理由的空。
     console.warn(`[QUOTA] 账号 ${row.id} 的额度没问到（插件 ${plugin.id}）：${(e as Error)?.message}`);
-    probe = quotaProbe("unknown", `插件问的时候抛了：${(e as Error)?.message ?? String(e)}`);
+    probe = quotaProbe("unknown", `额度插件执行时抛出异常：${(e as Error)?.message ?? String(e)}`);
   }
   const table = { ...snapshot.plugins[plugin.id] };
   table[row.id] = probe;

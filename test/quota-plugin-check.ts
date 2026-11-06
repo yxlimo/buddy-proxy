@@ -385,8 +385,11 @@ const badCreate = createOpenPlatform({
   quotaPlugin: "no-such-plugin",
 });
 check("没登记的插件 id 建不了平台", badCreate.ok === false, badCreate.message);
-check("拒绝的话说的是那个 id", badCreate.message.includes("没有这个额度插件：no-such-plugin"), badCreate.message);
-check("拒绝的话列了登记过的插件", badCreate.message.includes("七牛云资源包"), badCreate.message);
+check(
+  "机器码是「没有这个额度插件」，细节里带着那个 id 与登记过的几个",
+  badCreate.code === "QUOTA_PLUGIN_UNKNOWN" && badCreate.message.includes("no-such-plugin") && badCreate.message.includes("qiniu"),
+  JSON.stringify(badCreate),
+);
 check("没登记的插件 id → 表里没有这一行", openPlatformOf("quota-demo-bad") === null, JSON.stringify(openPlatformOf("quota-demo-bad")));
 
 // 旧库里的那一行：绕过写路径，直接塞一个没登记的 id。读的那一头（下面几节与
@@ -637,18 +640,17 @@ const plainId = plain.id ?? "";
 check("账号加得起来", plain.ok === true && plainId !== "", plain.message);
 const setPlain = setProviderKeys(plainId, ["sk-demo-plain", "should-not-be-written"]);
 check("只写了推理 key", setPlain.count === 1, String(setPlain.count));
-check("文案说清了只写了推理 key", setPlain.message.includes("多余的 key 没写"), setPlain.message);
+check("文案说清了只写了推理 key", setPlain.message.includes("多余的 key 未保存"), setPlain.message);
 check("第二把没落到任何地方", pluginFieldOf(plainId, "account") === "", pluginFieldOf(plainId, "account"));
 
 // 填错了插件 id：拒收，库里那一格原地不动（存下去之后这个平台一条额度结论都没有）。
 const plainBefore = openPlatformOf("quota-demo-none")?.quotaPlugin ?? "";
 const refused = updateOpenPlatform("quota-demo-none", { quotaPlugin: "no-such-plugin-3" });
 check("没登记的插件 id 改不进去", refused.ok === false, refused.message);
-check("拒绝的话说的是那个 id", refused.message.includes("没有这个额度插件：no-such-plugin-3"), refused.message);
 check(
-  "拒绝的话列了登记过的插件",
-  refused.message.includes("七牛云资源包") && refused.message.includes("qiniu"),
-  refused.message,
+  "机器码是「没有这个额度插件」，细节里带着那个 id 与登记过的几个",
+  refused.code === "QUOTA_PLUGIN_UNKNOWN" && refused.message.includes("no-such-plugin-3") && refused.message.includes("qiniu"),
+  JSON.stringify(refused),
 );
 check(
   "库里那一格没动",
