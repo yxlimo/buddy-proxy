@@ -734,6 +734,13 @@ export interface Settlement {
    * 只有 run() 成功的那一次会绑 —— 失败的那个账号已经由策略记过冷却了。
    */
   bind(accountId: string, what: string): void;
+  /**
+   * 内部用：有没有别的账号可换（策略与候选数说了算）。
+   *
+   * 没有别人可换时不记冷却：记了只会让这个平台在一段时间里一个上游请求都不
+   * 打，而客户端拿到的还是同一条报错。
+   */
+  hasAlternatives(has: boolean): void;
 }
 
 /**
@@ -747,11 +754,16 @@ export function settlement(): Settlement {
   let accountId: string | null = null;
   let what = "";
   let settled = false;
+  // 有没有别的账号可换：默认当有（策略没说话就是照旧记冷却）。
+  let hasAlternative = true;
   return {
     bind(id: string, label: string): void {
       if (settled) return;
       accountId = id;
       what = label;
+    },
+    hasAlternatives(has: boolean): void {
+      hasAlternative = has;
     },
     success(): void {
       if (settled || !accountId) return;
@@ -775,7 +787,7 @@ export function settlement(): Settlement {
       // 这次失败值多少冷却：判据在 cooldownForFailure（记账那一层）里，这里
       // 只按它的答案记账。超时与等过的限流在那里就已经答了 null —— 派发那条路
       // （onAttempt）问的是同一个函数，同一种失败不会两边两种待遇。
-      const decision = cooldownForFailure(accountId, error);
+      const decision = cooldownForFailure(accountId, error, Date.now(), hasAlternative);
       if (decision) {
         try {
           setCooldown(accountId, decision.untilMs, decision.reason);
@@ -952,6 +964,14 @@ export async function underPolicy<T>(
         }),
     })),
   );
+  // 有没有别的账号可换：策略与候选数说了算。降级且不止一个候选时才算有。
+  //
+  // 没有别人可换时不记冷却（见 cooldownForFailure）：记了只会让这个平台在一
+  // 段时间里一个上游请求都不打，而客户端拿到的还是同一条报错。结算那条路
+  // （流式答复的 failure）问的是同一件事，所以同一个答案带下去。
+  const hasAlternative = policy === "fallback" && candidates.length > 1;
+  settle?.hasAlternatives(hasAlternative);
+
   // 试的次序：权重大的先试（select 里也是这个次序，byWeight）。
   const tryOrder = byWeight(candidates);
 
@@ -997,7 +1017,7 @@ export async function underPolicy<T>(
       // 这次失败值多少冷却：判据在 cooldownForFailure（记账那一层）里，这里
       // 只按它的答案记账 —— 流式答复的结算（Settlement.failure）问的是同一个
       // 函数，两边不会给同一个错两种待遇。
-      const decision = cooldownForFailure(candidate.id, error);
+      const decision = cooldownForFailure(candidate.id, error, Date.now(), hasAlternative);
       if (decision) {
         try {
           setCooldown(candidate.id, decision.untilMs, decision.reason);

@@ -930,7 +930,7 @@ check(
   log429.split("\n").filter((l) => l.includes("429")).slice(0, 3).join(" | "),
 );
 
-// 6. 401：凭据被拒，一次就结束，照旧记 credential 冷却。
+// 6. 401：凭据被拒，一次就结束；single 策略下没有别的账号可换，不记冷却。
 await publishScripted("e2e-retry-401", "cmodel");
 scripts.cmodel = [401, 401, 401];
 scriptCalls.length = 0;
@@ -939,8 +939,11 @@ const refused = await chat("e2e-retry-401");
 check("401：客户端拿到失败", refused.status >= 400, `HTTP ${refused.status}`);
 check("401：上游只被调了一次", scriptCalls.join(",") === "cmodel", scriptCalls.join(","));
 const refusedRow = cooldownOf(qoderAccount?.id ?? "qoder");
-check("401：照旧记了冷却", refusedRow !== null, JSON.stringify(refusedRow));
-check("401：理由是凭据被拒", refusedRow?.reason === "credential", String(refusedRow?.reason));
+check(
+  "401：没有别的账号可换，不记冷却",
+  refusedRow === null,
+  JSON.stringify(refusedRow),
+);
 
 // 7. 超时（上游 408）：不重试，也不写冷却。
 //

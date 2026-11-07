@@ -643,7 +643,8 @@ section("8. 401 带上游状态");
     JSON.stringify(listCooldowns().map((row) => row.providerId)),
   );
 
-  // 单一：不换账号，但那个账号要关一段时间 —— 否则面板上它一直写着可用。
+  // 单一：没有别的账号可换，所以不记冷却 —— 记了只会让这个平台一段时间里
+  // 一个上游请求都不打，而客户端拿到的还是同一条上游 401。
   const singleCreated = createOpenPlatform({
     id: "aup-401-single",
     label: "Aup 401 Single",
@@ -674,8 +675,8 @@ section("8. 401 带上游状态");
     refused.text.slice(0, 300),
   );
   check(
-    "单一：那个账号记了冷却",
-    listCooldowns().some((row) => row.providerId === solo.id),
+    "单一：没有别的账号可换，不记冷却",
+    listCooldowns().some((row) => row.providerId === solo.id) === false,
     JSON.stringify(listCooldowns().map((row) => row.providerId)),
   );
 }

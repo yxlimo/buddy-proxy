@@ -214,6 +214,10 @@ run = "node --experimental-strip-types test/log-scrub-check.ts"
 description = "Check the cooldown: a failed account is set aside, and how long (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/cooldown-check.ts"
 
+[tasks."test:cooldown:single"]
+description = "Check that a platform with nobody to switch to does not record a cooldown (a fake upstream, no tokens spent)"
+run = "node --experimental-strip-types test/cooldown-single-check.ts"
+
 [tasks."test:rate:wait"]
 description = "Check that a rate limit the gateway can wait out is waited out (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/rate-wait-check.ts"

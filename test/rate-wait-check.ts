@@ -9,9 +9,9 @@
 //   1. 上游说了 retry-after 2 秒 → 网关自己等，到点重试**同一个**账号。客户端
 //      拿到的是 200（不该看到 429/503），上游被打了两次，冷却表里没有这个账号；
 //   2. 控制组 A：retry-after 200 秒（等不起，上限是两分钟）→ 客户端拿到失败，
-//      走原有的冷却；
+//      single 策略没有别的账号可换，不记冷却；
 //   3. 控制组 B：429 + retry-after 2 秒，但正文说的是 RPM（不是 TPM）→ 不等，
-//      照旧失败 + 冷却。
+//      照旧失败 + 不记冷却。
 //
 // 走的是开放平台那条路（lib/router/upstreams/open-platform.ts）：SenseNova 的
 // 推理地址指到本机的假上游，账号与凭据写进这个测试自己的库。
@@ -315,7 +315,7 @@ section("场景一：TPM 限流（retry-after 2 秒）—— 网关自己等，�
   );
 }
 
-section("场景二（控制组 A）：retry-after 200 秒 —— 等不起，照旧报错 + 冷却");
+section("场景二（控制组 A）：retry-after 200 秒 —— 等不起，照旧报错 + 不记冷却");
 {
   mode = "tpm-long";
   calls.length = 0;
@@ -325,14 +325,7 @@ section("场景二（控制组 A）：retry-after 200 秒 —— 等不起，照
   check("客户端拿到的是失败（不是 200）", answered.status !== 200, `HTTP ${answered.status}`);
   check("没有等（< 5 秒）", answered.elapsed < 5000, `${answered.elapsed}ms`);
   check("上游只被打了 1 次", calls.length === 1, String(calls.length));
-  const row = cooldownRow(ACCOUNT);
-  check("走了原有的冷却路径", row !== null, "库里没有那一行");
-  check("冷却的理由是限流", row?.reason === "rate-limit", String(row?.reason));
-  check(
-    "冷却到上游说的时间（200 秒上下）",
-    row !== null && Math.abs(row.untilMs - (Date.now() + 200_000)) <= 5_000,
-    row ? String(row.untilMs) : "没有那一行",
-  );
+  check("single 策略没有别的账号可换，不记冷却", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
 }
 
 section("场景三（控制组 B）：429 + retry-after 2 秒，但正文是 RPM —— 不等");
@@ -345,9 +338,7 @@ section("场景三（控制组 B）：429 + retry-after 2 秒，但正文是 RPM
   check("客户端拿到的是失败（不是 200）", answered.status !== 200, `HTTP ${answered.status}`);
   check("没有等（< 1 秒）", answered.elapsed < 1000, `${answered.elapsed}ms`);
   check("上游只被打了 1 次", calls.length === 1, String(calls.length));
-  const row = cooldownRow(ACCOUNT);
-  check("走了原有的冷却路径", row !== null, "库里没有那一行");
-  check("冷却的理由是限流", row?.reason === "rate-limit", String(row?.reason));
+  check("single 策略没有别的账号可换，不记冷却", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
 }
 
 section("算法：等多久（单元）");

@@ -3,6 +3,10 @@
 // 记冷却的只有三类：限流、凭据被拒、额度见底。别的失败都不记 —— 它们说的
 // 不是「这个账号不能用了」。
 //
+// 前提：没有别的账号可换时不记（hasAlternative）。只有一个账号的平台记了冷却，
+// 那一段时间里它一个上游请求都不打，而客户端拿到的还是同一条报错 —— 什么也没
+// 换好，只是不打了。
+//
 //   限流（rate-limit：超了 RPM/TPM）
 //       固定 1 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来。
 //       限流的窗口是分钟级的：超了一分钟，等一分钟就够 —— 按 5 分钟算会把
@@ -124,12 +128,18 @@ export function rateWaitedOf(error: unknown): boolean {
  *
  * 不可降级的失败没有冷却：换一个账号也是一样的结果，把账号放下去只会让可用
  * 的账号更少；超时、连接断掉与等过限流的也不记（理由见文件顶上）。
+ *
+ * `hasAlternative` 说「有没有别的账号可换」：没有就不记冷却（理由见文件顶上）。
  */
 export function cooldownForFailure(
   accountId: string,
   error: unknown,
   now = Date.now(),
+  hasAlternative = true,
 ): CooldownDecision | null {
+  // 没有别的账号可换：记冷却只会让这个平台在一段时间里一个上游请求都不打，
+  // 而客户端拿到的还是同一条报错。让它继续试、把上游的话原样交出去。
+  if (!hasAlternative) return null;
   if (!isDegradableUpstreamError(error)) return null;
   const failure = classifyUpstreamError(error);
   // 超时不记账：这一条请求等得太久了，不是这个账号不能用了（见文件顶上的分类）。
