@@ -31,13 +31,11 @@ const kinds: PlatformKindList = {
       kind: 'openai',
       label: 'OpenAI 兼容',
       defaultBaseUrl: '',
-      modelsFromUpstream: true,
     }),
     create(PlatformKindSchema, {
       kind: 'anthropic',
       label: 'Anthropic 兼容',
       defaultBaseUrl: '',
-      modelsFromUpstream: true,
     }),
   ],
 }
@@ -55,13 +53,11 @@ const allKinds: PlatformKindList = {
       kind: 'openai',
       label: 'OpenAI 兼容',
       category: 'dialect',
-      modelsFromUpstream: true,
     }),
     create(PlatformKindSchema, {
       kind: 'anthropic',
       label: 'Anthropic 兼容',
       category: 'dialect',
-      modelsFromUpstream: true,
     }),
     create(PlatformKindSchema, {
       kind: 'minimax',
@@ -113,7 +109,6 @@ const simulatedPlatform = create(UpstreamSchema, {
   label: 'MiniMax Code',
   baseUrl: '',
   quotaPlugin: '',
-  modelsAuto: false,
   models: ['MiniMax-M2'],
   isOpenPlatform: false,
   fromRow: true,
@@ -171,7 +166,6 @@ const platform = create(UpstreamSchema, {
   label: '我的中转站',
   baseUrl: 'https://api.example.com/v1',
   quotaPlugin: 'qiniu-portal',
-  modelsAuto: true,
   models: ['gpt-4o', 'claude-3'],
   isOpenPlatform: true,
   fromRow: true,
@@ -205,12 +199,16 @@ describe('平台弹窗交出去的那一单', () => {
       label: '我的中转站',
       baseUrl: 'https://api.example.com/v1',
       quotaPlugin: 'qiniu-portal',
-      // 开着自动拉：目录不动。
-      modelsAuto: true,
-      models: [],
     })
     // 多一格都不行：类型建完就改不了。
     expect(submitted[0]).not.toHaveProperty('kind')
+    // 模型目录不由用户管：这一单里没有目录那几格（逐键对，不靠名字猜）。
+    expect(Object.keys(submitted[0] as object).sort()).toEqual([
+      'baseUrl',
+      'id',
+      'label',
+      'quotaPlugin',
+    ])
   })
 
   it('新增平台：带 kind，别的格不带', async () => {
@@ -399,8 +397,6 @@ describe('改一个模拟客户端', () => {
     expect(submitted[0]).toEqual({
       id: 'minimax',
       label: '我的 MiniMax',
-      modelsAuto: false,
-      models: ['MiniMax-M2'],
     })
   })
 
@@ -450,8 +446,6 @@ describe('改一个模拟客户端', () => {
       {
         id: 'minimax',
         label: '我的 MiniMax',
-        modelsAuto: false,
-        models: ['MiniMax-M2'],
       },
     ])
   })
@@ -506,8 +500,6 @@ describe('改一个模拟客户端', () => {
       label: '新的名字',
       baseUrl: 'https://api.example.com/v1',
       quotaPlugin: 'qiniu-portal',
-      modelsAuto: true,
-      models: [],
     })
   })
 })
@@ -560,11 +552,9 @@ describe('改平台时怎么判是不是模拟客户端', () => {
     expect(screen.queryByLabelText('额度插件')).not.toBeInTheDocument()
   })
 
-  it('模拟客户端：目录归代码，不摆「自动拉」开关，也不摆可改的目录', () => {
+  it('模拟客户端：目录归代码，只留一句说明，没有开关也没有文本域', () => {
     renderEdit(simulatedPlatform)
 
-    // 服务端对模拟客户端的 models / modelsAuto 一律忽略：摆出来的开关与文本域
-    // 就成了两个改了也不算数的控件。
     expect(
       screen.queryByRole('switch', { name: '自动拉模型目录' })
     ).not.toBeInTheDocument()
@@ -575,13 +565,17 @@ describe('改平台时怎么判是不是模拟客户端', () => {
     ).toBeInTheDocument()
   })
 
-  it('开放平台：开关与目录都还在（控制组）', () => {
+  it('开放平台：目录不由用户管，只留一句说明，没有开关也没有文本域', () => {
     renderEdit(platform)
 
+    // 开放平台的目录一律从上游拉：开关与文本域都不摆（用户改不了目录）。
     expect(
-      screen.getByRole('switch', { name: '自动拉模型目录' })
+      screen.queryByRole('switch', { name: '自动拉模型目录' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('模型目录')).not.toBeInTheDocument()
+    expect(
+      screen.getByText('模型目录由平台提供，用刷新按钮重新拉取。')
     ).toBeInTheDocument()
-    expect(screen.getByLabelText('模型目录')).toBeInTheDocument()
     expect(
       screen.queryByText('模型目录由代码提供，不能改。')
     ).not.toBeInTheDocument()
@@ -964,8 +958,6 @@ describe('用共性表补模型参数', () => {
       label: '我的中转站',
       baseUrl: 'https://api.example.com/v1',
       quotaPlugin: 'qiniu-portal',
-      modelsAuto: true,
-      models: [],
       traitsFromCommon: true,
     })
     expect(submitted[0]).not.toHaveProperty('kind')
@@ -981,7 +973,6 @@ describe('用共性表补模型参数', () => {
         label: '我的中转站',
         baseUrl: 'https://api.example.com/v1',
         quotaPlugin: 'qiniu-portal',
-        modelsAuto: true,
         models: [],
         isOpenPlatform: true,
         fromRow: true,
@@ -1016,7 +1007,6 @@ describe('用共性表补模型参数', () => {
       kind: 'openai',
       label: '我的中转站',
       baseUrl: 'https://api.example.com/v1',
-      modelsAuto: true,
       models: [],
       isOpenPlatform: true,
       fromRow: true,
@@ -1050,7 +1040,6 @@ const vendorKinds: PlatformKindList = {
       category: 'dialect',
       defaultBaseUrl: '',
       defaultQuotaPlugin: '',
-      modelsFromUpstream: true,
     }),
     create(PlatformKindSchema, {
       kind: 'qiniu',
@@ -1058,7 +1047,6 @@ const vendorKinds: PlatformKindList = {
       category: 'dialect',
       defaultBaseUrl: 'https://api.qnaigc.com/v1',
       defaultQuotaPlugin: 'qiniu',
-      modelsFromUpstream: false,
     }),
     create(PlatformKindSchema, {
       kind: 'xinghuo',
@@ -1066,7 +1054,6 @@ const vendorKinds: PlatformKindList = {
       category: 'dialect',
       defaultBaseUrl: 'https://maas-api.cn-huabei-1.xf-yun.com/v2',
       defaultQuotaPlugin: '',
-      modelsFromUpstream: true,
     }),
   ],
 }

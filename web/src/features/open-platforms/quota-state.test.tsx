@@ -44,12 +44,10 @@ const KINDS: PlatformKindList = {
     create(PlatformKindSchema, {
       kind: 'openai',
       label: 'OpenAI 兼容',
-      modelsFromUpstream: true,
     }),
     create(PlatformKindSchema, {
       kind: 'anthropic',
       label: 'Anthropic 兼容',
-      modelsFromUpstream: true,
     }),
   ],
 }
@@ -67,7 +65,6 @@ function facts(
     isOpenPlatform: true,
     quotaPlugin: 'qiniu-portal',
     models: ['gpt-4o'],
-    modelsSource: 'auto',
     modelsFetchedAtMs: FETCHED_AT,
     quota: create(UpstreamQuotaSchema, quota),
   })
@@ -310,7 +307,6 @@ describe('模拟客户端那一行', () => {
         kind: 'openai',
         label: 'OpenAI 兼容',
         category: 'dialect',
-        modelsFromUpstream: true,
       }),
       create(PlatformKindSchema, {
         kind: 'minimax',
@@ -346,7 +342,6 @@ describe('模拟客户端那一行', () => {
       quotaPlugin: '',
       isOpenPlatform: true,
       models: ['MiniMax-M2'],
-      modelsSource: 'manual',
     })
     return <OpenPlatformFacts upstream={upstream} kinds={SIMULATED} registry={READY} />
   }

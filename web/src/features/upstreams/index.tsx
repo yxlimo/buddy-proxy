@@ -232,9 +232,10 @@ export function UpstreamsPage() {
               <TableBody>
                 {list.map((upstream) => {
                   const isExpanded = expanded === upstream.id
-                  // 刷新模型目录摆不摆：只看平台自己那一格（目录归不归上游）。
+                  // 刷新模型目录摆不摆：只看这个平台是不是开放平台（开放平台的
+                  // 目录一律从上游拉，模拟客户端的目录归代码）。
                   const refreshControl = refreshModelsControl(
-                    upstream.modelsFromUpstream
+                    upstream.isOpenPlatform
                   )
                   return (
                     <Fragment key={upstream.id}>
@@ -346,9 +347,9 @@ export function UpstreamsPage() {
                                 编辑
                               </Button>
                             ) : null}
-                            {/* 刷新模型目录只看平台自己那一格 `models_from_upstream`：
-                                目录归上游才有这一格。 */}
-                            {refreshControl.show ? (
+                            {/* 刷新模型目录只给开放平台：开放平台的目录一律从
+                                上游拉，模拟客户端的目录归代码。 */}
+                            {refreshControl ? (
                               <Button
                                 size='sm'
                                 variant='outline'

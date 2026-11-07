@@ -142,9 +142,11 @@ export function store(): DatabaseSync {
   // platform_policy.platform 是同一个东西 —— 请求路径里那一段
   // （`<平台>/v1/messages`）用的就是它。
   //
-  // `models` 存的是整个目录（模型名、上次什么时候拉的、哪来的），
-  // `models_auto` 是「以后允不允许自动拉覆盖」那一格 —— 自动不自动不在 JSON
-  // 里（早期存过的那一份，忽略就是）。
+  // `models` 存的是整个目录（模型名、各模型参数、上次什么时候拉的）。
+  //
+  // `models_auto` 这一列留着但不再读写：目录归上游还是归代码由平台的族决定，
+  // 不是行说了算的。老库里的值不再有人读 —— 不删列是怕生产库升级时出事，
+  // 留着不动最稳。
   //
   // `traits_from_common` 是「上游与代码都没说清时从共性表补参数」那个开关。
   // 默认关：共性表是人工整理的近似，只有用户明确要才用。
@@ -356,14 +358,14 @@ function migratePlatformColumns(db: DatabaseSync): void {
  * 两次读之间的窗口：先读墓碑、再读平台行、再插，中间别人写一条墓碑或建一行，播
  * 出来就是「删掉的长回来了」或者「盖掉用户刚建的行」。一句里判完，窗口就没了。
  *
- * `models_auto` 是 0：模拟客户端的目录是代码里挑过的一份（各 kind 自己的
- * models()），不从上游拉 —— 上游那份是那个封闭客户端的目录，网关拿不到也不该拿。
+ * 目录是空的：模拟客户端那一族的目录由各 kind 自己的 models() 给出，不从上游
+ * 拉 —— 上游那份是那个封闭客户端的目录，网关拿不到也不该拿。
  */
 export function migrateSimulatedClients(db: DatabaseSync): void {
   const insert = db.prepare(
     "INSERT INTO platform " +
-      "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
-      "SELECT ?, ?, '', '[]', 0, '', ?, ?, ?, ? " +
+      "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
+      "SELECT ?, ?, '', '[]', '', ?, ?, ?, ? " +
       "WHERE NOT EXISTS (SELECT 1 FROM platform_preset_removed WHERE id = ?) " +
       "AND NOT EXISTS (SELECT 1 FROM platform WHERE id = ?)",
   );

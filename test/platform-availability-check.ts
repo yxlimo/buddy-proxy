@@ -75,6 +75,16 @@ const { setCooldown, clearCooldown } = await import("../lib/cooldown.ts");
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
 insertVendorPlatform("qiniu");
 insertVendorPlatform("sensenova");
+// 目录是上游那一份：这一节要的是「目录归平台，账号的状态不摘模型」，所以先
+// 往行里写一份（等价于上游答了一次）。
+const { syncPlatformModels } = await import("../lib/open-platforms.ts");
+syncPlatformModels("qiniu", [
+  "deepseek/deepseek-v4.1-flash-1017",
+  "qiniu/conatus-free",
+  "minimax/minimax-m3.1-flash",
+  "nvidia/nemotron-3-ultra-550b-a55b0-free",
+  "qwen/qwen3.8-flash-next",
+]);
 
 // 平台没有账号。
 const empty = platformAvailability("qiniu");

@@ -34,7 +34,6 @@ export const senseNovaKind = registerCompatiblePlatform({
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => senseNovaInferenceKey(accountId ?? provider.id),
-  modelsFromUpstream: true,
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),
   // 目录是平台那一行说了算：行里的 id 与顺序就是公布的。元数据在上游缓存里
   // （平台报的那一份），行里查不到的 id 只给名字。行读不到才退回缓存那一份 ——

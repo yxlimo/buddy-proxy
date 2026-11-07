@@ -62,12 +62,6 @@ export interface CompatiblePlatform {
    * 用户最后选的那个。
    */
   defaultQuotaPlugin?: string;
-  /**
-   * 这一类平台代码里挑过的那一份模型目录（不给就是建的时候目录是空的）。
-   *
-   * 目录归上游的那几家不给这一项：建的时候本来就没有目录，等上游那份。
-   */
-  defaultModels?: readonly string[];
   /** 支持的生效策略。默认 ["single", "fallback"]。 */
   policies?: ProviderKind["policies"];
   /** 推理端点的基础地址（`/chat/completions` 由工厂接上）。 */
@@ -88,7 +82,6 @@ export interface CompatiblePlatform {
   catalogAuth?(key: string): Record<string, string>;
   /** 模型目录。 */
   models(provider: ProviderRow): CatalogModel[];
-  modelsFromUpstream: ProviderKind["modelsFromUpstream"];
   /** 额度视图。不给就是没有。 */
   quotas?(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[];
   /** 额度用尽了吗。不给就是不知道（false）。 */
@@ -116,7 +109,6 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     policies: platform.policies ?? ["single", "fallback"],
     ...(platform.defaultBaseUrl ? { defaultBaseUrl: platform.defaultBaseUrl } : {}),
     ...(platform.defaultQuotaPlugin ? { defaultQuotaPlugin: platform.defaultQuotaPlugin } : {}),
-    ...(platform.defaultModels ? { defaultModels: platform.defaultModels } : {}),
     baseUrl: platform.baseUrl,
     inferWith: platform.inferWith,
     // 明文 key 也登记到注册表上：转发层与「问上游要模型目录」要的是同一把，
@@ -125,7 +117,6 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     ...(platform.catalogAuth ? { catalogAuth: platform.catalogAuth } : {}),
     credential: platform.credential ?? (() => missingCredential()),
     models: platform.models,
-    modelsFromUpstream: platform.modelsFromUpstream,
     quotas: platform.quotas ?? (() => []),
     outOfCredits: platform.outOfCredits ?? (() => false),
     ...(platform.recoverAt ? { recoverAt: platform.recoverAt } : {}),

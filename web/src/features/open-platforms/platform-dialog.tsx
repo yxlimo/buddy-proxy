@@ -21,7 +21,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { describeError } from '@/lib/errors'
 import type { QuotaRegistry } from '@/features/accounts/provider-key-fields'
 import type { PlatformKind } from '@/gen/buddy/admin/v1/admin_pb'
@@ -132,8 +131,6 @@ export type UpdatePlatformSubmit = {
    * 明确写了一遍）。关掉这一格要带 `false`，它与「没给」不是一回事。
    */
   traitsFromCommon?: boolean
-  modelsAuto: boolean
-  models: string[]
 }
 
 type Draft = {
@@ -169,9 +166,6 @@ type Draft = {
    * 拿「不是空」当「动过」。动过之后换类型不再覆盖这一格。
    */
   quotaPluginEdited: boolean
-  modelsAuto: boolean
-  /** 模型目录：一行一个模型名。 */
-  models: string
   /** 用共性表补模型参数这一格现在开着没有（这一格缺失时按关显示）。 */
   traitsFromCommon: boolean
   /**
@@ -484,9 +478,6 @@ export function PlatformDialog({
       const shared = {
         id: draft.id.trim(),
         label: draft.label.trim(),
-        modelsAuto: draft.modelsAuto,
-        // 自动拉的时候不动现在那份目录（服务端的约定）：不带清单。
-        models: draft.modelsAuto ? [] : parseModels(draft.models),
       }
       // 模拟客户端的地址与额度插件归代码：这两格整格不出现。发空串是「清空
       // 那一格」的意思，会把库里原来那份抹掉。
@@ -787,43 +778,16 @@ export function PlatformDialog({
                 </div>
               ) : null}
 
-              {/* 模拟客户端的目录归代码（后端对这一族的 models / modelsAuto 一律
-                  忽略）：不摆开关与文本域，只留一句说清。 */}
+              {/* 模型目录不由用户管：开放平台的目录一律从上游拉，模拟客户端的
+                  目录归代码。两族都只留一句说清，没有开关也没有文本域。 */}
               {simulated ? (
                 <p className='text-sm text-muted-foreground'>
                   模型目录由代码提供，不能改。
                 </p>
               ) : (
-                <div className='grid gap-2'>
-                  <label
-                    htmlFor='platform-models-auto'
-                    className='flex items-center gap-2 text-sm'
-                  >
-                    <Switch
-                      id='platform-models-auto'
-                      aria-label='自动拉模型目录'
-                      checked={draft.modelsAuto}
-                      onCheckedChange={(checked) =>
-                        patch({ modelsAuto: checked })
-                      }
-                    />
-                    自动拉模型目录
-                  </label>
-                  <Label htmlFor='platform-models'>模型目录</Label>
-                  <Textarea
-                    id='platform-models'
-                    value={draft.models}
-                    disabled={draft.modelsAuto}
-                    rows={4}
-                    placeholder='一行一个模型名'
-                    onChange={(event) => patch({ models: event.target.value })}
-                  />
-                  <p className='text-xs text-muted-foreground'>
-                    {draft.modelsAuto
-                      ? '自动拉的时候这份目录由平台给，这里改不了'
-                      : '留空表示保留现在这份目录'}
-                  </p>
-                </div>
+                <p className='text-sm text-muted-foreground'>
+                  模型目录由平台提供，用刷新按钮重新拉取。
+                </p>
               )}
 
               {/* 共性表：只有目录归上游的开放平台才有「平台没报的参数」这回事。
@@ -884,19 +848,10 @@ export function PlatformDialog({
   )
 }
 
-/** 表格里的模型目录：一行一个。空行不算。 */
-function parseModels(text: string): string[] {
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-}
-
 /**
  * 弹窗里现在这几格。
  *
- * 改的时候从平台上取现在的值（整单提交要的就是它们）；模型目录也在这儿 ——
- * 平台上的那一份目录，一行一个模型名。
+ * 改的时候从平台上取现在的值（整单提交要的就是它们）。
  */
 function toDraft(platform?: Upstream): Draft {
   if (!platform) {
@@ -912,8 +867,6 @@ function toDraft(platform?: Upstream): Draft {
       quotaPlugin: '',
       // 新增：预填由类型决定，用户没动过。
       quotaPluginEdited: false,
-      modelsAuto: false,
-      models: '',
       // 新增没有平台行，这一格没有意义（界面上也不摆）。
       traitsFromCommon: false,
       traitsFromCommonEdited: false,
@@ -933,8 +886,6 @@ function toDraft(platform?: Upstream): Draft {
     // 改平台时这一格是行上的值（用户自己存的那份）：当成动过，别拿类型的
     // 默认值去盖它。
     quotaPluginEdited: true,
-    modelsAuto: platform.modelsAuto,
-    models: platform.models.join('\n'),
     // 还没动过：提交时不带这一格。
     traitsFromCommon: traitsFromCommonOf(platform),
     traitsFromCommonEdited: false,

@@ -61,7 +61,7 @@ const { PLATFORMS, allPlatforms } = await import("../lib/platforms.ts");
 const { openPlatformOf, listOpenPlatforms, createOpenPlatform, deleteOpenPlatform } = await import(
   "../lib/open-platforms.ts"
 );
-const { SIMULATED_CLIENTS } = await import("../lib/platform-catalog.ts");
+const { SIMULATED_CLIENTS, platformCategoryOfKind } = await import("../lib/platform-catalog.ts");
 const { store, closeStore, migrateSimulatedClients, platformPresetRemoved } = await import(
   "../lib/store.ts"
 );
@@ -138,7 +138,11 @@ check(
 const seededRow = openPlatformOf(SIMULATED_CLIENTS[0].id);
 check("播种的行地址是空串", seededRow?.baseUrl === "", JSON.stringify(seededRow?.baseUrl));
 check("播种的行目录是空的", (seededRow?.models.items ?? []).length === 0, JSON.stringify(seededRow?.models));
-check("播种的行不自动拉目录", seededRow?.models.auto === false, JSON.stringify(seededRow?.models));
+check(
+  "播种的那一行是模拟客户端（目录由代码给出）",
+  platformCategoryOfKind(seededRow?.kind ?? "") === "simulated",
+  seededRow?.kind ?? "",
+);
 check("播种的行没有额度插件", seededRow?.quotaPlugin === "", JSON.stringify(seededRow?.quotaPlugin));
 
 // 已有库的行不被任何启动逻辑改写：插一行目录空着的厂商行（以前那一轮播种会
@@ -184,8 +188,8 @@ check(
   JSON.stringify(keptRow?.models),
 );
 check(
-  "已有库的行没被启动改写（自动那一格没动）",
-  keptRow?.models.auto === true,
+  "已有库的行没被启动改写（目录还是空的）",
+  (keptRow?.models.items ?? []).length === 0,
   JSON.stringify(keptRow?.models),
 );
 

@@ -58,13 +58,11 @@ function twoKinds() {
       kind: 'openai',
       label: 'OpenAI 兼容',
       defaultBaseUrl: '',
-      modelsFromUpstream: true,
     }),
     create(PlatformKindSchema, {
       kind: 'anthropic',
       label: 'Anthropic 兼容',
       defaultBaseUrl: '',
-      modelsFromUpstream: true,
     }),
   ]
 }
@@ -106,16 +104,13 @@ function openPlatform(
     accountCount: 0,
     hasEnabledAccount: false,
     baseUrl: 'https://api.example.com/v1',
-    // 这几格都不是零值：平台本来选着插件、开着自动拉、有一份目录。面板要是
-    // 把它们静默清空了，测试得看得出来（零值的话看不出来）。
+    // 这几格都不是零值：平台本来选着插件、有一份目录。面板要是把它们静默
+    // 清空了，测试得看得出来（零值的话看不出来）。
     quotaPlugin: 'qiniu-portal',
-    modelsAuto: true,
     models: ['gpt-4o', 'claude-3'],
-    modelsSource: 'auto',
     modelsFetchedAtMs: FETCHED_AT,
     isOpenPlatform: true,
     // 开放平台的目录归上游：卡片上有「刷新模型目录」。
-    modelsFromUpstream: true,
     fromRow: true,
     accounts: [],
   }
@@ -211,7 +206,6 @@ function editingClient(
           label: input.label ?? '',
           baseUrl: input.baseUrl ?? '',
           quotaPlugin: input.quotaPlugin ?? '',
-          modelsAuto: input.modelsAuto,
         }),
       })
     },
@@ -322,7 +316,6 @@ describe('面板上的开放平台', () => {
               category: 'dialect',
               defaultBaseUrl: 'https://api.qnaigc.com/v1',
               defaultQuotaPlugin: 'qiniu-portal',
-              modelsFromUpstream: false,
             }),
           ],
         }),
@@ -420,9 +413,9 @@ describe('面板上的开放平台', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
-  it('开放平台显示地址、模型来源、额度插件名；模拟客户端不摆这两格', async () => {
+  it('开放平台显示地址、模型目录、额度插件名；模拟客户端不摆这两格', async () => {
     const client = clientWith(
-      [template(), openPlatform({ quotaPlugin: 'qiniu', modelsAuto: true })],
+      [template(), openPlatform({ quotaPlugin: 'qiniu' })],
       {
         ListQuotaPlugins: () =>
           create(ListQuotaPluginsResponseSchema, {
@@ -443,8 +436,12 @@ describe('面板上的开放平台', () => {
 
     // 地址：原样显示。
     expect(screen.getByText('https://api.example.com/v1')).toBeInTheDocument()
-    // 模型来源：自动拉 / 手动配。
-    expect(screen.getByText(/模型目录：自动拉/)).toBeInTheDocument()
+    // 模型目录：几个模型、上次拉取的时刻。
+    expect(
+      screen.getByText(
+        `模型目录：2 个模型 · 上次拉取：${formatLocalMoment(FETCHED_AT)}`
+      )
+    ).toBeInTheDocument()
     // 额度插件名。
     expect(screen.getByText('额度插件：七牛云资源包')).toBeInTheDocument()
 
@@ -474,11 +471,9 @@ describe('面板上的开放平台', () => {
     ).toBeInTheDocument()
   })
 
-  it('手动配的模型目录显示模型数', async () => {
+  it('模型目录显示模型数：数的是平台上那份', async () => {
     const client = clientWith([
       openPlatform({
-        modelsAuto: false,
-        modelsSource: 'manual',
         models: ['a', 'b', 'c'],
         modelsFetchedAtMs: 0n,
       }),
@@ -487,51 +482,34 @@ describe('面板上的开放平台', () => {
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
-    expect(screen.getByText('模型目录：手动配 · 3 个模型')).toBeInTheDocument()
+    expect(
+      screen.getByText('模型目录：3 个模型 · 上次拉取：没拉过')
+    ).toBeInTheDocument()
   })
 
-  it('自动拉但没拉过：说没拉过，不说 0 也不说 1970', async () => {
-    const client = clientWith([
-      openPlatform({ modelsSource: 'auto', modelsFetchedAtMs: 0n }),
-    ])
+  it('没拉过：说没拉过，不说 0 也不说 1970', async () => {
+    const client = clientWith([openPlatform({ modelsFetchedAtMs: 0n })])
 
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
     expect(
-      screen.getByText('模型目录：自动拉 · 上次拉取：没拉过')
+      screen.getByText('模型目录：2 个模型 · 上次拉取：没拉过')
     ).toBeInTheDocument()
     expect(screen.queryByText(/1970/)).not.toBeInTheDocument()
   })
 
-  it('自动拉：显示服务端给的上次拉取时刻', async () => {
-    const client = clientWith([openPlatform({ modelsSource: 'auto' })])
+  it('拉过：显示服务端给的上次拉取时刻', async () => {
+    const client = clientWith([openPlatform()])
 
     renderWithClient({ client, children: <UpstreamsPage /> })
 
     await screen.findByText('我的中转站')
     expect(
       screen.getByText(
-        `模型目录：自动拉 · 上次拉取：${formatLocalMoment(FETCHED_AT)}`
+        `模型目录：2 个模型 · 上次拉取：${formatLocalMoment(FETCHED_AT)}`
       )
     ).toBeInTheDocument()
-  })
-
-  it('来源是手动（自动开着也不变）：显示手动配', async () => {
-    // 人写的目录 + 打开自动：目录本身还是人写的那份。
-    const client = clientWith([
-      openPlatform({
-        modelsAuto: true,
-        modelsSource: 'manual',
-        models: ['a', 'b'],
-        modelsFetchedAtMs: 0n,
-      }),
-    ])
-
-    renderWithClient({ client, children: <UpstreamsPage /> })
-
-    await screen.findByText('我的中转站')
-    expect(screen.getByText('模型目录：手动配 · 2 个模型')).toBeInTheDocument()
   })
 
   it('改平台：发的是 UpdatePlatform，带的是整单', async () => {
@@ -539,22 +517,13 @@ describe('面板上的开放平台', () => {
     const sent: Record<string, unknown>[] = []
     const client = clientWith([openPlatform()], {
       UpdatePlatform: (input) => {
-        sent.push({
-          id: input.id ?? '',
-          label: input.label ?? '',
-          baseUrl: input.baseUrl ?? '',
-          quotaPlugin: input.quotaPlugin ?? '',
-          modelsAuto: input.modelsAuto,
-          models: [...(input.models ?? [])],
-        })
+        sent.push({ ...(input as unknown as Record<string, unknown>) })
         return create(UpdatePlatformResponseSchema, {
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
             label: input.label ?? '',
             baseUrl: input.baseUrl ?? '',
             quotaPlugin: input.quotaPlugin ?? '',
-            modelsAuto: input.modelsAuto,
-            models: [...(input.models ?? [])],
           }),
         })
       },
@@ -575,34 +544,33 @@ describe('面板上的开放平台', () => {
     )
     // id 改不了。
     expect(within(dialog).getByLabelText('平台 id')).toBeDisabled()
-    // 模型目录是平台上那份：刷新了页面也还在。
-    expect(within(dialog).getByLabelText('模型目录')).toHaveValue(
-      'gpt-4o\nclaude-3'
-    )
+    // 目录不由用户管：弹窗里没有开关也没有文本域。
+    expect(
+      within(dialog).queryByRole('switch', { name: '自动拉模型目录' })
+    ).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('模型目录')).not.toBeInTheDocument()
 
     await user.clear(within(dialog).getByLabelText('名字'))
     await user.type(within(dialog).getByLabelText('名字'), '新的名字')
-    // 把自动拉关掉：目录那一格才能改。
-    await user.click(
-      within(dialog).getByRole('switch', { name: '自动拉模型目录' })
-    )
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
-      expect(sent).toEqual([
-        {
-          id: 'my-gateway',
-          label: '新的名字',
-          baseUrl: 'https://api.example.com/v1',
-          // 平台原来选着的插件：整单提交要带上，不许静默清空。
-          quotaPlugin: 'qiniu-portal',
-          // 原来开着自动拉，用户关掉了：带的是关掉这一格。
-          modelsAuto: false,
-          // 平台上那份目录：原样带上去，不许换成别的。
-          models: ['gpt-4o', 'claude-3'],
-        },
-      ])
+      expect(sent).toHaveLength(1)
     })
+    // 整单就这几格：模型目录不由用户管，不许发过去。
+    expect(sent[0]).toMatchObject({
+      id: 'my-gateway',
+      label: '新的名字',
+      baseUrl: 'https://api.example.com/v1',
+      // 平台原来选着的插件：整单提交要带上，不许静默清空。
+      quotaPlugin: 'qiniu-portal',
+    })
+    // 逐键对：请求体里只有上面那几格（目录那两格不在其中）。
+    expect(
+      Object.keys(sent[0])
+        .filter((key) => key !== '$typeName')
+        .sort()
+    ).toEqual(['baseUrl', 'id', 'label', 'quotaPlugin'])
   })
 
   it('改平台：开关没动过就不发这一格，动了才带', async () => {
@@ -651,8 +619,6 @@ describe('面板上的开放平台', () => {
           label: input.label ?? '',
           baseUrl: input.baseUrl ?? '',
           quotaPlugin: input.quotaPlugin ?? '',
-          modelsAuto: input.modelsAuto,
-          models: [...(input.models ?? [])],
         }
         // 弹窗那一单整个递下来的话，这里会多出这一格。
         if ('kind' in (input as object)) {
@@ -674,9 +640,6 @@ describe('面板上的开放平台', () => {
       label: '我的中转站',
       baseUrl: 'https://api.example.com/v1',
       quotaPlugin: 'qiniu-portal',
-      // 这个平台开着自动拉：目录不动（不带清单）。
-      modelsAuto: true,
-      models: [],
     })
     // 多一格都不行。
     expect(sent[0]).not.toHaveProperty('kind')
@@ -732,19 +695,13 @@ describe('面板上的开放平台', () => {
     })
   })
 
-  it('打开自动拉：只翻那一格，不带目录清单', async () => {
+  it('改平台：请求里没有目录那几格（模型目录不由用户管）', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: Record<string, unknown>[] = []
-    const client = clientWith([openPlatform({ modelsAuto: false, models: [] })], {
+    const client = clientWith([openPlatform()], {
       UpdatePlatform: (input) => {
-        sent.push({
-          id: input.id ?? '',
-          label: input.label ?? '',
-          baseUrl: input.baseUrl ?? '',
-          quotaPlugin: input.quotaPlugin ?? '',
-          modelsAuto: input.modelsAuto,
-          models: [...(input.models ?? [])],
-        })
+        // 整份入参抄下来：目录那两格要是被面板带上了，这里就看得见。
+        sent.push({ ...(input as unknown as Record<string, unknown>) })
         return create(UpdatePlatformResponseSchema, {
           platform: create(OpenPlatformSchema, {
             id: input.id ?? '',
@@ -763,25 +720,15 @@ describe('面板上的开放平台', () => {
     )
 
     const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByLabelText('模型目录'), 'gpt-4o')
-    await user.click(
-      within(dialog).getByRole('switch', { name: '自动拉模型目录' })
-    )
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
 
-    await waitFor(() => {
-      expect(sent).toEqual([
-        {
-          id: 'my-gateway',
-          label: '我的中转站',
-          baseUrl: 'https://api.example.com/v1',
-          quotaPlugin: 'qiniu-portal',
-          modelsAuto: true,
-          // 自动拉的时候不动现在那份目录：不带清单。
-          models: [],
-        },
-      ])
-    })
+    await waitFor(() => expect(sent).toHaveLength(1))
+    // 逐键对：目录那两格（目录清单与自动拉开关）都不在请求体里。
+    expect(
+      Object.keys(sent[0])
+        .filter((key) => key !== '$typeName')
+        .sort()
+    ).toEqual(['baseUrl', 'id', 'label', 'quotaPlugin'])
   })
 
   it('选额度插件：存进 quota_plugin，插件要哪几段凭据只展示', async () => {
@@ -812,7 +759,6 @@ describe('面板上的开放平台', () => {
             label: input.label ?? '',
             baseUrl: input.baseUrl ?? '',
             quotaPlugin: input.quotaPlugin ?? '',
-            modelsAuto: input.modelsAuto,
           }),
         })
       },
@@ -940,7 +886,6 @@ describe('面板上的开放平台', () => {
             label: input.label ?? '',
             baseUrl: input.baseUrl ?? '',
             quotaPlugin: input.quotaPlugin ?? '',
-            modelsAuto: input.modelsAuto,
           }),
         })
       },
@@ -985,7 +930,6 @@ describe('面板上的开放平台', () => {
             label: input.label ?? '',
             baseUrl: input.baseUrl ?? '',
             quotaPlugin: input.quotaPlugin ?? '',
-            modelsAuto: input.modelsAuto,
           }),
         })
       },
@@ -1014,7 +958,7 @@ describe('面板上的开放平台', () => {
   it('刷新模型目录：发的是 RefreshPlatformModels，成功那句由面板按条数说', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[] = []
-    const client = clientWith([openPlatform({ modelsAuto: true })], {
+    const client = clientWith([openPlatform()], {
       RefreshPlatformModels: (input) => {
         sent.push(input.platformId ?? '')
         return create(RefreshPlatformModelsResponseSchema, {
@@ -1042,7 +986,7 @@ describe('面板上的开放平台', () => {
 
   it('刷新失败：显示服务端给的原因', async () => {
     const user = userEvent.setup({ delay: null })
-    const client = clientWith([openPlatform({ modelsAuto: true })], {
+    const client = clientWith([openPlatform()], {
       RefreshPlatformModels: () =>
         create(RefreshPlatformModelsResponseSchema, {
           ok: false,
@@ -1487,13 +1431,11 @@ describe('建平台时能选类型', () => {
         kind: 'openai',
         label: 'OpenAI 兼容',
         defaultBaseUrl: 'https://gw.example.com/v1',
-        modelsFromUpstream: true,
       }),
       create(PlatformKindSchema, {
         kind: 'anthropic',
         label: 'Anthropic 兼容',
         defaultBaseUrl: '',
-        modelsFromUpstream: true,
       }),
     ]
     const client = clientWith([], {
@@ -1527,13 +1469,11 @@ describe('建平台时能选类型', () => {
         kind: 'openai',
         label: 'OpenAI 兼容',
         defaultBaseUrl: 'https://gw.example.com/v1',
-        modelsFromUpstream: true,
       }),
       create(PlatformKindSchema, {
         kind: 'anthropic',
         label: 'Anthropic 兼容',
         defaultBaseUrl: 'https://anthropic.example.com/v1',
-        modelsFromUpstream: true,
       }),
     ]
     const client = clientWith([], {
@@ -1690,7 +1630,6 @@ describe('建平台时能选类型', () => {
             kind: 'openai',
             label: 'OpenAI 兼容',
             defaultBaseUrl: 'https://gw.example.com/v1',
-            modelsFromUpstream: true,
           }),
         ],
       })
@@ -1756,25 +1695,24 @@ describe('建平台时能选类型', () => {
   })
 })
 
-describe('刷新模型目录按钮看平台那一格', () => {
-  it('目录不归上游就不摆按钮：厂商模板不再因为清单里没有它而拿不到按钮', async () => {
-    // 类型清单是「能新建的那几类」，厂商模板（七牛）与模拟客户端都不在里面。
-    // 以前照清单判，七牛这一类平台永远拿不到刷新按钮 —— 现在只看平台自己那一格。
+describe('刷新模型目录按钮看是不是开放平台', () => {
+  it('开放平台都摆：不管什么 kind、不管有没有账号', async () => {
+    // 目录归谁由平台的族决定：方言族（开放平台）一律从上游拉，所以按钮都摆。
     const client = clientWith([
       openPlatform({
         id: 'qiniu',
         kind: 'qiniu',
         label: '七牛',
         quotaPlugin: '',
-        modelsFromUpstream: false,
       }),
       openPlatform({
         id: 'opencode-go',
         kind: 'openai',
         label: '自建中转',
         quotaPlugin: '',
-        modelsFromUpstream: true,
       }),
+      // 模拟客户端：目录归代码，不摆按钮。
+      template({ id: 'minimax', label: 'MiniMax Code' }),
     ])
 
     renderWithClient({ client, children: <UpstreamsPage /> })
@@ -1782,13 +1720,20 @@ describe('刷新模型目录按钮看平台那一格', () => {
     await screen.findByText('七牛')
     await waitFor(() => {
       expect(
-        within(rowOf('自建中转')).getByRole('button', {
+        within(rowOf('七牛')).getByRole('button', {
           name: '刷新模型目录',
         })
       ).toBeInTheDocument()
     })
     expect(
-      within(rowOf('七牛')).queryByRole('button', { name: '刷新模型目录' })
+      within(rowOf('自建中转')).getByRole('button', {
+        name: '刷新模型目录',
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(rowOf('MiniMax Code')).queryByRole('button', {
+        name: '刷新模型目录',
+      })
     ).not.toBeInTheDocument()
     // 不解释为什么没有这个按钮。
     expect(screen.queryByText(/不能刷新|不支持刷新/)).not.toBeInTheDocument()

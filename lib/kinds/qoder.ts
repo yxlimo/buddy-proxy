@@ -63,7 +63,6 @@ registerKind({
   login: "device",
   needsRegion: true,
   regions: ["global", "cn"],
-  modelsFromUpstream: false,
   // 一行就是一个账号（两个区是两行）。
   policies: ["single", "fallback"],
   baseUrl: (provider) => {

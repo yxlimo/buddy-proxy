@@ -218,24 +218,13 @@ export interface ProviderKind {
    */
   openPlatform?: boolean;
   /**
-   * 这个种类的模型目录归上游吗。
-   *
-   * 归上游 = 「自动拉目录」与「刷新目录」对它有意义：目录是上游报的那一份。
-   * 不归上游 = 目录是代码挑过的一份（模拟客户端、七牛云、讯飞星火、
-   * TokenRhythm）：上游那份更宽，盖上来会出现被上游拒的模型。
-   *
-   * 面板只读这一处（面板上的 Upstream.models_from_upstream 就是它）：别看
-   * ListPlatformKinds 里那一格 —— 那个清单只有能新建的那几类。
-   */
-  modelsFromUpstream: boolean;
-  /**
    * 这一类平台默认的推理地址（空 = 没有）。
    *
    * 说的是「这一类平台默认指哪台」：额度请求靠它分辨「行上的地址还是默认那台」
    * （lib/quota-plugins.ts 的 quotaEndpointBase）。行上的地址还等于它时，额度
    * 问插件自己那台（门户、控制台、钱包）；用户把行指到别处时，跟着行走。
    *
-   * 它是适配器自己的能力描述，跟 catalogAuth、modelsFromUpstream 一样 —— 不是
+   * 它是适配器自己的能力描述，跟 catalogAuth 一样 —— 不是
    * 平台清单：平台行是用户在面板上自己建的（表里的行），代码这边不列平台。
    *
    * 登记时一次成形：给就是给了，不给就没有，没有「登记完再回头补」的第二步。
@@ -250,16 +239,6 @@ export interface ProviderKind {
    * 预填那一格（用户可以改），平台行上填的是用户最后选的那个。
    */
   defaultQuotaPlugin?: string;
-  /**
-   * 这一类平台代码里挑过的那一份模型目录。
-   *
-   * 建平台时写进行里（面板新建时不会给目录）：有些家的目录归上游、建的时候本来
-   * 就没有；有些家的目录是代码挑过的一份（上游那份更宽，盖上来会出现被上游拒的
-   * 模型），建的时候先把这一份填上。
-   *
-   * 空 = 建的时候目录是空的（归上游的那几家）。
-   */
-  defaultModels?: readonly string[];
   /** 区域都有哪些。 */
   regions?: string[];
   /**

@@ -45,6 +45,8 @@ enum UpstreamState {
 //
 // 一个平台下面可以有多个账号（`accounts`），账号才是 provider 表里的行。
 message Upstream {
+  reserved 23, 26, 30;
+  reserved "models_auto", "models_source", "models_from_upstream";
   // 平台的 id，也是路径里那一段。
   string id = 1;
   // 给人看的名字。
@@ -90,14 +92,10 @@ message Upstream {
   string state_reason = 21;
   // 额度插件：开放平台填的插件 id（模板平台没有这一格，空串）。
   string quota_plugin = 22;
-  // 模型目录以后允不允许自动拉覆盖（模板平台没有这一格，恒为 false）。
-  bool models_auto = 23;
   // 这是不是一个开放平台（表里的那一行，不是代码里的模板）。
   bool is_open_platform = 24;
-  // 模型目录（模型名）。模板平台没有这一格，空。
+  // 模型目录（模型名）：值来自上游，不改。
   repeated string models = 25;
-  // 这份目录哪来的：auto（自动拉的）/ manual（人写的）。模板平台没有这一格，空串。
-  string models_source = 26;
   // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。模板平台没有这一格，0。
   int64 models_fetched_at_ms = 27;
   // 人给这些模型写的元数据（见 ModelOverride）。open 平台与模板平台都可能有。
@@ -105,13 +103,6 @@ message Upstream {
   // 这个平台在数据库里有没有属于它的那一行（模拟客户端与自建平台都有；
   // 只存在于代码里的那一族没有）。有行的平台才能在面板上改与删。
   bool from_row = 29;
-  // 这个平台的模型目录归不归上游：true = 目录以上游报的那份为准（面板给刷新
-  // 按钮），false = 目录是代码挑过的一份（模拟客户端与厂商模板，改不了）。
-  //
-  // 值来自 kinds 登记表（ProviderKind.modelsFromUpstream），一个平台一个答案 ——
-  // 面板别看 ListPlatformKinds 里那一格：那个清单只有能新建的那几类，厂商模板
-  // 与模拟客户端都不在里面，照它判就永远没有刷新按钮。
-  bool models_from_upstream = 30;
   // 平台自己给的信息不足时，从共性表（模型 id → 能力参数）里补。
   // 默认关：只有用户明确打开才用。人工元数据仍然优先于它。
   bool traits_from_common = 31;
@@ -553,19 +544,17 @@ message ListProviderKindsResponse {
 
 // 一个开放平台：表里的一行（代码里的模板不是开放平台）。
 message OpenPlatform {
+  reserved 6, 8;
+  reserved "models_auto", "models_source";
   string id = 1;
   string label = 2;
   string base_url = 3;
   // 额度插件的 id。空串 = 不选插件。
   string quota_plugin = 4;
-  // 模型目录（模型名）。
+  // 模型目录（模型名）：值来自上游，不改。
   repeated string models = 5;
-  // 以后允不允许自动拉覆盖这一份目录。
-  bool models_auto = 6;
   // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。
   int64 models_fetched_at_ms = 7;
-  // 这份目录是哪来的：auto（自动拉的）/ manual（人写的）。
-  string models_source = 8;
   // 这个平台用哪一类适配器（kind 注册表里的那一个）：openai / qiniu / xinghuo /
   // sensenova / intern-ai / tokenrhythm。建平台时定下，之后不能改。
   string kind = 9;
@@ -608,17 +597,16 @@ message AddPlatformResponse {
 // 的面板、对模拟客户端平台故意不发这两格的面板）就会把没送的格清掉。
 //
 // label 与 base_url 空串要拒（平台必须有名字与地址）；quota_plugin 空串
-// = 不选插件；models_auto=false 且 models 非空 = 改成手工目录；models_auto=true
-// 时不动现有清单（让它自动拉）；models 为空时不动清单，只翻自动那一格。
+// = 不选插件。模型目录不在这里改：目录归上游还是归代码由平台的族决定。
 message UpdatePlatformRequest {
+  reserved 5, 6;
+  reserved "models_auto", "models";
   string id = 1;
   string label = 2;
   // 没给 = 别动这一格；给了空串 = 清空（空串会被地址校验拦下：平台得有地址）。
   optional string base_url = 3;
   // 没给 = 别动这一格；给了空串 = 清空（= 不选插件）。
   optional string quota_plugin = 4;
-  bool models_auto = 5;
-  repeated string models = 6;
   // 平台自己给的信息不足时，从共性表（模型 id → 能力参数）里补。
   // 默认关：只有用户明确打开才用。人工元数据仍然优先于它。
   // 没给 = 别动这一格；给了就照给的值写。
@@ -678,14 +666,14 @@ message ListQuotaPluginsResponse {
 
 // 建平台时能选的一类适配器。
 message PlatformKind {
+  reserved 4;
+  reserved "models_from_upstream";
   // kind 注册表里的那一类（写进 OpenPlatform.kind）。
   string kind = 1;
   // 面板上显示的名字。
   string label = 2;
   // 建平台时给这个地址占位；用户可以改。
   string default_base_url = 3;
-  // 这一类的模型目录能不能从上游拉（不能的话面板不显示「刷新模型目录」）。
-  bool models_from_upstream = 4;
   // 这一条是「方言」还是「预置的模拟客户端」。
   // dialect = 用户自己加的平台（选的是报文格式）；simulated = 从预置里挑一个。
   string category = 5;

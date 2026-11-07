@@ -294,10 +294,10 @@ const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
   conn
     .prepare(
       "INSERT OR IGNORE INTO platform " +
-        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+        "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)",
     )
-    .run("qiniu", "qiniu", QINIU_INFER_BASE, "[]", 0, "", "qiniu", Date.now(), Date.now());
+    .run("qiniu", "qiniu", QINIU_INFER_BASE, "[]", "", "qiniu", Date.now(), Date.now());
   conn.close();
 }
 
@@ -388,7 +388,7 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   // 开放平台：建、改、删、拉目录、额度插件、建平台时能选的那几类。
   // 拉目录放在删掉之后：平台没了就不会去问上游（本测试不发请求）。
   { method: "AddPlatform", request: { id: "contract-open", label: "契约开放平台", baseUrl: "https://api.contract-open.test/v1" } },
-  { method: "UpdatePlatform", request: { id: "contract-open", label: "契约开放平台改", baseUrl: "https://api.contract-open.test/v1", quotaPlugin: "", modelsAuto: false, models: ["m-1"] } },
+  { method: "UpdatePlatform", request: { id: "contract-open", label: "契约开放平台改", baseUrl: "https://api.contract-open.test/v1", quotaPlugin: "" } },
   { method: "DeletePlatform", request: { id: "contract-open" } },
   { method: "RefreshPlatformModels", request: { platformId: "contract-open" } },
   { method: "ListQuotaPlugins", request: {} },
@@ -446,13 +446,18 @@ check(
   JSON.stringify(catalogCredits),
 );
 
-// 平台这一层要报「目录归不归上游」：面板照这一格给刷新按钮，不再去能建的
-// 那几类里找（那个清单里没有厂商模板与模拟客户端）。
+// 平台这一层不再报「目录归不归上游」：判据是平台的族（PlatformKind.category）。
 const catalogOwnerField = contract.messages.get("Upstream")!.fields.find((f) => f.json === "modelsFromUpstream");
 check(
-  "Upstream 有 models_from_upstream（必填的 bool）",
-  catalogOwnerField?.type === "bool" && catalogOwnerField?.repeated === false && catalogOwnerField?.optional === false,
+  "Upstream 没有 models_from_upstream（目录归谁由平台的族决定）",
+  catalogOwnerField === undefined,
   JSON.stringify(catalogOwnerField),
+);
+const kindCategoryField = contract.messages.get("PlatformKind")!.fields.find((f) => f.json === "category");
+check(
+  "PlatformKind 有 category（判据是族）",
+  kindCategoryField?.type === "string" && kindCategoryField?.repeated === false,
+  JSON.stringify(kindCategoryField),
 );
 // 删一条人工条目要有自己的一条路：覆盖语义下「没发来」不再等于删。
 const deleteOverrideMethod = contract.methods.get("DeleteModelOverride");

@@ -23,7 +23,7 @@ export type RefreshOutcome = {
  *
  * 面板知道的都以服务端给的为准：
  *
- *   地址、插件 id、模型目录、目录来源、上次拉取的时刻   Upstream（ListUpstreams）
+ *   地址、插件 id、模型目录、上次拉取的时刻             Upstream（ListUpstreams）
  *   额度插件叫什么                                      额度插件登记表（ListQuotaPlugins）
  *   额度现在的结论                                       Upstream.quota.quotaState
  *
@@ -81,27 +81,18 @@ function kindLine(upstream: Upstream, kinds: PlatformKindList) {
 }
 
 /**
- * 模型目录：哪来的，外加上次拉取的时刻。
+ * 模型目录：几个模型，外加上次拉取的时刻。
  *
- * 目录本身、来源、时刻都是服务端给的（Upstream 上的那三格）：auto 说这份目录
- * 是自动拉来的，manual 说人写的。时刻是 0 的时候说「没拉过」—— 别显示 0，
- * 也别显示 1970（那是 Unix 纪元，不是「没拉过」）。
+ * 目录与时刻都是服务端给的（Upstream 上的那两格）。开放平台的目录一律从上游
+ * 拉，所以不说来源。时刻是 0 的时候说「没拉过」—— 别显示 0，也别显示 1970
+ * （那是 Unix 纪元，不是「没拉过」）。
  */
 function modelLine(upstream: Upstream): string {
-  const source = upstream.modelsSource
-  if (source === 'manual') {
-    // 目录本身也在 Upstream 上：数它有几条，不问别处。
-    return `模型目录：手动配 · ${upstream.models.length} 个模型`
-  }
-  if (source !== 'auto') {
-    // 服务端没说哪来的：不说「自动」，也不说「手动」。
-    return '模型目录：来源未知'
-  }
   const at =
     upstream.modelsFetchedAtMs > 0n
       ? formatLocalMoment(upstream.modelsFetchedAtMs)
       : '没拉过'
-  return `模型目录：自动拉 · 上次拉取：${at}`
+  return `模型目录：${upstream.models.length} 个模型 · 上次拉取：${at}`
 }
 
 /**

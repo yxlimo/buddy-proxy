@@ -73,7 +73,6 @@ export const openaiKind = registerCompatiblePlatform({
   login: "api_key",
   // 那一把 key 既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
-  modelsFromUpstream: true,
   // 地址是表里那一行的。拿不到时返回空串，不抛：抛出去会让「平台列表」这类
   // 只读路径也炸。地址为空的话转发层只会看到一个笼统的上游错误（fetch 一个
   // 空地址会 TypeError，转发层把它当成上游 5xx），所以空地址在写入侧就被

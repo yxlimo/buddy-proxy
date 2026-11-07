@@ -108,7 +108,8 @@ export function useAddPlatform() {
 /**
  * 改一个开放平台。
  *
- * 整单提交：名字、地址、额度插件、模型目录一起发。
+ * 整单提交：名字、地址、额度插件一起发。模型目录不由用户管（开放平台的目录
+ * 一律从上游拉），所以这一单里没有目录那几格。
  *
  * 模拟客户端的地址与额度插件两格归代码：那种平台调用方整格不给（`undefined`）
  * —— 给空串在这条 RPC 上就是「清空那一格」（合同里 string 没有 presence 位，
@@ -127,14 +128,10 @@ export function useUpdatePlatform() {
       baseUrl?: string
       quotaPlugin?: string
       traitsFromCommon?: boolean
-      modelsAuto: boolean
-      models: string[]
     }) => {
       const init: MessageInitShape<typeof UpdatePlatformRequestSchema> = {
         id: input.id,
         label: input.label,
-        modelsAuto: input.modelsAuto,
-        models: input.models,
       }
       if (input.baseUrl !== undefined) init.baseUrl = input.baseUrl
       if (input.quotaPlugin !== undefined) init.quotaPlugin = input.quotaPlugin
@@ -150,7 +147,7 @@ export function useUpdatePlatform() {
       toast.success('已保存')
     },
     onSettled: () => {
-      // 名字、地址、额度插件、模型目录都是平台那一行上的字段。
+      // 名字、地址、额度插件都是平台那一行上的字段。
       invalidateServerData(queryClient, 'platforms')
     },
   })

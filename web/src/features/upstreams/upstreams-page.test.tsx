@@ -86,7 +86,6 @@ function openPlatform(
     baseUrl: 'https://api.example.com/v1',
     isOpenPlatform: true,
     // 开放平台的目录归上游：卡片上有「刷新模型目录」。
-    modelsFromUpstream: true,
     // 表里的那一行：能改能删。
     fromRow: true,
     accounts: [],
@@ -130,13 +129,11 @@ function platformKinds() {
       label: 'MiniMax Code',
       presetId: 'minimax',
       category: 'simulated',
-      modelsFromUpstream: false,
     }),
     create(PlatformKindSchema, {
       kind: 'openai',
       label: 'OpenAI 兼容',
       category: 'open',
-      modelsFromUpstream: true,
     }),
   ]
 }
@@ -438,21 +435,24 @@ describe('平台的编辑与删除入口', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('刷新模型目录只看平台自己那一格：厂商模板不归上游就没有按钮', async () => {
-    // 默认的类型清单（`platformKinds()`）里只有 minimax 与 openai —— 厂商模板
-    // 与自建平台的 kind 都不在里面，照清单判就永远没有刷新按钮。
+  it('刷新模型目录只看是不是开放平台：模拟客户端没有，开放平台都有', async () => {
+    // 目录归谁由平台的族决定：方言族（开放平台）一律从上游拉，模拟客户端的目录
+    // 归代码。判据只有「是不是开放平台」这一条。
     const client = clientWith([
       platform({
+        id: 'minimax',
+        kind: 'minimax',
+        label: 'MiniMax Code',
+      }),
+      openPlatform({
         id: 'qiniu',
         kind: 'qiniu',
         label: '七牛',
-        modelsFromUpstream: false,
       }),
       openPlatform({
         id: 'opencode-go',
         kind: 'opencode',
         label: '自建中转',
-        modelsFromUpstream: true,
       }),
     ])
 
@@ -466,8 +466,15 @@ describe('平台的编辑与删除入口', () => {
         })
       ).toBeInTheDocument()
     })
+    // 开放平台：不管什么 kind，都有这个按钮。
     expect(
-      within(rowOf('七牛')).queryByRole('button', { name: '刷新模型目录' })
+      within(rowOf('七牛')).getByRole('button', { name: '刷新模型目录' })
+    ).toBeInTheDocument()
+    // 模拟客户端：目录归代码，没有这个按钮。
+    expect(
+      within(rowOf('MiniMax Code')).queryByRole('button', {
+        name: '刷新模型目录',
+      })
     ).not.toBeInTheDocument()
   })
 

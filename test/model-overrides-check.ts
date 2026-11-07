@@ -48,7 +48,7 @@ const { listModelOverrides, upsertModelOverrides, deleteModelOverride, mergeMode
 type ModelOverrideRow = import("../lib/model-overrides.ts").ModelOverrideRow;
 const { kindOf } = await import("../lib/provider-kinds.ts");
 const { addAccount } = await import("../lib/providers.ts");
-const { createOpenPlatform, updateOpenPlatform } = await import("../lib/open-platforms.ts");
+const { createOpenPlatform, syncPlatformModels } = await import("../lib/open-platforms.ts");
 const {
   workbuddyModel,
   workbuddyModelList,
@@ -133,7 +133,8 @@ section("没有人工条目时，每个平台的目录与改动前逐字段相�
 // 先造一个开放平台：它走的是「表里那一行说了算」那条路。
 const OPEN = "over-probe";
 createOpenPlatform({ id: OPEN, label: "Probe", baseUrl: "https://probe.example" });
-updateOpenPlatform(OPEN, { models: ["probe-one", "probe-two"], source: "manual" });
+// 目录是上游那一份：这里直接写进行里（等价于上游答了一次）。
+syncPlatformModels(OPEN, ["probe-one", "probe-two"], {});
 
 const BASELINE = new Map<string, string>();
 const capture = (key: string, platform: string, kind: string, region = ""): void => {

@@ -15,6 +15,7 @@ import {
   isSimulatedClientId,
   isSimulatedClientKind,
   PLATFORM_KIND_OPTIONS,
+  platformCategoryOfKind,
   platformKindOptionOf,
   simulatedClientPresetsOfKind,
 } from "./platform-catalog.ts";
@@ -39,15 +40,11 @@ import type { AdminFailure, AdminResult } from "./admin/error-codes.ts";
 export const OPEN_PLATFORM_KIND_NAME = "openai";
 
 /**
- * 模型目录：有哪些模型、还自动不自动、上次什么时候拉的、哪来的。
+ * 模型目录：有哪些模型、上次什么时候拉的。
  *
- * `auto` 与 `source` 是两件事：
- *
- *   auto    以后允不允许自动拉覆盖这一份目录（能查的那一格：models_auto）。
- *   source  现在这份目录是哪来的：自动拉的，还是人写的。
- *
- * 人手写了一份目录，source 就是 manual；自动那一格默认关掉 —— 写死的东西
- * 别再让它被自动拉覆盖。
+ * 这一份目录只有一个来源：上游。平台属于哪一族决定目录归谁（见
+ * lib/platform-catalog.ts 的 platformCategoryOfKind）：方言族从上游拉，
+ * 模拟客户端那一族用代码里的目录（那一族的行上没有目录）。
  */
 export interface OpenPlatformModels {
   /** 模型名。 */
@@ -60,12 +57,8 @@ export interface OpenPlatformModels {
    * 不知道，不是「什么都不能」。
    */
   traits: Record<string, ModelTraits>;
-  /** 以后允不允许自动拉覆盖这一份目录。 */
-  auto: boolean;
-  /** 上次拉目录的时刻（毫秒）。0 = 没拉过（手写的目录）。 */
+  /** 上次拉目录的时刻（毫秒）。0 = 没拉过。 */
   fetchedAt: number;
-  /** 现在这份目录是哪来的：自动拉的，还是人写的。 */
-  source: "auto" | "manual";
 }
 
 /**
@@ -146,7 +139,7 @@ const RESERVED_IDS = new Set(["v1", "admin", "health", "healthz", "metrics"]);
 export function listOpenPlatforms(): OpenPlatformRow[] {
   const rows = store()
     .prepare(
-      "SELECT id, label, base_url, models, models_auto, traits_from_common, quota_plugin, kind, region, created_at, updated_at " +
+      "SELECT id, label, base_url, models, traits_from_common, quota_plugin, kind, region, created_at, updated_at " +
         "FROM platform ORDER BY id",
     )
     .all() as any[];
@@ -157,7 +150,7 @@ export function listOpenPlatforms(): OpenPlatformRow[] {
 export function openPlatformOf(id: string): OpenPlatformRow | null {
   const row = store()
     .prepare(
-      "SELECT id, label, base_url, models, models_auto, traits_from_common, quota_plugin, kind, region, created_at, updated_at " +
+      "SELECT id, label, base_url, models, traits_from_common, quota_plugin, kind, region, created_at, updated_at " +
         "FROM platform WHERE id = ?",
     )
     .get(id) as any;
@@ -183,11 +176,6 @@ export function createOpenPlatform(input: {
   quotaPlugin?: string;
   /** 哪一类适配器。空串 = openai（OpenAI 兼容的通用平台）。 */
   kind?: string;
-  /**
-   * 模型目录。给了就用这份；不给就看这一类声明的那一份（kind 注册表里的
-   * defaultModels），也没声明就建一个空目录。
-   */
-  models?: string[];
 }): AdminResult {
   const id = String(input.id ?? "").trim();
   const problem = checkId(id);
@@ -208,7 +196,6 @@ export function createOpenPlatform(input: {
       ? (kindOf(kind)?.defaultQuotaPlugin ?? "")
       : String(input.quotaPlugin).trim();
   let region = "";
-  let modelsAuto = true;
 
   if (isSimulatedClientKind(kind)) {
     // 预置的模拟客户端：它不是「往某个地址讲某种方言」，而是冒充一个封闭
@@ -242,9 +229,6 @@ export function createOpenPlatform(input: {
     // platform 这一行上。
     quotaPlugin = "";
     region = preset.region;
-    // 目录是代码挑过的一份，不让上游盖上来（上游那份更宽，会出现被上游拒的
-    // 模型）。
-    modelsAuto = false;
   } else {
     const urlProblem = checkBaseUrl(baseUrl);
     if (urlProblem) return urlProblem;
@@ -252,21 +236,12 @@ export function createOpenPlatform(input: {
     if (kindProblem) return kindProblem;
     const pluginProblem = checkQuotaPlugin(quotaPlugin);
     if (pluginProblem) return pluginProblem;
-    // 目录能不能自动从上游拉，由 kind 注册表说了算（ProviderKind.modelsFromUpstream）：
-    // 七牛与 TokenRhythm 的上游目录不归它管。认不出 kind 时兜底成「能拉」——
-    // 这是兜底，不是结论。
-    const kindMeta = kindOf(kind);
-    modelsAuto = kindMeta ? kindMeta.modelsFromUpstream : true;
   }
 
   const now = Date.now();
-  // 目录：用户给了就用用户那份；没给就写这一类代码里挑过的那一份（有的家才有）。
-  // 写进去的那份算「自动来的」（source=auto）：它以后还能被上游那份盖上，
-  // 人手写的那一份才是 manual。
-  const kindMeta = kindOf(kind);
-  const askedModels = input.models === undefined ? undefined : normalizeModels(input.models);
-  const items = askedModels ?? [...(kindMeta?.defaultModels ?? [])];
-  const models: OpenPlatformModels = { items, traits: {}, auto: modelsAuto, fetchedAt: 0, source: "auto" };
+  // 目录是空的：建平台不预填目录 —— 目录归上游（方言族）或归代码（模拟客户端），
+  // 两种都不是建平台的人说了算。
+  const models: OpenPlatformModels = { items: [], traits: {}, fetchedAt: 0 };
   const db = store();
   // 行与墓碑的清除在同一个事务里：只清墓碑而没写进行，播种就会把这个 id 当成
   // 「用户没删过但也不存在」—— 下次启动补回一个空平台，用户刚建的配置没了。
@@ -276,14 +251,13 @@ export function createOpenPlatform(input: {
     // openai」—— 这一格现在由调用方定，写进去的必须是校验过的那一个。
     db.prepare(
       "INSERT INTO platform " +
-        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       id,
       label,
       normalizeBaseUrl(baseUrl),
       modelsJson(models),
-      models.auto ? 1 : 0,
       quotaPlugin,
       kind,
       region,
@@ -325,23 +299,6 @@ export function updateOpenPlatform(
     label?: string;
     baseUrl?: string;
     quotaPlugin?: string;
-    models?: string[];
-    /**
-     * 各模型的参数，跟 models 一起写。
-     *
-     * 不给就按 id 留着行里原来那些（清单里不再有的丢掉）：面板只改清单时不该把
-     * 上游报回来的参数一起抹掉，而对同一个 id 来说那些参数仍然是同一份事实。
-     */
-    traits?: Record<string, ModelTraits>;
-    modelsAuto?: boolean;
-    /**
-     * 这份目录是哪来的：自动拉的（auto）还是人写的（manual）。
-     *
-     * 不给就是「manual」：写了目录而没说哪来的，那多半是人写的。
-     */
-    source?: "auto" | "manual";
-    /** 上次拉目录的时刻（毫秒）。0 = 没拉过。 */
-    fetchedAt?: number;
     /**
      * 平台自己给的信息不足时从共性表里补参数。不给 = 别动这一格。
      *
@@ -392,45 +349,14 @@ export function updateOpenPlatform(
   const pluginProblem = checkQuotaPlugin(quotaPlugin);
   if (pluginProblem) return pluginProblem;
 
-  let models = row.models;
-  // 目录同理也是那一类的一部分：模拟客户端能过哪些模型由代码挑（能过那个客户端
-  // 的那一份），所以这两格也不管请求里怎么给，照库里存着。写入口只此一处，拦在
-  // 这里才拦得住所有调用方（面板、脚本、迁移）；放在面板那层只能拦住面板。
-  if (!simulated) {
-    if (patch.models !== undefined) {
-      const items = normalizeModels(patch.models);
-      models = {
-        items,
-        traits:
-          patch.traits === undefined
-            ? normalizeTraitsMap(models.traits, items)
-            : normalizeTraitsMap(patch.traits, items),
-        // 人写的目录就不是自动拉的：写死了就别再让它被覆盖（显式说了要自动的
-        // 除外 —— 那是明确的意思，不是默认值）。
-        auto: patch.modelsAuto === undefined ? false : patch.modelsAuto === true,
-        // 手写的目录没拉过：0 就是「没拉过」的意思。自动拉的那份记着拉的时刻，
-        // 免得刚拉过又去问上游。
-        fetchedAt: Number(patch.fetchedAt ?? 0) || 0,
-        source: patch.source === "auto" ? "auto" : "manual",
-      };
-    } else if (patch.modelsAuto !== undefined) {
-      // 只翻自动不自动，source 不动：source 说的是这份目录**现在**哪来的，
-      // auto 说的是**以后**能不能被自动拉覆盖 —— 人把自动打开，不等于这份
-      // 目录变成自动拉来的。这是有意的。
-      models = { ...models, auto: patch.modelsAuto === true };
-    }
-  }
-
   store()
     .prepare(
-      "UPDATE platform SET label = ?, base_url = ?, models = ?, models_auto = ?, quota_plugin = ?, " +
+      "UPDATE platform SET label = ?, base_url = ?, quota_plugin = ?, " +
         "traits_from_common = ?, updated_at = ? WHERE id = ?",
     )
     .run(
       label,
       normalizeBaseUrl(baseUrl),
-      modelsJson(models),
-      models.auto ? 1 : 0,
       quotaPlugin,
       patch.traitsFromCommon === undefined ? (row.traitsFromCommon ? 1 : 0) : patch.traitsFromCommon ? 1 : 0,
       Date.now(),
@@ -443,17 +369,11 @@ export function updateOpenPlatform(
  * 把上游刚拉到的目录写进平台那一行。
  *
  * 目录由行说了算（各 kind 的 models() 读它，见 lib/catalog-models.ts），而
- * SenseNova 与书生·端砚的目录只落在 cache 表 —— 两处不一起走，「上游答了、
- * 面板上还是空」就成了常态。
+ * 有些平台的目录只落在 cache 表 —— 两处不一起走，「上游答了、面板上还是空」
+ * 就成了常态。
  *
- * 两道闸，缺一道就会把不该动的目录盖掉：
- *
- *   1. 人写死的那一份不同步（source=manual）：那是明确的意思，含「我把目录清空
- *      了」。
- *   2. 行上那一格「自动拉」关着就不同步：目录归谁管是**行自己的数据**
- *      （models_auto）。播种给代码挑的那一份写的是 0，所以七牛云、TokenRhythm
- *      这几家（上游那份更宽，七牛报 78 个模型）默认就盖不上来；人打开开关就是
- *      明确要上游那份。
+ * 写不写的判据是平台的族（lib/platform-catalog.ts 的 platformCategoryOfKind）：
+ * 方言族那一份归上游，写进行里；模拟客户端那一族由代码给出，不写进行里。
  *
  * 行不存在也不同步：没有行可写。
  *
@@ -471,8 +391,8 @@ export function syncPlatformModels(
 ): void {
   const row = openPlatformOf(platform);
   if (!row) return;
-  if (row.models.source === "manual") return;
-  if (!row.models.auto) return;
+  // 模拟客户端那一族：目录由代码给出，不写进行里。
+  if (platformCategoryOfKind(row.kind) !== "dialect") return;
   const next = normalizeModels(items);
   // 空的不写：把行清空会让人以为模型没了，而上游答一个空清单多半是没答好（与
   // lib/router/catalog-cache.ts 拒收空清单同一件事）。
@@ -658,11 +578,7 @@ function normalizeBaseUrl(value: string): string {
 /**
  * 目录存进库里的样子。
  *
- * 整个目录是一个 JSON：模型名、各模型参数、上次什么时候拉的、哪来的。
- *
- * 自动不自动**不在**这个 JSON 里：那一格在 models_auto 列上（能查的那一格），
- * JSON 里再存一份，两份迟早会走样。早期存过的 JSON 里带着 auto，读的时候
- * 当它不存在。
+ * 整个目录是一个 JSON：模型名、各模型参数、上次什么时候拉的。
  *
  * 参数跟着清单一起写：`traits: { "<modelId>": { contextWindow: 256000 } }`。
  * 只写取到过的那几格，取不到的字段不出现 —— 写成 0 或 false 是另一份意思。
@@ -672,7 +588,6 @@ function modelsJson(models: OpenPlatformModels): string {
     items: models.items,
     traits: models.traits,
     fetchedAt: models.fetchedAt,
-    source: models.source,
   });
 }
 
@@ -680,11 +595,9 @@ function modelsJson(models: OpenPlatformModels): string {
  * 读目录。
  *
  * 坏掉的 JSON 读成空目录，不抛：一个写坏的行不该让整个平台列表读不出来。
- * 自动不自动看那一列（能查的那一格），JSON 里那一份只是照抄 —— 早期存过
- * 的 JSON 里带着 auto，忽略它就是。
  */
-function parseModels(raw: unknown, auto: boolean): OpenPlatformModels {
-  const empty: OpenPlatformModels = { items: [], traits: {}, auto, fetchedAt: 0, source: "auto" };
+function parseModels(raw: unknown): OpenPlatformModels {
+  const empty: OpenPlatformModels = { items: [], traits: {}, fetchedAt: 0 };
   let parsed: any;
   try {
     parsed = JSON.parse(String(raw ?? ""));
@@ -693,7 +606,7 @@ function parseModels(raw: unknown, auto: boolean): OpenPlatformModels {
   }
   if (Array.isArray(parsed)) {
     // 早期存的是单纯的模型名数组。
-    return { items: normalizeModels(parsed), traits: {}, auto, fetchedAt: 0, source: "auto" };
+    return { items: normalizeModels(parsed), traits: {}, fetchedAt: 0 };
   }
   if (!parsed || typeof parsed !== "object") return empty;
   const items = normalizeModels(Array.isArray(parsed.items) ? parsed.items : []);
@@ -701,9 +614,7 @@ function parseModels(raw: unknown, auto: boolean): OpenPlatformModels {
     items,
     // 老行没有这一格：空对象 —— 我们不知道这些模型的参数，不是「什么都没」。
     traits: normalizeTraitsMap(parsed.traits, items),
-    auto,
     fetchedAt: Number(parsed.fetchedAt ?? 0) || 0,
-    source: parsed.source === "manual" ? "manual" : "auto",
   };
 }
 
@@ -804,12 +715,11 @@ export function mergeModelTraits(
 
 /** 一行变一个对象。 */
 function toRow(row: any): OpenPlatformRow {
-  const auto = Number(row.models_auto ?? 1) !== 0;
   return {
     id: String(row.id),
     label: String(row.label ?? ""),
     baseUrl: String(row.base_url ?? ""),
-    models: parseModels(row.models, auto),
+    models: parseModels(row.models),
     quotaPlugin: String(row.quota_plugin ?? ""),
     kind: String(row.kind ?? "openai"),
     region: String(row.region ?? ""),

@@ -99,6 +99,14 @@ export function simulatedClientPresetsOfKind(kind: string): SimulatedClientPrese
 }
 
 /**
+ * 平台属于哪一族。
+ *
+ * dialect      用户自己加的平台（选的是报文格式）：模型目录归上游。
+ * simulated    预置的模拟客户端：模型目录归代码。
+ */
+export type PlatformCategory = "dialect" | "simulated";
+
+/**
  * 用户能自己建的一类平台：面板上「新增平台」的那个下拉，一格一条。
  *
  * 这一张说的是「用户能建哪几种」：方言与厂商五家都在里面，模拟客户端不在
@@ -108,14 +116,12 @@ export interface PlatformKindOption {
   kind: string;
   label: string;
   /** 方言（用户自己加，选的是报文格式）还是预置的模拟客户端（从目录里挑一个）。 */
-  category: "dialect" | "simulated";
+  category: PlatformCategory;
   /** 预置平台建出来的 id（方言类为空串：id 由用户填）。 */
   presetId: string;
   /** 区域（cn / global / 空串）。方言类为空串。 */
   region: string;
   defaultBaseUrl: string;
-  /** 这一类能不能从上游拉模型目录。 */
-  modelsFromUpstream: boolean;
 }
 
 /**
@@ -132,8 +138,8 @@ export interface PlatformKindOption {
  * workbuddy-global）不在：一个客户端一份会话，靠登录拿凭据，
  * 建出来的空平台没有模拟端可用。它们走预置目录那一套（platformKindChoices）。
  *
- * `modelsFromUpstream` 与 kinds 登记表同源（ProviderKind.modelsFromUpstream）：
- * 这一格只是新建下拉里的一列，事实在登记表那边。改一处就要改另一处。
+ * 目录归上游还是归代码，由平台所属的族决定（platformCategoryOfKind）：方言族从
+ * 上游拉，模拟客户端用代码里写死的那份。这一格不决定目录的来源。
  */
 export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
   {
@@ -143,7 +149,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     presetId: "",
     region: "",
     defaultBaseUrl: "",
-    modelsFromUpstream: true,
   },
   {
     kind: "anthropic",
@@ -152,7 +157,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     presetId: "",
     region: "",
     defaultBaseUrl: "",
-    modelsFromUpstream: true,
   },
   {
     kind: "qiniu",
@@ -162,8 +166,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     region: "cn",
     // 默认地址在注册表里（ProviderKind.defaultBaseUrl），不在这里写死。
     defaultBaseUrl: "",
-    // 上游那份目录更宽（78 个模型），盖上来会出现被上游拒的模型。
-    modelsFromUpstream: false,
   },
   {
     kind: "xinghuo",
@@ -172,7 +174,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     presetId: "",
     region: "cn",
     defaultBaseUrl: "",
-    modelsFromUpstream: true,
   },
   {
     kind: "sensenova",
@@ -181,7 +182,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     presetId: "",
     region: "cn",
     defaultBaseUrl: "",
-    modelsFromUpstream: true,
   },
   {
     kind: "intern-ai",
@@ -190,7 +190,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     presetId: "",
     region: "cn",
     defaultBaseUrl: "",
-    modelsFromUpstream: true,
   },
   {
     kind: "tokenrhythm",
@@ -200,14 +199,23 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     // 中转站没有区域之分。
     region: "",
     defaultBaseUrl: "",
-    // 上游那份目录不归它：行上的目录是代码挑过的一份。
-    modelsFromUpstream: false,
   },
 ];
 
 /** 能建的这一类平台。认不出就是 null（不能建的那种）。 */
 export function platformKindOptionOf(kind: string): PlatformKindOption | null {
   return PLATFORM_KIND_OPTIONS.find((option) => option.kind === kind) ?? null;
+}
+
+/**
+ * 这一类平台属于哪一族。
+ *
+ * 模型目录归谁由这一族决定：方言族一律从上游拉，模拟客户端一族用代码里的
+ * 目录。判据只有这一处（模拟客户端那一族是预置目录里登记的那几条）——
+ * 别的地方要问就读它，别自己再按 kind 写一遍名单。
+ */
+export function platformCategoryOfKind(kind: string): PlatformCategory {
+  return isSimulatedClientKind(kind) ? "simulated" : "dialect";
 }
 
 /**
@@ -228,8 +236,6 @@ export function platformKindChoices(): PlatformKindOption[] {
     region: client.region,
     // 地址由模拟端定，面板不问也不显示。
     defaultBaseUrl: "",
-    // 模拟客户端的目录是代码挑过的一份，不让上游覆盖。
-    modelsFromUpstream: false,
   }));
   return [...PLATFORM_KIND_OPTIONS, ...simulated];
 }

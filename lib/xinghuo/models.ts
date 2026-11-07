@@ -1,8 +1,8 @@
 // lib/xinghuo/models.ts — 讯飞星火能用的模型，写死的一份。
 //
-// 目录本身从上游拉（`/v2/models`，见 lib/xinghuo/register.ts 的
-// modelsFromUpstream）：这里只提供按 id 查的元数据 —— 上游那份清单一个参数也
-// 不带，上下文长度与输出上限只有这里说得出来。填不出来的不填，填了就是编的。
+// 目录本身从上游拉（`/v2/models`）：这里只提供按 id 查的元数据 —— 上游那份清单
+// 一个参数也不带，上下文长度与输出上限只有这里说得出来。填不出来的不填，
+// 填了就是编的。
 
 import type { CatalogModel } from "../catalog-models.ts";
 

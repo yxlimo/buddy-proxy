@@ -162,18 +162,11 @@ export function platformKindHint(list: PlatformKindList): string | null {
 }
 
 /**
- * 「刷新模型目录」按钮存不存在。
+ * 这一行摆不摆刷新模型目录按钮。
  *
- * 判据只有一个：平台自己那一格 `models_from_upstream`（服务端按类型登记表算好、
- * 跟着 Upstream 一起给的那个值）。不看 `ListPlatformKinds` —— 那个清单只有能新建
- * 的那几类，厂商模板（七牛、星火……）与模拟客户端都不在里面，照它判就永远没有
- * 刷新按钮。清单那一格现在只服务「新建平台」。
+ * 判据只有一个：这个平台是不是开放平台（服务端给的 `is_open_platform` 那一格）。
+ * 开放平台的目录一律从上游拉，所以都摆这个按钮；模拟客户端的目录归代码，不摆。
  */
-export type RefreshModelsControl = { show: false } | { show: true }
-
-/** 这一行摆不摆刷新模型目录按钮。 */
-export function refreshModelsControl(
-  modelsFromUpstream: boolean
-): RefreshModelsControl {
-  return modelsFromUpstream === true ? { show: true } : { show: false }
+export function refreshModelsControl(isOpenPlatform: boolean): boolean {
+  return isOpenPlatform === true
 }

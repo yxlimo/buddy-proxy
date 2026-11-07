@@ -430,10 +430,6 @@ function platformMessage(
     enabled,
     // 名下的多个账号怎么选。策略在平台层。
     policy: upstreamPolicy(id),
-    // 这个平台的目录归不归上游：值来自 kind 登记，一个平台一个答案。面板照这一格
-    // 给刷新按钮 —— 别拿 ListPlatformKinds 里那一格判：那个清单只有能新建的
-    // 那几类，厂商模板与模拟客户端都不在里面。
-    modelsFromUpstream: kindOf(platform?.kind ?? "")?.modelsFromUpstream === true,
     // 这个平台支持哪几个策略：面板只给它支持的那几个。
     policies: platformPolicies(id).map(policyEnum),
     // 名下有几个账号。面板用它判「策略有没有用」。
@@ -464,16 +460,14 @@ function platformMessage(
     // 加账号之前什么都存不进去。
     baseUrl: open ? open.baseUrl : upstreamBaseUrl(id),
     region: upstreamRegion(id),
-    // 额度插件与模型目录：只有开放平台有这几格（模板平台是空串、false 与空目录）。
+    // 额度插件与模型目录：只有开放平台有这几格（模板平台是空串与空目录）。
     quotaPlugin: open?.quotaPlugin ?? "",
-    modelsAuto: open?.models.auto ?? false,
     // 共性表那个开关（面板上的一个勾）：模拟客户端那一族的行也有，所以照表里的
     // 那一行报，不跟着 open（open 把那一族滤掉了）。
     traitsFromCommon: row?.traitsFromCommon ?? false,
-    // 模型目录三格：目录本身、哪来的、上次拉的时刻。模板平台没有这一份
-    // 目录，所以是空 / 空串 / 0（0 的意思是「没拉过」，不是「没有模型」）。
+    // 模型目录两格：目录本身与上次拉的时刻。模板平台没有这一份目录，所以是
+    // 空与 0（0 的意思是「没拉过」，不是「没有模型」）。
     models: open?.models.items ?? [],
-    modelsSource: open?.models.source ?? "",
     modelsFetchedAtMs: BigInt(open?.models.fetchedAt ?? 0),
     // 人给这些模型写的元数据：模板平台也有（目录是代码的，人写的那一层同样是
     // 人写的那一层），所以不跟着 open 走。
@@ -657,9 +651,7 @@ function openPlatformMessage(row: OpenPlatformRow) {
     baseUrl: row.baseUrl,
     quotaPlugin: row.quotaPlugin,
     models: row.models.items,
-    modelsAuto: row.models.auto,
     modelsFetchedAtMs: BigInt(row.models.fetchedAt),
-    modelsSource: row.models.source,
     // 建的时候定下的那一类：面板靠它决定这一排平台能用哪些凭据格子、要不要
     // 显示「刷新模型目录」。
     kind: row.kind,
@@ -847,14 +839,12 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // base_url 与 quota_plugin 带 presence：没给 = 别动那一格，给了空串 = 清空。
     // 名字也照这条走（没给 = 别动；显式空串 = 错，平台得有名字），不这么写的话
     // “只改额度插件”那一单会先撞在“得有个名字”上。
-    const models = (request.models ?? []).map((m) => String(m).trim()).filter(Boolean);
+    // 目录不在这里改：目录归上游（方言族）还是归代码（模拟客户端）由平台的族
+    // 决定，不是面板说了算。面板要换目录，去点「刷新模型目录」。
     const patch: {
       label?: string;
       baseUrl?: string;
       quotaPlugin?: string;
-      models?: string[];
-      modelsAuto?: boolean;
-      source?: "auto" | "manual";
       traitsFromCommon?: boolean;
     } = {
       label: givenText(request.label),
@@ -864,18 +854,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
       // 带 presence 的开关：没给 = 别动（只改名字的单子不能把它清零）。
       traitsFromCommon: givenBool(request.traitsFromCommon),
     };
-    // 模拟客户端的目录是代码挑过的一份，数据层对那两格不认（updateOpenPlatform）：
-    // 这里照常把面板送的值递下去就行，规矩只有一处。
-    if (!request.modelsAuto && models.length) {
-      // 手工目录：写死的那一份，自动拉不许覆盖它。
-      patch.models = models;
-      patch.modelsAuto = false;
-      patch.source = "manual";
-    } else {
-      // 自动开着的时候不动现有清单（让它自动拉）；清单是空的时候也一样：
-      // 只翻自动那一格。
-      patch.modelsAuto = request.modelsAuto === true;
-    }
     const result = updateOpenPlatform(id, patch);
     if (!result.ok) throw adminError(result.code, result.message);
     console.log(`[ADMIN] 开放平台 ${id} 改了`);
@@ -963,7 +941,6 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           label: option.label,
           defaultBaseUrl: kindOf(option.kind)?.defaultBaseUrl ?? "",
           defaultQuotaPlugin: kindOf(option.kind)?.defaultQuotaPlugin ?? "",
-          modelsFromUpstream: option.modelsFromUpstream,
           category: option.category,
           presetId: option.presetId,
           region: option.region,

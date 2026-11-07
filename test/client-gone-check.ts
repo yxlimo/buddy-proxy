@@ -694,7 +694,7 @@ process.env.MINIMAX_BASE_URL = `${upstreamBase}/reject401`;
 process.env.MINIMAX_REGION = "cn";
 
 const { app } = await import("../lib/router/app.ts");
-const { createOpenPlatform, updateOpenPlatform } = await import("../lib/open-platforms.ts");
+const { createOpenPlatform, syncPlatformModels } = await import("../lib/open-platforms.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { writeOpenPlatformKey } = await import("../lib/open-platform-credentials.ts");
 const { setPlatformPolicy } = await import("../lib/platforms.ts");
@@ -718,8 +718,8 @@ const MODEL = "m-1";
 function seedOpenPlatform(id: string, kind: string, prefix: string): string[] {
   const created = createOpenPlatform({ id, label: id, baseUrl: `${openUpstreamBase}${prefix}`, kind });
   if (!created.ok) throw new Error(`${id} 建不起来：${created.message}`);
-  const catalog = updateOpenPlatform(id, { models: [MODEL] });
-  if (!catalog.ok) throw new Error(`${id} 目录写不进去：${catalog.message}`);
+  // 目录是上游那一份：这里直接写进行里（等价于上游答了一次）。
+  syncPlatformModels(id, [MODEL], {});
   setPlatformPolicy(id, "fallback");
   return [1, 2].map((n) => {
     const account = addAccount({ platform: id });

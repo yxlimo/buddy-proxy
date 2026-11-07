@@ -18,24 +18,12 @@ import { openPlatformOf } from "../open-platforms.ts";
 import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { qiniuInferenceKey, qiniuStatus } from "./account.ts";
-import { qiniuCatalogModels } from "./catalog.ts";
 import { QINIU_INFER_BASE } from "./config.ts";
-import { QINIU_MODELS } from "./models.ts";
 // 插件 id 从没有依赖的地方读（lib/qiniu/quota-plugin-id.ts）：插件模块与本模块
 // 互相引用，从插件对象上取 id 会在求值期撞上「还在初始化」。
 import { QINIU_QUOTA_PLUGIN_ID } from "./quota-plugin-id.ts";
 // import 这个插件文件就是登记它：启动校验之前，插件得先被认得。
 import "./quota-plugin.ts";
-
-/**
- * 代码里那一份目录：元数据表的出处，也是行读不到时的兜底。
- *
- * 平台自己的 /v1/models 报 78 个，但那把 key 的商品分组只让一部分能用 ——
- * 能调的就是这 5 个（lib/qiniu/models.ts 里实测过的那几条），行里的 id 去这
- * 里查元数据。
- */
-const CODE_CATALOG = qiniuCatalogModels(QINIU_MODELS);
-const CODE_BY_ID = new Map(CODE_CATALOG.map((model) => [model.id, model]));
 
 /**
  * 这个平台的额度插件 id。
@@ -59,17 +47,13 @@ export const qiniuKind = registerCompatiblePlatform({
   defaultBaseUrl: QINIU_INFER_BASE,
   // 额度插件：门户那一路。面板建平台时预填这一格（用户可以改）。
   defaultQuotaPlugin: QINIU_QUOTA_PLUGIN_ID,
-  // 目录是代码挑过的一份：建平台时先写进去这一份。
-  defaultModels: QINIU_MODELS.map((model) => model.id),
   // 推理用的是那把 API key：门户 cookie 只用来查额度。
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => qiniuInferenceKey(accountId ?? provider.id),
-  modelsFromUpstream: false,
   credential: (provider) => fromUpstreamStatus(qiniuStatus(provider.id), "api_key"),
-  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查。
-  // 行读不到（模板行本该由迁移补出）才退回代码目录 —— 那是兜底，不是常态。
-  models: (provider) => catalogModelsFromRow(provider, () => [...CODE_CATALOG], (id) => CODE_BY_ID.get(id)),
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的（目录从上游拉）。
+  models: (provider) => catalogModelsFromRow(provider, () => []),
   // 没有插件、或者快照里没有这个账号的那一份：额度是「未知」。空数组不是 0 ——
   // 0 说的是「一点不剩」，那是在替一个根本没问过的平台撒谎。
   quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),

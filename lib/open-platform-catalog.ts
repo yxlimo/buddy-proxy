@@ -16,16 +16,16 @@ import { randomUUID } from "node:crypto";
 import {
   mergeModelTraits,
   openPlatformOf,
+  syncPlatformModels,
   traitNumber,
-  updateOpenPlatform,
   type ModelTraits,
   type OpenPlatformRow,
 } from "./open-platforms.ts";
 // 归因头跟推理那条路用同一个名字：两个地方各写一遍，改一处就会走样。
 import { REQUEST_ID_HEADER } from "./router/upstreams/open-platform.ts";
-// 模拟客户端那一族的平台行长得跟开放平台一样，区别在 kind：它们的目录归各 kind
-// 自己的代码目录，不从上游拉。判别函数只在一个地方定义（lib/platform-catalog.ts）。
-import { isSimulatedClientKind } from "./platform-catalog.ts";
+// 平台属于哪一族：方言族（目录从上游拉）与模拟客户端（目录由代码给出）。
+// 判据只在一个地方定义（lib/platform-catalog.ts）。
+import { platformCategoryOfKind } from "./platform-catalog.ts";
 import { kindOf } from "./provider-kinds.ts";
 import { accountsOfPlatform } from "./providers.ts";
 // 引用即登记：问目录要拿各家的推理 key，而登记发生在各平台模块的求值期。环上
@@ -98,15 +98,11 @@ export function openPlatformCatalogStale(row: OpenPlatformRow, now = Date.now())
 /**
  * 这个平台的目录要不要去拉。
  *
- * 只看行自己那一格（`models_auto`）：人写死的目录不动（那是明确的意思，不是默认
- * 值），关着的那一行也不拉。目录归谁管是**行自己的数据**，不是代码里的名单 ——
- * 播种给代码挑的那一份写 0，模拟客户端那几行也是 0，它们自然落到不拉。
- *
- * 启动时与请求路径上的刷新用同一套口径：写成两份就会走样 —— 一边跳过了，另一
- * 边还在每 5 分钟带真 key 打一次上游。
+ * 判据是平台的族：方言族的目录归上游，模拟客户端那一族的目录由代码给出（拉了也
+ * 没人用）。行上不再有「要不要自动拉」那一格 —— 目录归谁不是行说了算的。
  */
 export function openPlatformCatalogRefreshable(row: OpenPlatformRow): boolean {
-  return row.models.auto;
+  return platformCategoryOfKind(row.kind) === "dialect";
 }
 
 /**
@@ -396,8 +392,7 @@ export interface RefreshCatalogOptions {
    * 目录」是明确的意思：他要的是现在就去问一次，退避说的「刚问过」在这个语境
    * 里不是答案。
    *
-   * 它只跳退避：目录归谁管（models_auto）不由它决定 —— 那一格关着就拒，跟有没有
-   * 人点过无关。
+   * 它只跳退避：目录归谁管（平台的族）不由它决定。
    *
    * 去重仍然生效：同一时刻只拉一轮，后来的跟着这一轮走 —— 点两下不该发两份。
    */
@@ -435,21 +430,10 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
   try {
     const row = openPlatformOf(id);
     if (!row) return { ok: false, message: `没有这个平台：${id}` };
-    // 目录归谁管就查那一格（models_auto）：关着就是用户说了算（或是播种写进去的
-    // 代码目录 —— 七牛云那份是代码挑过的，上游报 78 个模型，盖上来会出现被上游
-    // 拒的模型）。人手动点的那一下也不穿这一道：force 说的是「别等退避」，不是
-    // 「重新决定这份目录归谁管」。
-    if (!row.models.auto) return { ok: false, message: "目录为手工维护，不自动获取" };
-    // 人写的那份（source=manual）后台不碰：开关开着只说明「以后允许自动拉覆盖」，
-    // 不等于这份目录也算自动拉的（见 lib/open-platforms.ts 的 updatePlatform）。
-    // 只有面板上那一下（force）才盖它 —— 那一次是明确的意思。
-    if (row.models.source === "manual" && !force) {
-      return { ok: false, message: "目录是手写的，自动刷新不覆盖" };
-    }
     // 模拟客户端那一族：目录是各 kind 自己的代码目录，不从上游拉。与退避一样
     // 只看 row 与内存里的状态，不读库 —— 放在查 key 前面，请求路径上就不用为了
     // 判别去读 provider 表与凭据。
-    if (isSimulatedClientKind(row.kind)) {
+    if (platformCategoryOfKind(row.kind) !== "dialect") {
       return { ok: false, message: "这个平台不需要从上游获取目录" };
     }
     // 退避：上次成功之后失败过就先不再问。退避期内不告警 —— 同一个失败反复
@@ -488,21 +472,15 @@ async function runRefresh(id: string, force: boolean): Promise<CatalogOutcome> {
     for (const model of models) {
       if (Object.keys(model.traits).length) reported[model.id] = model.traits;
     }
-    const written = updateOpenPlatform(id, {
-      models: ids,
-      traits: mergeModelTraits(row.models.traits, ids, reported),
-      // 写回时保持行里原值：这一格说的是「以后允不允许自动拉覆盖」，只有用户在
-      // 面板上开关它才该变。刷新的时候把它固定成 1，就把用户关掉的开关又拨开了
-      // （而那个开关正是后台那条路的闸）。
-      modelsAuto: row.models.auto,
-      source: "auto",
-      fetchedAt: Date.now(),
-    });
-    if (!written.ok) {
+    try {
+      // 写回那一行：这次报了的参数用这次的，没报的按 id 留着行里原来那份。
+      syncPlatformModels(id, ids, mergeModelTraits(row.models.traits, ids, reported));
+    } catch (e) {
       // 写不回去是配置或库的问题，不是一般的「拉不到」：把原因写进日志，事后
       // 才查得到「目录为什么没更新」。
-      console.warn(`[OPEN-PLATFORM] ${id} 的模型目录没写回：${written.message}`);
-      return { ok: false, message: written.message };
+      const detail = (e as Error)?.message ?? String(e);
+      console.warn(`[OPEN-PLATFORM] ${id} 的模型目录没写回：${detail}`);
+      return { ok: false, message: `模型目录没写回：${detail}` };
     }
     // 成功：这一次的序号就是「上次成功」。
     catalogState.set(id, { ...state, lastSuccess: seq });

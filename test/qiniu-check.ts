@@ -21,7 +21,7 @@ const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
 const { platformOfAny } = await import("../lib/platforms.ts");
-const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
+const { updateOpenPlatform, syncPlatformModels } = await import("../lib/open-platforms.ts");
 const { addAccount, provider: providerRow } = await import("../lib/providers.ts");
 const { refreshHealthSnapshot } = await import("../lib/admin/upstreams.ts");
 const { quotaConclusionOf } = await import("../lib/quota-state.ts");
@@ -428,16 +428,25 @@ check(
 
 section("目录");
 
+// 目录是上游那一份：行里写进去什么就公布什么。
+const QINIU_UPSTREAM_MODELS = [
+  "nvidia/nemotron-3-ultra-550b-a55b0-free",
+  "qiniu/conatus-free",
+  "deepseek/deepseek-v4.1-flash-1017",
+  "minimax/minimax-m3.1-flash",
+  "qwen/qwen3.8-flash-next",
+];
+check(
+  "行里还没有目录：就没什么可公布的",
+  (kind?.models(PROVIDER) ?? []).length === 0,
+  JSON.stringify((kind?.models(PROVIDER) ?? []).map((m) => m.id)),
+);
+syncPlatformModels("qiniu", QINIU_UPSTREAM_MODELS, {});
 const models = kind?.models(PROVIDER) ?? [];
-check("目录是写死的 5 个", models.length === 5, String(models.length));
+check("目录是上游那一份（5 个）", models.length === 5, String(models.length));
 check(
   "就是这 5 个",
-  models.map((m) => m.id).join(",") ===
-    "nvidia/nemotron-3-ultra-550b-a55b0-free," +
-    "qiniu/conatus-free," +
-    "deepseek/deepseek-v4.1-flash-1017," +
-    "minimax/minimax-m3.1-flash," +
-    "qwen/qwen3.8-flash-next",
+  models.map((m) => m.id).join(",") === QINIU_UPSTREAM_MODELS.join(","),
   models.map((m) => m.id).join(","),
 );
 check(

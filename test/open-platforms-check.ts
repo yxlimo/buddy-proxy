@@ -50,6 +50,7 @@ const {
   deleteOpenPlatform,
   listOpenPlatforms,
   openPlatformOf,
+  syncPlatformModels,
 } = await import("../lib/open-platforms.ts");
 const { addAccount, provider } = await import("../lib/providers.ts");
 const { store, closeStore, migratePlatforms, migrateSimulatedClients, platformPresetRemoved } =
@@ -57,12 +58,16 @@ const { store, closeStore, migratePlatforms, migrateSimulatedClients, platformPr
 const { kindOf } = await import("../lib/provider-kinds.ts");
 // 引用即登记：这一节要拿 kind.models() 报的代码目录做对照。
 await import("../lib/kinds/index.ts");
-const { PLATFORM_KIND_OPTIONS, SIMULATED_CLIENTS, platformKindOptionOf, platformKindChoices } =
-  await import("../lib/platform-catalog.ts");
+const {
+  PLATFORM_KIND_OPTIONS,
+  SIMULATED_CLIENTS,
+  platformCategoryOfKind,
+  platformKindOptionOf,
+  platformKindChoices,
+} = await import("../lib/platform-catalog.ts");
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：后面几节要用的行，
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
-const { XINGHUO_MODELS } = await import("../lib/xinghuo/models.ts");
 
 let pass = 0;
 let fail = 0;
@@ -160,31 +165,30 @@ check(
   VENDOR_ROWS.filter((id) => openPlatformOf(id) !== null).join(","),
 );
 
-// 已有库的行不被任何启动逻辑改写：人工写死的那一份目录，重启之后还是那一份
-// （以前那一轮播种会把它按来源判断一遍）。
+// 建平台不预填目录：目录归上游（拉下来才有）或归代码（模拟客户端那一族）。
+// 已有库的行不被任何启动逻辑改写：重启之后那一行还是空的。
 const manualSeeded = createOpenPlatform({
   id: "seed-manual-row",
   label: "Seed Manual",
   baseUrl: "https://api.manual.test/v1",
 });
-check("人工目录的行建得起来", manualSeeded.ok === true, manualSeeded.message);
-updateOpenPlatform("seed-manual-row", { models: ["hand-1"] });
+check("这一行建得起来", manualSeeded.ok === true, manualSeeded.message);
+check(
+  "建平台不预填目录",
+  (openPlatformOf("seed-manual-row")?.models.items ?? []).length === 0,
+  JSON.stringify(openPlatformOf("seed-manual-row")?.models),
+);
 closeStore();
 store();
 const manualAfter = openPlatformOf("seed-manual-row");
 check(
-  "重启没改人工目录的模型",
-  (manualAfter?.models.items ?? []).join(",") === "hand-1",
+  "重启也不给这一行补目录",
+  (manualAfter?.models.items ?? []).length === 0,
   JSON.stringify(manualAfter?.models),
 );
 check(
-  "重启没把自动那一格打开",
-  manualAfter?.models.auto === false,
-  JSON.stringify(manualAfter?.models),
-);
-check(
-  "人工目录的来源还是 manual",
-  manualAfter?.models.source === "manual",
+  "目录上不再有「自动」与「来源」两格",
+  !("auto" in manualAfter!.models) && !("source" in manualAfter!.models),
   JSON.stringify(manualAfter?.models),
 );
 // 删掉：后面的计数按「用户自己建的行」算。
@@ -216,7 +220,7 @@ for (const client of SEEDED) {
     String(platformOfAny(client.id)?.kind),
   );
   check(`${client.id} 的地址是空的`, seeded?.baseUrl === "", JSON.stringify(seeded?.baseUrl));
-  check(`${client.id} 不自动拉目录`, seeded?.models.auto === false, JSON.stringify(seeded?.models));
+  check(`${client.id} 的目录是空的（那一族的目录由代码给出）`, seeded?.models.items.length === 0, JSON.stringify(seeded?.models));
 }
 // hidden 的那一条目录里有、表里没有：播出来就是一个地址、目录、额度全空的平台，
 // 面板上看得见却用不了。
@@ -258,7 +262,7 @@ check(
 );
 check("开放平台没有区域", platformOfAny("acme")?.region === "", JSON.stringify(platformOfAny("acme")?.region));
 check("模型目录先是空的", row?.models.items.length === 0, JSON.stringify(row?.models));
-check("新库里的目录还自动拉", row?.models.auto === true, JSON.stringify(row?.models));
+check("新库里的目录是空的（建平台不预填）", row?.models.items.length === 0, JSON.stringify(row?.models));
 check("开放平台那一行的 kind 是 openai", row?.kind === "openai", String(row?.kind));
 check("开放平台那一行没有区域", row?.region === "", JSON.stringify(row?.region));
 
@@ -424,16 +428,13 @@ check(
   `${nulled.message} / ${String(openPlatformOf("acme")?.quotaPlugin)}`,
 );
 
-const modeled = updateOpenPlatform("acme", { models: ["m1", "m2"] });
-check("模型目录写得进去", modeled.ok === true, modeled.message);
+// 目录写不进去：目录归上游（拉下来才有）或归代码，不是写入口说了算。
+const modeled = updateOpenPlatform("acme", { models: ["m1", "m2"] } as never);
+check("写入口不收目录（这一格已经不在契约里）", modeled.ok === true, modeled.message);
 const withModels = openPlatformOf("acme");
-check("模型在", withModels?.models.items.join(",") === "m1,m2", JSON.stringify(withModels?.models));
-check("手写的目录 source 是 manual", withModels?.models.source === "manual", JSON.stringify(withModels?.models));
-check("手写的目录不再自动拉", withModels?.models.auto === false, JSON.stringify(withModels?.models));
-const autoColumn = store().prepare("SELECT models_auto FROM platform WHERE id = ?").get("acme") as any;
-check("自动那一列跟目录一致", Number(autoColumn?.models_auto) === 0, JSON.stringify(autoColumn));
+check("行里仍然没有目录", (withModels?.models.items ?? []).length === 0, JSON.stringify(withModels?.models));
 check(
-  "手写的目录没拉过（fetchedAt 是 0）",
+  "没拉过的目录 fetchedAt 是 0",
   withModels?.models.fetchedAt === 0,
   JSON.stringify(withModels?.models),
 );
@@ -445,29 +446,25 @@ try {
   modelsJson = null;
 }
 check(
-  "目录的 JSON 里没有 auto（那一格在列上）",
-  modelsJson !== null && !("auto" in modelsJson),
+  "目录的 JSON 里没有 auto 也没有 source",
+  modelsJson !== null && !("auto" in modelsJson) && !("source" in modelsJson),
   JSON.stringify(modelsJson),
 );
-// 早期存过的 JSON 里带着 auto：忽略它 —— 自动不自动看那一列。
+// 早期存过的 JSON 里带着 auto / source：读的时候当它不存在。
 store()
   .prepare("UPDATE platform SET models = ? WHERE id = ?")
   .run(JSON.stringify({ items: ["m1", "m2"], auto: true, fetchedAt: 0, source: "manual" }), "acme");
 const oldJson = openPlatformOf("acme");
 check(
-  "老 JSON 里的 auto 忽略",
-  oldJson?.models.items.join(",") === "m1,m2" && oldJson?.models.auto === false,
+  "老 JSON 里的 auto / source 忽略",
+  oldJson?.models.items.join(",") === "m1,m2" &&
+    !("auto" in oldJson!.models) &&
+    !("source" in oldJson!.models),
   JSON.stringify(oldJson?.models),
 );
-
-const auto = updateOpenPlatform("acme", { modelsAuto: true });
-check("自动那一格改得掉", auto.ok === true, auto.message);
-check("自动拉回来了", openPlatformOf("acme")?.models.auto === true, JSON.stringify(openPlatformOf("acme")?.models));
-check(
-  "翻自动不自动不动 source（source 说的是这份目录哪来的）",
-  openPlatformOf("acme")?.models.source === "manual",
-  JSON.stringify(openPlatformOf("acme")?.models),
-);
+// 那一列留在库里，但没有人读它（目录归谁由平台的族决定）。
+const autoColumn = store().prepare("SELECT models_auto FROM platform WHERE id = ?").get("acme") as any;
+check("那一列还在（不删列），但没有人在读它", autoColumn !== undefined, JSON.stringify(autoColumn));
 
 check("改不存在的平台不收", updateOpenPlatform("nope", { label: "x" }).ok === false);
 
@@ -557,9 +554,9 @@ for (const kind of ["sensenova"]) {
   );
   check(`${kind} 那一行写进表了`, openPlatformOf(`kinds-${kind}`)?.kind === kind);
   check(
-    `${kind}：自动拉目录跟着注册表走`,
-    openPlatformOf(`kinds-${kind}`)?.models.auto === (kindOf(kind)?.modelsFromUpstream ?? true),
-    JSON.stringify(openPlatformOf(`kinds-${kind}`)?.models),
+    `${kind}：方言族（目录从上游拉）`,
+    platformCategoryOfKind(kind) === "dialect",
+    platformCategoryOfKind(kind),
   );
   // 收尾：这一行是这一节自己造的，后面的行数比对不留它。
   deleteOpenPlatform(`kinds-${kind}`);
@@ -583,7 +580,11 @@ check("预置的模拟客户端建得起来", simulatedAdded.ok === true, simula
 const simulatedRow = openPlatformOf(simulatedPreset.id);
 check("区域照预置", simulatedRow?.region === simulatedPreset.region, JSON.stringify(simulatedRow?.region));
 check("地址是空串（不收请求里那一个）", simulatedRow?.baseUrl === "", JSON.stringify(simulatedRow?.baseUrl));
-check("目录不让自动拉", simulatedRow?.models.auto === false, JSON.stringify(simulatedRow?.models));
+check(
+  "目录是空的（模拟客户端那一族的目录由代码给出）",
+  simulatedRow?.models.items.length === 0,
+  JSON.stringify(simulatedRow?.models),
+);
 check("额度插件是空串", simulatedRow?.quotaPlugin === "", JSON.stringify(simulatedRow?.quotaPlugin));
 check("kind 就是预置那一类", simulatedRow?.kind === simulatedPreset.kind, JSON.stringify(simulatedRow?.kind));
 check(
@@ -691,11 +692,9 @@ check(
   JSON.stringify(PLATFORM_KIND_OPTIONS.map((o) => o.defaultBaseUrl)),
 );
 check(
-  "能不能从上游拉目录跟着 kind 注册表",
-  PLATFORM_KIND_OPTIONS.every(
-    (o) => o.modelsFromUpstream === (kindOf(o.kind)?.modelsFromUpstream ?? true),
-  ),
-  JSON.stringify(PLATFORM_KIND_OPTIONS.map((o) => [o.kind, o.modelsFromUpstream])),
+  "这一张表里全是方言族（目录从上游拉）",
+  PLATFORM_KIND_OPTIONS.every((o) => o.category === "dialect"),
+  JSON.stringify(PLATFORM_KIND_OPTIONS.map((o) => [o.kind, o.category])),
 );
 check("认不出的 kind 是 null", platformKindOptionOf("no-such-kind") === null, JSON.stringify(platformKindOptionOf("no-such-kind")));
 
@@ -736,9 +735,9 @@ check(
   JSON.stringify(simulatedChoices.map((c) => [c.presetId, c.kind, c.region])),
 );
 check(
-  "模拟客户端没有默认地址、不从上游拉目录",
-  simulatedChoices.every((c) => c.defaultBaseUrl === "" && c.modelsFromUpstream === false),
-  JSON.stringify(simulatedChoices.map((c) => [c.defaultBaseUrl, c.modelsFromUpstream])),
+  "模拟客户端没有默认地址、目录由代码给出",
+  simulatedChoices.every((c) => c.defaultBaseUrl === "" && c.category === "simulated"),
+  JSON.stringify(simulatedChoices.map((c) => [c.defaultBaseUrl, c.category])),
 );
 check(
   "hidden 的 zcode 不在里面",
@@ -897,35 +896,24 @@ section("模拟客户端不拉目录");
 // 平台行只按 kind 分开（lib/platform-catalog.ts 的 isSimulatedClientKind）：模拟
 // 客户端那一族的行长得跟开放平台一样，但它们的目录归各 kind 自己的代码，不能拿去
 // 问上游要 —— 那会带着真 key 去打一个封闭客户端的接口。
-//
-// 把它们那一格「自动拉」打开：播种写的是 0，老库里那几行是 1（播种改口径之前写进去
-// 的），所以只有按 kind 判别才拦得住。
-// 目录归谁管只看行自己那一格（models_auto）：播种给模拟客户端写的也是 0，平时
-// 这几行根本走不到拉目录那一步。这里把那一格打开，验的是另一件事 —— 行说拉也
-// 不拉得到：模拟客户端的目录是那个封闭客户端自己的，不从上游来。
+// 目录归谁管只看平台的族，不看行上那一格：模拟客户端那一族的目录由代码给出，
+// 方言族的目录从上游拉。老库里那一列（models_auto）留着，但没有人读它。
 const { openPlatformCatalogRefreshable, refreshOpenPlatformCatalog } = await import(
   "../lib/open-platform-catalog.ts"
 );
 // 用一条没被动过的播种行：上面那条（minimax）删过又建回来了，现在是一条用户建的
 // 开放平台，kind 已经不是模拟端那一族，拿它验不到这里要验的东西。
 const simId = SEEDED.find((c) => c.id !== SIMULATED_CLIENTS[0].id)!.id;
-// 播出来的那一行本来就是 0。
 check(
-  "播出来的模拟客户端那几行 models_auto 是 0",
-  openPlatformOf(simId)?.models.auto === false,
-  JSON.stringify(openPlatformOf(simId)?.models),
-);
-check(
-  "models_auto 是 0：不问上游",
+  "模拟客户端那一族：不问上游",
   openPlatformCatalogRefreshable(openPlatformOf(simId)!) === false,
   JSON.stringify(openPlatformOf(simId)?.models),
 );
 store().prepare("UPDATE platform SET models_auto = 1 WHERE id = ?").run(simId);
-const simRow = openPlatformOf(simId);
 check(
-  "把那一格打开，刷新那条闸就放行（判据只有这一格）",
-  openPlatformCatalogRefreshable(simRow!) === true,
-  JSON.stringify(simRow?.models),
+  "那一列写成 1 也不改判据（模拟客户端的目录由代码给出）",
+  openPlatformCatalogRefreshable(openPlatformOf(simId)!) === false,
+  JSON.stringify(openPlatformOf(simId)?.models),
 );
 const simRefresh = await refreshOpenPlatformCatalog(simId);
 check(
@@ -933,10 +921,10 @@ check(
   simRefresh.ok === false && simRefresh.message.includes("不需要从上游获取目录"),
   JSON.stringify(simRefresh),
 );
-// 对照：同一个判断在开放平台上放行（不然上面那条只能说「什么都不刷新」）。
+// 对照：方言族那几行照旧要拉 —— 哪怕老库里那一列写着 0。
 const plainRow = openPlatformOf("zephyr");
 check(
-  "开放平台的目录照旧要拉",
+  "方言族的目录照旧要拉",
   plainRow !== null && openPlatformCatalogRefreshable(plainRow) === true,
   JSON.stringify(plainRow?.models),
 );
@@ -968,7 +956,7 @@ section("模型参数：按路径表取");
 // 各家上游同一件事用不同的名字报。这里不按平台验形状：同一张路径表喂不同的
 // JSON，取到了就是取到了；换一份表也换一个结果（证明取的是表，不是另写的判断）。
 const { parseModelList, traitsFromEntry, TRAIT_PATHS } = await import("../lib/open-platform-catalog.ts");
-const { catalogModelsFromRow, tokenRhythmCatalogModels } = await import("../lib/catalog-models.ts");
+const { catalogModelsFromRow } = await import("../lib/catalog-models.ts");
 
 /** 一条清单条目自己的参数（名字都叫 m，只比参数）。 */
 function traitsOf(entry: object): Record<string, unknown> {
@@ -1090,13 +1078,20 @@ section("模型参数落在平台那一行");
 
 const traitsRow = createOpenPlatform({ id: "traits-demo", label: "参数", baseUrl: "https://traits.test/v1" });
 check("建一行来放参数", traitsRow.ok === true, traitsRow.message);
-const codeModel = tokenRhythmCatalogModels()[0];
+// 代码表（假的）：行里查不到的 id 才用它 —— 目录本身归上游，代码表只剩「按 id 取
+// 元数据」这一个用途。
+const codeModel = {
+  id: "demo-model-1",
+  displayName: "Demo Model 1",
+  effortOptions: ["low", "high", "max"],
+  maxOutputTokens: 4096,
+};
 const byId = (id: string) => (id === codeModel.id ? codeModel : undefined) as any;
-const written = updateOpenPlatform("traits-demo", {
-  models: [codeModel.id],
-  traits: { [codeModel.id]: { contextWindow: 12345 }, ghost: { contextWindow: 2 } },
-});
-check("参数跟着清单写进去", written.ok === true, written.message);
+// 目录与参数是上游来的：写回走的是上游那一条路（syncPlatformModels）。
+syncPlatformModels("traits-demo", [codeModel.id], {
+  [codeModel.id]: { contextWindow: 12345 },
+  ghost: { contextWindow: 2 },
+} as never);
 check(
   "读得回来",
   openPlatformOf("traits-demo")?.models.traits[codeModel.id]?.contextWindow === 12345,
@@ -1119,8 +1114,8 @@ check(
   JSON.stringify(shown[0]),
 );
 
-// 面板只改清单、不带参数：已经是同一个 id 的参数留着。
-updateOpenPlatform("traits-demo", { models: [codeModel.id, "second"] });
+// 上游这次只报了清单里多出来的一个，没报参数：同一个 id 的参数留着。
+syncPlatformModels("traits-demo", [codeModel.id, "second"], {});
 check(
   "只改清单时已有模型的参数留着",
   openPlatformOf("traits-demo")?.models.traits[codeModel.id]?.contextWindow === 12345,
@@ -1153,7 +1148,7 @@ check("收尾删干净了", openPlatformOf("traits-demo") === null, String(openP
 section("星火的目录归上游");
 
 const xinghuoKind = kindOf("xinghuo");
-check("星火能从上游拉目录", xinghuoKind?.modelsFromUpstream === true, String(xinghuoKind?.modelsFromUpstream));
+check("星火是方言族（目录从上游拉）", platformCategoryOfKind("xinghuo") === "dialect", platformCategoryOfKind("xinghuo"));
 // 一个指向不存在的平台行的账号：目录归上游之后，读不到行就是空 —— 代码目录不是目录。
 const xinghuoBare = {
   id: "0",
@@ -1196,61 +1191,42 @@ async function refreshViaPanel(id: string): Promise<{ ok?: boolean; message?: st
 }
 
 // 后面几节要用的厂商行：行是表里的一行，测试自己造一行（生产里是用户在面板
-// 上建的 —— 代码里没有模板表了）。
-//
-// 七牛与星火的目录是代码挑的那一份（上游那份更宽，盖上来会出现被上游拒的模型），
-// 所以那两行的「自动拉」那一格关着。
+// 上建的 —— 代码里没有模板表了）。建出来的那一行没有目录：目录从上游拉。
 insertVendorPlatform("qiniu");
-insertVendorPlatform("xinghuo", "xinghuo", { modelsAuto: false, models: XINGHUO_MODELS.map((m) => m.id) });
+insertVendorPlatform("xinghuo", "xinghuo");
 check(
   "造出来的两行厂商平台在表里",
   openPlatformOf("qiniu") !== null && openPlatformOf("xinghuo") !== null,
   [openPlatformOf("qiniu"), openPlatformOf("xinghuo")].map((r) => String(r?.id)).join(","),
 );
+check(
+  "两行建出来时都没有目录",
+  (openPlatformOf("qiniu")?.models.items ?? []).length === 0 &&
+    (openPlatformOf("xinghuo")?.models.items ?? []).length === 0,
+  JSON.stringify([openPlatformOf("qiniu")?.models, openPlatformOf("xinghuo")?.models]),
+);
 
-// 七牛云：目录是代码挑的那一份（七牛报 78 个模型，拿上游那份盖上来会出现被上游
-// 拒的模型），所以插这一行时那一格写的就是 0。把地址指向假上游，于是“有没有真的
-// 去问”就有据可查。
+// 七牛云：把地址指向假上游，于是「有没有真的去问」就有据可查。
 const qiniuUrlBefore = String(openPlatformOf("qiniu")?.baseUrl);
-const qiniuModelsBefore = JSON.stringify(openPlatformOf("qiniu")?.models);
-const qiniuAutoBefore = openPlatformOf("qiniu")?.models.auto;
-check("七牛云的目录不是自动拉的那一类", qiniuAutoBefore === false, String(qiniuAutoBefore));
 updateOpenPlatform("qiniu", { baseUrl: `${fakeBase}/v1` });
+const qiniuAccount = addAccount({ platform: "qiniu" });
+check("七牛云的账号加得起来", qiniuAccount.ok === true, qiniuAccount.message);
+setProviderKeys(qiniuAccount.id ?? "", ["sk-TESTONLY-qiniu-catalog"]); // privacy:allow — 编造的样例
 hits.length = 0;
 const qiniuRefresh = await refreshViaPanel("qiniu");
+check("七牛云的目录拉得到", qiniuRefresh.ok === true, JSON.stringify(qiniuRefresh));
+check("问的是 /v1/models", hits.includes("/v1/models"), JSON.stringify(hits));
 check(
-  "七牛云的刷新被拒（说的是目录手工维护，不是拉失败）",
-  qiniuRefresh.ok === false && qiniuRefresh.message.includes("手工维护"),
-  JSON.stringify(qiniuRefresh),
+  "目录是上游答的那份",
+  openPlatformOf("qiniu")?.models.items.join(",") === "xinghuo-upstream-1",
+  JSON.stringify(openPlatformOf("qiniu")?.models.items),
 );
-check("没去问上游", hits.length === 0, JSON.stringify(hits));
-check(
-  "目录一字节没动",
-  JSON.stringify(openPlatformOf("qiniu")?.models) === qiniuModelsBefore,
-  JSON.stringify(openPlatformOf("qiniu")?.models),
-);
-check(
-  "自动拉那一格没被翻",
-  openPlatformOf("qiniu")?.models.auto === qiniuAutoBefore,
-  String(openPlatformOf("qiniu")?.models.auto),
-);
+if (qiniuAccount.id) deleteAccount(qiniuAccount.id);
 updateOpenPlatform("qiniu", { baseUrl: qiniuUrlBefore });
 
-// 讯飞星火：目录来自代码常量表（XINGHUO_MODELS）—— 这一行那一格写的是 0，
-// 要拉上游由人在面板上把那一格打开，不由代码替它决定。
+// 讯飞星火：地址带 /v2，问的就是 /v2/models。
 const xinghuoUrlBefore = String(openPlatformOf("xinghuo")?.baseUrl);
 updateOpenPlatform("xinghuo", { baseUrl: `${fakeBase}/v2` });
-check(
-  "星火这一行不自动拉（目录是代码挑的那份）",
-  openPlatformOf("xinghuo")?.models.auto === false,
-  String(openPlatformOf("xinghuo")?.models.auto),
-);
-updateOpenPlatform("xinghuo", { modelsAuto: true });
-check(
-  "人打开那一格之后才拉",
-  openPlatformOf("xinghuo")?.models.auto === true,
-  String(openPlatformOf("xinghuo")?.models.auto),
-);
 const xinghuoAccount = addAccount({ platform: "xinghuo" });
 check("星火的账号加得起来", xinghuoAccount.ok === true, xinghuoAccount.message);
 setProviderKeys(xinghuoAccount.id ?? "", ["sk-TESTONLY-xinghuo-catalog"]); // privacy:allow — 编造的样例
@@ -1263,93 +1239,51 @@ check(
   openPlatformOf("xinghuo")?.models.items.join(",") === "xinghuo-upstream-1",
   JSON.stringify(openPlatformOf("xinghuo")?.models.items),
 );
-check(
-  "拉完 models_auto 还是 1（刷新不该改这个开关）",
-  openPlatformOf("xinghuo")?.models.auto === true,
-  String(openPlatformOf("xinghuo")?.models.auto),
-);
-
-// 反过来：那一格关着的时候——即使人点了刷新（force）——也不拉。写回若写死
-// modelsAuto: true，用户关掉的开关就会被一次刷新重新拨开。
-updateOpenPlatform("xinghuo", { modelsAuto: false });
-const xinghuoItemsBefore = JSON.stringify(openPlatformOf("xinghuo")?.models.items);
-hits.length = 0;
-const xinghuoForced = await refreshViaPanel("xinghuo");
-check(
-  "开关关着：人点也不拉（force 只穿退避）",
-  xinghuoForced.ok === false && String(xinghuoForced.message).includes("手工维护"),
-  JSON.stringify(xinghuoForced),
-);
-check("开关关着：没去问上游", hits.length === 0, JSON.stringify(hits));
-check(
-  "开关关着：目录没被动过",
-  JSON.stringify(openPlatformOf("xinghuo")?.models.items) === xinghuoItemsBefore,
-  JSON.stringify(openPlatformOf("xinghuo")?.models.items),
-);
-check(
-  "开关关着：那一格还是关的",
-  openPlatformOf("xinghuo")?.models.auto === false,
-  String(openPlatformOf("xinghuo")?.models.auto),
-);
-updateOpenPlatform("xinghuo", { modelsAuto: true });
-
-// 收尾：把星火那行拨回模板的样子（后面的老库模拟对模板行的地址有断言）。
-updateOpenPlatform("xinghuo", { baseUrl: xinghuoUrlBefore });
 if (xinghuoAccount.id) deleteAccount(xinghuoAccount.id);
+updateOpenPlatform("xinghuo", { baseUrl: xinghuoUrlBefore });
 
-section("手写的目录不被后台冲刷");
+section("目录只有上游那一份");
 
-// 人写了一份目录（source=manual），又在面板上把「自动拉」打开：那个开关说的是
-// 「以后允许自动拉覆盖」，不等于这份目录现在算自动拉来的
-// （lib/open-platforms.ts 的 updatePlatform 就是这么做的）。后台那条刷新（不带
-// force）不许冲掉手写那份，只有人点刷新（force）才盖它 —— 盖完 source 才变 auto。
+// 目录只有上游那一份：建出来的时候没有，人点一次刷新才有，刷新打的就是上游。
 fakeModels = [{ id: "hand-up-1", context_length: 8192 }];
-const handRow = createOpenPlatform({ id: "hand-catalog", label: "手写目录", baseUrl: `${fakeBase}/v1` });
-check("建一行来放手写目录", handRow.ok === true, handRow.message);
-updateOpenPlatform("hand-catalog", {
-  models: ["hand-written-1"],
-  traits: { "hand-written-1": { contextWindow: 4096 } },
-});
-const handAccount = addAccount({ platform: "hand-catalog" });
-check("手写目录那行的账号加得起来", handAccount.ok === true, handAccount.message);
-setProviderKeys(handAccount.id ?? "", ["sk-TESTONLY-hand-catalog"]); // privacy:allow — 编造的样例
+const handRow = createOpenPlatform({ id: "hand-catalog", label: "上游目录", baseUrl: `${fakeBase}/v1` });
+check("建一行来放上游的目录", handRow.ok === true, handRow.message);
 check(
-  "手写目录：开关默认关着",
-  openPlatformOf("hand-catalog")?.models.auto === false,
-  String(openPlatformOf("hand-catalog")?.models.auto),
-);
-updateOpenPlatform("hand-catalog", { modelsAuto: true });
-check(
-  "开关打开之后来源还是 manual（开关说的是以后）",
-  openPlatformOf("hand-catalog")?.models.source === "manual",
+  "建出来的时候没有目录",
+  (openPlatformOf("hand-catalog")?.models.items ?? []).length === 0,
   JSON.stringify(openPlatformOf("hand-catalog")?.models),
 );
+const handAccount = addAccount({ platform: "hand-catalog" });
+check("那一行的账号加得起来", handAccount.ok === true, handAccount.message);
+setProviderKeys(handAccount.id ?? "", ["sk-TESTONLY-hand-catalog"]); // privacy:allow — 编造的样例
 check(
-  "开关开着：面板上那个按钮可用",
+  "面板上那个按钮可用",
   openPlatformCatalogRefreshable(openPlatformOf("hand-catalog")!) === true,
   JSON.stringify(openPlatformOf("hand-catalog")?.models),
 );
 hits.length = 0;
 const handBackground = await refreshOpenPlatformCatalog("hand-catalog");
 check(
-  "后台刷新跳过手写的目录（也没去问上游）",
-  handBackground.ok === false && handBackground.message.includes("手写的") && hits.length === 0,
+  "后台刷新拉到了上游那一份（问了一次）",
+  handBackground.ok === true && hits.length === 1,
   JSON.stringify([handBackground, hits]),
 );
 check(
-  "手写那份一个字没动",
-  openPlatformOf("hand-catalog")?.models.items.join(",") === "hand-written-1" &&
-    openPlatformOf("hand-catalog")?.models.traits["hand-written-1"]?.contextWindow === 4096 &&
-    openPlatformOf("hand-catalog")?.models.source === "manual",
-  JSON.stringify(openPlatformOf("hand-catalog")?.models),
+  "目录是上游答的那份",
+  openPlatformOf("hand-catalog")?.models.items.join(",") === "hand-up-1",
+  JSON.stringify(openPlatformOf("hand-catalog")?.models.items),
+);
+check(
+  "参数也跟上来",
+  openPlatformOf("hand-catalog")?.models.traits["hand-up-1"]?.contextWindow === 8192,
+  JSON.stringify(openPlatformOf("hand-catalog")?.models.traits),
 );
 const handForced = await refreshViaPanel("hand-catalog");
-check("人点刷新：盖掉了手写那份", handForced.ok === true, JSON.stringify(handForced));
+check("人点刷新也是同一份", handForced.ok === true, JSON.stringify(handForced));
 check(
-  "盖完来源变成 auto",
-  openPlatformOf("hand-catalog")?.models.items.join(",") === "hand-up-1" &&
-    openPlatformOf("hand-catalog")?.models.source === "auto",
-  JSON.stringify(openPlatformOf("hand-catalog")?.models),
+  "目录没变",
+  openPlatformOf("hand-catalog")?.models.items.join(",") === "hand-up-1",
+  JSON.stringify(openPlatformOf("hand-catalog")?.models.items),
 );
 
 section("刷新保留上游这次没报的参数");
@@ -1400,16 +1334,19 @@ const demoKnown = (id: string): any =>
 
 const commonRow = createOpenPlatform({ id: "common-demo", label: "共性表", baseUrl: "https://common.test/v1" });
 check("建一行来查共性表", commonRow.ok === true, commonRow.message);
-const commonWritten = updateOpenPlatform("common-demo", {
-  models: [COMMON_ID, NO_TIERS_ID, REASONING_ID, UNKNOWN_ID],
-  traits: {
-    [COMMON_ID]: { maxOutputTokens: 4096, reasoning: false },
-    [NO_TIERS_ID]: { efforts: [] },
-    [REASONING_ID]: { reasoning: false },
-    [UNKNOWN_ID]: { contextWindow: 7777 },
-  },
+// 目录与参数是上游来的：写回走上游那一条路（syncPlatformModels）。
+syncPlatformModels("common-demo", [COMMON_ID, NO_TIERS_ID, REASONING_ID, UNKNOWN_ID], {
+  [COMMON_ID]: { maxOutputTokens: 4096, reasoning: false },
+  [NO_TIERS_ID]: { efforts: [] },
+  [REASONING_ID]: { reasoning: false },
+  [UNKNOWN_ID]: { contextWindow: 7777 },
 });
-check("目录与参数写进去了", commonWritten.ok === true, commonWritten.message);
+check(
+  "目录与参数写进去了",
+  (openPlatformOf("common-demo")?.models.items ?? []).join(",") ===
+    [COMMON_ID, NO_TIERS_ID, REASONING_ID, UNKNOWN_ID].join(","),
+  JSON.stringify(openPlatformOf("common-demo")?.models),
+);
 check(
   "开关默认关着",
   openPlatformOf("common-demo")?.traitsFromCommon === false,
@@ -1465,7 +1402,7 @@ const listedCommon = ((await (adminService as any).listUpstreams({}, {})) as any
 check(
   "ListUpstreams 把这一格报给面板",
   listedCommon?.traitsFromCommon === true,
-  JSON.stringify([listedCommon?.traitsFromCommon, listedCommon?.modelsAuto]),
+  JSON.stringify([listedCommon?.traitsFromCommon, listedCommon?.models]),
 );
 
 const mergedOn = catalogModelsFromRow({ platform: "common-demo" }, () => [], demoKnown);

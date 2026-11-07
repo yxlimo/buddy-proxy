@@ -36,7 +36,7 @@
 //  15. ListUpstreams 的 models_from_upstream：逐 kind 的答案（方言类与
 //      SenseNova / 端砚 true；七牛 / 星火 / TokenRhythm 与模拟客户端 false）
 //      —— 面板照这一格给刷新按钮，不再去 ListPlatformKinds 里猜
-//  16. 模拟客户端的目录不归上游：models / modelsAuto 两格在写入口（数据层）被
+//  16. 目录写不进去：models / modelsAuto 那几格在写入口（数据层）被
 //      忽略（不报错，按现值留着），同一单里别的格照常保存；面板那条路端到端
 //      也写不坏；同一格在开放平台上照常生效（对照组）
 //
@@ -59,6 +59,7 @@ const { PLATFORM_KIND_OPTIONS, SIMULATED_CLIENTS, platformKindChoices } = await 
 );
 const { addAccount } = await import("../lib/providers.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
+const { platformCategoryOfKind } = await import("../lib/platform-catalog.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { upstreamBaseUrl } = await import("../lib/admin/upstreams.ts");
 const { PLATFORMS } = await import("../lib/platform-templates.ts");
@@ -296,15 +297,14 @@ check("自建平台的 from_row 是 true", acme?.fromRow === true, show(acme?.fr
 check("ListUpstreams 里的 kind 是 openai", acme?.kind === "openai", show(acme?.kind));
 check("没有账号时状态是没有凭据", acme?.state === UpstreamState.NO_CREDENTIAL, String(acme?.state));
 check("额度插件那一格是空的", acme?.quotaPlugin === "", show(acme?.quotaPlugin));
-check("新加的平台默认自动拉目录", acme?.modelsAuto === true, show(acme?.modelsAuto));
-// 模型目录三格：报的是平台行里的那份（刚建的平台还没有目录）。
+// 模型目录两格：报的是平台行里的那份（刚建的平台还没有目录）。
 const acmeRow = openPlatformOf("acme");
 check("新加的平台目录是空的", (acme?.models ?? []).length === 0, show(acme?.models));
 check("新加的平台没拉过目录", acme?.modelsFetchedAtMs === 0n, show(acme?.modelsFetchedAtMs));
 check(
-  "目录来源跟库里那一行一样",
-  acme?.modelsSource === acmeRow?.models.source,
-  show([acme?.modelsSource, acmeRow?.models.source]),
+  "报出来的清单跟库里那一行一样",
+  (acme?.models ?? []).join(",") === (acmeRow?.models.items ?? []).join(","),
+  show([acme?.models, acmeRow?.models.items]),
 );
 
 /* ------------------------------------------------------------------ *
@@ -547,26 +547,16 @@ const manual = await guard(() => updatePlatform({
   label: "Acme Cloud",
   baseUrl: "https://api.acme.test/v1",
   quotaPlugin: "qiniu",
-  modelsAuto: false,
-  models: ["m-1", "m-2"],
 }));
-check("手工目录写得进去", manual !== null, errDetail());
+check("改平台走得通", manual !== null, errDetail());
 const manualRow = openPlatformOf("acme");
-check("清单是那两份", manualRow?.models.items.join(",") === "m-1,m-2", show(manualRow?.models));
-check("自动拉关掉了", manualRow?.models.auto === false, show(manualRow?.models));
-check("来源是人写的", manualRow?.models.source === "manual", show(manualRow?.models));
+check(
+  "目录没被写进去（目录只有上游那一份）",
+  (manualRow?.models.items ?? []).length === 0,
+  show(manualRow?.models),
+);
 const manualListed = (await listUpstreams()).find((u) => u.id === "acme");
-check("ListUpstreams 里自动那一格是 false", manualListed?.modelsAuto === false, show(manualListed?.modelsAuto));
-check(
-  "ListUpstreams 报的是那两份清单",
-  (manualListed?.models ?? []).join(",") === "m-1,m-2",
-  show(manualListed?.models),
-);
-check(
-  "ListUpstreams 报的是来源是人写的",
-  manualListed?.modelsSource === "manual",
-  show(manualListed?.modelsSource),
-);
+check("ListUpstreams 报的是空清单", (manualListed?.models ?? []).length === 0, show(manualListed?.models));
 check(
   "ListUpstreams 报的是没拉过目录",
   manualListed?.modelsFetchedAtMs === 0n,
@@ -874,8 +864,8 @@ for (const kind of ["sensenova"]) {
   );
   check(`${kind} 写进表了`, openPlatformOf(`kind-build-${kind}`)?.kind === kind, show(openPlatformOf(`kind-build-${kind}`)));
   check(
-    `${kind}：自动拉目录跟着注册表走`,
-    openPlatformOf(`kind-build-${kind}`)?.models.auto === (kindOf(kind)?.modelsFromUpstream ?? true),
+    `${kind}：建出来时没有目录`,
+    (openPlatformOf(`kind-build-${kind}`)?.models.items ?? []).length === 0,
     show(openPlatformOf(`kind-build-${kind}`)?.models),
   );
   // 收尾：这一行是这一节自己造的，后面按行数比的小节不留它。
@@ -941,13 +931,12 @@ check(
   show(kindOptions.map((k: any) => k.category)),
 );
 check(
-  "每一条都带名字、默认地址、能不能拉目录、category、preset_id、region 这六格",
+  "每一条都带名字、默认地址、category、preset_id、region 这五格",
   kindOptions.every(
     (k: any) =>
       typeof k.kind === "string" &&
       typeof k.label === "string" &&
       typeof k.defaultBaseUrl === "string" &&
-      typeof k.modelsFromUpstream === "boolean" &&
       typeof k.category === "string" &&
       typeof k.presetId === "string" &&
       typeof k.region === "string",
@@ -974,10 +963,14 @@ check(
 );
 const openaiOption = dialectKinds.find((k: any) => k.kind === "openai");
 check("openai 的默认地址是空串", openaiOption?.defaultBaseUrl === "", show(openaiOption?.defaultBaseUrl));
-check("openai 能从上游拉目录", openaiOption?.modelsFromUpstream === true, show(openaiOption?.modelsFromUpstream));
+check("openai 是方言族（目录从上游拉）", openaiOption?.category === "dialect", show(openaiOption?.category));
 const anthropicOption = dialectKinds.find((k: any) => k.kind === "anthropic");
 check("anthropic 的默认地址是空串", anthropicOption?.defaultBaseUrl === "", show(anthropicOption?.defaultBaseUrl));
-check("anthropic 能从上游拉目录", anthropicOption?.modelsFromUpstream === true, show(anthropicOption?.modelsFromUpstream));
+check(
+  "anthropic 是方言族（目录从上游拉）",
+  anthropicOption?.category === "dialect",
+  show(anthropicOption?.category),
+);
 
 // 模拟客户端那几条：kind / preset_id / region 跟目录一致，地址不由用户填。
 const visibleSimulated = SIMULATED_CLIENTS.filter((c) => !c.hidden);
@@ -995,9 +988,9 @@ check(
   show(simulatedKinds.map((k: any) => [k.presetId, k.kind, k.label, k.region])),
 );
 check(
-  "模拟客户端没有默认地址也不从上游拉目录",
-  simulatedKinds.every((k: any) => k.defaultBaseUrl === "" && k.modelsFromUpstream === false),
-  show(simulatedKinds.map((k: any) => [k.defaultBaseUrl, k.modelsFromUpstream])),
+  "模拟客户端没有默认地址、目录由代码给出",
+  simulatedKinds.every((k: any) => k.defaultBaseUrl === "" && k.category === "simulated"),
+  show(simulatedKinds.map((k: any) => [k.defaultBaseUrl, k.category])),
 );
 check(
   "hidden 的 zcode 不在答复里",
@@ -1026,9 +1019,9 @@ for (const kind of VENDOR_KINDS) {
     `${option?.defaultBaseUrl} / ${registryBase}`,
   );
   check(
-    `${kind}：能不能拉目录与注册表一致`,
-    option?.modelsFromUpstream === (kindOf(kind)?.modelsFromUpstream ?? true),
-    show(option?.modelsFromUpstream),
+    `${kind}：族是判据（方言族一律从上游拉）`,
+    option?.category === platformCategoryOfKind(kind),
+    show([option?.category, platformCategoryOfKind(kind)]),
   );
 }
 
@@ -1055,7 +1048,11 @@ const builtMinimax = await guard(() => addPlatform({ kind: "minimax", id: "minim
 check("预置的模拟客户端建得起来", builtMinimax !== null, show(builtMinimax));
 check("答复里带着这一行", builtMinimax?.platform?.id === "minimax", show(builtMinimax?.platform));
 check("区域照预置", openPlatformOf("minimax")?.region === "cn", show(openPlatformOf("minimax")?.region));
-check("目录不让自动拉", openPlatformOf("minimax")?.models.auto === false, show(openPlatformOf("minimax")?.models));
+check(
+  "行上不预填目录（那一族的目录由代码给出）",
+  (openPlatformOf("minimax")?.models.items ?? []).length === 0,
+  show(openPlatformOf("minimax")?.models),
+);
 check("地址是空串", openPlatformOf("minimax")?.baseUrl === "", show(openPlatformOf("minimax")?.baseUrl));
 check("额度插件是空串", openPlatformOf("minimax")?.quotaPlugin === "", show(openPlatformOf("minimax")?.quotaPlugin));
 check("墓碑清掉了", platformPresetRemoved("minimax") === false, show(platformPresetRemoved("minimax")));
@@ -1150,11 +1147,6 @@ check(
   show(refreshedListed?.models),
 );
 check(
-  "ListUpstreams 报的是自动拉的",
-  refreshedListed?.modelsSource === "auto",
-  show(refreshedListed?.modelsSource),
-);
-check(
   "ListUpstreams 报的是拉目录的时刻",
   Number(refreshedListed?.modelsFetchedAtMs ?? 0n) > 0,
   show(refreshedListed?.modelsFetchedAtMs),
@@ -1216,7 +1208,6 @@ section("模板平台");
 
 const templateUpstream = (await listUpstreams()).find((u) => u.id === SIMULATED_CLIENTS[0].id);
 check("模板平台的额度插件是空串", templateUpstream?.quotaPlugin === "", show(templateUpstream?.quotaPlugin));
-check("模板平台的自动拉是 false", templateUpstream?.modelsAuto === false, show(templateUpstream?.modelsAuto));
 check("模板平台不是开放平台", templateUpstream?.isOpenPlatform === false, show(templateUpstream?.isOpenPlatform));
 // 但它有表里的那一行（播种补的）：面板要能改名字、删它。isOpenPlatform 说的是
 // 「地址与额度插件归用户填」—— 两件事分开报，否则拿 isOpenPlatform 当判据的
@@ -1257,11 +1248,6 @@ check(
   "模板平台的目录是空的",
   (templateUpstream?.models ?? []).length === 0,
   show(templateUpstream?.models),
-);
-check(
-  "模板平台的目录来源是空串",
-  templateUpstream?.modelsSource === "",
-  show(templateUpstream?.modelsSource),
 );
 check(
   "模板平台的拉取时刻是 0",
@@ -1323,7 +1309,7 @@ section("模型目录归不归上游");
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
 insertVendorPlatform("qiniu");
-insertVendorPlatform("xinghuo", "xinghuo", { modelsAuto: false });
+insertVendorPlatform("xinghuo", "xinghuo");
 insertVendorPlatform("sensenova");
 insertVendorPlatform("intern-ai");
 insertVendorPlatform("tokenrhythm");
@@ -1337,38 +1323,42 @@ const catalogOwner = await guard(() => addPlatform({
 check("opencode-go 建得起来", catalogOwner !== null, show(catalogOwner));
 
 const ownerListed = await listUpstreams();
-const fromUpstreamOf = (id: string): unknown => ownerListed.find((u) => u.id === id)?.modelsFromUpstream;
 
-// 一个平台一个答案：方言类、SenseNova / 端砚、星火 的目录归上游，七牛 /
-// TokenRhythm 与模拟客户端的目录是代码挑过的一份。
-const catalogOwners: Array<[string, boolean, string]> = [
-  ["opencode-go", true, "openai 方言：目录是上游报的那份"],
-  ["qiniu", false, "代码挑过的一份（上游那份更宽）"],
-  ["xinghuo", true, "上游报得出来（/v2/models，一个参数也不带）"],
-  ["sensenova", true, "没有代码目录，只有上游报得出来"],
-  ["intern-ai", true, "没有代码目录，只有上游报得出来"],
-  ["tokenrhythm", false, "代码挑过的一份"],
-  ["minimax", false, "模拟客户端：代码挑过的一份"],
+// 一个平台一个答案，判据只有平台的族：方言族的目录归上游，模拟客户端那一族的
+// 目录由代码给出。
+const catalogOwners: Array<[string, string, boolean]> = [
+  ["opencode-go", "openai", true],
+  ["qiniu", "qiniu", true],
+  ["xinghuo", "xinghuo", true],
+  ["sensenova", "sensenova", true],
+  ["intern-ai", "intern-ai", true],
+  ["tokenrhythm", "tokenrhythm", true],
+  ["minimax", "minimax", false],
 ];
 check(
   "七个平台都在列表里（不然下面几条比的都是 undefined）",
   catalogOwners.every(([id]) => ownerListed.some((u) => u.id === id)),
   show(catalogOwners.filter(([id]) => !ownerListed.some((u) => u.id === id)).map(([id]) => id)),
 );
-for (const [id, want, why] of catalogOwners) {
-  check(`${id}：models_from_upstream 是 ${want}（${why}）`, fromUpstreamOf(id) === want, show(fromUpstreamOf(id)));
+for (const [id, kind, want] of catalogOwners) {
+  const category = platformCategoryOfKind(kind);
+  check(
+    `${id}：${want ? "目录从上游拉" : "目录由代码给出"}（族是判据）`,
+    (category === "dialect") === want,
+    show([category, platformCategoryOfKind(kind)]),
+  );
 }
 
 /* ------------------------------------------------------------------ *
- * 16. 模拟客户端的目录不归上游：models / modelsAuto 两格在写入口（数据层）被忽略
+ * 16. 目录写不进去：models / modelsAuto 那几格在写入口（数据层）被忽略
  * ------------------------------------------------------------------ */
 
-section("模拟客户端的目录改了也不动");
+section("目录写不进去（模拟客户端那一族与方言族一样）");
 
 const minimaxBefore = openPlatformOf("minimax");
 check(
-  "起点：自动是关的、清单是空的",
-  minimaxBefore?.models.auto === false && minimaxBefore?.models.items.length === 0,
+  "起点：清单是空的（那一族的目录由代码给出）",
+  (minimaxBefore?.models.items ?? []).length === 0,
   show(minimaxBefore?.models),
 );
 
@@ -1380,51 +1370,41 @@ const ignored = updateOpenPlatform("minimax", {
   label: ignoredLabel,
   models: ["x"],
   modelsAuto: true,
-});
+} as never);
 check("数据层送目录不报错", ignored.ok === true, ignored.message);
 
 const minimaxAfter = openPlatformOf("minimax");
-check("库里的 models_auto 还是 0", minimaxAfter?.models.auto === false, show(minimaxAfter?.models));
 check("库里的清单还是空的", (minimaxAfter?.models.items ?? []).length === 0, show(minimaxAfter?.models));
-check("source 也没被改成 manual", minimaxAfter?.models.source === "auto", show(minimaxAfter?.models));
-// 同一单里的 label 得落库：不认的只有目录那两格，别的格不能跟着不生效。
+// 同一单里的 label 得落库：不认的只有目录那几格，别的格不能跟着不生效。
 check("同一单里的名字改了", minimaxAfter?.label === ignoredLabel, show(minimaxAfter?.label));
 
-// 不带 modelsAuto 的手工目录那一形状：真让它落库，清单会被写进去、source 会被
-// 改成 manual —— 反证靠这一条抓「清单本身被改坏」，上面那条只抓得到 models_auto。
-const manualShape = updateOpenPlatform("minimax", { models: ["y"] });
-check("手工目录的形状也不报错", manualShape.ok === true, manualShape.message);
-const manualShapeRow = openPlatformOf("minimax");
-check("清单还是空的", (manualShapeRow?.models.items ?? []).length === 0, show(manualShapeRow?.models));
-check("source 还是 auto", manualShapeRow?.models.source === "auto", show(manualShapeRow?.models));
-
-// 端到端一条：面板那条路照面板的形状送（模拟客户端发的是空清单与「自动关」），
-// 也得是「成功返回、目录没动」。
+// 端到端一条：面板那条路照面板的形状送（模拟客户端发的是空清单），也得是
+// 「成功返回、目录没动」。
 const panelShape = await guard(() =>
-  updatePlatform({ id: "minimax", label: ignoredLabel, modelsAuto: false, models: [] }),
+  updatePlatform({ id: "minimax", label: ignoredLabel, modelsAuto: false, models: [] } as never),
 );
 check("面板那条路照常成功", panelShape !== null, `${errCode()} / ${errDetail()}`);
 check("答复里带着这个平台", panelShape?.platform?.id === "minimax", show(panelShape?.platform));
 const panelShapeRow = openPlatformOf("minimax");
 check(
-  "面板那条路也没写坏（自动还是关、清单还是空）",
-  panelShapeRow?.models.auto === false && (panelShapeRow?.models.items ?? []).length === 0,
+  "面板那条路也没写坏（清单还是空）",
+  (panelShapeRow?.models.items ?? []).length === 0,
   show(panelShapeRow?.models),
 );
 const minimaxListed = (await listUpstreams()).find((u) => u.id === "minimax");
 check(
-  "ListUpstreams 里报的也是「自动关、清单空」",
-  minimaxListed?.modelsAuto === false && (minimaxListed?.models ?? []).length === 0,
-  show([minimaxListed?.modelsAuto, minimaxListed?.models]),
+  "ListUpstreams 里报的也是空清单",
+  (minimaxListed?.models ?? []).length === 0,
+  show(minimaxListed?.models),
 );
 
-// 对照：同一格在开放平台上照常生效 —— 不认的只是模拟客户端那一族，不是这两格。
-const control = await guard(() => updatePlatform({ id: "opencode-go", models: ["m-1"] }));
-check("对照：开放平台的目录写得进去", control !== null, show(control));
+// 对照：方言族的行也一样写不进去 —— 目录只有上游那一份。
+const control = await guard(() => updatePlatform({ id: "opencode-go", models: ["m-1"] } as never));
+check("对照：面板送目录过去也走得通", control !== null, show(control));
 const controlRow = openPlatformOf("opencode-go");
 check(
-  "对照：手工目录就是 manual + 关掉自动",
-  controlRow?.models.auto === false && JSON.stringify(controlRow?.models.items) === '["m-1"]' && controlRow?.models.source === "manual",
+  "对照：目录仍然写不进去（只有上游那一份）",
+  (controlRow?.models.items ?? []).length === 0,
   show(controlRow?.models),
 );
 

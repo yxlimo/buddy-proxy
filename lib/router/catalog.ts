@@ -22,7 +22,6 @@ export {
   minimaxCatalogModels,
   qoderCatalogModels,
   senseNovaCatalogModels,
-  tokenRhythmCatalogModels,
   workbuddyCatalogModels,
   zcodeCatalogModels,
 } from "../catalog-models.ts";

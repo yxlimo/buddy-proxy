@@ -8,7 +8,6 @@ import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "./qode
 import { workbuddyLabel, type WorkBuddyModel } from "./workbuddy/models.ts";
 import type { MiniMaxModel } from "./minimax/models.ts";
 import type { ZcodeModel } from "./zcode/models.ts";
-import { TOKENRHYTHM_MODELS } from "./tokenrhythm/models.ts";
 import type { SenseNovaModel } from "./sensenova/models.ts";
 import type { InternAiCatalogModel } from "./intern-ai/models.ts";
 // 目录是平台那一行的（见 catalogModelsFromRow）：这里只读行，不写行。
@@ -96,18 +95,6 @@ export function zcodeCatalogModels(models: ZcodeModel[]): CatalogModel[] {
     contextWindow: m.context,
     maxOutputTokens: m.output,
     ...(m.efforts.length ? { effortOptions: [...m.efforts] } : {}),
-  }));
-}
-
-export function tokenRhythmCatalogModels(): CatalogModel[] {
-  return TOKENRHYTHM_MODELS.map((m) => ({
-    id: m.id,
-    displayName: m.name,
-    reasoning: m.reasoning,
-    toolCall: m.toolCall,
-    effortOptions: [...m.efforts],
-    contextWindow: m.context,
-    maxOutputTokens: m.maxOutput,
   }));
 }
 
@@ -227,21 +214,10 @@ function withUnknownTraits(model: CatalogModel, traits: ModelTraits | undefined)
  *
  * 两种「空」不是一个意思，别混：
  *
- *   行读不到（null）：模板行本该由迁移补出，理论上不该发生。这时退回各家自己的
- *     **兜底源**，而它们不是同一种东西：
+ *   行读不到（null）：平台行没了，理论上不该发生。方言族的目录只有行里那一份，
+ *     行没了就是空 —— 不拿代码里的目录去顶：那会让删掉的平台自己回来。
  *
- *       qiniu / xinghuo / tokenrhythm  代码里的常量表（lib/<kind>/models.ts），
- *         与路由读的是同一份。
- *       sensenova / intern-ai          上游目录的缓存（cache 表里那一份）—— 这两家
- *         没有代码目录，缓存就是它们手上唯一的事实。
- *       openai / anthropic              没有兜底：这两类平台的目录只在表里那一行，
- *         行没了就是空。上面说的「整组消失」在它们身上照样发生 —— 留一个兜底名字
- *         不等于每家都有东西可退。
- *
- *     兜底是**兜底**，不是常态；按家写清楚退到哪儿，是因为那个后果不一样大。
- *
- *   行在、目录是空的：这个平台没有模型。人清空了，或者上游还没拉到，都是这个
- *     意思。**不许退回代码目录** —— 那会让人删掉的模型自己回来。
+ *   行在、目录是空的：这个平台没有模型。上游还没拉到，就是这个意思。
  */
 export function catalogModelsFromRow(
   provider: { platform: string },

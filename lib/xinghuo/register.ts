@@ -34,14 +34,10 @@ export const xinghuoKind = registerCompatiblePlatform({
   baseUrl: () => XINGHUO_INFER_BASE,
   // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）。
   defaultBaseUrl: XINGHUO_INFER_BASE,
-  // 目录是代码挑过的一份：建平台时先写进去这一份（上游那份更宽，会带出被拒的模型）。
-  defaultModels: XINGHUO_MODELS.map((model) => model.id),
   // 只有这一把 key：它既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
-  // 目录能从上游拉（GET /v2/models，base_url 就是 …/v2，拼 {base}/models 正好）。
-  modelsFromUpstream: true,
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),
   // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查
   // （行里记着的参数优先）。行读不到不退回代码目录：目录归上游之后，代码表只剩

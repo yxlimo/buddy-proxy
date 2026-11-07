@@ -82,7 +82,6 @@ registerKind({
   label: "WorkBuddy",
   login: "browser",
   policies: ["single", "fallback"],
-  modelsFromUpstream: false,
   // The row carries the region, so a row that is not logged in yet still
   // answers with the right host.
   baseUrl: (provider) => WORKBUDDY_ENDPOINTS[regionFrom(provider.region)].base,
