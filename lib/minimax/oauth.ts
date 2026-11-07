@@ -29,6 +29,7 @@ import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
 import { registerLoginFlow, type LoginContext, type LoginTicket, type PollResult } from "../login-flow.ts";
+import { WARN_MS } from "./warn-ms.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
 export const OAUTH_ORIGINS: Record<string, string> = {
@@ -42,7 +43,6 @@ const SCOPES = configString("MINIMAX_SCOPES", DEFAULT_SCOPES.join(" ")).split(/\
 const REGION = configString("MINIMAX_REGION", DEFAULT_REGION);
 const ORIGIN = configString("MINIMAX_OAUTH_ORIGIN", OAUTH_ORIGINS[REGION] ?? OAUTH_ORIGINS.cn);
 const CACHE_MS = configNumber("MINIMAX_AUTH_CACHE_MS", 5000);
-const WARN_MS = configNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 // Refresh when this much life is left. The real client uses 5 min; a 1-hour token
 // means the proxy refreshes roughly once an hour.
 const REFRESH_BUFFER_MS = configNumber("MINIMAX_REFRESH_BUFFER_MS", 5 * 60 * 1000);
@@ -498,7 +498,6 @@ export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
   };
 }
 
-export const OAUTH_WARN_MS = WARN_MS;
 export const OAUTH_REFRESH_BUFFER_MS = REFRESH_BUFFER_MS;
 
 /* ------------------------------------------------------------------ *
