@@ -16,6 +16,7 @@ import sys
 import tempfile
 import typing
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -799,6 +800,85 @@ class SyncCheckTest(unittest.TestCase):
             buddy_sync.compare_models(moved, local),
             ["space-bunny efforts: 网关 high / 本地 low,high,max"],
         )
+
+
+class OpencodeTargetTest(unittest.TestCase):
+    """opencode 的目标：OPENCODE_CONFIG 指的那份优先于全局那份。"""
+
+    def _target(self):
+        for target in buddy_sync.targets():
+            if target.label.startswith("opencode (WSL"):
+                return target
+        raise AssertionError("targets() 里没有 opencode (WSL)")
+
+    def _sources(self):
+        return [("buddy", "Buddy (主路由)", "", [("m", "M", None, 1000, 100)])]
+
+    def test_the_env_var_decides_the_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "shay-models.jsonc"
+            with mock.patch.dict(os.environ, {"OPENCODE_CONFIG": str(path)}):
+                target = self._target()
+            self.assertEqual(target.path, path)
+            # 标签得让人看出改的是哪一份，别以为是全局那份。
+            self.assertEqual(target.label, "opencode (WSL, OPENCODE_CONFIG)")
+
+    def test_without_the_env_var_the_global_path_is_used(self):
+        env = {k: v for k, v in os.environ.items() if k != "OPENCODE_CONFIG"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            target = self._target()
+        self.assertEqual(target.path, pathlib.Path.home() / ".config/opencode/opencode.jsonc")
+        self.assertEqual(target.label, "opencode (WSL)")
+
+    def test_the_env_file_is_created_when_it_is_missing(self):
+        # 那份文件本来就该由本脚本生成：没有就建，跳过等于永远不生效。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "shay-models.jsonc"
+            self.assertFalse(path.exists())
+            with mock.patch.dict(os.environ, {"OPENCODE_CONFIG": str(path)}):
+                target = self._target()
+                with mock.patch.object(buddy_sync, "GATEWAY", "http://gw"):
+                    result = buddy_sync.patch_target(target, self._sources(), False, False)
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(path.exists())
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(cfg.get("$schema"), buddy_sync.OPENCODE_SCHEMA)
+            self.assertIn("buddy", cfg["providers"])
+
+    def test_the_env_file_only_gets_providers(self):
+        # mcp / plugins 归 nix：那份文件里只放 providers（外加 $schema）。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "shay-models.jsonc"
+            path.write_text(json.dumps({"mcp": {"x": 1}, "plugins": ["p"]}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"OPENCODE_CONFIG": str(path)}):
+                target = self._target()
+                with mock.patch.object(buddy_sync, "GATEWAY", "http://gw"):
+                    buddy_sync.patch_target(target, self._sources(), False, False)
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(sorted(cfg), ["$schema", "providers"])
+
+    def test_the_global_file_keeps_the_other_keys(self):
+        # 全局那份是 nix 管的：除了 providers，别的一概不动。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "opencode.jsonc"
+            path.write_text(json.dumps({"mcp": {"x": 1}, "providers": {}}), encoding="utf-8")
+            target = buddy_sync.Target("opencode (WSL)", path, True, True, False)
+            with mock.patch.object(buddy_sync, "GATEWAY", "http://gw"):
+                buddy_sync.patch_target(target, self._sources(), False, False)
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(cfg["mcp"], {"x": 1})
+            self.assertIn("buddy", cfg["providers"])
+
+    def test_a_missing_global_file_is_created_too(self):
+        # 全局那份没有的时候也建一个（否则 opencode 那边一个 provider 都没有）。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "opencode.jsonc"
+            target = buddy_sync.Target("opencode (WSL)", path, True, True, False)
+            with mock.patch.object(buddy_sync, "GATEWAY", "http://gw"):
+                result = buddy_sync.patch_target(target, self._sources(), False, False)
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(result["created"])
+            self.assertTrue(path.exists())
 
 
 if __name__ == "__main__":

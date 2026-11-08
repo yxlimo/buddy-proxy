@@ -17,11 +17,20 @@
   --check          只比对不写：一致退出码 0，有差异退出码 1
   --keep-legacy    保留 qoder / minimax-code / minimax / token-rhythm 这些老名字
 
-只改这三个文件：
+只改这几处：
 
-    ~/.config/opencode/opencode.jsonc                  WSL 的 opencode（JSONC）
+    $OPENCODE_CONFIG（没设就是 ~/.config/opencode/opencode.jsonc）
+        WSL 的 opencode（JSONC）
     ~/.pi/agent/models.json                            WSL 的 pi（JSON）
     /mnt/c/Users/<你>/.config/opencode/opencode.jsonc  Windows 的 opencode（JSONC）
+
+opencode 的配置分几份，深合并、后来的覆盖前面的：远端 .well-known/opencode、
+全局 ~/.config/opencode/opencode.json{,c}、OPENCODE_CONFIG 指的那份、项目级
+opencode.json{,c} 与 .opencode/、OPENCODE_CONFIG_CONTENT。
+
+全局那份是 nix 管的（插件、MCP、compaction 这些基础设施），模型交给本脚本 ——
+写进 OPENCODE_CONFIG 指的那份。那份没有就建，建出来只有 $schema 与 providers：
+mcp / plugins 归 nix，不往那儿抄。
 
 主路由的 provider 名字叫 buddy，显示名 Buddy (主路由)：
   opencode  baseURL = {GATEWAY}/v1     package = @ai-sdk/anthropic（客户端自己拼 /messages）
@@ -35,6 +44,7 @@
 provider 清空）。别的 provider 一个都不动。
 """
 import argparse
+import collections
 import copy
 import json
 import os
@@ -72,6 +82,17 @@ PI_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"]
 # 存在的目录找。
 WINDOWS_USERS_ROOT = pathlib.Path("/mnt/c/Users")
 
+# opencode 读配置的地方。模型写进 OPENCODE_CONFIG 指的那份，而不是全局那份：
+# 全局那份由 nix 生成（插件、MCP、compaction 这些基础设施），它是只读软链，
+# 而且 nix 每次重建都会盖回去。OPENCODE_CONFIG 那份本来就是给本脚本写的 ——
+# 没有就建。
+OPENCODE_CONFIG_ENV = "OPENCODE_CONFIG"
+OPENCODE_SCHEMA = "https://opencode.ai/config.json"
+
+# 一个目标：显示用的名字、路径、是不是 JSONC、没有时要不要建、是不是归本脚本管。
+# exclusive 的意思是「这份文件只放 providers（外加 $schema）」：别的键不抄过来。
+Target = collections.namedtuple("Target", "label path is_jsonc create exclusive")
+
 
 def windows_opencode_config() -> pathlib.Path | None:
     """Windows 那份 opencode 配置。没有就返回 None（那一处跳过）。"""
@@ -84,15 +105,38 @@ def windows_opencode_config() -> pathlib.Path | None:
     return None
 
 
+def opencode_config_path() -> tuple:
+    """WSL 的 opencode 目标：OPENCODE_CONFIG 指的那份，否则全局那份。
+
+    返回 (路径, 是不是 OPENCODE_CONFIG 指的那份)。环境变量里可能有 ~，
+    要展开；相对路径按当前目录算成绝对的，免得报告里写个相对路径看着像在别处。
+    """
+    raw = os.environ.get(OPENCODE_CONFIG_ENV, "").strip()
+    if raw:
+        path = pathlib.Path(raw).expanduser()
+        if not path.is_absolute():
+            path = pathlib.Path.cwd() / path
+        return path, True
+    return pathlib.Path.home() / ".config/opencode/opencode.jsonc", False
+
+
 def targets() -> list:
     """这次要同步的几处：WSL 的 opencode、WSL 的 pi，Windows 的 opencode（有才有）。"""
+    opencode_path, from_env = opencode_config_path()
     out = [
-        ("opencode (WSL)", pathlib.Path.home() / ".config/opencode/opencode.jsonc", True),
-        ("pi (WSL)", pathlib.Path.home() / ".pi/agent/models.json", False),
+        Target(
+            "opencode (WSL, OPENCODE_CONFIG)" if from_env else "opencode (WSL)",
+            opencode_path,
+            True,
+            True,     # 没有就建：这份文件本来就该由本脚本生成，跳过等于永远不生效
+            from_env, # OPENCODE_CONFIG 那份只放 providers（+ $schema），mcp / plugins 归 nix
+        ),
+        Target("pi (WSL)", pathlib.Path.home() / ".pi/agent/models.json", False, False, False),
     ]
     windows = windows_opencode_config()
     if windows:
-        out.append(("opencode (Windows)", windows, True))
+        # Windows 那份是别人（用户自己）维护的：没有就不写，也不动别的键。
+        out.append(Target("opencode (Windows)", windows, True, False, False))
     return out
 
 # 真正答话的网关（拉到了清单的那个）与写进客户端的 api key。
@@ -501,22 +545,58 @@ def _apply(providers: dict, sources: list, shape, keep_legacy: bool) -> list:
     return removed
 
 
-def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, dry_run: bool, keep_legacy: bool) -> dict:
-    """同步一个目标。返回这次改了什么。"""
-    result = {"label": label, "path": path, "status": "ok", "added": [], "removed": [], "changed": [], "legacy": []}
-    if not path.exists():
-        result["status"] = "missing"
-        return result
+def patch_target(target, sources: list, dry_run: bool, keep_legacy: bool) -> dict:
+    """同步一个目标。返回这次改了什么。
 
-    if is_jsonc:
-        cfg, comments, trailing = load_jsonc(path)
-        old_text = path.read_text(encoding="utf-8")
-    else:
-        old_text = path.read_text(encoding="utf-8")
-        cfg = parse_json(old_text, str(path))
+    target.create    没有这个文件就建一个
+    target.exclusive 这份文件归本脚本管：只写 providers（外加 $schema），别的键不抄
+    """
+    label, path, is_jsonc = target.label, target.path, target.is_jsonc
+    result = {
+        "label": label,
+        "path": path,
+        "status": "ok",
+        "added": [],
+        "removed": [],
+        "changed": [],
+        "legacy": [],
+        "created": False,
+    }
+    existed = path.exists()
+    cfg: dict
+    if not existed:
+        if not target.create:
+            result["status"] = "missing"
+            return result
+        # 新建的文件：带 $schema，别的键没有。
+        cfg = {"$schema": OPENCODE_SCHEMA}
         comments, trailing = [], {}
-    providers = cfg.setdefault("providers", {})
-    before = copy.deepcopy(providers)
+        old_text = ""
+    else:
+        try:
+            if is_jsonc:
+                cfg, comments, trailing = load_jsonc(path)
+                old_text = path.read_text(encoding="utf-8")
+            else:
+                old_text = path.read_text(encoding="utf-8")
+                cfg = parse_json(old_text, str(path))
+                comments, trailing = [], {}
+        except OSError as exc:
+            result["status"] = "error"
+            result["error"] = f"读不出来：{exc}"
+            return result
+
+    if target.exclusive:
+        # 这份文件只放 providers（外加 $schema）：mcp / plugins 那些归 nix，
+        # 不往这儿抄，也不管原文件里有什么。
+        old_providers = cfg.get("providers")
+        before = copy.deepcopy(old_providers) if isinstance(old_providers, dict) else {}
+        providers = {}
+        cfg = {"$schema": OPENCODE_SCHEMA, "providers": providers}
+        comments, trailing = [], {}
+    else:
+        providers = cfg.setdefault("providers", {})
+        before = copy.deepcopy(providers)
 
     if is_jsonc:
         removed = _apply(providers, sources, opencode_provider, keep_legacy)
@@ -532,6 +612,7 @@ def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, 
 
     result["legacy"] = removed
     result["added"], result["removed"], result["changed"] = _diff_providers(before, providers)
+    result["created"] = not existed
 
     if is_jsonc:
         new_text = dump_jsonc(cfg, comments, trailing)
@@ -543,7 +624,13 @@ def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, 
 
     result["changed_file"] = new_text != old_text
     if result["changed_file"] and not dry_run:
-        path.write_text(new_text, encoding="utf-8")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(new_text, encoding="utf-8")
+        except OSError as exc:
+            # 写不进去（比如全局那份是 nix 的只读软链）：报清楚，别让 traceback 淹掉重点。
+            result["status"] = "error"
+            result["error"] = f"写不进去：{exc}"
     return result
 
 
@@ -553,6 +640,10 @@ def report(result: dict, dry_run: bool) -> None:
         print(f"  {label}  {path}")
         print("    没有这个文件，跳过")
         return
+    if result["status"] == "error":
+        print(f"  {label}  {path}")
+        print(f"    !! {result.get('error', '写失败了')}")
+        return
     added, removed, changed = result["added"], result["removed"], result["changed"]
     if not result["changed_file"]:
         print(f"  {label}  {path}")
@@ -560,14 +651,20 @@ def report(result: dict, dry_run: bool) -> None:
         return
     verb = "要改" if dry_run else "已改"
     print(f"  {label}  {path}")
+    if result.get("created"):
+        print(f"    {'要建' if dry_run else '已建'}：新文件")
+        # 新建的文件谈不上「改」：下面几行直接说做了什么。
+        prefix = ""
+    else:
+        prefix = f"{verb}："
     if added:
-        print(f"    {verb}：新增 provider {len(added)} 个 — {', '.join(added)}")
+        print(f"    {prefix}新增 provider {len(added)} 个 — {', '.join(added)}")
     if removed:
-        print(f"    {verb}：删除 provider {len(removed)} 个 — {', '.join(removed)}")
+        print(f"    {prefix}删除 provider {len(removed)} 个 — {', '.join(removed)}")
     if changed:
-        print(f"    {verb}：更新 provider {len(changed)} 个 — {', '.join(changed)}")
+        print(f"    {prefix}更新 provider {len(changed)} 个 — {', '.join(changed)}")
     for legacy in result["legacy"]:
-        print(f"    {verb}：清掉老名字 {legacy}")
+        print(f"    {prefix}清掉老名字 {legacy}")
 
 
 # ------------------------------------------------------------------ 比对（--check）
@@ -720,12 +817,12 @@ def run_check(gateway: str, models: list) -> int:
     print("")
     print("结果：")
     total = 0
-    for label, path, is_jsonc in targets():
-        print(f"  {label}  {path}")
-        if not path.exists():
+    for target in targets():
+        print(f"  {target.label}  {target.path}")
+        if not target.path.exists():
             print("    没有这个文件，跳过")
             continue
-        diffs = check_target(label, path, is_jsonc, models)
+        diffs = check_target(target.label, target.path, target.is_jsonc, models)
         if not diffs:
             print("    一致")
             continue
@@ -788,20 +885,24 @@ def main(argv: list) -> int:
     print("")
 
     results = []
-    for label, path, is_jsonc in targets():
-        results.append(patch_target(label, path, is_jsonc, sources, args.dry_run, args.keep_legacy))
+    for target in targets():
+        results.append(patch_target(target, sources, args.dry_run, args.keep_legacy))
 
     print("结果：")
     for result in results:
         report(result, args.dry_run)
 
     changed = [r for r in results if r.get("changed_file")]
+    errors = [r for r in results if r.get("status") == "error"]
+    written = [r for r in changed if r.get("status") != "error"]
     print("")
     if args.dry_run:
         print(f"dry-run：{len(changed)} 个文件待改，没有写入。")
     else:
-        print(f"写了 {len(changed)} 个文件，其余没动。")
-    return 1 if failures else 0
+        print(f"写了 {len(written)} 个文件，其余没动。")
+    if errors:
+        print(f"有 {len(errors)} 处没写进去（上面报了的那些）。")
+    return 1 if (failures or errors) else 0
 
 
 if __name__ == "__main__":
