@@ -16,6 +16,7 @@ import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect
 import { parseLooseJson, readOpenAIChunks, readOrAbort, readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
 import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode } from "../upstream-status.ts";
 import { scrubForLog } from "../log-scrub.ts";
+import { readEnvNumber } from "../env.ts";
 
 export type Dialect = "anthropic" | "openai";
 
@@ -454,6 +455,159 @@ async function drainText(reader: ReadableStreamDefaultReader<Uint8Array>, head: 
   return text;
 }
 
+/* ---------------- 上游安静了 ---------------- */
+
+/**
+ * 上游安静多久算「它不会再说话了」（毫秒）的默认值。
+ *
+ * 靠 undici 那个 5 分钟的 bodyTimeout 兜底太久了：客户端在这 5 分钟里一个字
+ * 都等不到，最后等到的还是 Node 自己那句 `terminated`。推理模型的流里，两帧
+ * 之间安静几十秒是正常的，超过这个数就是在挂着，不是在想。
+ *
+ * 导出给测试用：默认值调错（比如忘了改回来）比没有还糟 —— 一条 thinking 的
+ * 流会被砍在中间。
+ */
+export const STREAM_IDLE_DEFAULT_MS = 120_000;
+
+/**
+ * 上游安静多久算「它不会再说话了」（毫秒）。
+ *
+ * 环境变量能改短（ROUTER_STREAM_IDLE_MS）：自测不能真等两分钟。
+ */
+const STREAM_IDLE_MS = readEnvNumber("ROUTER_STREAM_IDLE_MS", STREAM_IDLE_DEFAULT_MS);
+
+/** 「安静了多久」，写进句子给人看：一秒以内说毫秒，不然说秒。 */
+function idleSpan(idleMs: number): string {
+  return idleMs < 1000 ? `${idleMs}ms` : `${Math.round(idleMs / 1000)}s`;
+}
+
+/**
+ * 上游不说话了。
+ *
+ * `name` 是 `TimeoutError`：`classifyUpstreamError` 认这个名字，日志里因此是
+ * timeout 而不是 unknown，策略也照「上游太慢」处理（换一个账号也许答得出来）。
+ *
+ * `message` 是人话：它是客户端唯一能看到的那一句。
+ */
+export class StreamIdleError extends Error {
+  readonly idleMs: number;
+  readonly label: string;
+
+  constructor(idleMs: number, label: string) {
+    super(`upstream sent nothing for ${idleSpan(idleMs)} (${label})`);
+    this.name = "TimeoutError";
+    this.idleMs = idleMs;
+    this.label = label;
+  }
+}
+
+/**
+ * 上游安静了就当作它不会再说话。
+ *
+ * 量的是**两帧之间**的安静，不是总时长：每收到一帧就重新计时，所以一条很长
+ * 但一直在吐字的流（每 10 秒一帧、跑 10 分钟）不会被判超时。一帧都没有的等待
+ * 也算安静 —— 推理模型的第一帧可能要几十秒，但超过上限就不是在算，是卡住了。
+ *
+ * 超时后把上游那一侧取消掉（不取消，那条连接还挂着，账号也还占着），然后把
+ * 错误交给客户端那一层：调用方的 catch 会把它写成一条 error 事件。
+ *
+ * 只包上游这一侧，不包发往客户端的帧：客户端读得慢是另一件事（见上面的看门
+ * 狗），把它也算成「上游安静了」会切掉一条正在正常前进的答复。
+ *
+ * `idleMs` 给 0 或负数就是不设这道闸。
+ *
+ * 导出给测试用："计时只在有 pending read 的时候走" 这条语义在转发链路上看不
+ * 出来（peekStream 与写帧循环一直在读，pending read 总是在），只有在它就是
+ * 顶层消费方的时候量得到。
+ */
+export function withStreamIdle(
+  body: ReadableStream<Uint8Array>,
+  label: string,
+  idleMs: number = STREAM_IDLE_MS,
+): ReadableStream<Uint8Array> {
+  if (!(idleMs > 0)) {
+    // 生产旋钮能悄无声息把整道闸关掉：调成 0 就是不设上限，上游可以永远不
+    // 说话，而这条请求一直挂着。关闸本身是允许的（自测要用），但不能是悄
+    // 悄关的 —— 出了问题得能在日志里看见是谁把闸关了。
+    console.warn(`[DELIVER] 空闲上限被设成 ${idleMs}，流不再有超时`);
+    return body;
+  }
+  const reader = body.getReader();
+  let timer: NodeJS.Timeout | null = null;
+  const clearTimer = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+  };
+
+  /** 等下一帧，或者等安静到上限。 */
+  const nextChunk = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
+    new Promise((resolve, reject) => {
+      let settled = false;
+      timer = setTimeout(() => {
+        timer = null;
+        if (settled) return;
+        settled = true;
+        // 上游那一侧停手：安静到这个地步，挂着只是白占连接与账号。
+        void reader.cancel("the upstream went quiet").catch(() => {
+          /* 上游自己已经结束了 */
+        });
+        reject(new StreamIdleError(idleMs, label));
+      }, idleMs);
+      // 这个定时器不该让进程活着。
+      timer.unref?.();
+      reader.read().then(
+        (result) => {
+          if (settled) return;
+          settled = true;
+          clearTimer();
+          resolve(result);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimer();
+          reject(error);
+        },
+      );
+    });
+
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await nextChunk();
+        } catch (e) {
+          clearTimer();
+          controller.error(e);
+          return;
+        }
+        if (result.done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(result.value);
+      },
+      async cancel(reason) {
+        // 客户端走了：计时停下，上游那一侧的 reader 交回去取消。
+        clearTimer();
+        try {
+          await reader.cancel(reason);
+        } catch {
+          /* 已经结束了 */
+        }
+      },
+    },
+    // 默认的 highWaterMark 是 1：交出去一帧之后还会预取一帧，于是客户端读得
+    // 慢、我们自己在背压里等的时候，`pull` 照样被叫着、计时照样走 —— 量到的
+    // 是「客户端还没来读」而不是「上游安静了」。慢客户端于是被当成安静的上游
+    // 砍掉，连已经缓冲好的帧一起丢。0 让 pull 只在真的有 pending read 时触发，
+    // 与上面「量的是上游两帧之间的安静」那句话一致。
+    { highWaterMark: 0 },
+  );
+}
+
 /**
  * Look at the first chunk before committing to a 200 response.
  *
@@ -627,14 +781,24 @@ export async function deliverOpenAIStream(
   sseHead(ctx);
   let upstream: ReadableStream<Uint8Array>;
   try {
-    upstream = await peekStream(body, abort.signal);
+    // 等上游的**第一帧**也要算进「安静」：包在 peekStream 之前，推理模型那
+    // 几十秒的等待就被同一个上限管着，而不是交给 undici 那 5 分钟。
+    upstream = await peekStream(withStreamIdle(body, `model=${model}`), abort.signal);
   } catch (e) {
     if (e instanceof ClientGoneError) {
       reportClientGone(ctx, onFailure);
       ctx.res.end();
       return;
     }
-    throw e;
+    // 头已经发出去了（sseHead 在 peek 之前），这条答复只剩「写一条 error 帧」
+    // 这一种说法：上游连第一帧都没吐就安静了是这样，peek 阶段别的错也是这样。
+    // 往外抛的话，路由层会以为可以换个账号重来 —— 它换来的是第二次 sseHead，
+    // 头已发过，于是 ERR_HTTP_HEADERS_SENT，外加一次白打的上游（还在计费）。
+    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
+    await writeFrame(ctx, errorEvent(clientMessageOf(e)));
+    reportFailure(onFailure, e);
+    ctx.res.end();
+    return;
   }
   // 看门狗断开连接时（客户端不读了）也要停上游：它还在吐字就是在计费。
   onClientGone(ctx, upstream, abort);
@@ -656,7 +820,7 @@ export async function deliverOpenAIStream(
   } catch (e) {
     // The headers are already out, so the failure goes back as an error event.
     console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    await writeFrame(ctx, errorEvent((e as Error)?.message));
+    await writeFrame(ctx, errorEvent(clientMessageOf(e)));
     reportFailure(onFailure, e);
   }
   ctx.res.end();
@@ -688,6 +852,9 @@ export async function deliverAnthropicStream(
   ctx.res.setHeader("x-request-id", rid("req_"));
   takeOver(ctx);
   sseHead(ctx);
+  // 上游安静了就当作它不会再说话。包在 tee 之前：tee 出来的两条支线都从这
+  // 一个计时走，源头才不会因为没人读而挂在那里（挂着就是在计费）。
+  const upstreamBody = withStreamIdle(body, `model=${model}`);
   // 客户端走了的时候，这个信号让读上游的那个循环停下来。
   const abort = new AbortController();
   if (dialect === "anthropic") {
@@ -699,7 +866,7 @@ export async function deliverAnthropicStream(
     // A copy is parsed on the side for the usage: the upstream puts the input
     // tokens in message_start and the output tokens in message_delta, and
     // nobody reads those unless someone parses them.
-    const [toClient, toParser] = body.tee();
+    const [toClient, toParser] = upstreamBody.tee();
     // 看门狗断开连接时（客户端不读了）也要停上游：它还在吐字就是在计费。
     // tee 的两条支线都要取消，源头才停（取消一条，另一条还在读）。
     onClientGoneTee(ctx, [toClient, toParser], abort);
@@ -719,12 +886,12 @@ export async function deliverAnthropicStream(
     return;
   }
   // 看门狗断开连接时（客户端不读了）也要停上游：它还在吐字就是在计费。
-  onClientGone(ctx, body, abort);
+  onClientGone(ctx, upstreamBody, abort);
   try {
-    for await (const chunk of anthropicStreamToOpenAI(body, model, onUsage, abort.signal)) {
+    for await (const chunk of anthropicStreamToOpenAI(upstreamBody, model, onUsage, abort.signal)) {
       if (!(await writeFrame(ctx, chunk))) {
         // 客户端走了：上游也别接着算（还在计费），这一条也不该记成成功。
-        await stopUpstream(body, abort);
+        await stopUpstream(upstreamBody, abort);
         reportClientGone(ctx, onFailure);
         break;
       }
@@ -733,7 +900,7 @@ export async function deliverAnthropicStream(
     reportClientGone(ctx, onFailure);
   } catch (e) {
     console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    await writeFrame(ctx, errorEvent((e as Error)?.message));
+    await writeFrame(ctx, errorEvent(clientMessageOf(e)));
     reportFailure(onFailure, e);
   }
   ctx.res.end();
@@ -798,7 +965,7 @@ export async function deliverOpenAIChunks(
       await writeFrame(ctx, SSE_DONE);
     } catch (e) {
       console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-      await writeFrame(ctx, errorEvent((e as Error)?.message));
+      await writeFrame(ctx, errorEvent(clientMessageOf(e)));
       reportFailure(onFailure, e);
     }
     ctx.res.end();
@@ -815,7 +982,7 @@ export async function deliverOpenAIChunks(
     reportClientGone(ctx, onFailure);
   } catch (e) {
     console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    await writeFrame(ctx, errorEvent((e as Error)?.message));
+    await writeFrame(ctx, errorEvent(clientMessageOf(e)));
     reportFailure(onFailure, e);
   }
   ctx.res.end();
@@ -823,6 +990,75 @@ export async function deliverOpenAIChunks(
 
 function errorEvent(message: string): string {
   return sseEvent("error", { type: "error", error: { type: "api_error", message } });
+}
+
+/* ---------------- 发给客户端的那句话 ---------------- */
+
+/** 上游没把话说完就断了。客户端那边看得懂的那一句。 */
+const UPSTREAM_CLOSED_EARLY = "upstream closed the connection before the answer finished";
+
+/** 说不出理由时的那一句：客户端得知道这是一次失败，不是答复。 */
+const UPSTREAM_FAILED = "upstream failed";
+
+/** Node/undici 说「连接断了」的整句话（整句就是它才算）。 */
+const RAW_DISCONNECT_TEXT = new Set(["terminated", "other side closed", "socket hang up"]);
+
+/** 同一种话，但会跟在别的字后面（`TypeError: fetch failed`）。 */
+const RAW_DISCONNECT_PARTS = ["fetch failed", "socket hang up", "other side closed"];
+
+/**
+ * 这一句是不是 Node/undici 说的「连接断了」。
+ *
+ * 抛出来的不一定是个 Error（`throw "socket hang up"` 也是合法的），那时只有
+ * 一个字符串可看，所以这句话得能单独判断。
+ */
+function isRawDisconnectText(text: string): boolean {
+  const lowered = text.trim().toLowerCase();
+  if (RAW_DISCONNECT_TEXT.has(lowered)) return true;
+  return RAW_DISCONNECT_PARTS.some((part) => lowered.includes(part));
+}
+
+/**
+ * 这个错误的理由是不是 Node/undici 说的「连接断了」。
+ *
+ * undici 抛的就是 `TypeError: terminated`，它自己那句在 `cause` 里（一个
+ * `UND_ERR_*` 的错）。这两样都是「我们的连接怎么了」，不是「你的请求怎么了」。
+ */
+function isRawConnectionFailure(e: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: any = e;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if (/^UND_ERR_/.test(String(current.code ?? ""))) return true;
+    if (isRawDisconnectText(String(current.message ?? ""))) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
+ * 客户端看到的那句话。
+ *
+ * 只翻我们知道的几种内部错误；别的照旧用 message —— 但绝不把 Node 内部字眼
+ * （terminated、fetch failed、UND_ERR_*）发给客户端：客户端拿它当「哪一类
+ * 失败」用，那种话它既看不懂，也不是它能处理的东西。
+ *
+ * 只动这一句：`hint` 里是上游原话，那是给客户端出主意的，另有既定语义
+ * （见 peekStream 与 sendError）。
+ */
+export function clientMessageOf(e: unknown): string {
+  // 上游安静了：那句人话本来就是我们自己写的。
+  if (e instanceof StreamIdleError) return e.message;
+  if (isRawConnectionFailure(e)) return UPSTREAM_CLOSED_EARLY;
+  // 抛出来的也可以就是个字符串（`throw "socket hang up"`）：那时没有 message，
+  // 按以前那样直接落到回落值就把原文丢了 —— 而原文往往是唯一的线索。
+  const said = typeof e === "string" ? e : (e as { message?: unknown } | null | undefined)?.message;
+  if (typeof said !== "string") return UPSTREAM_FAILED;
+  const text = said.trim();
+  // 一句空白不是一句话：`new Error("  ")` 不该让客户端收到一个空格。
+  if (!text) return UPSTREAM_FAILED;
+  if (isRawDisconnectText(text)) return UPSTREAM_CLOSED_EARLY;
+  return text;
 }
 
 /** One line about a failure, for the log. The stack is too noisy to keep. */
@@ -886,7 +1122,7 @@ async function pipeOpenAIChunks(
     await writeFrame(ctx, SSE_DONE);
   } catch (e) {
     console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    await writeFrame(ctx, sseData({ error: { type: "api_error", message: (e as Error)?.message ?? "upstream failed" } }));
+    await writeFrame(ctx, sseData({ error: { type: "api_error", message: clientMessageOf(e) } }));
     await writeFrame(ctx, SSE_DONE);
     reportFailure(onFailure, e);
   } finally {
@@ -975,7 +1211,7 @@ async function writeAnthropicFrames(
     reportClientGone(ctx, onFailure);
   } catch (e) {
     console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    await writeFrame(ctx, errorEvent((e as Error)?.message));
+    await writeFrame(ctx, errorEvent(clientMessageOf(e)));
     reportFailure(onFailure, e);
   } finally {
     if (pingTimer) clearInterval(pingTimer);
