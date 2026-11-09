@@ -156,6 +156,8 @@ export interface QuotaView {
   upstreamId: string;
   /** 属于哪个账号。 */
   accountId: string;
+  /** 账号的名字（账号行上的 alias）。空串 = 没设名字。 */
+  accountName?: string;
   balance?: BalanceView;
   credits?: CreditView;
   tokenPlan?: TokenPlanView;

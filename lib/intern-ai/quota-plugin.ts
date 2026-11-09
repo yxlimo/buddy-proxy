@@ -65,7 +65,7 @@ export function internAiCreditsViews(provider: ProviderRow, credits: InternAiCre
   const rateLimit = balance.rpmLimit > 0 ? `，RPM ${balance.rpmLimit} / TPM ${balance.tpmLimit}` : "";
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         total,

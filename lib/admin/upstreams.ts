@@ -790,6 +790,22 @@ function safeCredential(row: ProviderRow): CredentialView | null {
  */
 
 /**
+ * 一份额度属于谁：只看账号行。
+ *
+ * kind 只负责「这家平台怎么读快照」，账号 id、平台 id、名字这三样都属于账号行
+ * 本身 —— 让每个 kind 各写一遍，迟早有一家写错（2026-11-09：四个 kind 把平台
+ * id 填成了账号 id，面板把「8」当成上游，刷新额度问错了范围）。
+ */
+function withRowIdentity(row: ProviderRow, view: QuotaView): QuotaView {
+  return {
+    ...view,
+    upstreamId: row.platform,
+    accountId: row.id,
+    accountName: row.alias ?? "",
+  };
+}
+
+/**
  * 一个上游的额度，每个账号一条。
  *
  * TokenRhythm 有好几个租户，所以是「几条」而不是一条。
@@ -807,7 +823,7 @@ export async function upstreamQuotas(id: string, fresh = false, force = false): 
   for (const row of rows) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
-    out.push(...kind.quotas(row, snapshot));
+    out.push(...kind.quotas(row, snapshot).map((view) => withRowIdentity(row, view)));
   }
   return out;
 }
@@ -823,9 +839,14 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
   const first = quotas[0];
   const balances = quotas.map((q) => q.balance).filter((b): b is BalanceView => Boolean(b));
   const credits = quotas.map((q) => q.credits).filter((c): c is CreditView => Boolean(c));
+  // 归属（平台 + 账号 + 名字）跟着「第一条」走：调用方限定范围之后，这里合并
+  // 的本来就是同一个账号的几份（不同插件报的同一份额度）。名字只在一处丢过
+  // —— 2026-11-09：面板上账号卡片退回显示 id。
+  const named = quotas.find((q) => (q.accountName ?? "") !== "") ?? first;
   const merged: QuotaView = {
     upstreamId: first.upstreamId,
     accountId: first.accountId,
+    accountName: named.accountName ?? "",
     tokenPlan: quotas.find((q) => q.tokenPlan)?.tokenPlan,
   };
   if (balances.length) {
@@ -907,7 +928,7 @@ function upstreamQuotasCached(id: string): QuotaView[] {
   for (const row of accountsFor(id)) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
-    out.push(...kind.quotas(row, snapshot));
+    out.push(...kind.quotas(row, snapshot).map((view) => withRowIdentity(row, view)));
   }
   return out;
 }

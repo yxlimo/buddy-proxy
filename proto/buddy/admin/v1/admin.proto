@@ -181,6 +181,8 @@ message UpstreamQuota {
   int64 recover_at_ms = 7;
   // 给人看的一句话（为什么没有数字、为什么用不了）。空串 = 没有话要说。
   string message = 8;
+  // 账号的名字（账号行上的 alias）。空串 = 这个账号没设名字，面板退回显示 id。
+  string account_name = 9;
 }
 
 // 余额：钱。同一平台的多个账号可以合并。

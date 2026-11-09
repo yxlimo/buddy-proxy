@@ -21,7 +21,7 @@ function zcodeQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView
   if (!buckets.length) return [];
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       // Start Plan 的额度是 token 桶：它是一份「还剩多少 token」的额度。
       credits: {

@@ -263,10 +263,14 @@ function legacyQiniuQuotas(provider: any, quota: any): any[] {
 }
 
 const pluginViews = probed.views;
+// 归属（upstreamId / accountId）是后来修正过的：迁移前的实现把账号 id 当平台
+// 写，这条测的是「数字与形状没变」，所以只比数字那一半。归属另有一条断言守着。
+const withoutIdentity = (views: any[]): any[] =>
+  views.map(({ upstreamId: _upstreamId, accountId: _accountId, ...rest }) => rest);
 const legacyViews = legacyQiniuQuotas(QINIU_ACCOUNT, QUOTA);
 check(
-  "插件的输出与迁移前逐字段相同",
-  same(pluginViews, legacyViews),
+  "插件的输出与迁移前逐字段相同（归属另测）",
+  same(withoutIdentity(pluginViews), withoutIdentity(legacyViews)),
   JSON.stringify(pluginViews),
 );
 
@@ -291,8 +295,13 @@ check(
 check("资源包没有到期时间", credits?.lots?.[0]?.expiresAt === 0, String(credits?.lots?.[0]?.expiresAt));
 check(
   "额度挂在账号上",
-  pluginViews[0]?.accountId === QINIU_ACCOUNT.id && pluginViews[0]?.upstreamId === QINIU_ACCOUNT.id,
-  `${pluginViews[0]?.upstreamId} / ${pluginViews[0]?.accountId}`,
+  pluginViews[0]?.accountId === QINIU_ACCOUNT.id,
+  String(pluginViews[0]?.accountId),
+);
+check(
+  "平台 id 写的是平台，不是账号",
+  pluginViews[0]?.upstreamId === QINIU_ACCOUNT.platform,
+  `${pluginViews[0]?.upstreamId} / 期望 ${QINIU_ACCOUNT.platform}`,
 );
 
 // 门户答「全是 0」：翻成 no_quota，而且不再给数字 —— 数字全零说的是「一包都不剩」，

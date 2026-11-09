@@ -65,7 +65,7 @@ export function senseNovaPoolsViews(provider: ProviderRow, usage: SenseNovaPoolU
   const plan = usage.plan?.name ? `${usage.plan.name}：` : "";
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         // 平台不报活动积分的总额与已用，只报还剩多少。

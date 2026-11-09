@@ -63,7 +63,7 @@ export function qiniuQuotas(account: ProviderRow, payload: unknown): QuotaView[]
   const unit = quota.respacks[0]?.unit ?? "";
   return [
     {
-      upstreamId: account.id,
+      upstreamId: account.platform,
       accountId: account.id,
       credits: {
         total,

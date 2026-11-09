@@ -31,7 +31,7 @@ function workbuddyQuotas(provider: ProviderRow, snapshot: HealthSnapshot): Quota
   const used = resources.groups.reduce((sum, g) => sum + Number(g.used ?? 0), 0);
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         total: resources.total,

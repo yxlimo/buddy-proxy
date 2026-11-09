@@ -255,7 +255,8 @@ function AllUpstreamsFailedNotice({ onRetry }: { onRetry: () => void }) {
 /**
  * 一个账号的额度卡。
  *
- * 标题按账号分：主行写账号，账号没报就写上游；副行小字写上游。
+ * 主行是账号的名字；账号没设名字就退回账号 id，再没有就写上游。
+ * 副行只补上主行没说的那一层：主行已经写过的 id 不再重复一遍。
  */
 function QuotaCard({
   quota,
@@ -264,8 +265,16 @@ function QuotaCard({
   quota: UpstreamQuota
   refreshing?: boolean
 }) {
-  const title = quota.accountId || quota.upstreamId || '未知账号'
-  const subtitle = quota.upstreamId === title ? '' : quota.upstreamId
+  const name = quota.accountName?.trim() ?? ''
+  const title = name || quota.accountId || quota.upstreamId || '未知账号'
+  // 副行只说主行没说过的：同一段信息不写两遍（预置平台的账号 id 与平台 id
+  // 本来就相同，两段都写就成了 `qoder-cn · 账号 qoder-cn`）。
+  const parts: string[] = []
+  if (quota.upstreamId && quota.upstreamId !== title) parts.push(quota.upstreamId)
+  if (quota.accountId && quota.accountId !== quota.upstreamId && quota.accountId !== title) {
+    parts.push(`账号 ${quota.accountId}`)
+  }
+  const subtitle = parts.join(' · ')
   return (
     <div>
       <Card className='mb-4'>

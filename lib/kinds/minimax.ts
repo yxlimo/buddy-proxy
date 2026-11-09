@@ -37,7 +37,7 @@ function minimaxQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaVi
   const consumed = lots.reduce((sum, lot) => sum + Number(lot?.consumed ?? 0), 0);
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         total: granted,

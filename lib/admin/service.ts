@@ -263,6 +263,8 @@ export function quotaMessage(quota: QuotaView, conclusion?: QuotaConclusion | nu
   return create(UpstreamQuotaSchema, {
     upstreamId: quota.upstreamId,
     accountId: quota.accountId,
+    // 账号的名字：面板拿它当卡片标题，空串时退回显示 id。
+    accountName: quota.accountName ?? "",
     // 余额（钱）。只有中转站这类平台有。
     balance: quota.balance
       ? create(BalanceSummarySchema, {
@@ -359,7 +361,7 @@ function quotaAnswerOf(quota: QuotaView | null, row: ProviderRow | null): Upstre
   if (!row || !conclusion) return undefined;
   // 没有数字的那一份只要归属与结论：upstreamId 是平台（面板按它分组），
   // accountId 是这个账号。
-  return quotaMessage({ upstreamId: row.platform, accountId: row.id }, conclusion);
+  return quotaMessage({ upstreamId: row.platform, accountId: row.id, accountName: row.alias ?? "" }, conclusion);
 }
 
 /**

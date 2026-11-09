@@ -44,7 +44,7 @@ function qoderQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView
   }
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         total: Number(credits.plan?.total ?? 0) + Number(credits.addOn?.total ?? 0),
