@@ -396,11 +396,32 @@ function isBusy(error: unknown): boolean {
 }
 
 /**
+ * undici gives up on a quiet upstream: no headers, or no body for a while.
+ *
+ * The socket was fine and then stopped answering, so this is "the upstream is
+ * too slow", not "the upstream could not be reached". The two lead to
+ * different handling, so they must not share a word.
+ */
+const NETWORK_TIMEOUT_CODES = new Set(["UND_ERR_BODY_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT"]);
+const NETWORK_TIMEOUT_NAMES = new Set([
+  "BodyTimeoutError",
+  "HeadersTimeoutError",
+  "TimeoutError",
+  "AbortError",
+]);
+
+/**
  * The network failure behind an error, if that is what it is.
  *
  * A connection that failed, a socket that hung up, a timeout that ran out —
  * none of them is the request's fault, and the next account may well reach
  * the upstream.
+ *
+ * The timeout is checked first: undici's own body/headers timeouts carry a
+ * code in the `UND_ERR_*` family like the connection ones do, and they are one
+ * step down the chain (undici throws `TypeError: terminated` and puts its own
+ * error in the cause). Its default body timeout is five minutes, so a stream
+ * that goes quiet ends up here — as "timeout", never as "connection".
  */
 function networkReason(error: unknown): string | null {
   const seen = new Set<unknown>();
@@ -408,6 +429,8 @@ function networkReason(error: unknown): string | null {
   while (current && typeof current === "object" && !seen.has(current)) {
     seen.add(current);
     const code = String(current.code ?? "");
+    const name = String(current.name ?? "");
+    if (NETWORK_TIMEOUT_CODES.has(code) || NETWORK_TIMEOUT_NAMES.has(name)) return "timeout";
     if (
       [
         "ECONNREFUSED",
@@ -424,9 +447,6 @@ function networkReason(error: unknown): string | null {
     ) {
       return "connection";
     }
-    const name = String(current.name ?? "");
-    if (name === "TimeoutError") return "timeout";
-    if (name === "AbortError") return "timeout";
     const message = String(current.message ?? "").toLowerCase();
     if (message.includes("fetch failed") || message.includes("socket hang up")) return "connection";
     current = current.cause;

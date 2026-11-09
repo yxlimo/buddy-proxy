@@ -13,7 +13,8 @@
 //   1. Qoder 的 400：上游的状态在错误上，客户端拿到的还是网关的 502；
 //   2. Qoder 的 429：排队（LimitError），不可降级；
 //   3. WorkBuddy 的 400：同上；
-//   4. 上游的 400 判成「请求本身的问题」，不降级。
+//   4. 上游的 400 判成「请求本身的问题」，不降级；
+//   5. undici 的 body/headers 超时判成 timeout（不是 connection）。
 
 import fs from "node:fs";
 import http from "node:http";
@@ -102,7 +103,9 @@ setSecret(`session:provider:${workbuddyId}`, "session", {
 const { qoderChatCompletion } = await import("../lib/qoder/transport.ts");
 const { workbuddyChat } = await import("../lib/workbuddy/transport.ts");
 const { upstreamStatusOf } = await import("../lib/upstream-status.ts");
-const { classifyUpstreamError } = await import("../lib/router/provider-selection.ts");
+const { classifyUpstreamError, describeUpstreamError } = await import(
+  "../lib/router/provider-selection.ts"
+);
 
 /** 调一次，抓住错误。 */
 async function caught(run: () => Promise<unknown>): Promise<any> {
@@ -247,6 +250,54 @@ console.log("WorkBuddy：上游的 400");
   const failure = classifyUpstreamError(error);
   check("400 是请求本身的问题", failure.degradable === false, failure.kind);
   check("日志里说的是 400", failure.status === 400, String(failure.status));
+}
+
+console.log("");
+console.log("undici 的超时：body / headers 是「上游太久没回」");
+
+/**
+ * 复现 undici 抽掉连接时抛的形状。
+ *
+ * undici 不直接抛自己的错误，它抛 `TypeError("terminated")`，自己的错误放在
+ * cause 里 —— 码在下一层，所以只造一层的话测不到真实路径。字段就是 undici
+ * 错误的那三个（name、code、message），不编造其它形状。
+ */
+function terminatedBy(name: string, code: string, message: string): TypeError {
+  return new TypeError("terminated", { cause: Object.assign(new Error(message), { name, code }) });
+}
+
+{
+  // undici 默认 bodyTimeout 300s：上游 5 分钟没吐数据就是它（生产上 304.7s
+  // 那次断流就是这种形状，当时被当成 unknown，既不降级也不冷却）。
+  const error = terminatedBy("BodyTimeoutError", "UND_ERR_BODY_TIMEOUT", "Body Timeout Error");
+  const failure = classifyUpstreamError(error);
+  check("body timeout 判成 timeout", failure.kind === "timeout", failure.kind);
+  check("body timeout 没有上游状态", failure.status === null, String(failure.status));
+  check("body timeout 可降级（换账号也许能接）", failure.degradable === true, String(failure.degradable));
+  check(
+    "日志里写的是 timeout",
+    describeUpstreamError(error) === "timeout",
+    describeUpstreamError(error),
+  );
+}
+
+{
+  // 控制组：同一层同样长相，但码是连接类 —— 不能跟着一起变成 timeout。
+  const error = terminatedBy("SocketError", "UND_ERR_SOCKET", "other side closed");
+  const failure = classifyUpstreamError(error);
+  check("socket 断开还是 connection", failure.kind === "connection", failure.kind);
+  check(
+    "日志里写的是 connection",
+    describeUpstreamError(error) === "connection",
+    describeUpstreamError(error),
+  );
+}
+
+{
+  const error = terminatedBy("HeadersTimeoutError", "UND_ERR_HEADERS_TIMEOUT", "Headers Timeout Error");
+  const failure = classifyUpstreamError(error);
+  check("headers timeout 判成 timeout", failure.kind === "timeout", failure.kind);
+  check("headers timeout 没有上游状态", failure.status === null, String(failure.status));
 }
 
 server.close();
