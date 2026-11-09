@@ -111,9 +111,9 @@ export async function consoleApi<T>(
   }
   if (!r.ok) {
     const error = classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
-    // 429 会带 Retry-After：额度要用它算出「什么时候恢复」，而 classify 只看得到
-    // 状态码与正文。只在这一处补上。
-    error.retryAfterMs = retryAfterMs(r);
+    // 429 会带 Retry-After（有时只写在正文里）：额度要用它算出「什么时候恢复」，
+    // 而 classify 只看得到状态码与正文。只在这一处补上。
+    error.retryAfterMs = retryAfterMs(r, text);
     throw error;
   }
   // 业务错误藏在信封里，状态码还是 200。

@@ -133,7 +133,7 @@ export async function toOpenAiPlatform(
         // 客户端已经走了：这一次上游答的什么都不要了，也不能拿它给账号记一笔
         // （读正文的这会儿正断也不罕见）
         if (guard.gone()) throw new ClientGoneError();
-        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
+        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res, text) ?? undefined);
       },
       settle,
       ctx.availability,
@@ -367,7 +367,7 @@ export async function toAnthropicPlatform(
         // 客户端已经走了：这一次上游答的什么都不要了，也不能拿它给账号记一笔
         // （读正文的这会儿正断也不罕见）
         if (guard.gone()) throw new ClientGoneError();
-        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
+        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res, text) ?? undefined);
       },
       settle,
       ctx.availability,

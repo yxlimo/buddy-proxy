@@ -92,13 +92,13 @@ export async function platformApi<T>(
   }
   if (r.status === 429) {
     // 限流是「等一会儿」，不是「不行了」：调用方（额度）要用这个分别决定要不要
-    // 写冷却，以及等到什么时候。Retry-After 只有这里看得到。
+    // 写冷却，以及等到什么时候。Retry-After 只有这里看得到（有时只写在正文里）。
     const error = new TokenRhythmError(
       `接口被限流了（HTTP 429）：${body?.message ?? text.slice(0, 200)}`,
       429,
       "rate_limited",
     );
-    error.retryAfterMs = retryAfterMs(r);
+    error.retryAfterMs = retryAfterMs(r, text);
     throw error;
   }
   if (!r.ok) {

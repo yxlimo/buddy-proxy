@@ -564,9 +564,8 @@ console.log("");
 console.log("重试：没有人可换时无限重试，有人可换时试三次就换人；限流最多等三回");
 
 {
-  const { runWithRetries, settlement, transientRetryPlan, upstreamStatusError } = await import(
-    "../lib/router/upstreams/policy.ts"
-  );
+  const { runWithRetries, settlement, transientRetryPlan, upstreamStatusError, rateLimitWaitMs } =
+    await import("../lib/router/upstreams/policy.ts");
   const { cooldownForFailure, rateWaitedOf } = await import("../lib/router/account-cooldown.ts");
   const { cooldownUntil, listCooldowns } = await import("../lib/cooldown.ts");
   const { ClientGoneError } = await import("../lib/router/deliver.ts");
@@ -790,13 +789,15 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
     );
   }
 
-  // 9. 不重试的那几类：请求本身的问题、凭据被拒、限流、客户端走了。
+  // 9. 不重试的那几类：请求本身的问题、凭据被拒、客户端走了。
+  //
+  //    限流不在这里了：上游说了「过多久再来」就等它（见 11），上游什么也没说
+  //    也等默认的 30 秒（见 9.1）。
   {
     const noRetry: [string, Error][] = [
       ["400 请求本身的问题", statusError(400)],
       ["401 凭据被拒", statusError(401)],
       ["402 额度用尽", statusError(402)],
-      ["429 限流", statusError(429)],
       ["客户端走了", new ClientGoneError()],
       ["说不清的错", new Error("something odd")],
     ];
@@ -814,6 +815,42 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
       check(`${name}：不重试（只叫了一次）`, calls === 1, String(calls));
       check(`${name}：抛的就是那个错`, caught === error, String(caught?.message));
     }
+  }
+
+  // 9.1 限流但上游什么也没说（没有头、正文里也没有时间）：等默认的 30 秒。
+  {
+    const clock = fakeClock();
+    let calls = 0;
+    let caught: any = null;
+    const limited = statusError(429);
+    try {
+      await runWithRetries(
+        { id: "acct-rate-default" },
+        "限流",
+        async () => {
+          calls += 1;
+          throw limited;
+        },
+        { budgetMs: 200_000, now: clock.now, sleep: clock.sleep },
+      );
+    } catch (e) {
+      caught = e;
+    }
+    check(
+      "限流但上游没说要等多久：上游被叫了四次（等三回 + 最后一回）",
+      calls === 4,
+      String(calls),
+    );
+    check(
+      "限流但上游没说要等多久：等了三次，每次 30 秒",
+      JSON.stringify(clock.slept) === JSON.stringify([30_000, 30_000, 30_000]),
+      JSON.stringify(clock.slept),
+    );
+    check(
+      "限流但上游没说要等多久：抛的是 429",
+      String(caught?.message ?? "").startsWith("upstream HTTP 429"),
+      String(caught?.message),
+    );
   }
 
   // 10. 上游说了「过两分半再来」的 TPM 限流：等不起，也不是瞬时失败 —— 一次就结束。
@@ -908,6 +945,48 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
     check("连续四次 429：理由是限流", row?.reason === "rate-limit", String(row?.reason));
   }
 
+  // 12.1 预算用完时停手：三轮窗口都等完了还是限流 —— 那个账号确实被限住了。
+  //
+  //      预算 180 秒、上游每次都说「等 60 秒」：三轮刚好把预算用完，第四轮
+  //      开始前发现没时间了。这时候最终那个错误不能带「等过了限流窗口」的
+  //      标记：那个账号还在限流，冷却要照记（不记的话下一个请求又挑它，
+  //      再白等一轮）。
+  {
+    const clock = fakeClock();
+    let calls = 0;
+    let caught: any = null;
+    try {
+      await runWithRetries(
+        { id: "acct-budget-exhausted" },
+        "限流",
+        async () => {
+          calls += 1;
+          // 上游每次都说「等 60 秒再来」。
+          throw withCooldownUntil(statusError(429), clock.now() + 60_000);
+        },
+        { budgetMs: 180_000, now: clock.now, sleep: clock.sleep },
+      );
+    } catch (e) {
+      caught = e;
+    }
+    check("预算用完：上游被叫了三次", calls === 3, String(calls));
+    check(
+      "预算用完：等满三轮才停",
+      JSON.stringify(clock.slept) === JSON.stringify([60_000, 60_000, 60_000]),
+      JSON.stringify(clock.slept),
+    );
+    check(
+      "预算用完：最终那个错误不带 rateWaited 标记（那个账号还在限流）",
+      rateWaitedOf(caught) === false,
+      "标记贴错了",
+    );
+    check(
+      "预算用完：冷却照记（那个账号还在限流）",
+      cooldownForFailure("acct-budget-exhausted", caught) !== null,
+      JSON.stringify(cooldownForFailure("acct-budget-exhausted", caught)),
+    );
+  }
+
   // 13. 429 + retry-after 200 秒：等不起，立刻抛错（一次也不多等）。
   {
     const clock = fakeClock();
@@ -936,6 +1015,10 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
   }
 
   // 14. 总时限管着所有等待：等到手也过了这一轮的总时限，就不等也不再试。
+  //
+  //     第一轮等到了窗口，第二轮的窗口等不起 —— 那一轮**根本没等**。所以最终
+  //     那个错误不能带「等过了限流窗口」的标记：那个账号还在限流，冷却要照记
+  //     （不记的话下一个请求又会挑它，再白等一轮）。
   {
     const clock = fakeClock();
     let calls = 0;
@@ -961,6 +1044,16 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
       String(caught?.message),
     );
     check("总时限：只等了那一次", clock.slept.length === 1, JSON.stringify(clock.slept));
+    check(
+      "总时限：最后一轮没等 → 最终那个错误不带 rateWaited 标记",
+      rateWaitedOf(caught) === false,
+      "标记贴错了",
+    );
+    check(
+      "总时限：冷却照记（那个账号还在限流）",
+      cooldownForFailure("acct-deadline", caught) !== null,
+      JSON.stringify(cooldownForFailure("acct-deadline", caught)),
+    );
   }
 
   // 15. 流式结算那条路：同一个超时也是不写冷却。
@@ -1179,6 +1272,56 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
         String(caught?.hint),
       );
     }
+  }
+
+  // 20. 只有限流才等：402（额度见底）带着 retry-after 也不等。
+  //
+  //     上游给的 retry-after 说的是这个**请求**可以再来一次，不是这个**账号**
+  //     可以再来一次。额度见底等多久都一样：等下去只是把这一轮的时间吃掉，
+  //     fallback 换账号被挤掉。所以照旧交给策略（记冷却、换账号）。
+  {
+    const clock = fakeClock();
+    let calls = 0;
+    let caught: any = null;
+    // 402 + retry-after 30 秒：分类不是限流。
+    const spent = withCooldownUntil(statusError(402), clock.now() + 30_000);
+    try {
+      await runWithRetries(
+        { id: "acct-402-retry-after" },
+        "额度",
+        async () => {
+          calls += 1;
+          throw spent;
+        },
+        { budgetMs: 60_000, now: clock.now, sleep: clock.sleep },
+      );
+    } catch (e) {
+      caught = e;
+    }
+    check("402 带 retry-after：一次也没等", clock.slept.length === 0, JSON.stringify(clock.slept));
+    check("402 带 retry-after：上游只被叫了一次", calls === 1, String(calls));
+    check("402 带 retry-after：抛的就是那个错", caught === spent, String(caught?.message));
+    check(
+      "402 带 retry-after：冷却照记（额度见底不是等一等就好）",
+      cooldownForFailure("acct-402-retry-after", caught) !== null,
+      JSON.stringify(cooldownForFailure("acct-402-retry-after", caught)),
+    );
+  }
+
+  // 20.1 同一个判据的单元：rateLimitWaitMs 只对限流给数。
+  {
+    const spent = withCooldownUntil(statusError(402), Date.now() + 30_000);
+    check(
+      "402 带 retry-after → 不等（null）",
+      rateLimitWaitMs(spent) === null,
+      String(rateLimitWaitMs(spent)),
+    );
+    const limited = withCooldownUntil(statusError(429), Date.now() + 30_000);
+    check(
+      "429 带 retry-after → 等（对照组）",
+      rateLimitWaitMs(limited) !== null,
+      String(rateLimitWaitMs(limited)),
+    );
   }
 
   stopLogging();

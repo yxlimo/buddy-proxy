@@ -1,17 +1,32 @@
-// test/rate-wait-check.ts — TPM 限流：等得起就自己等，到点重试同一个账号。
+// test/rate-wait-check.ts — 上游说「过多久再来」：等得起就自己等，到点重试同一个账号。
 //
 //   node --experimental-strip-types test/rate-wait-check.ts
 //
 // 离线：假上游是本机的 http 服务，一个真请求都不发出去，不花任何额度。
 //
-// 覆盖的是七牛云那种「每分钟 token 超限」（429 + rate_limit_tpm_exceeded）：
+// 覆盖的是「上游说多久后可以重试」这一个值：
 //
-//   1. 上游说了 retry-after 2 秒 → 网关自己等，到点重试**同一个**账号。客户端
-//      拿到的是 200（不该看到 429/503），上游被打了两次，冷却表里没有这个账号；
-//   2. 控制组 A：retry-after 200 秒（等不起，上限是两分钟）→ 客户端拿到失败，
+//   1. 取值（单元）：`retry-after` 头优先，其次从正文里按语义读（"retry shortly
+//      (after 30 s)"、"retry in 45 seconds"、"请 30 秒后重试"）；正文里别处的数字
+//      （错误码 3001、模型名 4.5）不当秒数；正文里没有「重试」意思的句子
+//      （"Request timed out after 30 seconds"）也不当秒数；正文里读出来的值超过
+//      一分钟就当读不懂（头里的值不受这个上限约束）；
+//   2. 端到端：上游 429 + retry-after 1 秒 → 网关自己等，到点重试**同一个**
+//      账号。客户端拿到的是 200（不该看到 429/503），上游被打了两次，冷却表里
+//      没有这个账号；
+//   3. 正文里说「过多久再来」：没有头，正文写着 "retry after 1 s" → 照它说的
+//      等 1 秒；正文说 2 秒时等的是 2 秒（不是默认的 30 秒）；
+//   4. 控制组 A：retry-after 200 秒（等不起，上限是一分钟）→ 客户端拿到失败，
 //      single 策略没有别的账号可换，不记冷却；
-//   3. 控制组 B：429 + retry-after 2 秒，但正文说的是 RPM（不是 TPM）→ 不等，
-//      照旧失败 + 不记冷却。
+//   5. 控制组 B：retry-after 90 秒（超过一分钟）→ 不等，失败，上游只被叫一次；
+//   6. 控制组 C：限流但上游没说多久 → 等默认的 30 秒（这一条在单元里验：真等
+//      三十秒 × 三回的自测太慢，端到端那一条在 test/policy-check.ts 里用假钟
+//      验）。
+//
+// 自测真等，但只等一秒级的窗口：上游说 1 秒就等 1 秒，说 2 秒就等 2 秒。
+// 以前有个「把等待按比例缩短」的环境变量（ROUTER_RATE_WAIT_SCALE），它只给
+// 自测用，却是生产上的旋钮：误设成 0 就是零间隔连打上游还贴「等过了」的标记。
+// 它已经删掉了。
 //
 // 走的是开放平台那条路（lib/router/upstreams/open-platform.ts）：SenseNova 的
 // 推理地址指到本机的假上游，账号与凭据写进这个测试自己的库。
@@ -22,7 +37,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { startGateway as startHarness } from "./harness.ts";
+import { startGateway as startHarness, type Gateway } from "./harness.ts";
 
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "rate-wait-"));
 // 本进程要用同一个库（写账号与凭据），所以给它自己的数据目录。
@@ -56,8 +71,8 @@ function section(title: string): void {
  * 假上游
  * ------------------------------------------------------------------ */
 
-/** 假上游这三种答法。 */
-type Mode = "tpm" | "tpm-long" | "rpm";
+/** 假上游这几种答法。 */
+type Mode = "tpm" | "tpm-long" | "rpm" | "body-wait" | "body-wait-2" | "header-long";
 let mode: Mode = "tpm";
 /** 上游被叫过的：每次调用用的哪把 key（哪把 key 就是哪个账号）。 */
 const calls: string[] = [];
@@ -68,11 +83,33 @@ const TPM_BODY = {
   message: "tokens per minute limit exceeded",
 };
 
-/** 每分钟请求数超限：等一下没意义，换账号才是对的。 */
+/** 每分钟请求数超限：上游说了多久就等多久，不看它是不是 TPM。 */
 const RPM_BODY = {
   code: "rate_limit_rpm_exceeded",
   message: "requests per minute exceeded",
 };
+
+/**
+ * 线上真实那条：没有 retry-after 头，「多久以后」写在正文里。
+ *
+ * 这一条只用在单元里（真等三十秒的自测太慢）：端到端那一条用一秒的窗口。
+ */
+const ONLINE_BODY =
+  '{"error":{"type":"server_error","message":"Upstream request failed: ' +
+  '[prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)"}}';
+
+/** 正文里说的是 1 秒 —— 端到端真等一秒。 */
+const BODY_WAIT_1 =
+  '{"error":{"type":"server_error","message":"the cell is at capacity; retry shortly (after 1 s)"}}';
+
+/**
+ * 正文里说的是 2 秒 —— 与默认的 30 秒不一样。
+ *
+ * 这一条分辨得出「等的是上游说的那个数」与「等的是默认值」：默认是 30 秒，
+ * 上游说的是 2 秒，日志里写的那个数就是答案。
+ */
+const BODY_WAIT_2 =
+  '{"error":{"type":"server_error","message":"the cell is at capacity; retry shortly (after 2 s)"}}';
 
 const fake = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -87,6 +124,11 @@ const fake = http.createServer(async (req, res) => {
   const limited = (body: unknown, retryAfter: string): void => {
     res.writeHead(429, { "content-type": "application/json", "retry-after": retryAfter });
     res.end(JSON.stringify(body));
+  };
+  /** 限流：上游什么也没说（没有头，正文里也没有时间）。 */
+  const bare = (body: unknown): void => {
+    res.writeHead(429, { "content-type": "application/json" });
+    res.end(body);
   };
 
   // 模型清单：网关启动时问一次。
@@ -112,19 +154,56 @@ const fake = http.createServer(async (req, res) => {
     const key = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
     calls.push(key);
     if (mode === "tpm-long") {
-      // 等不起：上游说了「过三分多钟再来」（上限是两分钟）。
+      // 等不起：上游说了「过三分多钟再来」（上限是一分钟）。
       limited(TPM_BODY, "200");
       return;
     }
     if (mode === "rpm") {
-      limited(RPM_BODY, "2");
+      limited(RPM_BODY, "1");
+      return;
+    }
+    if (mode === "header-long") {
+      // 上游说了「过 90 秒再来」：超过一分钟，不等。
+      limited(TPM_BODY, "90");
+      return;
+    }
+    if (mode === "body-wait") {
+      // 没有头，「多久以后」在正文里（一秒）。第二回答 200。
+      if (calls.length === 1) {
+        bare(BODY_WAIT_1);
+        return;
+      }
+      json({
+        id: "c1",
+        object: "chat.completion",
+        created: 1792585589,
+        model: MODEL,
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 32, completion_tokens: 2, total_tokens: 34 },
+      });
+      return;
+    }
+    if (mode === "body-wait-2") {
+      // 正文里说的是 2 秒：第二回答 200。
+      if (calls.length === 1) {
+        bare(BODY_WAIT_2);
+        return;
+      }
+      json({
+        id: "c1",
+        object: "chat.completion",
+        created: 1792585589,
+        model: MODEL,
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 32, completion_tokens: 2, total_tokens: 34 },
+      });
       return;
     }
     if (calls.length === 1) {
-      // 第一回超了 TPM。上游答得慢一点：这样「等了 2 秒」在耗时上看得清楚
+      // 第一回超了 TPM。上游答得慢一点：这样「等了 1 秒」在耗时上看得清楚
       // （网关等的是上游说的那个窗口，不含上游自己答话的时间）。
       await new Promise((r) => setTimeout(r, 150));
-      limited(TPM_BODY, "2");
+      limited(TPM_BODY, "1");
       return;
     }
     json({
@@ -213,22 +292,24 @@ db.prepare("INSERT OR REPLACE INTO cache (id, data, at) VALUES (?, ?, ?)").run(
  * 网关
  * ------------------------------------------------------------------ */
 
-const gw = await startHarness({
+/** 网关的环境：推理端点与控制台都指向假上游，一个字都不出机器。 */
+const GATEWAY_ENV = {
+  BENEFITS_DISABLED: "1",
+  SENSENOVA_BASE: `${fakeBase}/sensenova/v1`,
+  SENSENOVA_PLATFORM_BASE: `${fakeBase}/sensenova`,
+  SENSENOVA_IAM_BASE: `${fakeBase}/sensenova-iam`,
+  INTERN_AI_DISCOVERY_API_BASE: `${fakeBase}/intern-ai/v1`,
+  INTERN_AI_DISCOVERY_BASE: `${fakeBase}/intern-ai`,
+  TOKENRHYTHM_API_BASE: `${fakeBase}/tokenrhythm`,
+  MINIMAX_API_BASE: `${fakeBase}/minimax`,
+  MINIMAX_BASE_URL: `${fakeBase}/minimax`,
+};
+
+const gw: Gateway = await startHarness({
   dataDir: DATA_DIR,
   // 目录归这个测试：helper 不许删。
   keepDataDir: true,
-  env: {
-    BENEFITS_DISABLED: "1",
-    // 推理端点与控制台都指向假上游：一个字都不出机器。
-    SENSENOVA_BASE: `${fakeBase}/sensenova/v1`,
-    SENSENOVA_PLATFORM_BASE: `${fakeBase}/sensenova`,
-    SENSENOVA_IAM_BASE: `${fakeBase}/sensenova-iam`,
-    INTERN_AI_DISCOVERY_API_BASE: `${fakeBase}/intern-ai/v1`,
-    INTERN_AI_DISCOVERY_BASE: `${fakeBase}/intern-ai`,
-    TOKENRHYTHM_API_BASE: `${fakeBase}/tokenrhythm`,
-    MINIMAX_API_BASE: `${fakeBase}/minimax`,
-    MINIMAX_BASE_URL: `${fakeBase}/minimax`,
-  },
+  env: GATEWAY_ENV,
 });
 
 function cleanup(): void {
@@ -291,7 +372,7 @@ function clearCooldowns(): void {
  * 场景
  * ------------------------------------------------------------------ */
 
-section("场景一：TPM 限流（retry-after 2 秒）—— 网关自己等，重试同一个账号");
+section("场景一：限流 + retry-after 1 秒 —— 网关自己等，重试同一个账号");
 {
   mode = "tpm";
   calls.length = 0;
@@ -306,11 +387,11 @@ section("场景一：TPM 限流（retry-after 2 秒）—— 网关自己等，�
     calls.length === 2 && calls[0] === calls[1] && calls[0] !== "",
     calls.join(","),
   );
-  check("真的等了（≥ 2 秒）", answered.elapsed >= 2000, `${answered.elapsed}ms`);
+  check("真的等了（≥ 1 秒）", answered.elapsed >= 900, `${answered.elapsed}ms`);
   check("冷却表里没有这个账号", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
   check(
     "日志里看得见在等",
-    /is rate limited on tokens, waiting \d+s then retrying/.test(gw.log()),
+    /is rate limited, waiting 1s then retrying/.test(gw.log()),
     gw.log().slice(-600),
   );
 }
@@ -328,15 +409,76 @@ section("场景二（控制组 A）：retry-after 200 秒 —— 等不起，照
   check("single 策略没有别的账号可换，不记冷却", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
 }
 
-section("场景三（控制组 B）：429 + retry-after 2 秒，但正文是 RPM —— 不等");
+section("场景三：429 + retry-after 1 秒，正文是 RPM —— 上游说了多久就等多久");
 {
+  // 限流不再只认 TPM：上游说了「过 1 秒再来」就等那 1 秒。等三回还是限流，
+  // 才停手（那个账号是真的被限住了）。
   mode = "rpm";
   calls.length = 0;
   clearCooldowns();
 
   const answered = await chat();
   check("客户端拿到的是失败（不是 200）", answered.status !== 200, `HTTP ${answered.status}`);
-  check("没有等（< 1 秒）", answered.elapsed < 1000, `${answered.elapsed}ms`);
+  check("上游被打了 4 次（等三回 + 最后一回）", calls.length === 4, String(calls.length));
+  check(
+    "日志里说了等的是 1 秒",
+    /is rate limited, waiting 1s then retrying \(wait 1\/3\)/.test(gw.log()),
+    gw.log().slice(-600),
+  );
+  check("single 策略没有别的账号可换，不记冷却", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
+}
+
+section("场景四：429 + 没有头 + 正文说「retry after 1 s」—— 照它说的等");
+{
+  mode = "body-wait";
+  calls.length = 0;
+  clearCooldowns();
+
+  const answered = await chat();
+  check("客户端拿到的是 200（没看到 429/503）", answered.status === 200, `HTTP ${answered.status} ${answered.text.slice(0, 200)}`);
+  check("答案有内容", answered.text.includes("ok"), answered.text.slice(0, 200));
+  check("上游被打了两次", calls.length === 2, String(calls.length));
+  check(
+    "两次都是同一个账号（没换账号）",
+    calls.length === 2 && calls[0] === calls[1] && calls[0] !== "",
+    calls.join(","),
+  );
+  check("真的等了（≥ 1 秒）", answered.elapsed >= 900, `${answered.elapsed}ms`);
+  check("冷却表里没有这个账号", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
+  check(
+    "日志里看得见在等 1 秒",
+    /is rate limited, waiting 1s then retrying/.test(gw.log()),
+    gw.log().slice(-600),
+  );
+}
+
+section("场景五（正文里说的是 2 秒）：等的是上游说的那个数，不是默认值");
+{
+  // 默认是 30 秒（上游什么也没说时的保守值），上游说的是 2 秒 —— 日志里写
+  // 的那个数就是分辨的依据。
+  mode = "body-wait-2";
+  calls.length = 0;
+  clearCooldowns();
+
+  const answered = await chat();
+  check("客户端拿到的是 200（没看到 429/503）", answered.status === 200, `HTTP ${answered.status} ${answered.text.slice(0, 200)}`);
+  check("上游被打了两次", calls.length === 2, String(calls.length));
+  check(
+    "日志里等的是 2 秒（不是默认的 30 秒）",
+    /is rate limited, waiting 2s then retrying/.test(gw.log()),
+    gw.log().slice(-600),
+  );
+}
+
+section("场景六（控制组 B）：retry-after 90 秒 —— 超过一分钟，不等");
+{
+  mode = "header-long";
+  calls.length = 0;
+  clearCooldowns();
+
+  const answered = await chat();
+  check("客户端拿到的是失败（不是 200）", answered.status !== 200, `HTTP ${answered.status}`);
+  check("没有等（< 5 秒）", answered.elapsed < 5000, `${answered.elapsed}ms`);
   check("上游只被打了 1 次", calls.length === 1, String(calls.length));
   check("single 策略没有别的账号可换，不记冷却", cooldownRow(ACCOUNT) === null, JSON.stringify(cooldownRow(ACCOUNT)));
 }
@@ -347,34 +489,130 @@ section("算法：等多久（单元）");
   const { withCooldownUntil, withUpstreamStatus } = await import("../lib/upstream-status.ts");
   const { AuthError } = await import("../lib/credential.ts");
 
-  const tpm = withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：tpm 超了", 502), 429);
-  check("TPM → 等 30 秒（上游没说要等多久时的保守值）", rateLimitWaitMs(tpm) === 30_000, String(rateLimitWaitMs(tpm)));
+  const limited = withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429", 502), 429);
+  check(
+    "限流但上游没说要等多久 → 等 30 秒（老默认值）",
+    rateLimitWaitMs(limited) === 30_000,
+    String(rateLimitWaitMs(limited)),
+  );
 
   const withRetry = withCooldownUntil(
-    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：tpm 超了", 502), 429),
+    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429", 502), 429),
     Date.now() + 5_000,
   );
   const wait = rateLimitWaitMs(withRetry);
   check("上游说了 5 秒 → 等 5 秒上下", wait !== null && wait >= 4_000 && wait <= 5_000, String(wait));
 
-  const twoMinutes = withCooldownUntil(
-    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：tpm 超了", 502), 429),
-    Date.now() + 120_000,
+  const oneMinute = withCooldownUntil(
+    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429", 502), 429),
+    Date.now() + 60_000,
   );
   check(
-    "上游说了 120 秒 → 等得起（上限就是两分钟）",
-    rateLimitWaitMs(twoMinutes) !== null,
-    String(rateLimitWaitMs(twoMinutes)),
+    "上游说了 60 秒 → 等得起（上限就是一分钟）",
+    rateLimitWaitMs(oneMinute) !== null,
+    String(rateLimitWaitMs(oneMinute)),
   );
 
   const tooLong = withCooldownUntil(
-    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：tpm 超了", 502), 429),
-    Date.now() + 200_000,
+    withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429", 502), 429),
+    Date.now() + 90_000,
   );
-  check("上游说了 200 秒 → 等不起（null）", rateLimitWaitMs(tooLong) === null, String(rateLimitWaitMs(tooLong)));
+  check("上游说了 90 秒 → 等不起（null）", rateLimitWaitMs(tooLong) === null, String(rateLimitWaitMs(tooLong)));
 
-  const rpm = withUpstreamStatus(new AuthError("upstream HTTP 429", "上游返回 429：requests per minute", 502), 429);
-  check("RPM → 不等（null）", rateLimitWaitMs(rpm) === null, String(rateLimitWaitMs(rpm)));
+  const bad = withUpstreamStatus(new AuthError("upstream HTTP 400", "上游返回 400", 502), 400);
+  check("不是限流、上游也没说时间 → 不等（null）", rateLimitWaitMs(bad) === null, String(rateLimitWaitMs(bad)));
+
+  // 额度见底（402）也带 retry-after：照样不等。
+  //
+  // 上游给的 retry-after 说的是这个**请求**可以再来一次，不是这个**账号**可以
+  // 再来一次。额度见底等多久都一样，等下去只是把这一轮的时间吃掉，fallback
+  // 换账号被挤掉。
+  const spent = withCooldownUntil(
+    withUpstreamStatus(new AuthError("upstream HTTP 402", "上游返回 402", 502), 402),
+    Date.now() + 30_000,
+  );
+  check(
+    "402 带 retry-after → 不等（null）",
+    rateLimitWaitMs(spent) === null,
+    String(rateLimitWaitMs(spent)),
+  );
+}
+
+section("取值：头优先，其次正文里的语义（单元）");
+{
+  const { retryAfterMs } = await import("../lib/upstream-status.ts");
+
+  /** 一个只有头的答复。 */
+  const withHeader = (retryAfter?: string): Response =>
+    new Response("{}", { status: 429, headers: retryAfter ? { "retry-after": retryAfter } : {} });
+
+  check(
+    "头说 5 秒、正文说 30 秒 → 取头的那 5 秒",
+    retryAfterMs(withHeader("5"), "retry after 30 seconds") === 5_000,
+    String(retryAfterMs(withHeader("5"), "retry after 30 seconds")),
+  );
+  check(
+    "没有头 + 线上那条原文 → 30 秒",
+    retryAfterMs(withHeader(), ONLINE_BODY) === 30_000,
+    String(retryAfterMs(withHeader(), ONLINE_BODY)),
+  );
+  check(
+    "没有头 + retry shortly (after 30 s) → 30 秒",
+    retryAfterMs(withHeader(), "the cell is at capacity; retry shortly (after 30 s)") === 30_000,
+    String(retryAfterMs(withHeader(), "the cell is at capacity; retry shortly (after 30 s)")),
+  );
+  check(
+    "没有头 + Please retry in 45 seconds → 45 秒",
+    retryAfterMs(withHeader(), "Please retry in 45 seconds") === 45_000,
+    String(retryAfterMs(withHeader(), "Please retry in 45 seconds")),
+  );
+  check(
+    "没有头 + try again in 20s → 20 秒",
+    retryAfterMs(withHeader(), "try again in 20s") === 20_000,
+    String(retryAfterMs(withHeader(), "try again in 20s")),
+  );
+  check(
+    "没有头 + wait 30s → 30 秒",
+    retryAfterMs(withHeader(), "wait 30s") === 30_000,
+    String(retryAfterMs(withHeader(), "wait 30s")),
+  );
+  check(
+    "没有头 + 请 30 秒后重试 → 30 秒",
+    retryAfterMs(withHeader(), "请求过于频繁，请 30 秒后重试") === 30_000,
+    String(retryAfterMs(withHeader(), "请求过于频繁，请 30 秒后重试")),
+  );
+  check(
+    "没有头 + 正文里只有错误码与模型名 → 没有时间",
+    retryAfterMs(withHeader(), '{"error":{"code":3001,"message":"model 4.5 is overloaded"}}') === null,
+    String(retryAfterMs(withHeader(), '{"error":{"code":3001,"message":"model 4.5 is overloaded"}}')),
+  );
+  check(
+    "没有头 + 说的是两小时 → 读不懂（null）",
+    retryAfterMs(withHeader(), "retry after 2 hours") === null,
+    String(retryAfterMs(withHeader(), "retry after 2 hours")),
+  );
+
+  // 没有「重试」意思的句子不是等待窗口：那是超时文案。
+  //
+  // 读出来的秒数会被写进冷却表：一句普通英文把账号关掉半小时，那不是上游的
+  // 意思。
+  const notRetry: [string, string][] = [
+    ["超时文案", "Request timed out after 30 seconds"],
+    ["凭据过期", "the key expires in 30 minutes"],
+    ["任务完成", "the job completes in 30 seconds"],
+    ["等太久（超过一分钟）", "wait 2 minutes for the model to load"],
+  ];
+  for (const [name, body] of notRetry) {
+    const got = retryAfterMs(withHeader(), body);
+    check(`没有头 + ${name} → 没有时间（null）`, got === null, String(got));
+  }
+
+  // 头里的值不受一分钟那个上限约束：等不等是 policy 的事。
+  check(
+    "头说 120 秒 → 读出来还是 120 秒（上限是 policy 判的）",
+    retryAfterMs(withHeader("120"), "") === 120_000,
+    String(retryAfterMs(withHeader("120"), "")),
+  );
 }
 
 // 等网关进程真的退了再删它的目录：Windows 上它开着的库删不掉（EPERM）。

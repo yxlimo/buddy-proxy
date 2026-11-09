@@ -153,7 +153,7 @@ async function minimaxRejection(res: Response): Promise<AuthError> {
   const error = new AuthError(message, "", res.status, type);
   withUpstreamStatus(error, res.status);
   // 上游说的「过多久再试」：冷却到那时候为止（路由层看这个，不自己猜）。
-  const wait = retryAfterMs(res);
+  const wait = retryAfterMs(res, text);
   if (wait !== null) withCooldownUntil(error, Date.now() + wait);
   // 业务码：先在信封里找，再找正文末尾括号里的那个。MiniMax Code 报
   // Token Plan 用完时是 `当前已达到 Token Plan 用量上限…… (2067)`，码在

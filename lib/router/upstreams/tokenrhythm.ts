@@ -119,7 +119,7 @@ export async function toTokenRhythm(
       if (!response.ok) {
         const text = await response.text().catch(() => "");
         // retry-after 是上游说的「过多久再来」：挂到错误上，冷却照它算。
-        throw upstreamStatusError(response.status, text, "TokenRhythm ", retryAfterMs(response) ?? undefined);
+        throw upstreamStatusError(response.status, text, "TokenRhythm ", retryAfterMs(response, text) ?? undefined);
       }
       return { response, accountId };
     },

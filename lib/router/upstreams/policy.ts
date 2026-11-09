@@ -144,14 +144,6 @@ export function upstreamStatusError(
  * ------------------------------------------------------------------ */
 
 /**
- * 正文里出现这些之一，就是「每分钟 token 超限」（TPM）。
- *
- * 只有这一类才等：RPM（请求太密）等一下没意义 —— 那是请求本身的节奏不对，
- * 换账号才是对的。
- */
-const TPM_MARKERS = ["tpm", "tokens per minute", "rate_limit_tpm_exceeded"];
-
-/**
  * 上游没说要等多久时，等多久（毫秒）。
  *
  * 一分钟窗口的一半：保守。早回来了只是再失败一次。
@@ -161,9 +153,9 @@ const DEFAULT_RATE_WAIT_MS = 30_000;
 /**
  * 一次最多等多久（毫秒）。
  *
- * 超过两分钟就不等了：客户端等不了那么久，那种情况照旧报错 + 降级。
+ * 一分钟以内才等：客户端等不了更久，那种情况照旧报错 + 降级。
  */
-const MAX_RATE_WAIT_MS = 120_000;
+const MAX_RATE_WAIT_MS = 60_000;
 
 /**
  * 一个账号上这一轮总共最多花多久（毫秒）。
@@ -216,29 +208,45 @@ const TRANSIENT_RETRY_DELAYS_MS = [300, 900, 2700];
 export { rateWaitedOf, withRateWaited, type RateWaited } from "../account-cooldown.ts";
 
 /**
- * 这个失败是「每分钟 token 超限」吗。
+ * 这个失败是限流吗。
  *
- * 只有 TPM 类才算：RPM 等一下没意义，换账号才是对的。
+ * 分类说了算（见 classifyUpstreamError）：正文里有没有「每分钟 token 超限」
+ * 那几个字是上游自己的说法，不是网关的判据 —— 上游说「限流」时它就是限流。
  */
-function isTokenRateLimit(error: unknown): boolean {
-  const text = errorTextOf(error).toLowerCase();
-  return TPM_MARKERS.some((marker) => text.includes(marker));
+function isRateLimitFailure(error: unknown): boolean {
+  return classifyUpstreamError(error).kind === "rate-limit";
 }
 
 /**
  * 等多久（毫秒）。null = 等不起，照旧报错。
  *
- * 等多久：上游自己说的（retry-after，挂在错误上）；没说的话按一分钟窗口的
- * 一半。上游说了「过两分半再来」就是等不起 —— 客户端等不了那么久。
+ * 判据：
+ *
+ *   - **只有限流才等**：分类说了算（见 classifyUpstreamError）。额度见底（402）、
+ *     凭据被拒（401）、请求本身的问题（400）都不是「等一会儿就好」—— 那些失败
+ *     等多久都一样，换账号才是对的。上游给了 retry-after 也不等：那个头说的是
+ *     「这个请求可以再来一次」，不是「这个账号可以再来一次」。
+ *   - 上游说了「过多久再来」（错误上带着那个时刻）→ 等它。过了就不等，
+ *     超过一分钟也不等 —— 客户端等不了那么久；
+ *   - 上游什么也没说，但这次是限流 → 等默认的三十秒。
+ *
+ * 为什么不再区分 TPM 与 RPM：上游说「限流」时它就是限流，正文里有没有那几个
+ * 标记不是网关的判据。分不分的后果只有两个：
+ *
+ *   - 只有一个账号可换的平台：等三十秒比立刻失败强（上游抽一下就好了）；
+ *   - 有别的账号可换的：等完这一轮再交给策略换人 —— 换人要快，但先把这一轮
+ *     等完不吃亏（上游的窗口通常只有几秒）。
  *
  * `now` 是钟：测试要能把「等多久」算准（注入的钟与真钟差几毫秒，断言就飘）。
  */
 export function rateLimitWaitMs(error: unknown, now: () => number = Date.now): number | null {
-  if (!isTokenRateLimit(error)) return null;
+  if (!isRateLimitFailure(error)) return null;
   const until = cooldownUntilOf(error);
-  const wait = until === null ? DEFAULT_RATE_WAIT_MS : until - now();
-  if (wait <= 0 || wait > MAX_RATE_WAIT_MS) return null;
-  return wait;
+  if (until !== null) {
+    const wait = until - now();
+    return wait > 0 && wait <= MAX_RATE_WAIT_MS ? wait : null;
+  }
+  return DEFAULT_RATE_WAIT_MS;
 }
 
 /** 等一会儿（毫秒）。 */
@@ -316,7 +324,8 @@ function whyNotCooling(error: unknown): string {
  * 「这一次没成事，过一会儿再来」。分成两层的话，一个 TPM 限流过的账号会先等
  * 完窗口、再把瞬时重试的次数从头数一遍，最坏打到五次，日志也会出现两套说法。
  *
- *   - TPM 限流：等上游说的那个窗口（两分钟以内）再来一次，最多等三回。客户端
+ *   - 限流：等上游说的那个窗口（一分钟以内；上游什么也没说就等默认的三十秒）
+ *     再来一次，最多等三回。客户端
  *     这时候只是在等答复，不该看到 429/503 —— 等发生在拿到答复之前，连接一直
  *     开着，不会写出半截答复。等过的这个账号带一个标记：但只贴在「最终抛出的
  *     那个错误本身还是限流」时 —— 那样冷却不写它（见 cooldownForFailure），它
@@ -426,6 +435,13 @@ export async function runWithRetries<A extends { id: string }, T>(
     // 预算要算上上游花掉的时间：上一次尝试可能已经吃掉了大头，这时候再打一次
     // 只会在客户端已经等不下去之后才回。第一次尝试前剩余必然为正，不用判。
     if (attempts > 0 && deadline - clock() <= 0) {
+      // 预算用完时，标记要按「到底等没等过最后一轮」处理：
+      //   - 三轮窗口都等完了还是限流：账号确实被限住了 → 冷却照记（等于等够了）；
+      //   - 预算不够、最后一轮没等：不能算「等过了」→ 冷却也照记。
+      // 两条都是「不贴标记」，区别只在语义。贴错的后果是：还在限流的账号不记
+      // 冷却，下一个请求又挑它、再白等一轮。
+      if (rateWaits >= MAX_RATE_WAITS) rateWaitsExhausted = true;
+      else rateWaited = false;
       console.log(
         `[ROUTE] ${what} account=${account.id} out of time (${Math.round(budgetMs / 1000)}s), not trying again`,
       );
@@ -453,16 +469,22 @@ export async function runWithRetries<A extends { id: string }, T>(
           stop(e, true);
         }
         // 等到手也过了这一轮的总时限：不再等，也不再试。
+        //
+        // 最后一轮根本没等 → 不能算「等过了限流窗口」：那个标记的意思是
+        // 「这个限流是我们替它等过的」，而这一轮我们没等（等的是上一轮）。
+        // 贴错了的后果是那个还在限流的账号不记冷却，下一个请求又挑它，
+        // 再白等一轮。所以在这里先把标记摘掉。
         if (clock() + wait > deadline) {
+          rateWaited = false;
           console.log(
-            `[ROUTE] ${what} account=${account.id} is rate limited on tokens, no time left for a ${Math.ceil(wait / 1000)}s wait, not waiting`,
+            `[ROUTE] ${what} account=${account.id} is rate limited, no time left for a ${Math.ceil(wait / 1000)}s wait, not waiting`,
           );
           stop(e, true);
         }
         rateWaits += 1;
         rateWaited = true;
         console.log(
-          `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying (wait ${rateWaits}/${MAX_RATE_WAITS})`,
+          `[ROUTE] ${what} account=${account.id} is rate limited, waiting ${Math.ceil(wait / 1000)}s then retrying (wait ${rateWaits}/${MAX_RATE_WAITS})`,
         );
         await nap(wait);
         continue;
@@ -532,6 +554,12 @@ function upstreamBodyOf(error: unknown): string | null {
 
 /**
  * 上游自己的答复：状态码与正文。没有就是 null（那是网关自己编的错）。
+ *
+ * 正文只认上游自己的：传输层留在错误上的那份。网关自己写的那句话（qoder 的
+ * 「删掉 session 文件后重启服务即可重新登录」、tokenrhythm 的「TokenRhythm
+ * 上游返回 429：…」）不是上游的答复 —— 把它当上游的答复交给客户端，客户端
+ * 看到的就是网关的话，排查时也会认错对象。传输层没留下正文时就是空正文：
+ * 上游说了什么，客户端看不到（那不是答复的一部分）。
  */
 function upstreamAnswerOf(error: unknown): { status: number; body: string } | null {
   const status = upstreamSaidStatus(error);
@@ -556,6 +584,13 @@ function upstreamAnswerError(answered: { status: number; body: string }, origina
     answered.status,
     answerTypeOf(answered.status),
   );
+  // 上游说过的话，另放在客户端看不到的地方（客户端只拿 message 与 hint）。
+  //
+  // 传输层没把上游的正文留在错误上时，那些话就在原始错误里（MiniMax 的
+  // 「您的限额将在 2026-10-30 07:55:44 重置」）。冷却那一步要读它来算恢复
+  // 时刻（见 lib/router/account-cooldown.ts 的 errorTextOf）—— 客户端拿到的
+  // 答复里不该混着网关的话，但记账要算得到。
+  (error as { detail?: string }).detail = errorTextOf(original);
   // 上游说的「过多久再来」也跟着走：冷却要照上游说的那个时刻算，不是照固定的
   // 一分钟（那会把一个只限流一分钟的账号下线五分钟）。
   const until = cooldownUntilOf(original);
@@ -650,6 +685,12 @@ function tenantLevelFailure(
     code === null ? null : `业务码 ${code}`,
   ].filter((part): part is string => part !== null);
   const because = said.length ? `（${said.join("，")}）` : "";
+  // The client reads the type too. A refused credential keeps the type the
+  // rest of the gateway uses for a credential problem (the 503 default),
+  // and the two quota-ish ones say what they are.
+  let type: string | undefined;
+  if (kind === "rate-limit") type = "rate_limit_error";
+  else if (kind === "quota") type = "usage_limit_error";
   // The code goes into the message too: a client that reads only
   // error.message still sees which failure it was.
   return {
@@ -662,10 +703,7 @@ function tenantLevelFailure(
     // 额度用尽是 402：客户端看到的是「充值/等额度」。其余的租户级错误是网关
     // 自己的事，客户端处理不了，503。
     status: kind === "quota" ? 402 : 503,
-    // The client reads the type too. A refused credential keeps the type the
-    // rest of the gateway uses for a credential problem (the 503 default),
-    // and the two quota-ish ones say what they are.
-    type: kind === "rate-limit" ? "rate_limit_error" : kind === "quota" ? "usage_limit_error" : undefined,
+    type,
   };
 }
 
@@ -1029,9 +1067,14 @@ export async function underPolicy<T>(
       const moves = isDegradableUpstreamError(error);
       const at = candidates.findIndex((c) => c.id === candidate.id);
       const next = moves && policy === "fallback" ? candidates[at + 1]?.id : undefined;
+      // 换不换人、换到谁，说清楚：换人有目标就报目标，没有目标而策略是要换的
+      // 就报「没人可换了」，其余报「不换」。
+      let switching = ", not switching";
+      if (next) switching = `, trying ${next}`;
+      else if (moves && policy === "fallback") switching = ", no account left";
       console.log(
         `[ROUTE] ${what} account=${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
-          (next ? `, trying ${next}` : moves && policy === "fallback" ? ", no account left" : ", not switching") +
+          switching +
           (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : whyNotCooling(error)),
       );
     },

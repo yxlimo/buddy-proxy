@@ -71,9 +71,9 @@ async function requestJson(url: string, session: SenseNovaSession, init: Platfor
     // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。
     if (r.status === 401) clearSession();
     const error = classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
-    // 429 会带 Retry-After：额度要用它算出「什么时候恢复」，而 classify 只看得到
-    // 状态码与正文，看不到头。只在这一处补上。
-    error.retryAfterMs = retryAfterMs(r);
+    // 429 会带 Retry-After（有时只写在正文里）：额度要用它算出「什么时候恢复」，
+    // 而 classify 只看得到状态码与正文，看不到头。只在这一处补上。
+    error.retryAfterMs = retryAfterMs(r, text);
     throw error;
   }
   // 有些接口用 code 表示业务错误。成功的结果里没有这个字段。
