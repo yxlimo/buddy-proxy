@@ -20,25 +20,32 @@ import {
   providersNeedingLogin,
 } from "../login.ts";
 import {
-  ensureSenseNovaKey,
   refreshSenseNovaCatalog,
   senseNovaCatalog,
+  senseNovaInferenceKey,
 } from "../sensenova/transport.ts";
 import {
   loadSession as loadSenseNovaSession,
   login as loginSenseNova,
 } from "../sensenova/auth.ts";
 import {
-  ensureInternAiKey,
   internAiCatalog,
+  internAiInferenceKey,
   refreshInternAiCatalog,
 } from "../intern-ai/transport.ts";
 import { loadSession as loadInternAiSession } from "../intern-ai/auth.ts";
-import { PLATFORMS } from "../platforms.ts";
+import { listOpenPlatforms } from "../open-platforms.ts";
+import {
+  openPlatformCatalogRefreshable,
+  openPlatformCatalogStale,
+  openPlatformHasKey,
+  refreshOpenPlatformCatalog,
+} from "../open-platform-catalog.ts";
+import { allPlatforms } from "../platforms.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { benefits } from "../admin/benefits.ts";
 import { pruneUsage } from "../usage.ts";
-import { enabledAccounts, refreshWorkBuddyCatalog } from "./catalog-routes.ts";
+import { refreshWorkBuddyCatalog } from "./catalog-routes.ts";
 
 /** The background work of a start: the logins, the catalogues, the timers. */
 export function startUpstreams(): void {
@@ -92,6 +99,28 @@ export function startUpstreams(): void {
   // 抓到的第一份就写进库，写死的那张引导表也就退场了）。
   void refreshWorkBuddyCatalog();
 
+  // 开放平台的目录：表里那些平台的模型清单要问上游要。人写死的不动（那是
+  // 明确的意思），刚拉过的也不必再问 —— 启动时拉一次，新加的平台不用等谁来
+  // 问 /v1/models 才有目录可用。
+  for (const row of listOpenPlatforms()) {
+    // 模板优先：表里这一行跟代码里的模板重名时不生效（拉回来的目录写回去也
+    // 会被拒），别白拉一次。人写死的目录也不动（那是明确的意思）。
+    if (!openPlatformCatalogRefreshable(row)) continue;
+    if (!openPlatformCatalogStale(row)) continue;
+    // 没有 key 是正常状态（平台刚建、还没填 key）：不问上游，也不说话。
+    if (!openPlatformHasKey(row.id)) continue;
+    // 双保险：refreshOpenPlatformCatalog 自己不 reject（库开不了、SQLITE_BUSY
+    // 都归一成 { ok: false }），这里再兜一层 —— 后台的 promise 没人接，reject
+    // 出去就是一次未处理的 rejection（Node 当它致命，网关就退了）。
+    void refreshOpenPlatformCatalog(row.id)
+      .then((outcome) => {
+        if (outcome.ok) console.log(`  [OPEN-PLATFORM] ${row.id} 模型目录：${outcome.message}`);
+        // 拉不到的那一行告警由目录自己写（lib/open-platform-catalog.ts）：同一
+        // 次失败只留一行，两处都写就是刷屏。
+      })
+      .catch((e) => console.warn(`  [OPEN-PLATFORM] ${row.id} 的模型目录没拉到：${(e as Error).message}`));
+  }
+
   for (const provider of providersNeedingLogin("workbuddy")) {
     void ensureWorkBuddySession(provider)
       .then(async (outcome) => {
@@ -110,7 +139,8 @@ export function startUpstreams(): void {
   }
 
   // 中转站：一个账号一行一个钱包，启动时问一遍平台，余额不明就早说。
-  for (const template of PLATFORMS) {
+  // 平台全在表里（代码里的模板名单已经空了），按 allPlatforms() 走。
+  for (const template of allPlatforms()) {
     if (template.kind !== "tokenrhythm") continue;
     if (!accountsOfPlatform(template.id).length) continue;
     void tokenRhythmStatuses(template.id)
@@ -128,9 +158,12 @@ export function startUpstreams(): void {
   }
 
   // 账号一行一个：谁的会话没了就补谁的，不停在整个平台上。
-  for (const row of enabledAccounts("sensenova")) {
-    // 推理端点要的是一把 key，不是 cookie。账号上有会话却没有 key 的（老版本
-    // 登录留下的），在这里补一把 —— 登录完了上游才是 READY 的。
+  //
+  // 这里要的是「开着的账号」，不是「能服务的账号」：没有凭据的那个正是要
+  // 登录的那一个（enabledAccounts 只给已经拿着凭据的那些）。
+  for (const row of accountsOfPlatform("sensenova").filter((account) => account.enabled)) {
+    // 推理端点要的是一把 key，不是 cookie。key 由用户自己在面板上填：没有就
+    // 没有，网关不替人建一把（平台只把完整值给一次）。
     void (async () => {
       // SenseNova 的登录是账号密码加 PKCE，不用开浏览器，所以没有会话时
       // 网关自己登 —— 凭据在环境里，够用。
@@ -139,13 +172,16 @@ export function startUpstreams(): void {
         console.log(`  [SENSENOVA] ${row.id} 还没有登录态，用环境里的账号密码登录`);
         session = await loginSenseNova(undefined, undefined, row.id);
       }
-      await ensureSenseNovaKey(session, row.id);
+      if (!senseNovaInferenceKey(row.id)) {
+        console.log(`  [SENSENOVA] ${row.id} 没有推理用的 API key，请在面板上填一把`);
+        return;
+      }
       await refreshSenseNovaCatalog(true, row.id);
       console.log(`  [SENSENOVA] ${row.id} 模型清单：${senseNovaCatalog().length} 个`);
     })().catch((e) => console.warn(`  [SENSENOVA] ${row.id}: ${(e as Error).message}`));
   }
 
-  for (const row of enabledAccounts("intern-ai")) {
+  for (const row of accountsOfPlatform("intern-ai").filter((account) => account.enabled)) {
     // 与 SenseNova 一样：推理端点认的是 Discovery 子站那把 key。
     void (async () => {
       const session = loadInternAiSession(row.id);
@@ -154,7 +190,10 @@ export function startUpstreams(): void {
         console.log(`  [INTERN-AI] ${row.id} 还没有登录态，在面板上登录一次即可`);
         return;
       }
-      await ensureInternAiKey(session, row.id);
+      if (!internAiInferenceKey(row.id)) {
+        console.log(`  [INTERN-AI] ${row.id} 没有推理用的 API key，请在面板上填一把`);
+        return;
+      }
       await refreshInternAiCatalog(true, row.id);
       console.log(`  [INTERN-AI] ${row.id} 模型目录：${internAiCatalog().length} 个`);
     })().catch((e) => console.warn(`  [INTERN-AI] ${row.id}: ${(e as Error).message}`));

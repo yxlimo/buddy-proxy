@@ -11,7 +11,6 @@ import {
   GetLoginStatusResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
-  ListProviderKindsResponseSchema,
   ListUpstreamsResponseSchema,
   LoginSessionSchema,
   LogoutAccountResponseSchema,
@@ -95,7 +94,6 @@ function clientWith(
     ListUpstreams: () =>
       create(ListUpstreamsResponseSchema, { upstreams: [platform(accounts)] }),
     ListAccounts: () => create(ListAccountsResponseSchema, { accounts }),
-    ListProviderKinds: () => create(ListProviderKindsResponseSchema, { kinds: [] }),
     ListCredentials: (input) =>
       create(ListCredentialsResponseSchema, {
         credentials: [
@@ -272,8 +270,12 @@ describe('平台下的账号', () => {
 
     const dialog = await screen.findByRole('alertdialog')
     // 说清楚凭据一起删、删完回不来。
-    expect(within(dialog).getByText(/2 条凭据也一起删掉/)).toBeInTheDocument()
-    expect(within(dialog).getByText(/删完回不来/)).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(/同时删除其名下的 2 条凭据，且不可恢复/)
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(/平台本身保留，客户端的地址不变/)
+    ).toBeInTheDocument()
     // 还没确认：什么都没发。
     expect(deleted).toEqual([])
 
@@ -456,7 +458,7 @@ describe('平台下的账号', () => {
     await screen.findByText('备用')
 
     // 点第二个账号的铅笔：改的是那一行自己的名字。
-    await user.click(screen.getByRole('button', { name: '改 minimax-3 的别名' }))
+    await user.click(screen.getByRole('button', { name: '编辑 minimax-3 的别名' }))
     const input = screen.getByLabelText('minimax-3 的别名')
     await user.clear(input)
     await user.type(input, '主账号备用')

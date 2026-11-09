@@ -45,6 +45,8 @@ enum UpstreamState {
 //
 // 一个平台下面可以有多个账号（`accounts`），账号才是 provider 表里的行。
 message Upstream {
+  reserved 23, 26, 30;
+  reserved "models_auto", "models_source", "models_from_upstream";
   // 平台的 id，也是路径里那一段。
   string id = 1;
   // 给人看的名字。
@@ -88,6 +90,22 @@ message Upstream {
   int64 recovers_at_ms = 20;
   // 一句给面板直接用的话（比如「冷却到 12:23（rate-limit）」）。没有就空串。
   string state_reason = 21;
+  // 额度插件：开放平台填的插件 id（模板平台没有这一格，空串）。
+  string quota_plugin = 22;
+  // 这是不是一个开放平台（表里的那一行，不是代码里的模板）。
+  bool is_open_platform = 24;
+  // 模型目录（模型名）：值来自上游，不改。
+  repeated string models = 25;
+  // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。模板平台没有这一格，0。
+  int64 models_fetched_at_ms = 27;
+  // 人给这些模型写的元数据（见 ModelOverride）。open 平台与模板平台都可能有。
+  repeated ModelOverride model_overrides = 28;
+  // 这个平台在数据库里有没有属于它的那一行（模拟客户端与自建平台都有；
+  // 只存在于代码里的那一族没有）。有行的平台才能在面板上改与删。
+  bool from_row = 29;
+  // 平台自己给的信息不足时，从共性表（模型 id → 能力参数）里补。
+  // 默认关：只有用户明确打开才用。人工元数据仍然优先于它。
+  bool traits_from_common = 31;
 }
 
 // provider 的生效策略：上游名下的多个账号（租户）里，先调谁、失败后换谁。
@@ -155,6 +173,16 @@ message UpstreamQuota {
   CreditSummary credits = 4;
   // 套餐额度（按窗口的百分比）。
   TokenPlan token_plan = 5;
+  // 这一次问额度的结论，原样透出插件给的状态：ok / no_quota / blocked /
+  // unauthorized / rate_limited / missing / unknown。空串 = 这一份答复没有额度
+  // 结论（没选插件、插件没登记、这一轮没问），与 unknown（问了但问不到）不同。
+  string quota_state = 6;
+  // 什么时候恢复。Unix 毫秒；0 = 不知道。
+  int64 recover_at_ms = 7;
+  // 给人看的一句话（为什么没有数字、为什么用不了）。空串 = 没有话要说。
+  string message = 8;
+  // 账号的名字（账号行上的 alias）。空串 = 这个账号没设名字，面板退回显示 id。
+  string account_name = 9;
 }
 
 // 余额：钱。同一平台的多个账号可以合并。
@@ -410,8 +438,9 @@ message SetProviderKeysRequest {
 }
 
 message SetProviderKeysResponse {
-  bool ok = 1;
-  string message = 2;
+  reserved 1, 2;
+  reserved "ok", "message";
+  // 写进去了几段。0 是正当的答复（清掉了）。
   int32 count = 3;
 }
 
@@ -428,8 +457,10 @@ message AddAccountRequest {
 }
 
 message AddAccountResponse {
-  bool ok = 1;
-  string message = 2;
+  // 曾经是 ok / message 两格。失败不再是「成功的答复里写着 false」：它是一次
+  // Connect 错误，机器码在响应头 buddy-error 上（见下面 AdminService 那段说明）。
+  reserved 1, 2;
+  reserved "ok", "message";
   // 新账号的 id。
   string id = 3;
 }
@@ -509,6 +540,157 @@ message ProviderKind {
 // 面板上能选的类型。面板不问后端有哪些类，它问。
 message ListProviderKindsResponse {
   repeated ProviderKind kinds = 1;
+}
+
+// ── 开放平台 ────────────────────────────────────────────────────────────
+
+// 一个开放平台：表里的一行（代码里的模板不是开放平台）。
+message OpenPlatform {
+  reserved 6, 8;
+  reserved "models_auto", "models_source";
+  string id = 1;
+  string label = 2;
+  string base_url = 3;
+  // 额度插件的 id。空串 = 不选插件。
+  string quota_plugin = 4;
+  // 模型目录（模型名）：值来自上游，不改。
+  repeated string models = 5;
+  // 上次拉目录的时刻（Unix 毫秒）。0 = 没拉过。
+  int64 models_fetched_at_ms = 7;
+  // 这个平台用哪一类适配器（kind 注册表里的那一个）：openai / qiniu / xinghuo /
+  // sensenova / intern-ai / tokenrhythm。建平台时定下，之后不能改。
+  string kind = 9;
+}
+
+// 加一个开放平台。先建空平台，再加账号 —— 这里不接 key、不接模型清单。
+message AddPlatformRequest {
+  string id = 1;
+  string label = 2;
+  // 方言类的平台必须给；预置的模拟客户端类忽略这一格（地址由模拟端定）。
+  string base_url = 3;
+  // 哪一类。两种取值都收：
+  //
+  //   方言（openai / anthropic，空串当 openai）：id 与地址都由调用方填。
+  //   预置的模拟客户端（minimax / qoder / workbuddy）：id 只能是那一类预置的
+  //   id（minimax / qoder / qoder-cn / workbuddy-cn / workbuddy-global），
+  //   地址与区域照预置来。
+  string kind = 4;
+  // 额度插件的 id。三种给法是三件事：
+  //
+  //   没给   = 用这一类声明的默认插件（kind 注册表里的 default_quota_plugin）。
+  //   空串   = 不用插件。
+  //   给了 id = 用这个（必须已登记；没登记就拒，不写库）。
+  //
+  // 带 presence 是为了分清「没给」与「给了空串」：没有 presence 时这两件事在线上
+  // 是同一份字节，用户在弹窗里选「不选插件」就变成了「用默认插件」。
+  optional string quota_plugin = 5;
+}
+
+message AddPlatformResponse {
+  reserved 1, 2;
+  reserved "ok", "message";
+  OpenPlatform platform = 3;
+}
+
+// 改一个开放平台。
+//
+// base_url 与 quota_plugin 带 presence：没给 = 别动这一格，给了空串 = 清空。
+// 没有 presence 时这两件事在线上是同一份字节，只改一部分字段的调用方（只改名字
+// 的面板、对模拟客户端平台故意不发这两格的面板）就会把没送的格清掉。
+//
+// label 与 base_url 空串要拒（平台必须有名字与地址）；quota_plugin 空串
+// = 不选插件。模型目录不在这里改：目录归上游还是归代码由平台的族决定。
+message UpdatePlatformRequest {
+  reserved 5, 6;
+  reserved "models_auto", "models";
+  string id = 1;
+  string label = 2;
+  // 没给 = 别动这一格；给了空串 = 清空（空串会被地址校验拦下：平台得有地址）。
+  optional string base_url = 3;
+  // 没给 = 别动这一格；给了空串 = 清空（= 不选插件）。
+  optional string quota_plugin = 4;
+  // 平台自己给的信息不足时，从共性表（模型 id → 能力参数）里补。
+  // 默认关：只有用户明确打开才用。人工元数据仍然优先于它。
+  // 没给 = 别动这一格；给了就照给的值写。
+  optional bool traits_from_common = 7;
+}
+
+message UpdatePlatformResponse {
+  reserved 1, 2;
+  reserved "ok", "message";
+  OpenPlatform platform = 3;
+}
+
+// 删一个开放平台。名下账号、凭据、额度、冷却一并清掉；指向它的已发布模型按现有
+// 规矩处理。模板平台删不掉。
+message DeletePlatformRequest {
+  string id = 1;
+}
+
+message DeletePlatformResponse {
+  reserved 1, 2;
+  reserved "ok", "message";
+}
+
+// 现在去问一次上游的模型目录。拉不到不是错误：ok=false 且保留原来那份。
+message RefreshPlatformModelsRequest {
+  string platform_id = 1;
+}
+
+message RefreshPlatformModelsResponse {
+  bool ok = 1;
+  string message = 2;
+  repeated string models = 3;
+}
+
+// 面板能选的额度插件。
+message ListQuotaPluginsRequest {}
+
+// 一个插件要的一段凭据。
+//
+// name 不是给人看的名字（那是 label）：它是这段凭据在库里的 id 后缀。
+message QuotaPluginField {
+  string name = 1;
+  string label = 2;
+  // 面板上要遮蔽显示。
+  bool secret = 3;
+}
+
+message QuotaPlugin {
+  string id = 1;
+  string label = 2;
+  repeated QuotaPluginField fields = 3;
+}
+
+message ListQuotaPluginsResponse {
+  repeated QuotaPlugin plugins = 1;
+}
+
+// 建平台时能选的一类适配器。
+message PlatformKind {
+  reserved 4;
+  reserved "models_from_upstream";
+  // kind 注册表里的那一类（写进 OpenPlatform.kind）。
+  string kind = 1;
+  // 面板上显示的名字。
+  string label = 2;
+  // 建平台时给这个地址占位；用户可以改。
+  string default_base_url = 3;
+  // 这一条是「方言」还是「预置的模拟客户端」。
+  // dialect = 用户自己加的平台（选的是报文格式）；simulated = 从预置里挑一个。
+  string category = 5;
+  // 预置平台建出来的 id（方言类为空串：id 由用户填）。
+  string preset_id = 6;
+  // 预置平台的区域（cn / global / 空串）。方言类为空串。
+  string region = 7;
+  // 建平台时给这一格预填（额度插件那一格）；用户可以改。空串 = 这一类没有额度接口。
+  string default_quota_plugin = 8;
+}
+
+message ListPlatformKindsRequest {}
+
+message ListPlatformKindsResponse {
+  repeated PlatformKind kinds = 1;
 }
 
 // ── 余额 ──────────────────────────────────────────────────────────────────
@@ -700,14 +882,14 @@ message ListPublishedModelsResponse {
 }
 
 message SavePublishedModelRequest {
-  // model.id 为空表示新建，非空表示改那一条。
+  // model.id 必填：新建时先起一个对外的 id，保存的是那一条（同 id 覆盖）。
   PublishedModel model = 1;
 }
 
 message SavePublishedModelResponse {
-  bool ok = 1;
+  reserved 1, 3;
+  reserved "ok", "message";
   string id = 2;
-  string message = 3;
 }
 
 message DeletePublishedModelRequest {
@@ -758,12 +940,82 @@ message CatalogModel {
   bool reasoning = 5;
   bool tool_call = 6;
   repeated string effort_options = 7;
-  // 计费倍率，0 是免费。
-  double credits = 8;
+  // 计费倍率。没给 = 不知道（面板不显示倍率）；给了 0 = 免费。
+  optional double credits = 8;
 }
 
 message ListModelsResponse {
   repeated CatalogModel models = 1;
+}
+
+// 可选档位。给了这个字段 = 人写了档位；列表为空 = 这个模型不能选档
+// （固定一档，或者不能思考）。
+//
+// 单独包一层是为了拿到 presence：repeated 没有 presence，而这里要把「没写」与
+// 「写了、一个档都没有」分开 —— 消息字段在不在正好能表达这件事。
+message EffortList {
+  repeated string levels = 1;
+}
+
+// 人给某个模型写的元数据。同 id 的那一条按这里说的来；没给的字段（optional
+// 没写）沿用原来的来源：代码里的那张表、上游拉回来的那份，或者最小形状。
+//
+// 只写 id 就是「把这个模型加进目录，元数据仍按原来的来源取」。
+message ModelOverride {
+  string id = 1;
+  optional string display_name = 2;
+  optional int32 context_window = 3;
+  optional int32 max_output_tokens = 4;
+  optional bool reasoning = 5;
+  optional bool tool_call = 6;
+  // 可选档位。没给 = 没写（沿用原来的档位）；给了空列表 = 明确不能选档。
+  optional EffortList effort_options = 7;
+  // 这里原来是「默认选哪一档」。目录里没有这一格（CatalogModel 没有），写了
+  // 也到不了路由 —— 存下来只是骗人，删掉。
+  reserved 8;
+  // 计费倍率。没给 = 不知道（面板不显示倍率）；给了 0 = 免费。
+  optional double credits = 9;
+}
+
+// 看某个平台当前「人写的」那部分：哪些模型是人工加的、各自写了哪些字段。
+message ListModelOverridesRequest {
+  // 平台 id，开放平台与模板平台都行。
+  string platform_id = 1;
+}
+
+message ListModelOverridesResponse {
+  repeated ModelOverride overrides = 1;
+}
+
+// 按模型 id 覆盖某个平台「人写的」那部分。
+//
+// 发来的每一条：同 id 的换掉、新 id 的加进来。**没发来的条目原封不动** ——
+// 这不是整体替换，删要靠 DeleteModelOverride 显式说。空列表于是什么都不改。
+//
+// 只写 id 的条目 = 把该模型加进目录，元数据仍按原来的来源取；给了字段就覆盖
+// 对应字段。
+message SetModelOverridesRequest {
+  string platform_id = 1;
+  repeated ModelOverride overrides = 2;
+}
+
+message SetModelOverridesResponse {
+  reserved 1, 2;
+  reserved "ok", "message";
+}
+
+// 删一条人工条目。
+//
+// 覆盖语义下「没发来」不再等于删，所以删要有自己的一条路：发来的 id 在就删掉，
+// 不在就是一条 Connect 错误（不是静默成功）。
+message DeleteModelOverrideRequest {
+  string platform_id = 1;
+  string model_id = 2;
+}
+
+message DeleteModelOverrideResponse {
+  reserved 1, 2;
+  reserved "ok", "message";
 }
 
 message TailLogRequest {
@@ -890,6 +1142,21 @@ message ImportLoginTokenResponse {
 
 // ── 服务 ──────────────────────────────────────────────────────────────────
 
+// 失败怎么表达（只对下面列出的那八个方法）：
+//
+//   成功  200，答复里没有 ok / message 两格。
+//   失败  一次 Connect 错误，状态码按语义选（InvalidArgument / NotFound /
+//         AlreadyExists / FailedPrecondition / Internal）。
+//
+// 面板要显示的文案不在这份契约里：错误消息（第一个参数）只放排查用的事实
+// （哪个 id、上游原文），不给用户读。给面板的是响应头 buddy-error 上的机器
+// 码，稳定、可枚举，面板拿它查自己那张文案表。这样同一件事不会在两侧各写
+// 一份中文。
+//
+// 这八个方法是：AddPlatform、UpdatePlatform、DeletePlatform、AddAccount、
+// SetProviderKeys、SavePublishedModel、SetModelOverrides、DeleteModelOverride。
+// 其余方法还带着 ok / message（它们没改，别照这八个的样子动）。
+
 service AdminService {
   rpc GetSystemStatus(GetSystemStatusRequest) returns (GetSystemStatusResponse);
   rpc RestartSystem(RestartSystemRequest) returns (RestartSystemResponse);
@@ -915,6 +1182,18 @@ service AdminService {
   // 删一个账号：行与它的凭据一起删。平台删不掉。
   rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse);
   rpc ListProviderKinds(ListProviderKindsRequest) returns (ListProviderKindsResponse);
+  // 开放平台是表里的一行，不是代码里的模板。这几个方法管它。
+  rpc AddPlatform(AddPlatformRequest) returns (AddPlatformResponse);
+  rpc UpdatePlatform(UpdatePlatformRequest) returns (UpdatePlatformResponse);
+  rpc DeletePlatform(DeletePlatformRequest) returns (DeletePlatformResponse);
+  rpc RefreshPlatformModels(RefreshPlatformModelsRequest) returns (RefreshPlatformModelsResponse);
+  rpc ListQuotaPlugins(ListQuotaPluginsRequest) returns (ListQuotaPluginsResponse);
+  // 建平台时的「用哪一类适配器」下拉。
+  rpc ListPlatformKinds(ListPlatformKindsRequest) returns (ListPlatformKindsResponse);
+  // 人给模型写的元数据。平台一级一份，模板平台与开放平台共用。
+  rpc ListModelOverrides(ListModelOverridesRequest) returns (ListModelOverridesResponse);
+  rpc SetModelOverrides(SetModelOverridesRequest) returns (SetModelOverridesResponse);
+  rpc DeleteModelOverride(DeleteModelOverrideRequest) returns (DeleteModelOverrideResponse);
 
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
 

@@ -14,7 +14,7 @@ import { renderWithClient } from '@/test/render'
  *
  * 静悄悄地退化成一个输入框，用户会以为「就只能手填」。
  */
-describe('上游模型 id 的目录', () => {
+describe('平台模型 id 的目录', () => {
   it('目录是空的：说清楚「没有目录，手填模型 id」', async () => {
     const client = mockAdminClient({
       ListModels: () => create(ListModelsResponseSchema, { models: [] }),
@@ -28,7 +28,7 @@ describe('上游模型 id 的目录', () => {
     })
 
     expect(
-      await screen.findByText('这个上游没有目录，手填模型 id。')
+      await screen.findByText('这个平台没有目录，手填模型 id。')
     ).toBeInTheDocument()
     // 退回来的确实是一个输入框。
     expect(screen.getByRole('textbox')).toBeInTheDocument()
@@ -56,7 +56,7 @@ describe('上游模型 id 的目录', () => {
       expect(screen.getByRole('combobox')).toBeInTheDocument()
     })
     expect(
-      screen.queryByText('这个上游没有目录，手填模型 id。')
+      screen.queryByText('这个平台没有目录，手填模型 id。')
     ).not.toBeInTheDocument()
   })
 
@@ -71,7 +71,7 @@ describe('上游模型 id 的目录', () => {
     })
 
     expect(
-      await screen.findByText('先选 Provider 组，才有模型目录可选。')
+      await screen.findByText('先选平台组，才有模型目录可选。')
     ).toBeInTheDocument()
   })
 
@@ -90,7 +90,7 @@ describe('上游模型 id 的目录', () => {
     })
 
     expect(
-      await screen.findByText('取模型目录失败，手填一个上游模型 id。')
+      await screen.findByText('取模型目录失败，手填一个平台模型 id。')
     ).toBeInTheDocument()
   })
 })

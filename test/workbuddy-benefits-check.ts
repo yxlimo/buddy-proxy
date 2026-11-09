@@ -88,7 +88,11 @@ process.env.WORKBUDDY_CHAT_BASE = `http://127.0.0.1:${port}`;
  * ------------------------------------------------------------------ */
 
 const { setSecret } = await import("../lib/store.ts");
-setSecret("session:provider:workbuddy-cn", "session", {
+const { addAccount } = await import("../lib/providers.ts");
+// 会话与调用都揣账号 id：账号 id 是自增整数，不是平台名。
+const accountId = String(addAccount({ platform: "workbuddy-cn" }).id);
+if (!accountId) throw new Error("账号没有建出来");
+setSecret(`session:provider:${accountId}`, "session", {
   accessToken: "access_test",
   refreshToken: "refresh_test",
   expiresAtMs: Date.now() + 24 * 3600 * 1000,
@@ -104,7 +108,7 @@ const { runWorkBuddyBenefits } = await import("../lib/workbuddy/benefits.ts");
 /** 跑一次签到，返回报告。 */
 async function run(): Promise<{ report: string[]; calls: string[] }> {
   calls.length = 0;
-  const outcome = await runWorkBuddyBenefits("workbuddy-cn");
+  const outcome = await runWorkBuddyBenefits(accountId);
   return { report: outcome.report, calls: [...calls] };
 }
 

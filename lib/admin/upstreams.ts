@@ -8,7 +8,6 @@
 // —— 不用重启，也不用重新读配置。
 
 import { configNumber, configString } from "../config.ts";
-import { MINIMAX_MODELS, type MiniMaxModel } from "../minimax/models.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { fetchMiniMaxBalance, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
@@ -17,8 +16,6 @@ import {
   fetchMiniMaxCreditsAndPoints,
   type CreditLot,
 } from "../minimax/points.ts";
-import { qoderModelsForRegion, type QoderModel } from "../qoder/models.ts";
-import { type QoderRegion } from "../qoder/auth.ts";
 import { checkAccountHealth, fetchQoderCredits } from "../qoder/credits.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { fetchWorkBuddyResources, type WorkBuddySnapshotEntry } from "../workbuddy/resources.ts";
@@ -28,12 +25,6 @@ import {
   type WorkBuddyModel,
 } from "../workbuddy/models.ts";
 import { regionOf } from "../workbuddy/auth.ts";
-import { tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
-import { loadSession as loadSenseNovaSession } from "../sensenova/auth.ts";
-import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
-import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
-import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
-import { qiniuQuotaOf } from "../qiniu/quota.ts";
 import { clearHealthSnapshot, peekHealthSnapshot, putHealthSnapshot } from "../health-cache.ts";
 import {
   accountsOfPlatform,
@@ -42,9 +33,15 @@ import {
   provider,
   setProviderEnabled,
 } from "../providers.ts";
-import { isPlatform, platformOf } from "../platforms.ts";
+import { isPlatform, platformOfAny } from "../platforms.ts";
+// 开放平台的额度是数据：平台那一行指名的插件去问。
+import { OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
+import { quotaPluginOf, type QuotaProbe } from "../quota-plugins.ts";
+import { applyProbeEffect, quotaPluginIdOf, quotaProbe } from "../quota-state.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds/index.ts";
+// The judgment lives here: the panel and the route must read the same answer.
+import { platformAvailability, type PlatformAvailability } from "./platform-state.ts";
 import { kindOf } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import type {
@@ -61,7 +58,7 @@ export type { BalanceView, CreditView, CredentialView, HealthSnapshot, QuotaView
 import { CredentialState, ProviderPolicy as ContractPolicy, UpstreamState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { hasUsableCredential } from "./credentials.ts";
 import { loginActivity } from "./login.ts";
-import { coolingOf, coolingAccounts, platformCooling, type CoolingInfo, type PlatformCooling } from "./upstream-state.ts";
+import { coolingOf, platformCooling, type CoolingInfo, type PlatformCooling } from "./upstream-state.ts";
 import { policyEnum } from "./policy.ts";
 import { type CatalogGroup } from "../router/catalog.ts";
 
@@ -72,7 +69,7 @@ export type UpstreamId = string;
 /**
  * 这个 id 名下的账号行。
  *
- * 面板问的是**平台**（一行九个服务之一），适配器手里是**账号**（一行一份
+ * 面板问的是**平台**（一行一个服务），适配器手里是**账号**（一行一份
  * 登录）。两种 id 都收：认得出来的平台就取它名下的账号，否则就当账号 id。
  *
  * 先认平台：账号 id 是从平台 id 起的（`minimax`、`minimax-2`），所以一个平台
@@ -82,16 +79,6 @@ function accountsFor(id: string): ProviderRow[] {
   if (isPlatform(id)) return accountsOfPlatform(id);
   const row = provider(id);
   return row ? [row] : [];
-}
-
-/**
- * 这个平台现在能不能接：它名下有没有开着的账号。
- *
- * 平台自己没有开关 —— 开关在账号上，一个平台下有两个账号时可以只开一个。
- * 传账号 id 时问的就是那一个账号。
- */
-export function upstreamEnabled(id: string): boolean {
-  return accountsFor(id).some((row) => row.enabled);
 }
 
 /** 一个上游的开关状态。 */
@@ -111,7 +98,7 @@ export function setAccountEnabled(id: string, enabled: boolean): { ok: boolean; 
   const row = provider(id);
   return {
     ok: true,
-    message: `${row?.alias || id} ${enabled ? "开着" : "关了"}，已经生效`,
+    message: `${row?.alias || id} 已${enabled ? "启用" : "关闭"}，已生效`,
   };
 }
 
@@ -144,7 +131,8 @@ export function upstreamPolicy(id: string): ContractPolicy {
  * 的名单去数（那样同一个平台下的两个账号会被数成一个）。
  */
 export function upstreamAccountCount(id: string): number {
-  return accountsFor(id).length;
+  if (!isPlatform(id)) return accountsFor(id).length;
+  return platformAvailability(id).accounts;
 }
 
 /**
@@ -154,23 +142,14 @@ export function upstreamAccountCount(id: string): number {
  * 之分（就一个站点）。
  */
 export function upstreamRegion(id: string): string {
-  return platformOf(id)?.region ?? provider(id)?.region ?? "";
+  // 两处数据源都要认：模板只有模拟端那五家，开放平台在表里。区域是平台的
+  // 属性，跟着平台走 —— 账号行只是平台的一个入口。
+  return platformOfAny(id)?.region ?? provider(id)?.region ?? "";
 }
 
 /* ------------------------------------------------------------------ *
  * 模型目录
  * ------------------------------------------------------------------ */
-
-/** MiniMax 公布的模型。上游关着就一个也不公布。 */
-export function minimaxVisible(): MiniMaxModel[] {
-  return upstreamEnabled("minimax") ? MINIMAX_MODELS : [];
-}
-
-/** Qoder 全球区与中国区各自能服务的模型。 */
-export function qoderVisible(region: QoderRegion): QoderModel[] {
-  const id: UpstreamId = region === "cn" ? "qoder-cn" : "qoder";
-  return upstreamEnabled(id) ? qoderModelsForRegion(region) : [];
-}
 
 /**
  * WorkBuddy 的模型目录。
@@ -189,16 +168,8 @@ export function setWorkbuddyCatalog(models: WorkBuddyModel[], providerId = "work
   setWorkbuddyModelList(models, regionOf(providerId));
 }
 
-/** 现在开着的 Qoder 区域。 */
-export function qoderRegions(): QoderRegion[] {
-  return [
-    ...(upstreamEnabled("qoder") ? (["global"] as QoderRegion[]) : []),
-    ...(upstreamEnabled("qoder-cn") ? (["cn"] as QoderRegion[]) : []),
-  ];
-}
-
 /**
- * 每个平台的模型目录，面板与 /v1/models 共用。
+ * 每个平台的模型目录 —— 面板这一层要的是**全量**。
  *
  * 一组一个**平台**：路径里那一段是平台 id，同一个平台下有两个账号也只有一组
  * 目录 —— 按账号分组会把同一批模型公布两遍。目录本身是平台的 kind 说的，跟
@@ -206,6 +177,10 @@ export function qoderRegions(): QoderRegion[] {
  *
  * 只收有开着账号的平台：一个关着的上游不公布模型，请求它的时候也给一句清楚
  * 的「没启用」，而不是把它丢给一个不会回答的上游。
+ *
+ * 与 /v1/models 的差别是故意留着的：那边公布的是「现在接得了的」，用的是
+ * 判定（lib/admin/platform-state.ts）—— 面板与路由必须是同一个答案；这边
+ * 列的是全量：目标要在登录之前就能配上，先看见模型才谈得上配。
  */
 export function catalogGroups(): CatalogGroup[] {
   const groups: CatalogGroup[] = [];
@@ -213,6 +188,9 @@ export function catalogGroups(): CatalogGroup[] {
   for (const row of listProviders()) {
     if (!row.enabled) continue;
     if (seen.has(row.platform)) continue;
+    // 平台那一行没了（删了平台，账号行还在）：目录无处可归。不判这一下，已删
+    // 平台的模型会借孤儿账号回到面板的目录里 —— 平台都没了，模型不该还在。
+    if (!platformOfAny(row.platform)) continue;
     const kind = kindOf(row.kind);
     if (!kind) continue;
     const models = kind.models(row);
@@ -336,48 +314,6 @@ export async function miniMaxCreditFallback(
 }
 
 /**
- * SenseNova 的积分池。
- *
- * 问的是控制台（要登录态），没登录就问不了 —— 那是「不知道」，不是「没有」。
- */
-async function senseNovaPools(providerId = "sensenova"): Promise<unknown> {
-  const session = loadSenseNovaSession(providerId);
-  if (!session) return null;
-  try {
-    return await senseNovaPoolUsage(session);
-  } catch (e) {
-    console.warn(`[SENSENOVA] 积分池查询失败：${(e as Error)?.message}`);
-    return null;
-  }
-}
-
-/**
- * 书生·端砚的墨点：余额与批次。
- *
- * 两个接口都要登录态（Discovery 子站的 token）。批次拿不到时余额照样报 ——
- * 余额才是那个最要紧的数。
- */
-async function internAiCredits(providerId = "intern-ai"): Promise<{ balance: unknown; packs: unknown }> {
-  const session = loadInternAiSession(providerId);
-  if (!session) return { balance: null, packs: null };
-  const token = internAiTokenFor(session, "discovery");
-  if (!token) return { balance: null, packs: null };
-  try {
-    const balance = await internAiBalance(session, token);
-    let packs: unknown = null;
-    try {
-      packs = await internAiCreditPacks(session, token);
-    } catch (e) {
-      console.warn(`[INTERN-AI] 墨点批次查询失败：${(e as Error)?.message}`);
-    }
-    return { balance, packs };
-  } catch (e) {
-    console.warn(`[INTERN-AI] 墨点余额查询失败：${(e as Error)?.message}`);
-    return { balance: null, packs: null };
-  }
-}
-
-/**
  * 空快照：每个桶都是空的。
  *
  * 全量刷新从空快照开始填；单独刷一个平台时，它当「这个平台这一轮的结果」。
@@ -388,26 +324,13 @@ function emptySnapshot(): HealthSnapshot {
     minimax: {},
     zcode: {},
     workbuddy: {},
-    tokenrhythm: {},
-    sensenova: {},
-    internAi: {},
-    qiniu: {},
+    plugins: {},
   };
-}
-
-/**
- * 桶的名字。
- *
- * 快照按 kind 分桶：每个 kind 一张「账号 id → 那一份」的表。kind 与桶名
- * 只有 intern-ai 这一处对不上（桶叫 internAi）。
- */
-function bucketOf(kind: string): string {
-  return kind === "intern-ai" ? "internAi" : kind;
 }
 
 /** 快照里的一张表。桶不存在就是没有这一家。 */
 function bucketTable(snapshot: HealthSnapshot, bucket: string): Record<string, unknown> | undefined {
-  // SAFETY: 快照的每个桶都是「账号 id → 那一份」的表；桶名对不上时取到 undefined。
+  // SAFETY: 快照的每个具名桶都是「账号 id → 那一份」的表；没有这一桶时取到 undefined。
   const tables = snapshot as unknown as Record<string, Record<string, unknown>>;
   return tables[bucket];
 }
@@ -423,10 +346,11 @@ function copySnapshot(snapshot: HealthSnapshot): HealthSnapshot {
     minimax: { ...snapshot.minimax },
     zcode: { ...snapshot.zcode },
     workbuddy: { ...snapshot.workbuddy },
-    tokenrhythm: { ...snapshot.tokenrhythm },
-    sensenova: { ...snapshot.sensenova },
-    internAi: { ...snapshot.internAi },
-    qiniu: { ...snapshot.qiniu },
+    // 抄两层：里层那张表在合并一个平台的数字时会被写，共用一张表会把那次写漏到
+    // 副本外面去。
+    plugins: Object.fromEntries(
+      Object.entries(snapshot.plugins ?? {}).map(([id, table]) => [id, { ...table }]),
+    ),
   };
 }
 
@@ -451,12 +375,46 @@ function groupByPlatform(rows: ProviderRow[]): Map<string, ProviderRow[]> {
  */
 function applyPartial(snapshot: HealthSnapshot, partial: HealthSnapshot, rows: ProviderRow[]): void {
   for (const row of rows) {
-    const bucket = bucketOf(row.kind);
-    const target = bucketTable(snapshot, bucket);
+    // 额度来自插件的那些 kind 没有具名桶：它的那一份在插件桶里（两层），按账号逐条合并。
+    if (quotaFromPlugin(row.kind)) {
+      applyPluginPartial(snapshot, partial, row);
+      continue;
+    }
+    const target = bucketTable(snapshot, row.kind);
     if (!target) continue;
-    const value = bucketTable(partial, bucket)?.[row.id];
+    const value = bucketTable(partial, row.kind)?.[row.id];
     if (value === undefined) delete target[row.id];
     else target[row.id] = value;
+  }
+}
+
+/**
+ * 把一个开放平台账号的那一份合进插件桶。
+ *
+ * 插件桶是两层：插件 id → 账号 id → 那一份。所以按**账号**逐条合，不是整张表
+ * 盖掉 —— 同一个平台下别的账号、别的插件的份都留在原处。
+ *
+ * 这一轮没有这个账号的那一份，就删掉它在每个插件表里的旧值：与具名桶「这一轮
+ * 没问到就不报」是同一个意思（旧值是上一轮的，拿它充数就是在撒谎）。
+ */
+function applyPluginPartial(
+  snapshot: HealthSnapshot,
+  partial: HealthSnapshot,
+  row: ProviderRow,
+): void {
+  const plugins = snapshot.plugins;
+  // 两边的插件表都要看：这一轮换了插件的账号，它在旧插件表里的份也得走。
+  const ids = new Set<string>(Object.keys(plugins));
+  for (const id of Object.keys(partial.plugins ?? {})) ids.add(id);
+  for (const pluginId of ids) {
+    const table = { ...plugins[pluginId] };
+    const value = partial.plugins?.[pluginId]?.[row.id];
+    if (value === undefined) delete table[row.id];
+    else table[row.id] = value;
+    // 一张问过的表变空就不写了：「这个插件问过，谁也没有」与「没有这个插件的
+    // 表」是同一件事，留一堆空表只会让人以为那些插件问过了。
+    if (Object.keys(table).length) plugins[pluginId] = table;
+    else delete plugins[pluginId];
   }
 }
 
@@ -471,15 +429,21 @@ function applyPartial(snapshot: HealthSnapshot, partial: HealthSnapshot, rows: P
 export async function refreshHealthSnapshot(): Promise<void> {
   const groups = groupByPlatform(listProviders());
   const partials = new Map<string, HealthSnapshot>();
-  await Promise.allSettled(
-    [...groups.entries()].map(async ([platform, rows]) => {
-      try {
-        partials.set(platform, await refreshPlatform(platform, rows));
-      } catch (e) {
-        console.warn(`[HEALTH] ${platform} 的额度没问到：${(e as Error)?.message}`);
-      }
-    }),
-  );
+  // 每家一个任务，平台之间并发。用 for 攒 promise 而不是 map：map 的回调里
+  // 没有返回值，读的人会以为它在产出什么。
+  const work: Promise<void>[] = [];
+  for (const [platform, rows] of groups) {
+    work.push(
+      (async () => {
+        try {
+          partials.set(platform, await refreshPlatform(platform, rows));
+        } catch (e) {
+          console.warn(`[HEALTH] ${platform} 的额度没问到：${(e as Error)?.message}`);
+        }
+      })(),
+    );
+  }
+  await Promise.allSettled(work);
   const snapshot: HealthSnapshot = emptySnapshot();
   for (const [platform, rows] of groups) {
     const partial = partials.get(platform);
@@ -491,8 +455,65 @@ export async function refreshHealthSnapshot(): Promise<void> {
   healthRefreshedAt = Date.now();
 }
 
+/**
+ * 额度归插件问的那些 kind。
+ *
+ * 它们没有具名桶：快照里那一份存在插件桶里（插件 id → 账号 id → 那一次的结论）。
+ * 问哪个插件由平台那一行说（七牛、开放平台是用户选的），读法由 kind 自己说。
+ * 开放平台是数据，七牛云的额度在门户上、门户只认 cookie —— 两家都得由平台行
+ * 说了算：没指名插件就是「不知道」，不该自己找个地方去问。三家插件是跟 kind
+ * 一起登记的（SenseNova / TokenRhythm / 书生·端砚），各自一个插件 id，由平台
+ * 行那一格指名。
+ */
+const QUOTA_FROM_PLUGIN: ReadonlySet<string> = new Set([
+  OPEN_PLATFORM_KIND_NAME,
+  "qiniu",
+  "sensenova",
+  "intern-ai",
+  "tokenrhythm",
+]);
+
+function quotaFromPlugin(kind: string): boolean {
+  return QUOTA_FROM_PLUGIN.has(kind);
+}
+
+/**
+ * 问平台那一行指名的额度插件，把这一次的结论写进插件桶。
+ *
+ * 每一种结论都写 —— 面板要能回答「为什么这里没有数字」：「没填凭据」「凭据
+ * 被拒」「问不到」是三件不同的事，只写问到的那几种会把它们全变回「不知道」。
+ * 结论带来的副作用（写冷却、交给凭据线）由 lib/quota-state.ts 统一做。
+ *
+ * 没指名插件、或者指名的插件没登记：不写。那不是「问过了」，是没人去问。
+ */
+async function refreshPluginQuota(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
+  const pluginId = quotaPluginIdOf(row);
+  if (!pluginId) return;
+  const plugin = quotaPluginOf(pluginId);
+  if (!plugin) return;
+  let probe: QuotaProbe;
+  try {
+    probe = await plugin.probe(row);
+  } catch (e) {
+    // 插件不许 reject（翻不动的都归 unknown）。真 reject 了是插件的错：这一轮当
+    // 「问不到」，但要说出来 —— 否则面板上它就是个没有理由的空。
+    console.warn(`[QUOTA] 账号 ${row.id} 的额度没问到（插件 ${plugin.id}）：${(e as Error)?.message}`);
+    probe = quotaProbe("unknown", `额度插件执行时抛出异常：${(e as Error)?.message ?? String(e)}`);
+  }
+  const table = { ...snapshot.plugins[plugin.id] };
+  table[row.id] = probe;
+  snapshot.plugins[plugin.id] = table;
+  applyProbeEffect(row, probe, plugin.id, (line) => console.warn(line));
+}
+
 /** 问一家上游，把它那段填进快照。 */
 async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
+  // 额度归插件的那些 kind 先走插件：它们没有具名桶，下面那几个 case 是给自带
+  // 抓取逻辑的平台留的。
+  if (quotaFromPlugin(row.kind)) {
+    await refreshPluginQuota(snapshot, row);
+    return;
+  }
   switch (row.kind) {
     case "qoder": {
       let account: unknown;
@@ -526,20 +547,6 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
         resources: await fetchWorkBuddyResources(row.id),
       } as WorkBuddySnapshotEntry;
       return;
-    case "tokenrhythm":
-      // 一个账号一行一个钱包：快照也按账号存。
-      snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
-      return;
-    case "sensenova":
-      snapshot.sensenova[row.id] = { pools: await senseNovaPools(row.id) };
-      return;
-    case "intern-ai":
-      snapshot.internAi[row.id] = await internAiCredits(row.id);
-      return;
-    case "qiniu":
-      // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
-      snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
-      return;
   }
 }
 
@@ -553,15 +560,20 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
  */
 async function refreshPlatformRows(rows: ProviderRow[]): Promise<HealthSnapshot> {
   const partial = emptySnapshot();
-  await Promise.allSettled(
-    rows.map(async (row) => {
-      try {
-        await refreshOne(partial, row);
-      } catch (e) {
-        console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
-      }
-    }),
-  );
+  // 同上：用 for 攒 promise，不用 map 做副作用。
+  const work: Promise<void>[] = [];
+  for (const row of rows) {
+    work.push(
+      (async () => {
+        try {
+          await refreshOne(partial, row);
+        } catch (e) {
+          console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
+        }
+      })(),
+    );
+  }
+  await Promise.allSettled(work);
   return partial;
 }
 
@@ -688,29 +700,59 @@ async function freshPlatformSnapshot(id: string, force = false): Promise<HealthS
  * 凭据在账号上，所以平台报的是它名下那些账号里最好的那一份：有能用的就说
  * 能用，全都没有才说没有。要逐个看的话在账号列表里（ListAccounts）。
  *
+ * 「能用的」指的是**能推理的那一份**：门户 cookie 与登录会话配了也发不出一个
+ * 请求。七牛云只填了门户 cookie 时，这一层说的是「没有可用凭据」—— 与判定
+ * （platform-state.ts）、与路由说的是同一个词。
+ *
  * 各家上游的会话形状不一样，但状态字段是同一套，所以这里把它们抹平。
  */
 export function upstreamCredential(id: string): CredentialView {
-  const rows = accountsFor(id);
-  // 一份坏掉的会话不该把整个面板打成 500：读不出来的那一条当作没有凭据。
-  const views = rows.flatMap((row) => {
+  if (!isPlatform(id)) {
+    const row = provider(id);
+    const view = row ? safeCredential(row) : null;
+    return view ?? missingCredential("这个账号的凭据读不出来");
+  }
+  return upstreamCredentialOf(platformAvailability(id));
+}
+
+/** 一个平台的凭据状态（判定已经在手上了就用这个：不重读表）。 */
+export function upstreamCredentialOf(availability: PlatformAvailability): CredentialView {
+  const views = availability.rows.flatMap((row) => {
     const view = safeCredential(row);
-    return view ? [view] : [];
+    return view ? [{ row, view }] : [];
   });
-  const pick = views.find((view) => hasUsableCredential(view.status)) ?? views[0];
-  if (!pick) {
+  // 能推理的那一份优先：别的配了也发不出请求。
+  const servingIds = new Set(availability.serving.map((row) => row.id));
+  const serving = views.filter((entry) => servingIds.has(entry.row.id));
+  const pick =
+    serving.find((entry) => hasUsableCredential(entry.view.status)) ??
+    serving[0] ??
+    views.find((entry) => hasUsableCredential(entry.view.status)) ??
+    views[0];
+  if (!pick) return missingCredential("这个平台还没有账号");
+  // 平台看着有凭据，但没有一个账号有能推理的那一份：那是「没有可用凭据」。
+  if (!serving.length && hasUsableCredential(pick.view.status)) {
     return {
-      kind: "session",
+      ...pick.view,
       status: CredentialState.MISSING,
-      fingerprint: "",
-      expiresAt: 0,
-      remainingSec: 0,
-      warning: false,
-      detail: "这个平台还没有账号",
-      generation: 0,
+      detail: "没有可用凭据：在「上游」页填 API Key 或登录",
     };
   }
-  return pick;
+  return pick.view;
+}
+
+/** 一份「没有凭据」的样子。 */
+function missingCredential(detail: string): CredentialView {
+  return {
+    kind: "session",
+    status: CredentialState.MISSING,
+    fingerprint: "",
+    expiresAt: 0,
+    remainingSec: 0,
+    warning: false,
+    detail,
+    generation: 0,
+  };
 }
 
 /** 一个账号的凭据状态。会话坏了就是读不出来，不抛。 */
@@ -748,6 +790,22 @@ function safeCredential(row: ProviderRow): CredentialView | null {
  */
 
 /**
+ * 一份额度属于谁：只看账号行。
+ *
+ * kind 只负责「这家平台怎么读快照」，账号 id、平台 id、名字这三样都属于账号行
+ * 本身 —— 让每个 kind 各写一遍，迟早有一家写错（2026-11-09：四个 kind 把平台
+ * id 填成了账号 id，面板把「8」当成上游，刷新额度问错了范围）。
+ */
+function withRowIdentity(row: ProviderRow, view: QuotaView): QuotaView {
+  return {
+    ...view,
+    upstreamId: row.platform,
+    accountId: row.id,
+    accountName: row.alias ?? "",
+  };
+}
+
+/**
  * 一个上游的额度，每个账号一条。
  *
  * TokenRhythm 有好几个租户，所以是「几条」而不是一条。
@@ -765,7 +823,7 @@ export async function upstreamQuotas(id: string, fresh = false, force = false): 
   for (const row of rows) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
-    out.push(...kind.quotas(row, snapshot));
+    out.push(...kind.quotas(row, snapshot).map((view) => withRowIdentity(row, view)));
   }
   return out;
 }
@@ -781,9 +839,14 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
   const first = quotas[0];
   const balances = quotas.map((q) => q.balance).filter((b): b is BalanceView => Boolean(b));
   const credits = quotas.map((q) => q.credits).filter((c): c is CreditView => Boolean(c));
+  // 归属（平台 + 账号 + 名字）跟着「第一条」走：调用方限定范围之后，这里合并
+  // 的本来就是同一个账号的几份（不同插件报的同一份额度）。名字只在一处丢过
+  // —— 2026-11-09：面板上账号卡片退回显示 id。
+  const named = quotas.find((q) => (q.accountName ?? "") !== "") ?? first;
   const merged: QuotaView = {
     upstreamId: first.upstreamId,
     accountId: first.accountId,
+    accountName: named.accountName ?? "",
     tokenPlan: quotas.find((q) => q.tokenPlan)?.tokenPlan,
   };
   if (balances.length) {
@@ -817,13 +880,20 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
 export function forgetAccountSnapshot(accountId: string): void {
   const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data;
   if (!snapshot) return;
-  // 快照的每个桶都是「账号 id → 那一份」。摊成一张表就能按账号 id 找。
-  // 删的是桶里那张表本身，快照对象没换 —— 不需要再写回去。
-  const buckets: Record<string, unknown> = { ...snapshot };
-  for (const bucket of Object.values(buckets)) {
+  // 快照的每个桶都是「账号 id → 那一份」。删的是桶里那张表本身，快照对象没换
+  // —— 不需要再写回去。
+  for (const [name, bucket] of Object.entries(snapshot)) {
     if (!bucket || typeof bucket !== "object") continue;
-    const table = bucket as Record<string, unknown>;
-    delete table[accountId];
+    // 插件那一桶是两层：插件 id → 账号 id → 那一份。账号在里层，只删一层就
+    // 删不到：那一份额度会留在快照里，直到下一轮全量刷新才没。
+    if (name === "plugins") {
+      for (const table of Object.values(bucket as Record<string, unknown>)) {
+        if (!table || typeof table !== "object") continue;
+        delete (table as Record<string, unknown>)[accountId];
+      }
+      continue;
+    }
+    delete (bucket as Record<string, unknown>)[accountId];
   }
 }
 
@@ -858,7 +928,7 @@ function upstreamQuotasCached(id: string): QuotaView[] {
   for (const row of accountsFor(id)) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
-    out.push(...kind.quotas(row, snapshot));
+    out.push(...kind.quotas(row, snapshot).map((view) => withRowIdentity(row, view)));
   }
   return out;
 }
@@ -923,46 +993,76 @@ function accountState(row: ProviderRow, cooling?: Map<string, CoolingInfo>): Ups
   return UpstreamState.READY;
 }
 
-/** 严重程度：同时有几种时，面板先要看哪一种。 */
-const STATE_ORDER: UpstreamState[] = [
-  UpstreamState.LOGGING_IN,
-  UpstreamState.CREDENTIAL_REJECTED,
-  UpstreamState.CREDENTIAL_EXPIRED,
-  UpstreamState.NO_CREDENTIAL,
-  // 冷却先于额度用尽：额度用尽要等窗口，冷却到点就好 —— 面板先说快恢复的那个。
-  UpstreamState.COOLING,
-  UpstreamState.OUT_OF_CREDITS,
-];
-
 /**
  * 这个上游现在能不能接请求。
  *
- * 判据的顺序（先说最要紧的）：
+ * 判定住在 lib/admin/platform-state.ts —— 路由、目录、/health 与面板问的是
+ * 同一件事，必须是同一个答案。这里只把它的话翻成契约里的枚举。
  *
- *   1. 开关关着            → DISABLED（别的都不用看）
- *   2. 正在登录            → LOGGING_IN（用户正在点授权，面板该等）
- *   3. 凭据被拒过          → CREDENTIAL_REJECTED（面板该让人重登，而不是
- *                           让人以为「没登录」）
- *   4. 没有凭据            → NO_CREDENTIAL
- *   5. 凭据过期            → CREDENTIAL_EXPIRED
- *   6. 额度用尽            → OUT_OF_CREDITS（比冷却持久，先说它）
- *   7. 在冷却              → COOLING（路由暂时绕开这个账号）
- *   8. 其余                → READY
- *
- * 平台名下有几个账号时，有一个能接就算能接（READY）；都接不了就报最要紧的
- * 那一种：面板要的是「为什么接不了」，而不是一串状态。
+ * 翻的时候有一层细的：判定说「没有可用凭据」，面板还要能分出正在登录、
+ * 登录被拒、凭据过期 —— 三件事要人做的东西不一样。那是账号上的事，判定
+ * 不记，所以这里补一层；补的只是「为什么没有凭据」，不会把「没有凭据」
+ * 说成别的。
  */
 export function upstreamState(id: UpstreamId): UpstreamState {
-  const rows = accountsFor(id);
-  if (!rows.length) return UpstreamState.NO_CREDENTIAL;
-  if (!rows.some((row) => row.enabled)) return UpstreamState.DISABLED;
-  const cooling = coolingAccounts();
-  const states = rows.filter((row) => row.enabled).map((row) => accountState(row, cooling));
-  if (states.includes(UpstreamState.READY)) return UpstreamState.READY;
-  for (const state of STATE_ORDER) {
-    if (states.includes(state)) return state;
+  if (!isPlatform(id)) {
+    // 账号 id：只问那一个账号。
+    const row = provider(id);
+    return row ? accountState(row) : UpstreamState.NO_CREDENTIAL;
   }
-  return states[0] ?? UpstreamState.NO_CREDENTIAL;
+  return upstreamStateOf(platformAvailability(id));
+}
+
+/** 判定已经在手上了就用这个：不重读表。 */
+export function upstreamStateOf(availability: PlatformAvailability): UpstreamState {
+  switch (availability.state) {
+    case "no_account":
+      // 平台上一个账号都没有：没有凭据可谈。面板靠 accountCount 分得出
+      // 「没有账号」与「没有凭据」这两件事。
+      return UpstreamState.NO_CREDENTIAL;
+    case "accounts_off":
+      return UpstreamState.DISABLED;
+    case "no_credential":
+      return credentialTrouble(availability.rows) ?? UpstreamState.NO_CREDENTIAL;
+    case "credential_expired":
+      // 契约里有「登录过期了」这一档：会话型平台的会话过期就是它。
+      return UpstreamState.CREDENTIAL_EXPIRED;
+    case "credential_unknown":
+      // 契约里没有「凭据读不出来」这一档（这一档说的是网关自己读不出凭据，
+      // 不是「没登录」）。状态这一档只能说「没有可用凭据」，面板看得到的是
+      // 凭据那一行的详情与这一行的状态说明。
+      return UpstreamState.NO_CREDENTIAL;
+    case "out_of_credits":
+      return UpstreamState.OUT_OF_CREDITS;
+    case "cooling":
+      return UpstreamState.COOLING;
+    case "ready":
+      return UpstreamState.READY;
+  }
+}
+
+/**
+ * 「没有可用凭据」背后的那件更细的事。
+ *
+ * 判定只说「没有凭据」；面板要能说出是正在登录、登录被拒，还是凭据过期 ——
+ * 三件事要人做的东西不一样。
+ *
+ * 只看开着的账号：关着的账号说什么都与这个平台无关。
+ */
+function credentialTrouble(rows: ProviderRow[]): UpstreamState | null {
+  let expired = false;
+  for (const row of rows) {
+    if (!row.enabled) continue;
+    const activity = loginActivity(row.id);
+    if (activity.loggingIn) return UpstreamState.LOGGING_IN;
+    // 登录被拒过：面板上要说的是「被拒了」—— 用户能照着改密码。
+    if (activity.rejected) return UpstreamState.CREDENTIAL_REJECTED;
+    const view = safeCredential(row);
+    if (!view) continue;
+    if (view.status === CredentialState.ERROR) return UpstreamState.CREDENTIAL_REJECTED;
+    if (view.status === CredentialState.EXPIRED) expired = true;
+  }
+  return expired ? UpstreamState.CREDENTIAL_EXPIRED : null;
 }
 
 /**

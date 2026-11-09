@@ -7,10 +7,11 @@ import {
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
 import { describeError } from '@/lib/errors'
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
-export const benefitKeys = {
-  all: ['benefits'] as const,
-}
+/** 签到状态的查询键。键本身在 `lib/query-keys.ts` 里。 */
+export const benefitKeys = queryKeys.benefits
 
 /**
  * 今天的签到状态。
@@ -24,7 +25,7 @@ export const benefitKeys = {
 export function useBenefitStatus(options?: { enabled?: boolean }) {
   const client = useAdminClient()
   return useQuery({
-    queryKey: benefitKeys.all,
+    queryKey: queryKeys.benefits.all,
     queryFn: () =>
       client.getBenefitStatus(create(GetBenefitStatusRequestSchema)),
     ...options,
@@ -48,7 +49,7 @@ export function useRunBenefitNow() {
     },
     onSuccess: (result) => {
       if (result.ok) {
-        toast.success('签到跑完了')
+        toast.success('签到已完成')
         return
       }
       // 有账号没签到成功：具体是哪个账号、出了什么事，都在 lines 里，界面
@@ -56,7 +57,8 @@ export function useRunBenefitNow() {
       toast.error('有账号没签到成功')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: benefitKeys.all })
+      // 签到的结果在签到状态里；签到了会拿到积分，额度那份也变了。
+      invalidateServerData(queryClient, 'benefits', 'quotas')
     },
   })
 }

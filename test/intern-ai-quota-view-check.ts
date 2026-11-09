@@ -7,6 +7,11 @@
 // 端砚的额度是两套东西：墨点余额（账号里还剩多少墨点）与滚动窗口（这段时间
 // 里能用多少墨点）。面板原先只看得到墨点余额，真正的使用限额（5 小时 / 7 天
 // 窗口）看不见；窗口见底时也说不出多久恢复；平台说账号不可用时我们照发请求。
+//
+// 额度现在由插件问回来（lib/intern-ai/quota-plugin.ts），快照里存的是那一次的
+// 结论。所以这里造的是**结论**，不是原样答复：kind 只负责把结论读成面板那几行。
+// 结论怎么算调用的是插件自己的那几个函数 —— 与 probe 分支里用的是同一批，口径
+// 只有一份。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -31,6 +36,11 @@ function check(name: string, ok: boolean, detail = ""): void {
     console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
   }
 }
+
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("intern-ai", "intern-ai", { quotaPlugin: "intern-ai-credits" });
 
 const PROVIDER = {
   id: "intern-ai-test",
@@ -108,8 +118,30 @@ const PACKS = [
   },
 ];
 
+const {
+  internAiCreditsViews,
+  internAiBlocked,
+  internAiOutOfCredits,
+  internAiRecoverAt,
+} = await import("../lib/intern-ai/quota-plugin.ts");
+
+/** 插件 id：快照里那一份按它存。 */
+const PLUGIN_ID = "intern-ai-credits";
+
+/** 一份结论（与 probe 落进快照的那一份同一个形状）。 */
 function snapshotWith(bal: any, packs: any = PACKS): any {
-  return { internAi: { [PROVIDER.id]: { balance: bal, packs } } };
+  const credits = { balance: bal, packs };
+  let probe;
+  if (!bal) {
+    probe = { state: "missing", views: [], recoverAt: null, message: "没有会话" };
+  } else if (internAiBlocked(bal)) {
+    probe = { state: "blocked", views: [], recoverAt: internAiRecoverAt(credits), message: "账号不能用" };
+  } else if (internAiOutOfCredits(bal)) {
+    probe = { state: "no_quota", views: [], recoverAt: internAiRecoverAt(credits), message: "墨点用完了" };
+  } else {
+    probe = { state: "ok", views: internAiCreditsViews(PROVIDER, credits), recoverAt: null, message: "" };
+  }
+  return { plugins: { [PLUGIN_ID]: { [PROVIDER.id]: probe } } };
 }
 
 console.log("");
@@ -179,13 +211,18 @@ console.log("窗口见底时，恢复时间取窗口自己的时刻");
 }
 
 console.log("");
-console.log("窗口都满时，恢复时间退回批次的到期时间");
+console.log("额度没用完时没有恢复时刻（那不是「下次重置」）");
 
 {
   const tomorrow = platformStamp(Date.now() + 24 * 3600_000);
   const packs = [{ ...PACKS[0], expireAt: tomorrow, cycleEndAt: tomorrow }];
-  const at = internAiKind.recoverAt?.(PROVIDER, snapshotWith(balance(), packs)) ?? null;
-  check("取批次最早到期的那个", at === platformMs(tomorrow), `${at} vs ${platformMs(tomorrow)}`);
+  const snapshot = snapshotWith(balance(), packs);
+  const at = internAiKind.recoverAt?.(PROVIDER, snapshot) ?? null;
+  // 恢复时刻只在账号确实见底时有意义：还有墨点时它答 null，不拿批次的到期时间
+  // 顶上（那不是「等多久能再用」）。
+  check("还有额度 → 不知道什么时候恢复", at === null, String(at));
+  const lot = internAiKind.quotas(PROVIDER, snapshot)[0]?.credits?.lots?.[0];
+  check("批次的到期时间还在批次上", lot?.expiresAt === platformMs(tomorrow), `${lot?.expiresAt} vs ${platformMs(tomorrow)}`);
 }
 
 console.log("");

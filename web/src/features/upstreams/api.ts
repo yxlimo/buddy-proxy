@@ -4,7 +4,6 @@ import { toast } from 'sonner'
 import {
   AddAccountRequestSchema,
   DeleteAccountRequestSchema,
-  ListProviderKindsRequestSchema,
   ListUpstreamsRequestSchema,
   SetAccountEnabledRequestSchema,
   SetPlatformPolicyRequestSchema,
@@ -12,23 +11,18 @@ import {
 } from '@/gen/buddy/admin/v1/admin_pb'
 import type { ProviderPolicy } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-import { accountKeys } from '@/features/accounts/keys'
-import { systemKeys } from '@/features/overview/api'
 import { assertOk, describeError } from '@/lib/errors'
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
-export const upstreamKeys = {
-  all: ['upstreams'] as const,
-}
-
-export const providerKindKeys = {
-  all: ['provider-kinds'] as const,
-}
+/** 平台列表的查询键。键本身在 `lib/query-keys.ts` 里，见那份的说明。 */
+export const upstreamKeys = queryKeys.upstreams
 
 /**
  * 平台列表。
  *
- * 一行一个平台：九个模板（代码里的）加上它名下的账号。平台删不掉、关不掉，
- * 能改的是策略和账号。
+ * 一行一个平台：表里的每一行（播种的模拟客户端与自建的开放平台）加上它名下的
+ * 账号。平台改得了名字、删得掉，改不了 id。
  *
  * refetchOnMount: false 给旁观者用：已经在别处拿过列表的组件只想读一下平台的
  * kind，不该再发一次请求。
@@ -36,25 +30,9 @@ export const providerKindKeys = {
 export function useUpstreams(options?: { refetchOnMount?: boolean }) {
   const client = useAdminClient()
   return useQuery({
-    queryKey: upstreamKeys.all,
+    queryKey: queryKeys.upstreams.all,
     queryFn: () => client.listUpstreams(create(ListUpstreamsRequestSchema)),
     ...options,
-  })
-}
-
-/**
- * 平台有哪几类，每一类怎么登录。
- *
- * login 由后端给（api_key / device / browser / password / code）。面板照它
- * 决定给不给「填 key」的入口 —— 不按平台名一个个写死，写死就会漏（新平台
- * 第一次上就漏过一次）。
- */
-export function useProviderKinds() {
-  const client = useAdminClient()
-  return useQuery({
-    queryKey: providerKindKeys.all,
-    queryFn: () =>
-      client.listProviderKinds(create(ListProviderKindsRequestSchema)),
   })
 }
 
@@ -75,7 +53,7 @@ export function useSetAccountEnabled() {
           enabled: input.enabled,
         })
       )
-      assertOk(result, '没改成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {
@@ -85,9 +63,8 @@ export function useSetAccountEnabled() {
       toast.success(result.message || '已保存，已经生效')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-      void queryClient.invalidateQueries({ queryKey: systemKeys.status })
+      // 一个账号的开关：账号那份答复、平台那份（带账号）、总览、额度都变了。
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }
@@ -102,24 +79,22 @@ export function useAddAccount() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { platform: string; alias?: string }) => {
-      const result = await client.addAccount(
+      // 失败是一次 Connect 错误（AddAccount 没有 ok / message 两格）。
+      return await client.addAccount(
         create(AddAccountRequestSchema, {
           platform: input.platform,
           alias: input.alias ?? '',
         })
       )
-      assertOk(result, '没加上')
-      return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '加上了')
+    onSuccess: () => {
+      toast.success('已新增')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }
@@ -137,18 +112,17 @@ export function useDeleteAccount() {
       const result = await client.deleteAccount(
         create(DeleteAccountRequestSchema, { id: input.id })
       )
-      assertOk(result, '没删掉')
+      assertOk(result, '删除失败')
       return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '删掉了')
+      toast.success(result.message || '已删除')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }
@@ -173,17 +147,18 @@ export function useSetPlatformPolicy() {
           policy: input.policy,
         })
       )
-      assertOk(result, '没改成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '策略改好了')
+      toast.success(result.message || '策略已保存')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 策略是平台那一行上的字段：平台那份答复变了。
+      invalidateServerData(queryClient, 'platforms')
     },
   })
 }
@@ -207,18 +182,17 @@ export function useUpdateProvider() {
           weight: input.weight,
         })
       )
-      assertOk(result, '没改成')
+      assertOk(result, '保存失败')
       return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
     onSuccess: (result) => {
-      toast.success(result.message || '改好了')
+      toast.success(result.message || '已保存')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      invalidateServerData(queryClient, 'accounts')
     },
   })
 }

@@ -10,17 +10,38 @@
 // a dead session looks like.
 
 import {
-  TOKENRHYTHM_API_BASE,
   TokenRhythmError,
   forgetSession as forgetAccountSession,
   writeHeaders,
   type TokenRhythmSession,
 } from "./accounts.ts";
+import { TOKENRHYTHM_API_BASE } from "./config.ts";
+import { retryAfterMs } from "../upstream-status.ts";
 
 /** How to ask: which method, and what to send. */
 export interface PlatformRequest {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
+  /**
+   * 另一台机器（平台行把地址指到别处时）。
+   *
+   * 额度要问的是「这个平台在跟谁说话」：行上写的那台与默认的那台不同时，只换
+   * 主机名，路径、请求头、超时与凭据都一样。不给就是默认那台。
+   */
+  base?: string;
+}
+
+/**
+ * 请求的地址。
+ *
+ * 没给 base、或给的就是默认那台，照旧把路径接在配置地址后面。给了别的地址
+ * （平台行上那台）就按 URL 解析：以它的 origin 为根，用户填的地址带不带 /v1
+ * 都不影响路径。
+ */
+function requestUrl(base: string | undefined, path: string): string {
+  const other = String(base ?? "").trim();
+  if (!other || other === TOKENRHYTHM_API_BASE) return `${TOKENRHYTHM_API_BASE}${path}`;
+  return new URL(path, other).toString();
 }
 
 /**
@@ -36,7 +57,7 @@ export async function platformApi<T>(
 ): Promise<T> {
   const method = init.method ?? "GET";
   const write = method !== "GET";
-  const r = await fetch(`${TOKENRHYTHM_API_BASE}${path}`, {
+  const r = await fetch(requestUrl(init.base, path), {
     method,
     headers: write
       ? writeHeaders(session)
@@ -54,7 +75,7 @@ export async function platformApi<T>(
 
   if (r.status === 401) {
     forgetSession(session);
-    throw new TokenRhythmError("登录已过期", 503);
+    throw new TokenRhythmError("登录已过期", 503, "unauthorized");
   }
   if (r.status === 403) {
     // A write that fails the security check is a different thing from a dead
@@ -65,9 +86,20 @@ export async function platformApi<T>(
     }
     if (!write) {
       forgetSession(session);
-      throw new TokenRhythmError("登录已过期", 503);
+      throw new TokenRhythmError("登录已过期", 503, "unauthorized");
     }
     throw new TokenRhythmError(`接口失败（HTTP ${r.status}）：${body?.message ?? text.slice(0, 200)}`);
+  }
+  if (r.status === 429) {
+    // 限流是「等一会儿」，不是「不行了」：调用方（额度）要用这个分别决定要不要
+    // 写冷却，以及等到什么时候。Retry-After 只有这里看得到（有时只写在正文里）。
+    const error = new TokenRhythmError(
+      `接口被限流了（HTTP 429）：${body?.message ?? text.slice(0, 200)}`,
+      429,
+      "rate_limited",
+    );
+    error.retryAfterMs = retryAfterMs(r, text);
+    throw error;
   }
   if (!r.ok) {
     throw new TokenRhythmError(`接口失败（HTTP ${r.status}）：${body?.message ?? text.slice(0, 200)}`);

@@ -159,7 +159,7 @@ async function startGateway(): Promise<Gateway> {
       targets: [{ groupName: "minimax", upstreamModel: MODEL, weight: 1, enabled: true }],
     },
   });
-  if (saved.body?.ok !== true) throw new Error(`发布模型失败：${JSON.stringify(saved.body)}`);
+  if (!saved.body?.id) throw new Error(`发布模型失败：${JSON.stringify(saved.body)}`);
   return local;
 }
 

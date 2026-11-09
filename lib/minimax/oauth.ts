@@ -29,6 +29,7 @@ import { dataDir as sharedDataDir } from "../paths.ts";
 import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
 import { registerLoginFlow, type LoginContext, type LoginTicket, type PollResult } from "../login-flow.ts";
+import { WARN_MS } from "./warn-ms.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
 export const OAUTH_ORIGINS: Record<string, string> = {
@@ -42,7 +43,6 @@ const SCOPES = configString("MINIMAX_SCOPES", DEFAULT_SCOPES.join(" ")).split(/\
 const REGION = configString("MINIMAX_REGION", DEFAULT_REGION);
 const ORIGIN = configString("MINIMAX_OAUTH_ORIGIN", OAUTH_ORIGINS[REGION] ?? OAUTH_ORIGINS.cn);
 const CACHE_MS = configNumber("MINIMAX_AUTH_CACHE_MS", 5000);
-const WARN_MS = configNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 // Refresh when this much life is left. The real client uses 5 min; a 1-hour token
 // means the proxy refreshes roughly once an hour.
 const REFRESH_BUFFER_MS = configNumber("MINIMAX_REFRESH_BUFFER_MS", 5 * 60 * 1000);
@@ -215,9 +215,9 @@ function sessionFromGrant(grant: Grant, previous?: Session | null): Session {
 
 let cache: CredentialCache | null = null;
 
-function toCredential(session: Session): Credential {
+function toCredential(session: Session, providerId: string): Credential {
   return credentialFromSession(session, {
-    source: sessionId(),
+    source: sessionId(providerId),
     owner: "oauth",
     warnMs: WARN_MS,
     status: "authenticated",
@@ -298,7 +298,7 @@ export async function ensureCredential(providerId = "minimax"): Promise<Credenti
     lockId: sessionId(providerId),
     // 令牌是定时器换的，这里只取现在这一份。
     session: () => loadSession(providerId),
-    toCredential,
+    toCredential: (session) => toCredential(session, providerId),
     expired: (session) =>
       new AuthError(
         session ? `access token expired (generation ${session.generation})` : "no session",
@@ -437,8 +437,8 @@ export async function login(providerId = "minimax"): Promise<Session> {
   return session;
 }
 
-export async function revoke(): Promise<void> {
-  const session = loadSession();
+export async function revoke(providerId = "minimax"): Promise<void> {
+  const session = loadSession(providerId);
   if (!session) return;
   const r = await postForm(`${ORIGIN}/oauth2/revoke`, {
     token: session.refreshToken,
@@ -447,7 +447,7 @@ export async function revoke(): Promise<void> {
   });
   if (!r.ok) throw new AuthError(`revoke failed (${r.error ?? `HTTP ${r.status}`})`, "撤销失败。", 502);
   try {
-    deleteSecret(sessionId());
+    deleteSecret(sessionId(providerId));
   } catch {
     /* already gone */
   }
@@ -498,7 +498,6 @@ export function oauthStatus(providerId = "minimax"): Record<string, unknown> {
   };
 }
 
-export const OAUTH_WARN_MS = WARN_MS;
 export const OAUTH_REFRESH_BUFFER_MS = REFRESH_BUFFER_MS;
 
 /* ------------------------------------------------------------------ *

@@ -22,6 +22,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
+// 预置的模拟客户端目录（叶子模块，不引任何东西）：启动时按它把表里的行播出来。
+import { SIMULATED_CLIENTS } from "./platform-catalog.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -93,8 +95,8 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
-  // 账号：一行一个账号。`platform` 是代码里的模板（九个平台之一，也是请求
-  // 路径里那一段），同一平台下可以有多行。
+  // 账号：一行一个账号。`platform` 是平台 id（代码里的模板，或者表里的开放
+  // 平台，也是请求路径里那一段），同一平台下可以有多行。
   db.exec(
     `CREATE TABLE IF NOT EXISTS provider (
       id         TEXT PRIMARY KEY,
@@ -130,6 +132,69 @@ export function store(): DatabaseSync {
       updated_at INTEGER NOT NULL
     )`,
   );
+  // 开放平台：用户自己加的平台，一行一个。
+  //
+  // 代码里的模板（lib/platform-templates.ts）与这张表是两处数据源：模板优先 ——
+  // 模板里有的 id，表里的那一行当没有。这样把模板加回代码时不用先清库，
+  // 回滚是安全的。
+  //
+  // 这一张表的 `id` 就是**平台 id**：跟 provider.platform、
+  // platform_policy.platform 是同一个东西 —— 请求路径里那一段
+  // （`<平台>/v1/messages`）用的就是它。
+  //
+  // `models` 存的是整个目录（模型名、各模型参数、上次什么时候拉的）。
+  //
+  // `models_auto` 这一列留着但不再读写：目录归上游还是归代码由平台的族决定，
+  // 不是行说了算的。老库里的值不再有人读 —— 不删列是怕生产库升级时出事，
+  // 留着不动最稳。
+  //
+  // `traits_from_common` 是「上游与代码都没说清时从共性表补参数」那个开关。
+  // 默认关：共性表是人工整理的近似，只有用户明确要才用。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS platform (
+      id           TEXT PRIMARY KEY,
+      label        TEXT NOT NULL,
+      base_url     TEXT NOT NULL,
+      models       TEXT NOT NULL DEFAULT '[]',
+      models_auto  INTEGER NOT NULL DEFAULT 1,
+      traits_from_common INTEGER NOT NULL DEFAULT 0,
+      quota_plugin TEXT NOT NULL DEFAULT '',
+      kind         TEXT NOT NULL DEFAULT 'openai',
+      region       TEXT NOT NULL DEFAULT '',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    )`,
+  );
+  // 预置平台被删掉的墓碑：一行一个 id。
+  //
+  // 播种是「表里没有就补一行」，补不出「用户删过它」这件事 —— 删掉 minimax 的
+  // 行，下次启动又插回一个空平台，等于删不掉。所以删的那一下在这里留一条，播种
+  // 见到就跳过；用户自己把它建回来（createOpenPlatform）就把墓碑清掉。
+  //
+  // 只记预置目录（platform-catalog.ts 的 SIMULATED_CLIENTS）里的 id：用户自己建
+  // 的平台没有播种这一层，删了本来就没了。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS platform_preset_removed (
+      id         TEXT PRIMARY KEY,
+      removed_at INTEGER NOT NULL
+    )`,
+  );
+  // 人给某个模型的元数据：一行一个模型，只放**写了的**那些字段（JSON）。
+  //
+  // 平台一级一份：模板平台与开放平台共用这一张表 —— 目录的来源是两回事（有的
+  // 是代码里的表，有的是上游拉回来的），人写的那一层是同一个意思。
+  //
+  // 主键是（平台, 模型 id）：同一个模型在一个平台下只能有一条，重复写就是覆盖
+  // 自己；没有序号列，所以读出来的顺序是 model_id 的顺序 —— 稳定比「保存的先后」
+  // 重要（发布出去的目录每次都得一样）。
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS platform_model_override (
+      platform_id TEXT NOT NULL,
+      model_id    TEXT NOT NULL,
+      data        TEXT NOT NULL,
+      PRIMARY KEY (platform_id, model_id)
+    )`,
+  );
   // 账号的冷却：失败之后一段时间不再路由到那个账号。
   //
   // 落库：网关重启以后它还在 —— 一个刚被限流的账号不该因为重启又被试一次。
@@ -144,6 +209,12 @@ export function store(): DatabaseSync {
   );
   migrateProviderToAccounts(db);
   migrateProviderWeight(db);
+  migratePlatforms(db);
+  // 模拟客户端那一族的平台行必须在任何 allPlatforms() 之前就位：代码里的
+  // PLATFORMS 已经清空（lib/platform-templates.ts），表里没有的行等于平台不存在 ——
+  // 路由、面板、额度、目录全都按表里的行找平台。
+  migrateSimulatedClients(db);
+  migrateAccountIds(db);
   return db;
 }
 
@@ -234,6 +305,205 @@ function migrateProviderWeight(db: DatabaseSync): void {
   }
 }
 
+
+/**
+ * 平台表的迁移：补两列。
+ *
+ * 导出：测试要能单独再跑一次（老库模拟），迁移本身得能被调用。
+ */
+export function migratePlatforms(db: DatabaseSync): void {
+  migratePlatformColumns(db);
+}
+
+
+
+/**
+ * 平台表补两列：kind 与 region。
+ *
+ * `kind` 是「怎么跟它说话」（kind 注册表里的那一类），`region` 是「在哪个区域」。
+ * 这两样以前只存在于代码里的模板（lib/platform-templates.ts），平台迁进表里就得
+ * 有地方放。旧库没有这两列：补上，缺的那一列按缺省算（kind 是 openai ——
+ * 表里那些行都是用户自己加的开放平台；region 是空串）。
+ */
+function migratePlatformColumns(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(platform)").all() as { name?: string }[];
+  const has = (name: string) => columns.some((c) => c.name === name);
+  if (!has("kind")) db.exec("ALTER TABLE platform ADD COLUMN kind TEXT NOT NULL DEFAULT 'openai'");
+  if (!has("region")) db.exec("ALTER TABLE platform ADD COLUMN region TEXT NOT NULL DEFAULT ''");
+  // 共性表那个开关也是后来加的：老库没有这一列，补成关（与新建的库一样）。
+  if (!has("traits_from_common")) {
+    db.exec("ALTER TABLE platform ADD COLUMN traits_from_common INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+
+/**
+ * 模拟客户端那一族的平台补成表里的行。
+ *
+ * 必须在启动时播完，不能等第一次用到再建：PLATFORMS 已经清空
+ * （lib/platform-templates.ts），表里没有的行就等于这个平台不存在 —— 路由、面板、
+ * 额度、目录全都按表里的行找平台。少一行，那个客户端的请求就整条路断掉。
+ *
+ * 只播 `hidden === false` 的：hidden 是「目录里先备着、面板上还不给」。播出来就是
+ * 一个地址空、目录空、额度空的平台，面板上看得见却用不了 —— 那样 hidden 就没意义
+ * 了。将来把它改成 false，下一次启动自然就播。
+ *
+ * 删过的不播（platform_preset_removed 的墓碑）：删了就是没了，重启不该插回来。
+ * 用户自己建回来会清墓碑（lib/open-platforms.ts 的 createOpenPlatform）。
+ *
+ * 幂等：存在就不插，已经有的行一个字段都不改 —— 名字用户在面板上能改，那是用户
+ * 的值；目录与额度插件归别处维护，重启不该把它们拨回去。
+ *
+ * 判存在与判墓碑都在同一条语句里（INSERT … SELECT … WHERE NOT EXISTS），不再有
+ * 两次读之间的窗口：先读墓碑、再读平台行、再插，中间别人写一条墓碑或建一行，播
+ * 出来就是「删掉的长回来了」或者「盖掉用户刚建的行」。一句里判完，窗口就没了。
+ *
+ * 目录是空的：模拟客户端那一族的目录由各 kind 自己的 models() 给出，不从上游
+ * 拉 —— 上游那份是那个封闭客户端的目录，网关拿不到也不该拿。
+ */
+export function migrateSimulatedClients(db: DatabaseSync): void {
+  const insert = db.prepare(
+    "INSERT INTO platform " +
+      "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
+      "SELECT ?, ?, '', '[]', '', ?, ?, ?, ? " +
+      "WHERE NOT EXISTS (SELECT 1 FROM platform_preset_removed WHERE id = ?) " +
+      "AND NOT EXISTS (SELECT 1 FROM platform WHERE id = ?)",
+  );
+  const now = Date.now();
+  for (const client of SIMULATED_CLIENTS) {
+    // hidden 是目录数据（「面板上还不给」），不是库里的状态，留在 JS 这一层判。
+    if (client.hidden) continue;
+    insert.run(client.id, client.label, client.kind, client.region, now, now, client.id, client.id);
+  }
+}
+
+/**
+ * 这个预置平台是不是被用户删掉了。
+ *
+ * 只有播种与面板的删除/新建用得着：判断一个 id 在不在表里用 openPlatformOf。
+ */
+export function platformPresetRemoved(id: string): boolean {
+  return store().prepare("SELECT id FROM platform_preset_removed WHERE id = ?").get(id) !== undefined;
+}
+
+/**
+ * 记下「用户删掉了这个预置平台」。
+ *
+ * 与删平台那一行写在同一个事务里（调用方已经开着的那个）：两句话之间断掉，
+ * 就会出现「行删了、墓碑没写，重启又长回来」。
+ */
+export function rememberPlatformPresetRemoved(id: string): void {
+  store()
+    .prepare("INSERT OR REPLACE INTO platform_preset_removed (id, removed_at) VALUES (?, ?)")
+    .run(id, Date.now());
+}
+
+/**
+ * 用户把这个 id 建回来了，把墓碑清掉。
+ *
+ * 不清的话，这一行哪天再被删一次也无所谓 —— 问题在下次建的时候：播种见到墓碑就
+ * 跳过，可那一行是用户自己建的、归用户，墓碑留着只会误导后来读这张表的人。
+ */
+export function forgetPlatformPresetRemoved(id: string): void {
+  store().prepare("DELETE FROM platform_preset_removed WHERE id = ?").run(id);
+}
+
+/**
+ * 账号 id 从「平台名」换成数字。 *
+ * 账号 id 现在是一个自增整数（lib/providers.ts 的 nextAccountId），面板只显示
+ * alias，所以换号对使用者不可见 —— 但凭据与冷却都按 id 认人，得跟着搬。老库里
+ * 还是「平台名」形态（`tokenrhythm`、`qoder`、`workbuddy-cn`），启动时换掉。
+ *
+ * 幂等：全是数字就整段跳过。
+ *
+ * 一个事务里改四样：行上的 id、alias、凭据的 id、冷却。中途任何一步抛错就整个
+ * 回滚并把错误抛出去 —— 网关宁可起不来，也不能带着「一半账号换了号、另一半还
+ * 是旧号」的库对外服务：那会把凭据接到不相干的账号上。
+ */
+export function migrateAccountIds(db: DatabaseSync): void {
+  const rows = db.prepare("SELECT id, alias, created_at FROM provider").all() as {
+    id?: string;
+    alias?: string;
+    created_at?: number;
+  }[];
+  if (!rows.some((row) => !/^\d+$/.test(String(row.id)))) return;
+
+  // 编号：按建出来的先后（同一时刻再按 id），从现有最大数字往后接 —— 老库里
+  // 可能已经有数字 id（新装的库就是），接着排才不会撞号；也不填空洞，删掉的号
+  // 不再发放。
+  const ordered = [...rows].sort((a, b) => {
+    const byTime = Number(a.created_at ?? 0) - Number(b.created_at ?? 0);
+    return byTime !== 0 ? byTime : String(a.id).localeCompare(String(b.id));
+  });
+  let next = 1;
+  for (const row of rows) {
+    const id = String(row.id);
+    if (/^\d+$/.test(id)) next = Math.max(next, Number(id) + 1);
+  }
+  const mapping = new Map<string, string>();
+  for (const row of ordered) {
+    const old = String(row.id);
+    if (/^\d+$/.test(old)) continue;
+    mapping.set(old, String(next++));
+  }
+
+  let step = "开事务";
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    // 1. 行上的 id 换号。alias 只在空的时候补旧 id：生产上有人把账号改名成
+    //    「中转站 1」，那个名字不能被旧 id 盖掉。
+    step = "账号行";
+    const renameRow = db.prepare(
+      "UPDATE provider SET id = ?, alias = CASE WHEN alias = '' THEN ? ELSE alias END WHERE id = ?",
+    );
+    for (const [old, fresh] of mapping) renameRow.run(fresh, old, old);
+    // 2. 凭据：四种前缀都按冒号边界换中间那一段。
+    step = "凭据";
+    const secrets = db.prepare("SELECT id FROM secrets").all() as { id?: string }[];
+    const renameSecret = db.prepare("UPDATE secrets SET id = ? WHERE id = ?");
+    for (const row of secrets) {
+      const id = String(row.id);
+      const fresh = renamedSecretId(id, mapping);
+      if (fresh) renameSecret.run(fresh, id);
+    }
+    // 3. 冷却：按账号 id 记的，跟着换。
+    step = "冷却";
+    const renameCooldown = db.prepare("UPDATE cooldown SET provider_id = ? WHERE provider_id = ?");
+    for (const [old, fresh] of mapping) renameCooldown.run(fresh, old);
+    db.exec("COMMIT");
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* 事务可能已经没了 */
+    }
+    throw new Error(
+      `账号 id 迁移在「${step}」这一步失败：${(e as Error)?.message ?? String(e)}。` +
+        `事务已整个回滚，没有账号被换号；库还是迁移前的样子。`,
+    );
+  }
+}
+
+/**
+ * 凭据 id 跟着账号换号。
+ *
+ * 四种形态：`session:provider:<id>`、`key:provider:<id>`、
+ * `key:provider:<id>:<后缀>`、`account:<id>[:<后缀>]`。边界是冒号 ——
+ * `key:provider:qoder` 不能把 `key:provider:qoder-cn:…` 一起改掉，那是另一个
+ * 账号的凭据。映射里没有的账号（行已经被删掉、凭据留下）原样不动。
+ */
+function renamedSecretId(id: string, mapping: Map<string, string>): string | null {
+  const parts = id.split(":");
+  const rebase = (index: number): string | null => {
+    const fresh = mapping.get(parts[index] ?? "");
+    if (!fresh) return null;
+    return [...parts.slice(0, index), fresh, ...parts.slice(index + 1)].join(":");
+  };
+  if (parts[0] === "session" && parts[1] === "provider" && parts.length === 3) return rebase(2);
+  if (parts[0] === "key" && parts[1] === "provider" && parts.length >= 3) return rebase(2);
+  if (parts[0] === "account" && parts.length >= 2) return rebase(1);
+  return null;
+}
 
 /** 旧行（kind + region）属于哪个平台。 */
 function platformOfLegacyRow(kind: string, region: string): string {

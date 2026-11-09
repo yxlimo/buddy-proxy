@@ -1,4 +1,5 @@
-import { create } from '@bufbuild/protobuf'
+import { create, type MessageInitShape } from '@bufbuild/protobuf'
+import { Code, ConnectError } from '@connectrpc/connect'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -6,15 +7,17 @@ import {
   AccountSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
-  ListProviderKindsResponseSchema,
+  ListPublishedModelsResponseSchema,
+  ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
-  ProviderKindSchema,
   ProviderPolicy,
+  QuotaPluginFieldSchema,
+  QuotaPluginSchema,
   SetProviderKeysResponseSchema,
   UpstreamSchema,
   UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
-import type { Account } from '@/gen/buddy/admin/v1/admin_pb'
+import type { Account, QuotaPlugin, Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 import { UpstreamsPage } from '@/features/upstreams/index'
 import { upstreamKeys } from '@/features/upstreams/api'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -109,11 +112,6 @@ describe('账号的 API Key', () => {
             }),
           ],
         }),
-      // 后端说七牛云是 api_key 登录：面板据此给「凭据」按钮。
-      ListProviderKinds: () =>
-        create(ListProviderKindsResponseSchema, {
-          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
-        }),
       ListAccounts: () =>
         create(ListAccountsResponseSchema, { accounts: [qiniuAccount()] }),
       ListCredentials: () =>
@@ -121,8 +119,6 @@ describe('账号的 API Key', () => {
       SetProviderKeys: (input) => {
         sent.push(input.upstreamId ?? '')
         return create(SetProviderKeysResponseSchema, {
-          ok: true,
-          message: '写好了',
           count: 1,
         })
       },
@@ -171,16 +167,12 @@ describe('账号的 API Key', () => {
             }),
           ],
         }),
-      ListProviderKinds: () =>
-        create(ListProviderKindsResponseSchema, {
-          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
-        }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () =>
         create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
         sent.push(input.upstreamId ?? '')
-        return create(SetProviderKeysResponseSchema, { ok: true })
+        return create(SetProviderKeysResponseSchema)
       },
     })
 
@@ -228,16 +220,12 @@ describe('账号的 API Key', () => {
             }),
           ],
         }),
-      ListProviderKinds: () =>
-        create(ListProviderKindsResponseSchema, {
-          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
-        }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () =>
         create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
         sent.push(input.upstreamId ?? '')
-        return create(SetProviderKeysResponseSchema, { ok: true })
+        return create(SetProviderKeysResponseSchema)
       },
     })
 
@@ -294,11 +282,6 @@ describe('七牛云的凭据', () => {
             }),
           ],
         }),
-      // 后端说七牛云是 api_key 登录：面板据此给「凭据」按钮。
-      ListProviderKinds: () =>
-        create(ListProviderKindsResponseSchema, {
-          kinds: [create(ProviderKindSchema, { kind: 'qiniu', login: 'api_key' })],
-        }),
       ListAccounts: () =>
         create(ListAccountsResponseSchema, { accounts: [qiniuAccount()] }),
       ListCredentials: () =>
@@ -307,8 +290,6 @@ describe('七牛云的凭据', () => {
         const keys = input.keys ?? []
         sent.push(keys)
         return create(SetProviderKeysResponseSchema, {
-          ok: true,
-          message: '写好了',
           count: keys.length,
         })
       },
@@ -402,47 +383,44 @@ describe('七牛云的凭据', () => {
 })
 
 /**
- * 给不给「填 key」的入口，由后端说的 kind ⇒ login 决定。
+ * 给不给「填 key」的入口，由面板知道这一类要填哪几格决定。
  *
  * 以前是按平台名一个个写死，写死就漏：新平台上线的第一次必漏（qiniu、
- * xinghuo 各漏过一次）。
+ * xinghuo 各漏过一次）。现在那张表是凭据的形状（几格、每格是什么），表里有
+ * 这一类才给入口。
  */
-describe('按 kind 的 login 给入口', () => {
+describe('凭据的入口按这一类的格子给', () => {
   beforeEach(() => {
     toastSuccess.mockClear()
     toastError.mockClear()
     window.history.replaceState(null, '', '/')
   })
 
-  /** 一个平台 + 后端说的每一类怎么登录。 */
+  /** 一个平台（这一类要填哪几格，面板自己知道，不问后端怎么登录）。 */
   function kindsClient(
     list: ReturnType<typeof upstream>[],
-    kinds: { kind: string; login: string }[],
     sent?: string[][]
   ) {
     return mockAdminClient({
       ListUpstreams: () => create(ListUpstreamsResponseSchema, { upstreams: list }),
-      ListProviderKinds: () =>
-        create(ListProviderKindsResponseSchema, {
-          kinds: kinds.map((row) => create(ProviderKindSchema, row)),
-        }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () => create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
         sent?.push(input.keys ?? [])
-        return create(SetProviderKeysResponseSchema, { ok: true })
+        return create(SetProviderKeysResponseSchema)
       },
     })
   }
 
-  it('后端说这一类用 api_key 登录：账号行给「API Key」按钮', async () => {
+  it('这一类要填 key：账号行给「API Key」按钮', async () => {
     const user = userEvent.setup({ delay: null })
 
     renderWithClient({
-      client: kindsClient(
-        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
-        [{ kind: 'xinghuo', login: 'api_key' }]
-      ),
+      client: kindsClient([
+        upstream('xinghuo', 'xinghuo', '讯飞星火', [
+          accountOf('xinghuo-1', 'xinghuo', '星火一'),
+        ]),
+      ]),
       children: <UpstreamsPage />,
     })
 
@@ -456,14 +434,15 @@ describe('按 kind 的 login 给入口', () => {
     ).toBeInTheDocument()
   })
 
-  it('后端说这一类不是 api_key 登录：不给「API Key」按钮', async () => {
+  it('这一类不用填 key（凭据是登录会话）：不给「API Key」按钮', async () => {
     const user = userEvent.setup({ delay: null })
 
     renderWithClient({
-      client: kindsClient(
-        [upstream('qoder', 'qoder', 'Qoder', [accountOf('qoder-1', 'qoder', '邱德')])],
-        [{ kind: 'qoder', login: 'device' }]
-      ),
+      client: kindsClient([
+        upstream('qoder', 'qoder', 'Qoder', [
+          accountOf('qoder-1', 'qoder', '邱德'),
+        ]),
+      ]),
       children: <UpstreamsPage />,
     })
 
@@ -481,14 +460,51 @@ describe('按 kind 的 login 给入口', () => {
     ).toBeInTheDocument()
   })
 
+  it('会话型的四家（MiniMax / Qoder / WorkBuddy / ZCode）都不给填 key 的入口', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: kindsClient([
+        upstream('minimax', 'minimax', 'MiniMax Code', [
+          accountOf('minimax-1', 'minimax', '主账号'),
+        ]),
+        upstream('qoder', 'qoder', 'Qoder', [
+          accountOf('qoder-1', 'qoder', '邱德'),
+        ]),
+        upstream('workbuddy', 'workbuddy', 'WorkBuddy', [
+          accountOf('workbuddy-1', 'workbuddy', '打工人'),
+        ]),
+        upstream('zcode', 'zcode', 'ZCode', [
+          accountOf('zcode-1', 'zcode', '写代码的'),
+        ]),
+      ]),
+      children: <UpstreamsPage />,
+    })
+
+    for (const id of ['minimax', 'qoder', 'workbuddy', 'zcode']) {
+      await user.click(
+        await screen.findByRole('button', { name: `展开 ${id} 的账号与凭据` })
+      )
+    }
+
+    // 四家都不给「API Key」/「凭据」那个入口：它们的凭据是登录会话。
+    expect(
+      screen.queryByRole('button', { name: 'API Key' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: '凭据' })
+    ).not.toBeInTheDocument()
+  })
+
   it('MiniMax Code：额度只认会话，不再给「套餐 key」按钮', async () => {
     const user = userEvent.setup({ delay: null })
 
     renderWithClient({
-      client: kindsClient(
-        [upstream('minimax', 'minimax', 'MiniMax Code', [accountOf('minimax', 'minimax', '主账号')])],
-        [{ kind: 'minimax', login: 'device' }]
-      ),
+      client: kindsClient([
+        upstream('minimax', 'minimax', 'MiniMax Code', [
+          accountOf('minimax', 'minimax', '主账号'),
+        ]),
+      ]),
       children: <UpstreamsPage />,
     })
 
@@ -515,8 +531,11 @@ describe('按 kind 的 login 给入口', () => {
 
     renderWithClient({
       client: kindsClient(
-        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
-        [{ kind: 'xinghuo', login: 'api_key' }],
+        [
+          upstream('xinghuo', 'xinghuo', '讯飞星火', [
+            accountOf('xinghuo-1', 'xinghuo', '星火一'),
+          ]),
+        ],
         sent
       ),
       children: <UpstreamsPage />,
@@ -542,8 +561,11 @@ describe('按 kind 的 login 给入口', () => {
 
     renderWithClient({
       client: kindsClient(
-        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
-        [{ kind: 'xinghuo', login: 'api_key' }],
+        [
+          upstream('xinghuo', 'xinghuo', '讯飞星火', [
+            accountOf('xinghuo-1', 'xinghuo', '星火一'),
+          ]),
+        ],
         sent
       ),
       children: <UpstreamsPage />,
@@ -559,5 +581,561 @@ describe('按 kind 的 login 给入口', () => {
     await waitFor(() => {
       expect(sent).toEqual([['']])
     })
+  })
+})
+
+/**
+ * 凭据弹窗按平台渲染带标签的格子。
+ *
+ * 位置就是顺序：SetProviderKeys 的 keys[] 是按位置读的（服务端
+ * lib/admin/credentials.ts 就是这么解的），所以断言的是发出去的数组本身 ——
+ * 第几格填的什么，数组的第几项就是什么。
+ */
+describe('凭据弹窗按平台渲染格子', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  /** 一个平台，带着它名下的一个账号。 */
+  function platformOf(
+    id: string,
+    kind: string,
+    label: string,
+    extra: Partial<
+      Omit<MessageInitShape<typeof UpstreamSchema>, '$typeName' | '$unknown'>
+    > = {}
+  ): Upstream {
+    const base: MessageInitShape<typeof UpstreamSchema> = {
+      id,
+      kind,
+      label,
+      state: UpstreamState.NO_CREDENTIAL,
+      policy: ProviderPolicy.SINGLE,
+      policies: [ProviderPolicy.SINGLE],
+      accountCount: 1,
+      accounts: [accountOf(`${id}-1`, id, '账号一')],
+    }
+    return create(UpstreamSchema, { ...base, ...extra })
+  }
+
+  /** 一个假客户端：把每次提交的 keys 记下来（按位置，一个不差）。 */
+  function clientOf(
+    upstream: Upstream,
+    sent: string[][],
+    plugins: QuotaPlugin[] = []
+  ) {
+    return mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, { upstreams: [upstream] }),
+      ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
+      ListCredentials: () =>
+        create(ListCredentialsResponseSchema, { credentials: [] }),
+      ListQuotaPlugins: () =>
+        create(ListQuotaPluginsResponseSchema, { plugins }),
+      // 删平台之前要扫一遍主路由模型。
+      ListPublishedModels: () =>
+        create(ListPublishedModelsResponseSchema, { models: [] }),
+      SetProviderKeys: (input) => {
+        const keys = [...(input.keys ?? [])]
+        sent.push(keys)
+        return create(SetProviderKeysResponseSchema, {
+          count: keys.length,
+        })
+      },
+    })
+  }
+
+  /** 展开平台，点开凭据弹窗。 */
+  async function openDialog(
+    user: ReturnType<typeof userEvent.setup>,
+    upstreamId: string
+  ) {
+    await user.click(
+      await screen.findByRole('button', {
+        name: `展开 ${upstreamId} 的账号与凭据`,
+      })
+    )
+    await user.click(
+      await screen.findByRole('button', { name: /^(凭据|API Key)$/ })
+    )
+    await screen.findByRole('dialog')
+  }
+
+  it('SenseNova：一格「推理 API Key」，发出去一把', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('sensenova', 'sensenova', 'SenseNova'),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'sensenova')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-sense-1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-sense-1']])
+    })
+  })
+
+  it('书生·端砚：两格，Discovery 在前、Chat 在后', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('intern-ai', 'intern-ai', '书生·端砚'),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'intern-ai')
+
+    expect(
+      await screen.findByLabelText('Discovery 子站 key')
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByLabelText('Chat 子站 key（可空）')
+    ).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Discovery 子站 key'), 'sk-disc')
+    await user.type(screen.getByLabelText('Chat 子站 key（可空）'), 'sk-chat')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-disc', 'sk-chat']])
+    })
+  })
+
+  it('书生·端砚：Chat 留空：空的那一格也占着位置', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('intern-ai', 'intern-ai', '书生·端砚'),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'intern-ai')
+
+    await user.type(screen.getByLabelText('Discovery 子站 key'), 'sk-disc')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-disc', '']])
+    })
+  })
+
+  it('TokenRhythm：一格「API Key」，发出去一把', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('tokenrhythm', 'tokenrhythm', 'TokenRhythm'),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'tokenrhythm')
+
+    expect(await screen.findByLabelText('API Key')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('API Key'), 'sk-tr-1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-tr-1']])
+    })
+  })
+
+  it('TokenRhythm：全空提交：一把空串发上去（清掉那把 key）', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('tokenrhythm', 'tokenrhythm', 'TokenRhythm'),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'tokenrhythm')
+
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['']])
+    })
+  })
+
+  it('开放平台：推理 key 在前，插件的那几段按 fields 的顺序在后', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+    const plugins = [
+      create(QuotaPluginSchema, {
+        id: 'demo-plugin',
+        label: '演示插件',
+        fields: [
+          create(QuotaPluginFieldSchema, {
+            name: 'first',
+            label: '第一段',
+            secret: true,
+          }),
+          create(QuotaPluginFieldSchema, {
+            name: 'second',
+            label: '第二段',
+            secret: false,
+          }),
+        ],
+      }),
+    ]
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('my-open', 'openai', '我的开放平台', {
+          isOpenPlatform: true,
+          quotaPlugin: 'demo-plugin',
+        }),
+        sent,
+        plugins
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'my-open')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('第一段')).toBeInTheDocument()
+    expect(await screen.findByLabelText('第二段')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.type(screen.getByLabelText('第一段'), 'v1')
+    await user.type(screen.getByLabelText('第二段'), 'v2')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-infer', 'v1', 'v2']])
+    })
+  })
+
+  it('开放平台：没选插件：只有推理那一格', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('my-open', 'openai', '我的开放平台', {
+          isOpenPlatform: true,
+          quotaPlugin: '',
+        }),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'my-open')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    // 只有一格：没有插件的那几段。
+    expect(
+      screen.queryByLabelText('第一段')
+    ).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-infer']])
+    })
+  })
+
+  it('开放平台：插件没登记：也只有推理那一格', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('my-open', 'openai', '我的开放平台', {
+          isOpenPlatform: true,
+          quotaPlugin: 'not-registered',
+        }),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'my-open')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-infer']])
+    })
+  })
+
+  it('开放平台：插件不要额外的凭据（额度走登录会话）：只有推理那一格', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('my-open', 'openai', '我的开放平台', {
+          isOpenPlatform: true,
+          quotaPlugin: 'sensenova-pools',
+        }),
+        sent,
+        [
+          create(QuotaPluginSchema, {
+            id: 'sensenova-pools',
+            label: 'SenseNova 积分池',
+            // 额度用的是登录会话，不另填凭据。
+            fields: [],
+          }),
+        ]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'my-open')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    // 格子总数说准：推理那一格，加上插件那段（零段）。
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.querySelectorAll('input')).toHaveLength(1)
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-infer']])
+    })
+  })
+
+  it('SenseNova：选出额度插件也不往上加格子（仍是一格）', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('sensenova', 'sensenova', 'SenseNova'),
+        sent,
+        [
+          create(QuotaPluginSchema, {
+            id: 'sensenova-pools',
+            label: 'SenseNova 积分池',
+            fields: [],
+          }),
+        ]
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'sensenova')
+
+    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog')
+    // 一格：额度插件那段不往上加格子。
+    expect(dialog.querySelectorAll('input')).toHaveLength(1)
+
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-sense-1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-sense-1']])
+    })
+  })
+
+  it('那个「每行一把」的文本框没有了：弹窗里只有带标签的格子', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('intern-ai', 'intern-ai', '书生·端砚'),
+        sent
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'intern-ai')
+
+    // 文本框（textarea）在无障碍树里是 textbox：这里一个都没有。
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('key（每行一把）')
+    ).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * 开放平台的凭据格子数由额度插件登记表说了算。
+ *
+ * 登记表没到手的时候，面板只知道有「推理 API Key」那一格。这时候开弹窗，用户
+ * 一保存就发上去一个长度 1 的 keys 数组，而服务端 setProviderKeys 是按位置
+ * 写的（keys[i+1] ?? ""）—— 插件那几段就被当成空串清掉了。那是静默的数据
+ * 丢失，不是显示问题。所以登记表没到手就不给开那个弹窗。
+ */
+describe('开放平台的凭据入口：登记表没到手就不给开', () => {
+  beforeEach(() => {
+    toastSuccess.mockClear()
+    toastError.mockClear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  /** 额度插件登记表那个 RPC 的处理器。 */
+  type PluginsHandler = NonNullable<
+    Parameters<typeof mockAdminClient>[0]['ListQuotaPlugins']
+  >
+
+  /** 一个开放平台：选了「演示插件」，那个插件要两段凭据。 */
+  function openPlatform(): Upstream {
+    return create(UpstreamSchema, {
+      id: 'my-open',
+      kind: 'openai',
+      label: '我的开放平台',
+      state: UpstreamState.NO_CREDENTIAL,
+      policy: ProviderPolicy.SINGLE,
+      policies: [ProviderPolicy.SINGLE],
+      accountCount: 1,
+      accounts: [accountOf('my-open-1', 'my-open', '账号一')],
+      isOpenPlatform: true,
+      quotaPlugin: 'demo-plugin',
+    })
+  }
+
+  /** 一个假客户端：额度插件登记表按给的处理器来。 */
+  function openClient(listPlugins: PluginsHandler) {
+    return mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, { upstreams: [openPlatform()] }),
+      ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
+      ListCredentials: () =>
+        create(ListCredentialsResponseSchema, { credentials: [] }),
+    ListQuotaPlugins: listPlugins,
+    ListPublishedModels: () =>
+      create(ListPublishedModelsResponseSchema, { models: [] }),
+    SetProviderKeys: () => create(SetProviderKeysResponseSchema),
+    })
+  }
+
+  /** 展开开放平台那一行。 */
+  async function expand(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(
+      await screen.findByRole('button', {
+        name: '展开 my-open 的账号与凭据',
+      })
+    )
+  }
+
+  it('插件列表还在加载：凭据入口是禁用的，弹窗开不了', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      // 一直不回的登记表：这个查询就永远在加载中。
+      client: openClient(() => new Promise<never>(() => {})),
+      children: <UpstreamsPage />,
+    })
+
+    await expand(user)
+
+    // 入口的名字随格子数变（「凭据」还是「API Key」），这里不挑名字：挑的是
+    // 它点不了。
+    const button = await screen.findByRole('button', {
+      name: /^(凭据|API Key)$/,
+    })
+    // 不能点：点下去就少几段。
+    expect(button).toBeDisabled()
+    // 也看得见为什么点不了。
+    expect(screen.getByText('凭据格子还在加载')).toBeInTheDocument()
+
+    await user.click(button)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('插件列表取不到：显示错误，凭据入口是禁用的', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: openClient(() => {
+        throw new ConnectError('连接被拒', Code.Unavailable)
+      }),
+      children: <UpstreamsPage />,
+    })
+
+    await expand(user)
+
+    const button = await screen.findByRole('button', {
+      name: /^(凭据|API Key)$/,
+    })
+    await waitFor(() => {
+      expect(button).toBeDisabled()
+    })
+    // 错误照出来：不让格子数悄悄变少。
+    expect(
+      await screen.findByText(/插件列表取不到/)
+    ).toBeInTheDocument()
+
+    await user.click(button)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('模板平台不看登记表：登记表没到手，入口照常给', async () => {
+    const user = userEvent.setup({ delay: null })
+
+    renderWithClient({
+      client: mockAdminClient({
+        ListUpstreams: () =>
+          create(ListUpstreamsResponseSchema, {
+            upstreams: [
+              create(UpstreamSchema, {
+                id: 'qiniu',
+                kind: 'qiniu',
+                label: '七牛云',
+                state: UpstreamState.NO_CREDENTIAL,
+                policy: ProviderPolicy.SINGLE,
+                policies: [ProviderPolicy.SINGLE],
+                accountCount: 1,
+                accounts: [qiniuAccount()],
+              }),
+            ],
+          }),
+        ListAccounts: () =>
+          create(ListAccountsResponseSchema, { accounts: [] }),
+        ListCredentials: () =>
+          create(ListCredentialsResponseSchema, { credentials: [] }),
+        ListQuotaPlugins: () => new Promise<never>(() => {}),
+      }),
+      children: <UpstreamsPage />,
+    })
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: '展开 qiniu 的账号与凭据',
+      })
+    )
+
+    // 模板平台的格子是写死的，不看登记表：入口照常给，弹窗也照常开。
+    const button = await screen.findByRole('button', { name: '凭据' })
+    expect(button).not.toBeDisabled()
+    await user.click(button)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(await screen.findByLabelText('门户 Cookie')).toBeInTheDocument()
   })
 })

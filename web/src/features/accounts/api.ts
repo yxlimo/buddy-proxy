@@ -7,11 +7,12 @@ import {
   TestCredentialRequestSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-import { accountKeys } from '@/features/accounts/keys'
-import { upstreamKeys } from '@/features/upstreams/api'
 import { assertOk, describeError } from '@/lib/errors'
+import { queryKeys } from '@/lib/query-keys'
+import { invalidateServerData } from '@/lib/server-data'
 
-export { accountKeys }
+/** 账号那份答复的查询键。键本身在 `lib/query-keys.ts` 里。 */
+export const accountKeys = queryKeys.accounts
 
 /**
  * 某个账号名下的凭据。
@@ -22,7 +23,7 @@ export { accountKeys }
 export function useCredentials(accountId: string) {
   const client = useAdminClient()
   return useQuery({
-    queryKey: accountKeys.credentials(accountId),
+    queryKey: queryKeys.accounts.credentials(accountId),
     queryFn: () =>
       client.listCredentials(create(ListCredentialsRequestSchema, { accountId })),
     enabled: accountId !== '',
@@ -50,7 +51,8 @@ export function useTestCredential() {
       toast.success(result.message || '这条凭据还能用')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
+      // 试一条凭据会改它的状态（能用/不能用），账号那一行跟着变。
+      invalidateServerData(queryClient, 'credentials')
     },
   })
 }
@@ -66,24 +68,23 @@ export function useSetProviderKeys() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { accountId: string; keys: string[] }) => {
-      const result = await client.setProviderKeys(
+      // 失败是一次 Connect 错误（SetProviderKeys 没有 ok / message 两格）。
+      return await client.setProviderKeys(
         create(SetProviderKeysRequestSchema, {
           upstreamId: input.accountId,
           keys: input.keys,
         })
       )
-      assertOk(result, '写入失败')
-      return result
     },
     onError: (error) => {
       toast.error(describeError(error))
     },
-    onSuccess: (result) => {
-      toast.success(result.message || '已写入')
+    onSuccess: () => {
+      toast.success('已写入')
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-      void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+      // 写进去的是凭据：条数、能不能用都变了，账号那一行与平台那份答复跟着变。
+      invalidateServerData(queryClient, 'credentials')
     },
   })
 }

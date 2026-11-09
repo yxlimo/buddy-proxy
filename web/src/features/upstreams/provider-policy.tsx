@@ -15,7 +15,7 @@ import type { Upstream } from '@/gen/buddy/admin/v1/admin_pb'
  * 策略的中文标签。
  *
  * 后端也有一份：lib/platforms.ts 的 POLICY_TEXT。两边要一起改 —— 后端的 toast
- * （策略改成了降级）与面板的下拉是同屏出现的。
+ * （策略已改为降级。）与面板的下拉是同屏出现的。
  */
 const POLICY_LABELS: Partial<Record<ProviderPolicy, string>> = {
   [ProviderPolicy.SINGLE]: '单一',
@@ -50,11 +50,11 @@ function policyHint(policy: ProviderPolicy): string {
     case ProviderPolicy.FALLBACK:
       return '名下的账号挨个试，一个接不了就换下一个'
     case ProviderPolicy.EXPIRY_FIRST:
-      return '先用赠金最先到期的那本；那本没钱了就换一个'
+      return '先用最先到期的余额'
     default:
       return policy === ProviderPolicy.UNSPECIFIED
-        ? '服务端没给这个平台的策略'
-        : '服务端给了一个面板不认识的策略'
+        ? '策略未设置'
+        : '未知策略'
   }
 }
 

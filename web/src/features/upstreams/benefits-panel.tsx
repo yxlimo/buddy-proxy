@@ -61,8 +61,7 @@ export function BenefitsPanel({
         <div className='grid gap-0.5'>
           <h3 className='text-sm font-medium'>每日签到</h3>
           <p className='text-xs text-muted-foreground'>
-            登记了签到的账号每天一次。点「现在签到」会把所有登记过的账号都签
-            一遍，所以下面结果是全部账号的
+            点「现在签到」会把所有登记过的账号都签一遍，下面结果是全部账号的
           </p>
         </div>
         <Button

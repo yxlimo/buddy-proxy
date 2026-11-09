@@ -15,7 +15,7 @@
 import { saveAggregateModel, deleteAggregateModel, clearAggregateUsage, listAggregateModels } from "../lib/aggregate.ts";
 import { clearUsage } from "../lib/usage.ts";
 import { setSecret } from "../lib/store.ts";
-import { addAccount, provider } from "../lib/providers.ts";
+import { accountsOfPlatform, addAccount } from "../lib/providers.ts";
 
 const [, , command, ...rest] = process.argv;
 
@@ -47,9 +47,11 @@ switch (command) {
     // token; the router does need one to send a request at all.
     const now = Date.now();
     // 账号是数据，平台是模板：没有账号行就没有地方挂会话，路由也选不到它。
-    if (!provider("qoder")) addAccount({ platform: "qoder" });
-    if (!provider("workbuddy-cn")) addAccount({ platform: "workbuddy-cn" });
-    setSecret("session:provider:qoder", "session", {
+    // 凭据挂在账号自己的 id 上 —— 账号 id 与平台 id 是两回事。
+    const qoderId = accountsOfPlatform("qoder")[0]?.id ?? addAccount({ platform: "qoder" }).id;
+    const workbuddyId = accountsOfPlatform("workbuddy-cn")[0]?.id ?? addAccount({ platform: "workbuddy-cn" }).id;
+    if (!qoderId || !workbuddyId) throw new Error("账号没有建出来");
+    setSecret(`session:provider:${qoderId}`, "session", {
       schemaVersion: 1,
       region: "global",
       clientId: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
@@ -65,7 +67,7 @@ switch (command) {
       loginAtMs: now,
       refreshedAtMs: now,
     });
-    setSecret("session:provider:workbuddy-cn", "session", {
+    setSecret(`session:provider:${workbuddyId}`, "session", {
       accessToken: "wb-test-token",
       refreshToken: "wb-test-refresh",
       uid: "test-user",

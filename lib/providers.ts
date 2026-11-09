@@ -1,27 +1,33 @@
 // lib/providers.ts — 账号：一行一个登录身份。
 //
-// 平台是代码里的模板（lib/platforms.ts）：九个服务，路径里那一段就是它的 id。
-// 账号是这张表里的行：同一个平台下可以有多行 —— MiniMax Code 的主账号与 M
-// plan 是两行，中转站的每个租户也是一行。
+// 平台是代码里的模板与表里的开放平台（lib/platforms.ts）：请求路径里那一段
+// 就是它的 id。账号是这张表里的行：同一个平台下可以有多行 —— MiniMax Code 的
+// 主账号与 M plan 是两行，中转站的每个租户也是一行。
 //
 // 一行有三个来处：
 //
-//   id        账号自己的标识，自动生成（`minimax`、`minimax-2`）。路径里不用它。
+//   id        账号自己的键，自动生成（`1`、`2`……）。面板不显示它。
 //   platform  它属于哪个平台。平台决定 kind、region 与说话的方式。
 //   alias     面板上用来分辨两个账号。
+//
+// 账号 id 与平台 id 相互独立：关联只靠 provider.platform。id 不派生自平台
+// —— 派生出来的 id 在平台改名或换绑时会跟着错位，还会让后缀看起来像某种
+// 编号（它曾经被当成旧租户号读过）。面板显示 alias，id 只是键。
 //
 // kind 与 region 是从平台模板**派生**的，不是存的：它们是服务的属性，不是
 // 哪个登录的身份。
 
 import { store } from "./store.ts";
 import { kindOf, type ProviderKind } from "./provider-kinds.ts";
-import { PLATFORMS, platformOf, platformPolicy } from "./platforms.ts";
+import { allPlatforms, platformOfAny, platformPolicy } from "./platforms.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧，这一层只说哪个平台不存在。
+import type { AdminResult } from "./admin/error-codes.ts";
 
 /** 一个账号。 */
 export interface ProviderRow {
   /** 账号 id。路径里不用它，路径里是平台 id。 */
   id: string;
-  /** 它属于哪个平台：九个模板之一，也是路径里那一段。 */
+  /** 它属于哪个平台：模板或者表里的开放平台，也是路径里那一段。 */
   platform: string;
   /** 派生自平台：怎么跟它说话。 */
   kind: string;
@@ -97,12 +103,15 @@ export function provider(id: string): ProviderRow | null {
 
 function toRow(row: any): ProviderRow {
   const platform = String(row.platform ?? "");
-  const template = platformOf(platform);
+  // 平台有两个数据源：代码里的模板与表里的开放平台。kind 与 region 从两处合起来
+  // 的那一份派生 —— 开放平台不在模板里，所以它拿到的是那个占位的 kind 名，
+  // 不是空串（空串会让人以为这个账号没有种类）。
+  const known = platformOfAny(platform);
   return {
     id: String(row.id),
     platform,
-    kind: template?.kind ?? "",
-    region: template?.region ?? "",
+    kind: known?.kind ?? "",
+    region: known?.region ?? "",
     alias: String(row.alias ?? ""),
     enabled: Number(row.enabled) !== 0,
     weight: Number(row.weight ?? 100),
@@ -112,12 +121,6 @@ function toRow(row: any): ProviderRow {
   };
 }
 
-/** A policy value from the database; anything unknown means 'single'. */
-function policyOfValue(value: unknown): ProviderPolicy {
-  const raw = String(value ?? "single");
-  return (PROVIDER_POLICIES as string[]).includes(raw) ? (raw as ProviderPolicy) : "single";
-}
-
 /**
  * 这个平台的生效策略：它名下的几个账号怎么选。
  *
@@ -125,7 +128,9 @@ function policyOfValue(value: unknown): ProviderPolicy {
  * 账号行。
  */
 export function policyOf(idOrPlatform: string): ProviderPolicy {
-  const platform = platformOf(idOrPlatform) ? idOrPlatform : provider(idOrPlatform)?.platform;
+  // 平台有两处数据源：模板与表里的开放平台。只认模板的话，开放平台上的策略
+  // 读不出来（面板上永远是「单一」）。
+  const platform = platformOfAny(idOrPlatform) ? idOrPlatform : provider(idOrPlatform)?.platform;
   return platform ? platformPolicy(platform) : "single";
 }
 
@@ -147,27 +152,34 @@ export function updateProvider(
   store()
     .prepare("UPDATE provider SET alias = ?, enabled = ?, weight = ?, updated_at = ? WHERE id = ?")
     .run(alias, enabled ? 1 : 0, weight, Date.now(), id);
-  return { ok: true, message: "改好了" };
+  return { ok: true, message: "已保存" };
 }
 
 /**
  * 在一个平台下加一个账号。
  *
- * id 是自动起的：平台 id 后面接序号（`minimax`、`minimax-2`、`minimax-3`……）。
- * 路径里用的是平台 id，所以账号 id 只要不重就行，不需要人取名。
+ * id 是自动起的独立序号（`1`、`2`……），跟平台无关。路径里用的是平台 id，
+ * 所以账号 id 只要不重就行；面板不显示它，认人靠 alias。
  */
 export function addAccount(input: {
   platform: string;
   alias?: string;
-}): { ok: boolean; message: string; id?: string } {
+}): AdminResult & { id?: string } {
   const platform = String(input.platform ?? "").trim();
-  if (!platformOf(platform)) {
-    return { ok: false, message: `没有这个平台：${platform}。可选：${PLATFORMS.map((p) => p.id).join("、")}` };
+  // 平台有两个数据源：代码里的模板与表里的开放平台。可选的那些从两处合起来
+  // 拿 —— 只认模板的话，用户自己加的平台在面板上就没法选。
+  const platforms = allPlatforms();
+  if (!platforms.some((p) => p.id === platform)) {
+    return {
+      ok: false,
+      code: "ACCOUNT_PLATFORM_NOT_FOUND",
+      message: `no platform ${platform || "(empty)"}, known: ${platforms.map((p) => p.id).join(", ")}`,
+    };
   }
-  const id = nextAccountId(platform);
+  const id = nextAccountId();
   const now = Date.now();
   const existing = accountsOfPlatform(platform).length;
-  const alias = String(input.alias ?? "").trim() || `${platformOf(platform)?.label}${existing ? ` ${existing + 1}` : ""}`;
+  const alias = String(input.alias ?? "").trim() || `${platformOfAny(platform)?.label ?? platform}${existing ? ` ${existing + 1}` : ""}`;
   // 新账号排在现有的后面：权重比现在最小的那个再低一点。
   const lowest = accountsOfPlatform(platform).reduce((min, row) => Math.min(min, row.weight), 100);
   const weight = Math.max(1, lowest - 10);
@@ -176,15 +188,29 @@ export function addAccount(input: {
       "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?)",
     )
     .run(id, platform, alias, weight, now, now);
-  return { ok: true, message: `加好了：${alias}`, id };
+  return { ok: true, message: `已新增：${alias}`, id };
 }
 
-/** 这个平台下一个没人用的账号 id。 */
-function nextAccountId(platform: string): string {
-  for (let n = 1; ; n++) {
-    const id = n === 1 ? platform : `${platform}-${n}`;
-    if (!provider(id)) return id;
+/**
+ * 下一个没人用的账号 id：一个自增整数。
+ *
+ * 序号取现有数字 id 里最大的那个加一，不从 1 开始找空洞 —— 删掉的号不再发放，
+ * 免得新账号捡到旧账号的残留（冷却、日志里都按 id 认人）。
+ *
+ * id 只是一把键：它跟平台无关，也不给面板看。面板认人用 alias。
+ */
+function nextAccountId(): string {
+  const rows = store().prepare("SELECT id FROM provider").all() as any[];
+  let next = 1;
+  const taken = new Set<string>();
+  for (const row of rows) {
+    const id = String(row.id);
+    taken.add(id);
+    if (!/^\d+$/.test(id)) continue;
+    next = Math.max(next, Number(id) + 1);
   }
+  while (taken.has(String(next))) next++;
+  return String(next);
 }
 
 /** 删一个 provider。它名下的凭据也一起删 —— 留着就没人认领了。 */
@@ -221,7 +247,7 @@ export function deleteProviderRow(id: string): { ok: boolean; message: string } 
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}` };
   store().prepare("DELETE FROM provider WHERE id = ?").run(id);
-  return { ok: true, message: "删掉了" };
+  return { ok: true, message: "已删除" };
 }
 
 /** 开关。 */

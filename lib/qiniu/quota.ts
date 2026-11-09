@@ -3,11 +3,14 @@
 // 额度不在推理端点上：它在门户（portal.qiniu.com）上，而且门户只认会话
 // cookie。推理用的那把 key 在这里没有用。
 //
-// 读不到额度不是错误 —— 推理不需要它。所以这里返回 null（不知道），不抛：
-// 「不知道」与「没钱」不是一回事，路由要分得清。
+// 读不到额度不是错误 —— 推理不需要它。所以这里从不抛：拿不到就说清楚是哪一种
+// 拿不到（凭据被拒 / 被限流 / 别的），由调用方翻成状态。「不知道」与「没钱」不是
+// 一回事，路由要分得清。
+//
+// 状态码只在这里看得到：吞掉它就分不出「cookie 过期了」与「门户抽了一下」，那两种
+// 在面板上是两件事。
 
 import { QINIU_PORTAL_BASE, QINIU_RESPACK_PATH } from "./config.ts";
-import { qiniuPortalCookie } from "./account.ts";
 
 /** 一个资源包。 */
 export interface QiniuRespack {
@@ -76,57 +79,105 @@ export function parseRespackOverview(body: unknown): QiniuRespack[] {
 }
 
 /**
+ * 问门户的结果：拿到了，或者为什么没拿到。
+ *
+ * message 只写门户说了什么（状态码、业务码、异常的话），不带 cookie 或它的任何
+ * 片段 —— 门户 cookie 等价于密码，它会进日志与面板。
+ */
+export type QiniuQuotaAnswer =
+  | { ok: true; quota: QiniuQuota }
+  | {
+      ok: false;
+      /** 凭据被拒 / 被限流 / 别的（网络、超时、解析、业务码）。 */
+      reason: "unauthorized" | "rate_limited" | "unknown";
+      /** HTTP 状态码；没发出去就是 0。 */
+      status: number;
+      message: string;
+      /** 门户说了多久之后再来（毫秒）；没说就是 null。 */
+      retryAfterMs: number | null;
+    };
+
+/**
  * 问门户要这个账号的资源包。
  *
- * 拿不到就 null（不知道），并记一行日志。额度是给人看的，读不到不影响推理。
+ * endpointBase 是门户那一台的根：平台行把地址指到了别处时，调用方换成那一台
+ * （主机名换掉，路径、请求头、超时都不动）。
+ *
+ * 不抛：每一种失败都是一种能说清楚的回答。日志不在这里记 —— 结论由调用方翻成
+ * 状态，写日志是那一层的事（一处记，不两处各记一遍）。
  */
-export async function fetchQiniuQuota(cookie: string): Promise<QiniuQuota | null> {
-  if (!cookie) return null;
-  const url = `${QINIU_PORTAL_BASE}${QINIU_RESPACK_PATH}?page=1&page_size=10`;
+export async function fetchQiniuQuota(
+  cookie: string,
+  endpointBase: string = QINIU_PORTAL_BASE,
+): Promise<QiniuQuotaAnswer> {
+  const credential = String(cookie ?? "").trim();
+  if (!credential) {
+    return { ok: false, reason: "unknown", status: 0, message: "没有门户 cookie", retryAfterMs: null };
+  }
+  const url = new URL(`${QINIU_RESPACK_PATH}?page=1&page_size=10`, endpointBase).toString();
   try {
     const res = await fetch(url, {
       headers: {
-        Cookie: cookie,
+        Cookie: credential,
         Accept: "*/*",
         "User-Agent": USER_AGENT,
       },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) {
-      console.warn(`[QINIU] 额度查询失败（HTTP ${res.status}）`);
-      return null;
+      const status = res.status;
+      if (status === 401 || status === 403) {
+        return { ok: false, reason: "unauthorized", status, message: `门户拒了这份 cookie（HTTP ${status}）`, retryAfterMs: null };
+      }
+      if (status === 429) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          status,
+          message: "门户限流了（HTTP 429）",
+          retryAfterMs: retryAfterOf(res),
+        };
+      }
+      return { ok: false, reason: "unknown", status, message: `门户返回 HTTP ${status}`, retryAfterMs: null };
     }
     const body = await res.json().catch(() => null);
     if (!body || typeof body !== "object") {
-      console.warn("[QINIU] 额度查询的回答读不出来");
-      return null;
+      return { ok: false, reason: "unknown", status: res.status, message: "门户的回答读不出来", retryAfterMs: null };
     }
     const code = (body as Record<string, unknown>).code;
     if (code !== undefined && Number(code) !== 200) {
-      console.warn(`[QINIU] 门户没有给额度（code ${String(code)}）`);
-      return null;
+      return {
+        ok: false,
+        reason: "unknown",
+        status: res.status,
+        message: `门户没有给额度（code ${String(code)}）`,
+        retryAfterMs: null,
+      };
     }
     const respacks = parseRespackOverview(body);
     if (!respacks.length) {
-      console.warn("[QINIU] 门户没有给资源包");
-      return null;
+      return { ok: false, reason: "unknown", status: res.status, message: "门户没有给资源包", retryAfterMs: null };
     }
-    return { respacks, at: Date.now() };
+    return { ok: true, quota: { respacks, at: Date.now() } };
   } catch (e) {
-    console.warn(`[QINIU] 额度查询失败：${(e as Error)?.message}`);
-    return null;
+    return {
+      ok: false,
+      reason: "unknown",
+      status: 0,
+      message: `门户查询失败：${(e as Error)?.message ?? String(e)}`,
+      retryAfterMs: null,
+    };
   }
 }
 
 /**
- * 这个账号的额度（去门户问）。
+ * 门户说多久之后再来。
  *
- * 没有门户 cookie 就问不了：那是「不知道」，不是「没有资源包」。
+ * Retry-After 是秒；没有、或者读不成一个正数，就是「没说」。
  */
-export async function qiniuQuotaOf(providerId: string): Promise<QiniuQuota | null> {
-  const cookie = qiniuPortalCookie(providerId);
-  if (!cookie) return null;
-  return fetchQiniuQuota(cookie);
+function retryAfterOf(res: Response): number | null {
+  const seconds = Number(String(res.headers.get("retry-after") ?? "").trim());
+  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
 }
 
 /** 门户的量是字符串，转成数字；认不出来就是 0。 */

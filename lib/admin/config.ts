@@ -207,12 +207,12 @@ export function knownConfigKeys(): Set<string> {
  */
 export function setConfigValue(key: string, value: string, clear = false): { ok: boolean; message: string } {
   if (!knownConfigKeys().has(key)) {
-    return { ok: false, message: `不认识的配置项：${key}` };
+    return { ok: false, message: `无法识别的配置项：${key}` };
   }
   if (clear) {
     configClear(key);
     reloadConfig();
-    return { ok: true, message: `清掉了 ${key} 的覆盖值` };
+    return { ok: true, message: `已清除 ${key} 的覆盖值` };
   }
   configOverride(key, value);
   // 改完就重新读一遍：面板能改的那些是热的，下一个请求就是新的值。
@@ -222,7 +222,7 @@ export function setConfigValue(key: string, value: string, clear = false): { ok:
   if (readEnvValue(key) !== null) {
     return {
       ok: true,
-      message: `写了 ${key}，但这个设置被环境变量钉着，现在生效的还是环境变量的值；环境变量撤了才轮到这一份。`,
+      message: `已保存 ${key}，但这个设置被环境变量固定，当前生效的仍是环境变量的值；环境变量撤销后才会使用这一份。`,
     };
   }
   // 保留天数改了：按新的天数清一遍，不用等下一个小时。
@@ -231,7 +231,7 @@ export function setConfigValue(key: string, value: string, clear = false): { ok:
     const dropped = pruneUsage(days);
     if (dropped > 0) console.log(`  [USAGE] 丢掉了 ${dropped} 条超过 ${days} 天的用量记录`);
   }
-  return { ok: true, message: `写了 ${key}` };
+  return { ok: true, message: `已保存 ${key}` };
 }
 
 /**

@@ -18,10 +18,24 @@ import type { ProviderPolicy, ProviderRow } from "./providers.ts";
 import type { CatalogModel } from "./router/catalog.ts";
 import type { Dialect } from "./router/deliver.ts";
 import type { Route } from "./router/routes.ts";
+// 只为快照里那一桶的类型：额度插件问回来的结论。
+import type { QuotaProbe } from "./quota-plugins.ts";
 // 只为 `dispatch` 的参数类型：upstreams/tokenrhythm.ts 从这边取 kindOf，值上不互相引用。
 import type { UpstreamContext } from "./router/upstreams/index.ts";
+// 人工元数据那一层：注册表是它唯一的调用方（见 registerKind）。这一条引用只
+// 引 lib/store.ts 与叶子模块，不会再绕回这里 —— 否则注册表求值期的顺序就成了
+// 隐患。
+import { applyModelOverrides } from "./model-overrides.ts";
 /** 面板上登录的方式。 */
 export type ProviderLoginMethod = "device" | "browser" | "password" | "code" | "api_key";
+
+/**
+ * 这一类上游发推理请求时拿哪一份凭据。
+ *
+ * 有的平台配了两份凭据：会话（问额度用）与 key（推理用）。只有这一份是
+ * 推理凭据。
+ */
+export type InferenceCredential = "session" | "api_key";
 
 /** 一次签到的结果。 */
 export interface BenefitOutcome {
@@ -142,6 +156,8 @@ export interface QuotaView {
   upstreamId: string;
   /** 属于哪个账号。 */
   accountId: string;
+  /** 账号的名字（账号行上的 alias）。空串 = 没设名字。 */
+  accountName?: string;
   balance?: BalanceView;
   credits?: CreditView;
   tokenPlan?: TokenPlanView;
@@ -168,13 +184,17 @@ export interface HealthSnapshot {
   /** ZCode 的 Start Plan 额度。 */
   zcode: Record<string, { quota: unknown }>;
   workbuddy: Record<string, { credits: unknown }>;
-  tokenrhythm: Record<string, { tenants: unknown }>;
-  /** SenseNova 的积分池。 */
-  sensenova: Record<string, { pools: unknown }>;
-  /** 书生·端砚的墨点：余额与批次。 */
-  internAi: Record<string, { balance: unknown; packs: unknown }>;
-  /** 七牛云的资源包。 */
-  qiniu: Record<string, { quota: unknown }>;
+  /**
+   * 额度插件问回来的结论：插件 id → 账号 id → 那一次的结论。
+   *
+   * 上面那几个桶是自带抓取逻辑的平台留下的（它们还没搬成插件）。额度归插件的
+   * 那些平台没有具名桶 —— 包括开放平台（数据，插件由平台那一行指名）与三家插件
+   * 随 kind 一起登记的平台（SenseNova、TokenRhythm、书生·端砚）。
+   *
+   * 存结论而不存原样答复：状态怎么处理是平台的事（lib/quota-state.ts），插件只
+   * 管翻译，快照里存的就只能是翻译完的东西。
+   */
+  plugins: Record<string, Record<string, QuotaProbe>>;
 }
 
 /* ------------------------------------------------------------------ *
@@ -199,6 +219,28 @@ export interface ProviderKind {
    * 样子重建请求的 —— 多余的头直接无视。
    */
   openPlatform?: boolean;
+  /**
+   * 这一类平台默认的推理地址（空 = 没有）。
+   *
+   * 说的是「这一类平台默认指哪台」：额度请求靠它分辨「行上的地址还是默认那台」
+   * （lib/quota-plugins.ts 的 quotaEndpointBase）。行上的地址还等于它时，额度
+   * 问插件自己那台（门户、控制台、钱包）；用户把行指到别处时，跟着行走。
+   *
+   * 它是适配器自己的能力描述，跟 catalogAuth 一样 —— 不是
+   * 平台清单：平台行是用户在面板上自己建的（表里的行），代码这边不列平台。
+   *
+   * 登记时一次成形：给就是给了，不给就没有，没有「登记完再回头补」的第二步。
+   */
+  defaultBaseUrl?: string;
+  /**
+   * 这一类平台默认用哪个额度插件。
+   *
+   * 空 = 这一类没有额度接口（面板上那一格是空的，不是「不知道」）。
+   *
+   * 它是这一类平台的能力描述，跟 defaultBaseUrl 同一形态：建平台时面板拿它
+   * 预填那一格（用户可以改），平台行上填的是用户最后选的那个。
+   */
+  defaultQuotaPlugin?: string;
   /** 区域都有哪些。 */
   regions?: string[];
   /**
@@ -210,6 +252,39 @@ export interface ProviderKind {
   policies?: ProviderPolicy[];
   /** 基础地址。 */
   baseUrl(provider: ProviderRow): string;
+  /**
+   * 这一类上游发推理请求时拿哪一份凭据。
+   *
+   * 有的平台配了两份凭据：会话（只用来问额度）与 key（推理用）。只有这里
+   * 指的那一份能拿去推理 —— 别的配了也不算数。所以「这个账号能不能推理」
+   * 按它判，不按「有没有配凭据」判：配了门户 cookie 的七牛云账号，一个
+   * 请求也发不出去。
+   */
+  inferWith: InferenceCredential;
+  /**
+   * 发推理请求时用的那把**明文** key。空串表示没有。
+   *
+   * 与 `inferenceCredentialOf`（lib/admin/accounts.ts）不是一回事：那个给的是
+   * 面板要看的一条凭据（掩码、指纹、状态），拿不去发请求。这里只回答「发请求
+   * 时带什么」，也就是转发层与「问上游要模型目录」要的那一份。
+   *
+   * 只有以 key 鉴权的种类才有这一项：`inferWith` 是 session 的种类，凭据就是
+   * 会话本身，没有第二把 key 可给。
+   *
+   * 第二个参数是策略选中的那个账号：一个平台下有多个账号，key 是按账号取的，
+   * 而 `provider` 只说明是哪个平台。
+   */
+  keyOf?(provider: ProviderRow, accountId?: string): string;
+  /**
+   * 问上游要模型目录（`/models`）时带的鉴权头。
+   *
+   * 目录那一个端点的鉴权跟着方言走：多数上游收 `Authorization: Bearer`，
+   * Anthropic 那一族只认 `x-api-key` 加版本头 —— 发错了上游回 401，看着像
+   * key 不对，其实是头不对，目录永远拉不到。
+   *
+   * 没有这一项的种类按 Bearer 发：那是绝大多数上游的约定，保底行为不变。
+   */
+  catalogAuth?(key: string): Record<string, string>;
   /** 凭据。 */
   credential(provider: ProviderRow): CredentialView;
   /** 模型目录。 */
@@ -317,9 +392,19 @@ function credentialStateOf(status: string): CredentialState {
 
 const REGISTRY = new Map<string, ProviderKind>();
 
-/** 登记一个种类。 */
+/**
+ * 登记一个种类。
+ *
+ * 目录多加一层：人写的元数据是发布目录的最后一道覆盖（lib/model-overrides.ts）。
+ * 包在这里而不是各家 models() 里，是因为登记只有一个入口，目录出口却有好几个
+ * —— 五家从 lib/kinds/shared.ts 转登记，anthropic 与 registerCompatiblePlatform
+ * 直接从这一层登记；按家接，迟早漏掉一个（qoder / minimax / zcode 那次就漏了）。
+ */
 export function registerKind(kind: ProviderKind): void {
-  REGISTRY.set(kind.kind, kind);
+  REGISTRY.set(kind.kind, {
+    ...kind,
+    models: (provider) => applyModelOverrides(provider.platform, kind.models(provider)),
+  });
 }
 
 /** 一个种类。 */

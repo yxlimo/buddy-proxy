@@ -10,7 +10,8 @@ import {
   WEEKLY_WINDOW_LABEL,
   windowLabel,
 } from '@/features/balance/token-plan'
-import { formatDate, formatMoney, formatPoints } from '@/lib/format'
+import { formatDate, formatLocalMoment, formatMoney, formatPoints } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 /**
  * 三样额度，各是各的。
@@ -32,6 +33,59 @@ const QUOTA_LABELS = {
 type QuotaLine = {
   label: string
   value: string
+}
+
+/**
+ * 这个额度里有没有东西可说。
+ *
+ * 没有就是「不知道」，不是 0：额度插件没选、插件没登记、快照里没这一份，
+ * 三种都到这里来。面板拿它判「显示未知」还是「显示它算出来的值」。
+ */
+export function hasQuota(quota?: UpstreamQuota): boolean {
+  if (!quota) return false
+  if ((quota.tokenPlan?.windows?.length ?? 0) > 0) return true
+  return Boolean(quota.credits) || Boolean(quota.balance)
+}
+
+/**
+ * 服务端给的结论（`ok` 之外）在面板上各写一句。
+ *
+ * 状态名在这一层定死，不只靠 `message`：那句话是插件写的，可能为空、也可能
+ * 含糊，只靠它的话「没钱」「账号不能用」「凭据被拒」会挤成同一句 —— 各种不能
+ * 接的原因就分不开了。
+ *
+ * 这里不限定有几种：服务端发什么就认得什么，认不出的原样显示（见下面）。
+ */
+const QUOTA_STATE_LABELS = new Map<string, string>([
+  ['no_quota', '额度用尽'],
+  ['blocked', '平台说这个账号不能用'],
+  ['unauthorized', '凭据被拒'],
+  ['rate_limited', '被限流'],
+  ['missing', '还没填凭据'],
+  ['unknown', '未知'],
+])
+
+/**
+ * 这一份额度没有数字时，那一句话；没有话要说就是 null。
+ *
+ * 三个 null 各有各的意思：
+ *
+ *   空串        这一份答复没有结论（没选插件、插件没登记、这一轮没问），整栏不显示
+ *   ok          数字自己会说，不用再写一句
+ *   不认得的值  原样搬上来 —— 认不出的状态也是一份结论，不能因此就藏起来
+ *
+ * 「什么时候恢复」只看 `recoverAtMs`：哪几种状态会带它是服务端定的，面板不另
+ * 列一份名单（两份名单一旦不同步，面板会把服务端给的时刻藏掉）。
+ */
+export function quotaStateText(quota?: UpstreamQuota): string | null {
+  const state = (quota?.quotaState ?? '').trim()
+  if (!state || state === 'ok') return null
+  // 服务端给的字符串可能是 `constructor`、`toString` 这类：查表要查自己的表，
+  // 不能退到 Object 的原型上 —— 那样界面上会是一段函数体。
+  const label = QUOTA_STATE_LABELS.get(state) ?? state
+  const at = quota?.recoverAtMs ?? 0n
+  const when = at > 0n ? ` · ${formatLocalMoment(at)} 恢复` : ''
+  return `${label}${when}`
 }
 
 /**
@@ -92,17 +146,33 @@ function tokenPlanLine(window: TokenPlanWindow): string {
  * 这里只给一个主额度：有套餐额度就显示套餐额度，没有才显示积分；余额有就
  * 另外一行。三样不叠加、不换算、不求和。
  */
-export function QuotaSummary({ quota }: { quota?: UpstreamQuota }) {
+export function QuotaSummary({
+  quota,
+  align = 'end',
+}: {
+  quota?: UpstreamQuota
+  /** 靠右（表格里那一列）还是靠左（平台名下面那一段）。 */
+  align?: 'start' | 'end'
+}) {
   const lines = quotaLines(quota)
   if (lines.length === 0) {
-    return <span className='text-xs text-muted-foreground'>—</span>
+    // 没有数字的时候说原因：额度用尽、平台说账号不能用、凭据被拒、被限流、
+    // 还没填凭据、问不到 —— 各是一句，都不写成 0。
+    return (
+      <span className='text-xs text-muted-foreground'>
+        {quotaStateText(quota) ?? '—'}
+      </span>
+    )
   }
   return (
     <div className='grid max-w-full gap-0.5'>
       {lines.map((line) => (
         <div
           key={line.label}
-          className='flex flex-wrap items-baseline justify-end gap-x-1 text-xs'
+          className={cn(
+            'flex flex-wrap items-baseline gap-x-1 text-xs',
+            align === 'start' ? 'justify-start' : 'justify-end'
+          )}
         >
           <span className='text-muted-foreground'>{line.label}</span>
           {/* 套餐额度那一行最长，窄列里要能折行，不能溢出到隔壁列去。 */}
@@ -127,9 +197,15 @@ export function QuotaDetail({ quota }: { quota: UpstreamQuota }) {
   const windows = quota.tokenPlan?.windows ?? []
   const credits = quota.credits
   const balance = quota.balance
+  // 没有数字的那一份（用尽 / 不能用 / 问不到）在这里也说得清，不留一个空面板。
+  const state = quotaStateText(quota)
 
   return (
     <div className='grid gap-6 px-6 pb-4'>
+      {state ? <p className='text-sm font-medium'>{state}</p> : null}
+      {quota.message ? (
+        <p className='text-xs text-muted-foreground'>{quota.message}</p>
+      ) : null}
       {windows.length > 0 ? (
         <section className='grid gap-2'>
           <p className='text-sm font-medium'>{QUOTA_LABELS.tokenPlan}</p>

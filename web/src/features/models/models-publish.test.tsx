@@ -77,11 +77,7 @@ describe('主路由模型的发布与停用', () => {
       SavePublishedModel: (input) => {
         const sent = input.model as PublishedModel
         saved.push(sent)
-        return create(SavePublishedModelResponseSchema, {
-          ok: true,
-          id: sent.id,
-          message: '发布了',
-        })
+        return create(SavePublishedModelResponseSchema, { id: sent.id })
       },
     })
 
@@ -113,7 +109,7 @@ describe('主路由模型的发布与停用', () => {
       SavePublishedModel: (input) => {
         const sent = input.model as PublishedModel
         saved.push(sent)
-        return create(SavePublishedModelResponseSchema, { ok: true })
+        return create(SavePublishedModelResponseSchema)
       },
     })
 
@@ -147,7 +143,7 @@ describe('主路由模型的发布与停用', () => {
       SavePublishedModel: (input) => {
         const sent = input.model as PublishedModel
         saved.push(sent)
-        return create(SavePublishedModelResponseSchema, { ok: true })
+        return create(SavePublishedModelResponseSchema)
       },
     })
 

@@ -33,19 +33,41 @@ import {
   upstreamKeys,
   useAddAccount,
   useDeleteAccount,
-  useProviderKinds,
   useSetAccountEnabled,
   useUpstreams,
   useUpdateProvider,
 } from '@/features/upstreams/api'
 import { AddAccountDialog } from '@/features/upstreams/add-account-dialog'
+import {
+  useAddPlatform,
+  useListPlatformKinds,
+  useQuotaPlugins,
+  useRefreshPlatformModels,
+  useUpdatePlatform,
+} from '@/features/open-platforms/api'
+import {
+  platformKindsFrom,
+  refreshModelsControl,
+} from '@/features/open-platforms/platform-kinds'
+import { DeletePlatformButton } from '@/features/open-platforms/platform-delete'
+import {
+  OpenPlatformFacts,
+  type RefreshOutcome,
+} from '@/features/open-platforms/platform-facts'
+import { PlatformDialog } from '@/features/open-platforms/platform-dialog'
+import { PlatformModelsButton } from '@/features/open-platforms/models-dialog'
 import { useBenefitStatus, useRunBenefitNow } from '@/features/upstreams/benefits'
 import { BenefitsPanel } from '@/features/upstreams/benefits-panel'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
 import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
+import {
+  providerKeyAccess,
+  quotaRegistryFrom,
+} from '@/features/accounts/provider-key-fields'
 import { useSetProviderKeys } from '@/features/accounts/api'
 import { formatLocalMoment } from '@/lib/format'
+import { describeError } from '@/lib/errors'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
 import type {
@@ -62,21 +84,24 @@ const REGION_LABELS: Record<string, string> = {
 /**
  * 上游页：平台列表 + 账号管理。
  *
- * 平台是代码里的模板（九个服务），它的 id 是请求路径里那一段，所以删不掉、
- * 关不掉，能改的只有生效策略。账号是 provider 表里的行：一个平台下可以有好几
- * 个，各自的凭据、开关、额度各归各。
+ * 平台是表里的行（播种的模拟客户端与自建的开放平台都是），它的 id 是请求路径
+ * 里那一段：名字改得了、平台删得掉，id 改不了。能改的还有生效策略。账号是 provider
+ * 表里的行：一个平台下可以有好几个，各自的凭据、开关、额度各归各。
  */
 export function UpstreamsPage() {
   const upstreams = useUpstreams()
-  // 每一类平台怎么登录：由后端说。面板照它决定给不给「填 key」的入口，不按平
-  // 台名写死（写死就漏，新平台上线的第一次必漏）。
-  const kinds = useProviderKinds()
   const setEnabled = useSetAccountEnabled()
   const addAccount = useAddAccount()
   const updateProvider = useUpdateProvider()
   const deleteAccount = useDeleteAccount()
   const setKeys = useSetProviderKeys()
   const login = useAccountLogin()
+  // 开放平台：面板上加的那些平台（表里的行），跟播种的模拟客户端不是一回事。
+  const plugins = useQuotaPlugins()
+  const kindsQuery = useListPlatformKinds()
+  const addPlatform = useAddPlatform()
+  const updatePlatform = useUpdatePlatform()
+  const refreshModels = useRefreshPlatformModels()
   /** 展开着的那个平台：点一行看它名下的账号与凭据。 */
   const [expanded, setExpanded] = useState<string | null>(null)
   /** 正在给哪个平台新增账号。 */
@@ -85,6 +110,24 @@ export function UpstreamsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   /** 正在填 key 的账号 id。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
+  /** 正在新增平台（表里的那一行）。 */
+  const [addingPlatform, setAddingPlatform] = useState(false)
+  /** 正在改的平台。 */
+  const [editingPlatform, setEditingPlatform] = useState<Upstream | null>(null)
+  /** 上一次刷新模型目录的结果：按平台记着，照服务端的话显示。 */
+  const [refreshOutcomes, setRefreshOutcomes] = useState<Record<string, RefreshOutcome>>({})
+
+  /** 打开弹窗：把上一次提交留下的错误清掉，别让新的表单接着显示旧话。 */
+  const openAddPlatform = () => {
+    addPlatform.reset()
+    updatePlatform.reset()
+    setAddingPlatform(true)
+  }
+  const openEditPlatform = (upstream: Upstream) => {
+    addPlatform.reset()
+    updatePlatform.reset()
+    setEditingPlatform(upstream)
+  }
   /** 刚才那次签到的结果：签到是全局的，结果留在页面上，换个平台也还在。 */
   const [runResult, setRunResult] = useState<RunBenefitNowResponse | null>(null)
   // 签到状态是所有账号一份的：展开了才去取，没展开不费那个请求。
@@ -96,18 +139,28 @@ export function UpstreamsPage() {
   const busyAccountId = setEnabled.isPending
     ? (setEnabled.variables?.accountId ?? null)
     : null
-  // kind ⇒ login。取不到就是取不到：那一类的入口由组件里的历史特例兜着。
-  const loginByKind = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const kind of kinds.data?.kinds ?? []) {
-      map.set(kind.kind, kind.login)
-    }
-    return map
-  }, [kinds.data])
-
   // 列表在重取的时候开关别动：开关的值以服务端的答复为准，重取完了再让它变，
   // 免得先弹回旧值再跳到新值。
   const refreshing = useIsFetching({ queryKey: upstreamKeys.all }) > 0
+  // 建平台时能选的类型：名字那一行（`platformKindReadout`）收在
+  // platform-kinds.ts，这里只照结果渲染。用 useMemo 稳住这一份：弹窗里那个
+  // 「清单到手了选第一条」的 effect 拿它当依赖，每次渲染新建一个就会白跑一次。
+  // 得摆在下面那两个提前 return 之前：hook 不能只在有数据的时候调。
+  const kinds = useMemo(
+    () =>
+      platformKindsFrom({
+        isPending: kindsQuery.isPending,
+        isError: kindsQuery.isError,
+        error: kindsQuery.error,
+        kinds: kindsQuery.data?.kinds,
+      }),
+    [
+      kindsQuery.isPending,
+      kindsQuery.isError,
+      kindsQuery.error,
+      kindsQuery.data,
+    ]
+  )
 
   if (upstreams.isPending) {
     return <LoadingState />
@@ -120,14 +173,41 @@ export function UpstreamsPage() {
 
   const list = upstreams.data.upstreams
   const loginTarget = login.target
-  // 正在填 key 的那个账号。找不到就是没有：key 不能写到别的账号上去，所以找
-  // 不到的时候不开弹窗，也不发请求。
+  // 额度插件登记表的状态：三档（加载中 / 取不到 / 到手）。开放平台的凭据格子
+  // 数由它说了算，判据在 providerKeyAccess 那一层。
+  const registry = quotaRegistryFrom({
+    isPending: plugins.isPending,
+    isError: plugins.isError,
+    error: plugins.error,
+    plugins: plugins.data?.plugins,
+  })
+  // 那一类平台的凭据入口：能不能填凭据、填哪几格（位置就是顺序，
+  // SetProviderKeys 按位置读）。
+  const accessOf = (upstream: Upstream) =>
+    providerKeyAccess({
+      kind: upstream.kind,
+      isOpenPlatform: upstream.isOpenPlatform,
+      platformLabel: upstream.label || upstream.id,
+      quotaPlugin: upstream.quotaPlugin,
+      registry,
+    })
   const keysTarget = keysFor ? findAccount(list, keysFor) : undefined
+  const keysAccess = keysTarget ? accessOf(keysTarget.upstream) : undefined
+  // 弹窗只在格子数说得准的时候开：说不准就发上去一个短一截的 keys 数组，
+  // 服务端按位置写，短掉的那几段就被清成空串了。
+  const keysLayout =
+    keysAccess?.status === 'ready' ? keysAccess.layout : null
 
   return (
     <PageShell
-      title='上游'
-      description='平台是代码里的模板，固定的九个，删不掉也关不掉。账号才是数据：一个平台下可以有一个或多个账号，凭据挂在账号上'
+      title='平台'
+      description='平台分两种：内置的模板平台，和自己在面板上加的开放平台。每个平台下可以有多个账号。'
+      actions={
+        <Button onClick={openAddPlatform}>
+          <Plus />
+          新增平台
+        </Button>
+      }
     >
 
       <Card>
@@ -135,7 +215,7 @@ export function UpstreamsPage() {
           {list.length === 0 ? (
             <EmptyState
               title='网关没有返回任何平台'
-              description='平台是代码里的模板，正常时一定有九个'
+              description='正常情况下会有九个内置平台'
             />
           ) : (
             <Table>
@@ -152,6 +232,11 @@ export function UpstreamsPage() {
               <TableBody>
                 {list.map((upstream) => {
                   const isExpanded = expanded === upstream.id
+                  // 刷新模型目录摆不摆：只看这个平台是不是开放平台（开放平台的
+                  // 目录一律从上游拉，模拟客户端的目录归代码）。
+                  const refreshControl = refreshModelsControl(
+                    upstream.isOpenPlatform
+                  )
                   return (
                     <Fragment key={upstream.id}>
                       <TableRow
@@ -190,6 +275,17 @@ export function UpstreamsPage() {
                               <span className='font-mono text-xs text-muted-foreground'>
                                 {upstream.id}
                               </span>
+                              {/* 开放平台的配置：地址、模型目录、额度插件与额度。
+                                  模拟客户端那一族（表里有行、地址与目录归代码）
+                                  没有地址与插件这两格。 */}
+                              {upstream.isOpenPlatform ? (
+                                <OpenPlatformFacts
+                                  upstream={upstream}
+                                  kinds={kinds}
+                                  registry={registry}
+                                  refresh={refreshOutcomes[upstream.id]}
+                                />
+                              ) : null}
                             </div>
                           </div>
                         </TableCell>
@@ -231,9 +327,72 @@ export function UpstreamsPage() {
                         </TableCell>
                         <TableCell className='text-right'>
                           <div
-                            className='flex justify-end'
+                            className='flex items-center justify-end gap-2'
                             onClick={(event) => event.stopPropagation()}
                           >
+                            {/* 自定义模型：写的是平台那一行上的人工元数据，所以跟
+                                「有行才能改」同一个判据。模板平台的目录在代码里，
+                                人写的那一份一样能覆盖它。 */}
+                            {upstream.fromRow ? (
+                              <PlatformModelsButton platform={upstream} />
+                            ) : null}
+                            {/* 能改能删看的是表里有没有它这一行：开放平台与模拟客户
+                                端都有行，只有代码没有行的才只能开关（在账号上）。 */}
+                            {upstream.fromRow ? (
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                onClick={() => openEditPlatform(upstream)}
+                              >
+                                编辑
+                              </Button>
+                            ) : null}
+                            {/* 刷新模型目录只给开放平台：开放平台的目录一律从
+                                上游拉，模拟客户端的目录归代码。 */}
+                            {refreshControl ? (
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                onClick={() =>
+                                  refreshModels.mutate(
+                                    { platformId: upstream.id },
+                                    {
+                                      // 成功那句由面板自己说：拉回来几个模型。
+                                      onSuccess: (result) => {
+                                        setRefreshOutcomes((prev) => ({
+                                          ...prev,
+                                          [upstream.id]: {
+                                            ok: true,
+                                            message: `已刷新，${result.models.length} 个模型`,
+                                            models: [...result.models],
+                                          },
+                                        }))
+                                      },
+                                      // 失败（拉不到、服务端说 ok=false）都走
+                                      // `describeError`：原因写在平台那一行下面，
+                                      // 不再弹 toast 说一遍。
+                                      onError: (error) => {
+                                        setRefreshOutcomes((prev) => ({
+                                          ...prev,
+                                          [upstream.id]: {
+                                            ok: false,
+                                            message: describeError(error),
+                                            models: [],
+                                          },
+                                        }))
+                                      },
+                                    }
+                                  )
+                                }
+                              >
+                                刷新模型目录
+                              </Button>
+                            ) : null}
+                            {/* 删平台之前要先扫主路由模型：指向它的那些
+                                模型会跟着一起删，这事得在弹框里说清楚。 */}
+                            {upstream.fromRow ? (
+                              <DeletePlatformButton platform={upstream} />
+                            ) : null}
                             <Button
                               size='sm'
                               onClick={() => setAdding(upstream)}
@@ -266,9 +425,7 @@ export function UpstreamsPage() {
                                 onRetry={() => void benefits.refetch()}
                               />
                               <ProviderAccounts
-                                platform={upstream.id}
-                                kind={upstream.kind}
-                                loginOf={(kind) => loginByKind.get(kind)}
+                                access={accessOf(upstream)}
                                 accounts={upstream.accounts}
                                 loggingIn={login.pending}
                                 busyAccountId={busyAccountId}
@@ -307,7 +464,7 @@ export function UpstreamsPage() {
                                   // 账号不在列表里了：不要把 key 写到别处去。
                                   if (!findAccount(list, account.id)) {
                                     toast.error('找不到这个账号', {
-                                      description: `${account.id} 不在上游列表里`,
+                                      description: `${account.id} 不在平台列表里`,
                                     })
                                     return
                                   }
@@ -362,13 +519,13 @@ export function UpstreamsPage() {
         }
       />
 
+      {/* 凭据弹窗：这一类不用填 key（或者账号找不到了）时没有弹窗。 */}
       <ProviderKeysDialog
-        open={keysTarget !== undefined}
-        kind={keysTarget?.kind}
+        open={keysTarget !== undefined && keysLayout !== null}
+        layout={keysLayout}
         onOpenChange={(open) => {
           if (!open) setKeysFor(null)
         }}
-        existing={[]}
         pending={setKeys.isPending}
         onSubmit={(keys) => {
           if (!keysTarget) return
@@ -378,6 +535,35 @@ export function UpstreamsPage() {
               onSuccess: () => setKeysFor(null),
             }
           )
+        }}
+      />
+
+      {/* 新增与修改开放平台：同一个弹窗。改的时候是整单提交。 */}
+      <PlatformDialog
+        open={addingPlatform || editingPlatform !== null}
+        platform={editingPlatform ?? undefined}
+        existing={list}
+        kinds={kinds}
+        registry={registry}
+        pending={addPlatform.isPending || updatePlatform.isPending}
+        error={addPlatform.error ?? updatePlatform.error}
+        onOpenChange={(open) => {
+          if (open) return
+          setAddingPlatform(false)
+          setEditingPlatform(null)
+        }}
+        onSubmit={(input) => {
+          // 新增那一单带 kind，改那一单不带 —— 看形状就分得清，不靠外面那个
+          // 状态碰巧对上。
+          if ('kind' in input) {
+            addPlatform.mutate(input, {
+              onSuccess: () => setAddingPlatform(false),
+            })
+            return
+          }
+          updatePlatform.mutate(input, {
+            onSuccess: () => setEditingPlatform(null),
+          })
         }}
       />
 
@@ -394,8 +580,8 @@ export function UpstreamsPage() {
               注销 {deleteTarget ? deleteTarget.alias || deleteTarget.id : ''}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              这个账号会被删掉，它名下的 {deleteTarget?.credentialCount ?? 0}{' '}
-              条凭据也一起删掉，删完回不来。平台本身还在，客户端的地址不变
+              删除该账号会同时删除其名下的 {deleteTarget?.credentialCount ?? 0}{' '}
+              条凭据，且不可恢复。平台本身保留，客户端的地址不变
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -421,15 +607,15 @@ export function UpstreamsPage() {
 /**
  * 在所有平台的账号里找一个账号。
  *
- * 找到时把它所在的平台 kind 一起带出来：key 的种类看平台，不看账号。
+ * 找到时把它所在的平台一起带出来：key 的种类与格子看平台，不看账号。
  */
 function findAccount(
   list: Upstream[],
   accountId: string
-): { account: Account; kind: string } | undefined {
+): { account: Account; upstream: Upstream } | undefined {
   for (const upstream of list) {
     const account = upstream.accounts.find((row) => row.id === accountId)
-    if (account) return { account, kind: upstream.kind }
+    if (account) return { account, upstream }
   }
   return undefined
 }

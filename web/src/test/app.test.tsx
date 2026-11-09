@@ -110,9 +110,9 @@ describe('面板', () => {
       { timeout: 5000 }
     )
     expect(screen.getByText('网关管理面板')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Provider' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '平台' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '配置' })).toBeInTheDocument()
-    // 账号与凭据并进了 Provider 页，侧边栏不再单列。
+    // 账号与凭据并进了「平台」页，侧边栏不再单列。
     expect(
       screen.queryByRole('link', { name: '账号与凭据' })
     ).not.toBeInTheDocument()

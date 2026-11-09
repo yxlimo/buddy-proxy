@@ -31,12 +31,18 @@ function section(name: string): void {
 const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
-const { platformOf } = await import("../lib/platforms.ts");
+const { platformOfAny } = await import("../lib/platforms.ts");
+const { syncPlatformModels } = await import("../lib/open-platforms.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { listAccounts } = await import("../lib/admin/accounts.ts");
 const { beginLogin } = await import("../lib/admin/login.ts");
 const { xinghuoInferenceKey, xinghuoStatus } = await import("../lib/xinghuo/account.ts");
+
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("xinghuo", "xinghuo");
 
 const PROVIDER = {
   id: "xinghuo-test",
@@ -61,7 +67,8 @@ const kind = kindOf("xinghuo");
 check("种类在", kind !== null, String(kind));
 check("名字是讯飞星火", kind?.label === "讯飞星火", String(kind?.label));
 check("登录方式是 api_key", kind?.login === "api_key", String(kind?.login));
-check("平台在", platformOf("xinghuo") !== null, String(platformOf("xinghuo")));
+// 星火现在在平台表里（不再在代码里的模板里）：两处数据源合起来才认得它。
+check("平台在", platformOfAny("xinghuo") !== null, String(platformOfAny("xinghuo")));
 check(
   "收 single 与 fallback",
   policiesOfKind("xinghuo").join(",") === "single,fallback",
@@ -79,8 +86,15 @@ check(
 
 section("目录");
 
+// 目录是上游那一份：行里写进去什么就公布什么（这里写进去的是上游答的那份）。
+check(
+  "行里还没有目录：就没什么可公布的",
+  (kind?.models(PROVIDER) ?? []).length === 0,
+  JSON.stringify((kind?.models(PROVIDER) ?? []).map((m) => m.id)),
+);
+syncPlatformModels("xinghuo", ["Spark-X2.6"], {});
 const models = kind?.models(PROVIDER) ?? [];
-check("目录是写死的 1 个", models.length === 1, String(models.length));
+check("目录是上游那一份（1 个）", models.length === 1, String(models.length));
 check("就是 Spark-X2.6", models[0]?.id === "Spark-X2.6", String(models[0]?.id));
 check("每个都有名字", models.every((m) => !!m.displayName), models.map((m) => m.displayName).join(","));
 check(
@@ -167,7 +181,7 @@ section("控制组");
 {
   const result = setProviderKeys("zcode", ["x"]);
   check("ZCode 仍然被拒", !result.ok, result.message);
-  check("说的是不接受", result.message.includes("不接受"), result.message);
+  check("机器码说的是没有这个账号", result.code === "ACCOUNT_NOT_FOUND", JSON.stringify(result));
   check("一段都没写", result.count === 0, String(result.count));
 }
 

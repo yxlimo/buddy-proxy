@@ -44,7 +44,7 @@ function qoderQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView
   }
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         total: Number(credits.plan?.total ?? 0) + Number(credits.addOn?.total ?? 0),
@@ -69,6 +69,8 @@ registerKind({
     const region = provider.region === "cn" ? "cn" : "global";
     return QODER_ENDPOINTS[region].infer.replace(/\/model\/v1\/chat\/completions$/, "");
   },
+  // 推理用的就是登录会话：access token 本身是推理凭据。
+  inferWith: "session",
   credential: (provider) => fromUpstreamStatus(qoderStatus(provider.id), "session"),
   models: (provider) => qoderCatalogModels(qoderModelsForRegion(qoderRegionOf(provider.id))),
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),

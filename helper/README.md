@@ -19,11 +19,31 @@ python3 helper/buddy_todo.py
 ## 同步模型
 
 网关改了主路由公布的模型（上下文、输出上限、思考档位），客户端配置就悄悄过期了。
-跑一次就把三处配置对齐：
+跑一次就把这几处配置对齐：
 
-- `~/.config/opencode/opencode.jsonc`（WSL 的 opencode）
+- `$OPENCODE_CONFIG` 指的那份（没设这个变量就是 `~/.config/opencode/opencode.jsonc`）—— WSL 的 opencode
 - `/mnt/c/Users/<你>/.config/opencode/opencode.jsonc`（Windows 的 opencode，没有这个文件就跳过）
 - `~/.pi/agent/models.json`（WSL 的 pi）
+
+### opencode 写哪一份
+
+opencode 的配置分几份，深合并、后来的覆盖前面的：远端 `.well-known/opencode`、
+全局 `~/.config/opencode/opencode.jsonc`、`$OPENCODE_CONFIG` 指的那份、项目级
+`opencode.jsonc` 与 `.opencode/`、`$OPENCODE_CONFIG_CONTENT`。
+
+全局那份由 nix 管（插件、MCP、compaction 这些基础设施），模型交给本脚本 ——
+写进 `$OPENCODE_CONFIG` 指的那份：
+
+```bash
+export OPENCODE_CONFIG=~/.config/opencode/shay-models.jsonc
+python3 helper/buddy_sync.py
+```
+
+那份文件归本脚本管：没有就建（跳过等于永远不生效），写出来只有 `$schema` 与
+`providers` —— 插件、MCP、compaction 那些在全局那份（nix 管）里，不往模型这份里抄。
+
+opencode 把几份配置深合并，同名键取后者：全局那份里已有的 provider 会被模型
+这份覆盖。
 
 ```bash
 python3 helper/buddy_sync.py --dry-run     # 只说要改什么，不写

@@ -33,7 +33,7 @@ vi.mock('sonner', () => ({
 /**
  * 策略的中文标签。
  *
- * 后端给的话长这样（lib/platforms.ts 的 POLICY_TEXT）：「策略改成了降级」。这里
+ * 后端给的话长这样（lib/platforms.ts 的 POLICY_TEXT）：「策略已改为降级。」这里
  * 照着后端的形状回，断言的才是用户真正看到的那句话。
  */
 const POLICY_LABEL: Partial<Record<ProviderPolicy, string>> = {
@@ -149,9 +149,9 @@ function setup(options: Options = {}) {
         ok,
         message:
           answer?.message ??
-          `策略改成了${
+          `策略已改为${
             POLICY_LABEL[raw.policy as ProviderPolicy] ?? '单一'
-          }`,
+          }。`,
       })
     },
   })
@@ -326,9 +326,9 @@ describe('平台的生效策略', () => {
     await screen.findByText('TokenRhythm')
     await pickPolicy(user, '余额到期优先')
 
-    // 后端给的话是「策略改成了余额到期优先」，面板原样给用户看。
+    // 后端给的话是「策略已改为余额到期优先。」，面板原样给用户看。
     await waitFor(() => {
-      expect(toastSuccess).toHaveBeenCalledWith('策略改成了余额到期优先')
+      expect(toastSuccess).toHaveBeenCalledWith('策略已改为余额到期优先。')
     })
     expect(toastError).not.toHaveBeenCalled()
     await waitFor(() => {
@@ -345,7 +345,7 @@ describe('平台的生效策略', () => {
     await pickPolicy(user, '降级')
 
     await waitFor(() => {
-      expect(toastSuccess).toHaveBeenCalledWith('策略改好了')
+      expect(toastSuccess).toHaveBeenCalledWith('策略已保存')
     })
   })
 

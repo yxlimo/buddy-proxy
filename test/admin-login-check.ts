@@ -54,6 +54,13 @@ let minimaxTokenRequests = 0;
 /** 发了第几次 qoder 的 deviceToken poll。 */
 let qoderPollRequests = 0;
 /**
+ * 建推理 key 的接口被问了几次。
+ *
+ * 开放平台侧的 key 一律由用户自己填：以前登录成功之后网关会顺手建一把
+ * （ensure），现在不建了 —— 这个计数器就是判据。
+ */
+let trKeyCreates = 0;
+/**
  * 自测放行的那一次登录的 nonce。
  *
  * 上游的 poll 端点用 404 说「用户还没点」：那是等待，不是失败。只有 nonce
@@ -161,6 +168,30 @@ const mock = http.createServer(async (req, res) => {
     );
     return;
   }
+  if (req.url?.startsWith("/api/auth/login")) {
+    // TokenRhythm 的登录：会话在 cookie 里（tr_session），写操作还要 csrf。
+    res.setHeader("Set-Cookie", ["tr_session=fake-session", "tr_csrf=fake-csrf"]);
+    res.end(JSON.stringify({ data: { user: { id: "u-1", name: "fake" } } }));
+    return;
+  }
+  if (req.url?.startsWith("/api/api-keys")) {
+    // 建推理 key：以前登录成功之后网关会调它（ensure）。
+    trKeyCreates++;
+    res.end(
+      JSON.stringify({
+        code: 0,
+        data: {
+          id: "key-made-by-gateway",
+          name: "buddy",
+          maskedKey: "sk-••••made",
+          keyPrefix: "sk-",
+          status: "active",
+          key: "sk-made-by-the-gateway", // privacy:allow — 编造的样例 (fabricated sample)
+        },
+      }),
+    );
+    return;
+  }
   res.statusCode = 404;
   res.end("{}");
 });
@@ -189,6 +220,8 @@ const gw = await startHarness({
     MINIMAX_OAUTH_ORIGIN: mockBase,
     WORKBUDDY_CN_BASE: mockBase,
     ZCODE_BASE_URL: mockBase,
+    // TokenRhythm 也指到假上游：自测不碰真平台。
+    TOKENRHYTHM_API_BASE: mockBase,
     // Qoder 的 poll 也指到假上游：自测不碰真平台。
     QODER_GLOBAL_OPENAPI_BASE: mockBase,
     QODER_CN_OPENAPI_BASE: mockBase,
@@ -206,6 +239,41 @@ process.on("exit", () => {
 });
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
+
+/**
+ * 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：网关那个库里要有的
+ * 行，测试自己写进去。地址与插件照各适配器自己的默认（lib/provider-kinds.ts
+ * 里那一类的默认地址、lib/quota-plugins.ts 里登记的插件 id）。
+ */
+const VENDOR_PLATFORMS: [string, string, string][] = [
+  ["qiniu", "qiniu", "https://api.qnaigc.com/v1"],
+  ["tokenrhythm", "tokenrhythm", "https://tokenrhythm.studio/v1"],
+  ["sensenova", "sensenova", "https://token.sensenova.cn/v1"],
+  ["intern-ai", "intern-ai", "https://discovery-api.intern-ai.org.cn/v1"],
+];
+{
+  const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
+  db.exec("PRAGMA journal_mode = WAL");
+  const now = Date.now();
+  for (const [id, kind, baseUrl] of VENDOR_PLATFORMS) {
+    db.prepare(
+      "INSERT OR IGNORE INTO platform " +
+        "(id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+    ).run(
+      id,
+      id,
+      baseUrl,
+      JSON.stringify({ items: [], traits: {}, fetchedAt: 0, source: "auto" }),
+      1,
+      "",
+      kind,
+      now,
+      now,
+    );
+  }
+  db.close();
+}
 
 
 
@@ -227,10 +295,13 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 }
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
-// 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
+// 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。账号 id 是
+// 自增整数，所以这里把它们记下来，下面的断言与凭据格子都用真的那份。
+const accountIdOf: Record<string, string> = {};
 for (const platform of ["minimax", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
-  if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
+  if (typeof made.body?.id === "string" && made.body.id) accountIdOf[platform] = made.body.id;
+  else console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
 
 /** 等到满足条件为止。条件可以是异步的。 */
@@ -433,13 +504,14 @@ check(
   approvedStatus.body?.session?.credential?.status === "CREDENTIAL_STATE_USABLE",
   JSON.stringify(approvedStatus.body?.session),
 );
+const minimaxSecretId = `session:provider:${String(approved.body?.session?.accountId ?? accountIdOf["minimax"] ?? "")}`;
 const secretAppeared = await waitFor(() =>
-  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:provider:minimax") as any)?.data),
+  Boolean((db.prepare("SELECT data FROM secrets WHERE id = ?").get(minimaxSecretId) as any)?.data),
 );
 check("凭据落进了 secrets 表", secretAppeared, JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
 const storedSecret = db
   .prepare("SELECT data FROM secrets WHERE id = ?")
-  .get("session:provider:minimax") as any;
+  .get(minimaxSecretId) as any;
 check(
   "落库的凭据里有 access token",
   String(storedSecret?.data ?? "").includes("at-test"),
@@ -520,11 +592,11 @@ console.log("账号密码、换码与回填");
 // 面板上要有地方点：能登录的账号都在列表里。
 const accounts = await call("ListAccounts", {});
 const accountList = Array.isArray(accounts.body?.accounts) ? accounts.body.accounts : [];
-check("MiniMax 在账号列表里", accountList.some((a: any) => a.id === "minimax"));
-check("Qoder 中国区在账号列表里", accountList.some((a: any) => a.id === "qoder-cn"));
-check("WorkBuddy 在账号列表里", accountList.some((a: any) => a.id === "workbuddy-cn"));
-check("SenseNova 在账号列表里", accountList.some((a: any) => a.id === "sensenova"));
-check("intern-ai 在账号列表里", accountList.some((a: any) => a.id === "intern-ai"));
+check("MiniMax 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["minimax"] && a.platform === "minimax"), JSON.stringify(accountList));
+check("Qoder 中国区在账号列表里", accountList.some((a: any) => a.id === accountIdOf["qoder-cn"] && a.platform === "qoder-cn"), JSON.stringify(accountList));
+check("WorkBuddy 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["workbuddy-cn"] && a.platform === "workbuddy-cn"), JSON.stringify(accountList));
+check("SenseNova 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["sensenova"] && a.platform === "sensenova"), JSON.stringify(accountList));
+check("intern-ai 在账号列表里", accountList.some((a: any) => a.id === accountIdOf["intern-ai"] && a.platform === "intern-ai"), JSON.stringify(accountList));
 
 // 密码型上游不走 BeginLogin 的轮询；这里只验分派与错误。
 const wrongUpstream = await call("LoginWithPassword", { upstreamId: "qoder", username: "x", password: "y" });
@@ -552,6 +624,36 @@ check("空授权码不换", noCode.body?.ok !== true, JSON.stringify(noCode.body
     .filter((kind) => !loginFlowOf(kind) && !noLoginFlowReason(kind));
   check("每个平台都有登录链或显式声明", naked.length === 0, naked.join("、"));
 }
+
+console.log("");
+console.log("登录不再替用户建 key");
+
+// 开放平台侧的 key 一律由用户自己填（面板上的 setProviderKeys）：以前登录成功
+// 之后网关会顺手建一把（ensure），建出来的那把用户既看不到也换不掉。
+//
+// 这里是判据：把 ensure 加回去，下面这几条立刻变红。
+const trLogin = await call("LoginWithPassword", {
+  upstreamId: "tokenrhythm",
+  accountId: accountIdOf["tokenrhythm"],
+  username: "someone",
+  password: "secret",
+});
+check("TokenRhythm 登录成功", trLogin.body?.ok === true, JSON.stringify(trLogin.body));
+await new Promise((r) => setTimeout(r, 300));
+check("TokenRhythm：网关没有替用户建 key", trKeyCreates === 0, String(trKeyCreates));
+const trCredential = db
+  .prepare("SELECT data FROM secrets WHERE id = ?")
+  .get(`key:provider:${accountIdOf["tokenrhythm"]}:account`) as any;
+check(
+  "TokenRhythm：账号上没有多出 key",
+  !String(trCredential?.data ?? "").includes("sk-"),
+  String(trCredential?.data ?? ""),
+);
+check(
+  "TokenRhythm：登录态还在（账号与密码存下了）",
+  String(trCredential?.data ?? "").includes("someone"),
+  String(trCredential?.data ?? ""),
+);
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);

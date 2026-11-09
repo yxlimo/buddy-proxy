@@ -24,7 +24,7 @@ export const sidebarData: SidebarData = {
       title: '网关',
       items: [
         {
-          title: 'Provider',
+          title: '平台',
           url: '/upstreams',
           icon: Boxes,
         },

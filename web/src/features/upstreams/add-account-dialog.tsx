@@ -15,8 +15,8 @@ import { Label } from '@/components/ui/label'
 /**
  * 在一个平台下加一个账号。
  *
- * 平台是代码里的模板（九个服务），加不了也删不掉；能加的是账号 —— 同一个平台
- * 下可以有好几个（主账号与 M plan、中转站的每个租户）。
+ * 平台是表里的一行（播种的模拟客户端与自建的开放平台）；能加的是账号 —— 同一个
+ * 平台下可以有好几个（主账号与 M plan、中转站的每个租户）。
  *
  * 别名可以不给：不给就由服务端起一个（「账号 2」这种）。
  */
@@ -56,8 +56,7 @@ export function AddAccountDialog({
             新增账号
           </DialogTitle>
           <DialogDescription>
-            在「{platformLabel}」下加一个账号。账号各自有自己的凭据、自己的额度；
-            客户端走的地址不变（/{platform}/v1），换的是这个平台下选了哪个账号
+            在「{platformLabel}」下加一个账号。客户端地址不变。
           </DialogDescription>
         </DialogHeader>
         <div className='grid gap-2'>
@@ -74,7 +73,7 @@ export function AddAccountDialog({
             }}
           />
           <p className='text-xs text-muted-foreground'>
-            别名只给面板看：同一个平台下两个账号靠它分辨。不填的话服务端起一个
+            同一个平台下多个账号靠它分辨，不填会自动命名
           </p>
         </div>
         <DialogFooter>

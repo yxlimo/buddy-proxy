@@ -10,7 +10,8 @@
 import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
 import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
-import { TOKENRHYTHM_INFER_BASE, tokenRhythmCredentialOf, type TokenRhythmCredential } from "./accounts.ts";
+import { tokenRhythmCredentialOf, type TokenRhythmCredential } from "./accounts.ts";
+import { TOKENRHYTHM_INFER_BASE } from "./config.ts";
 
 /**
  * Put the thinking back into the assistant messages.
@@ -37,7 +38,7 @@ export function inferenceAccount(accountId: string): { credential: TokenRhythmCr
   if (!credential.apiKey) {
     throw new AuthError(
       `tokenrhythm account ${accountId} has no inference key`,
-      `TokenRhythm 账号 ${accountId} 没有推理用的 key。在面板上给它配一把，或等网关自己建一把。`,
+      `TokenRhythm 账号 ${accountId} 没有推理用的 key。在面板上给它配一把。`,
       500,
     );
   }

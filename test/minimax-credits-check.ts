@@ -413,11 +413,15 @@ section("套餐额度只走会话");
 
 const { miniMaxCodeTokenPlan } = await import("../lib/admin/upstreams.ts");
 const { setSecret: writeDbSecret } = await import("../lib/store.ts");
+const { addAccount } = await import("../lib/providers.ts");
+// 额度读的是某个账号的会话：参数是账号 id，不是平台名。
+const minimaxId = String(addAccount({ platform: "minimax" }).id);
+if (!minimaxId) throw new Error("账号没有建出来");
 
 // 没有会话：读不到，也不打上游。
 sessionPlanHits = 0;
 keyPlanHits = 0;
-const noSession = await miniMaxCodeTokenPlan("minimax");
+const noSession = await miniMaxCodeTokenPlan(minimaxId);
 check("没有会话就是 null", noSession === null, JSON.stringify(noSession));
 check(
   "没有会话就不打上游（连旧的那条路也不走）",
@@ -426,7 +430,7 @@ check(
 );
 
 // 有会话：读的是会话那个接口。
-writeDbSecret("session:provider:minimax", "session", {
+writeDbSecret(`session:provider:${minimaxId}`, "session", {
   accessToken: "session-token",
   refreshToken: "refresh-token",
   expiresAtMs: Date.now() + 3600_000,
@@ -435,7 +439,7 @@ writeDbSecret("session:provider:minimax", "session", {
 });
 sessionPlanHits = 0;
 keyPlanHits = 0;
-const withSession = await miniMaxCodeTokenPlan("minimax");
+const withSession = await miniMaxCodeTokenPlan(minimaxId);
 check(
   "有会话就读到了套餐额度",
   (withSession as any)?.windows?.length === 1,

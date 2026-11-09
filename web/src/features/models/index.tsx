@@ -141,11 +141,11 @@ export function PublishedModelsPage() {
   return (
     <PageShell
       title='主路由模型'
-      description='主路由：对外公布一个模型 id，可挂载多个 Provider 的模型，客户端仅看到公布的这一层。'
+      description='对外公布一个模型 id，背后挂一个或多个平台模型。'
       actions={
         <Button onClick={openCreate}>
           <Plus />
-          新建
+          新增
         </Button>
       }
     >
@@ -155,19 +155,17 @@ export function PublishedModelsPage() {
           <CardDescription>
             <span>
               根路由当前公布 {publishedCount} 个（共 {list.length} 个）。
-            </span>{' '}
-            各目标的请求量为网关运行统计。
+            </span>
           </CardDescription>
         </CardHeader>
         <CardContent className='px-0'>
           {list.length === 0 ? (
             <EmptyState
               title='暂无主路由模型'
-              description='根路由仅服务此处公布的模型。'
               action={
                 <Button onClick={openCreate}>
                   <Plus />
-                  新建一个
+                  新增一个
                 </Button>
               }
             />
@@ -179,7 +177,7 @@ export function PublishedModelsPage() {
                   <TableHead>显示名</TableHead>
                   <TableHead>策略</TableHead>
                   <TableHead>上下文 / 输出 token</TableHead>
-                  <TableHead>Provider 目标</TableHead>
+                  <TableHead>平台目标</TableHead>
                   <TableHead className='text-right'>请求</TableHead>
                   <TableHead className='text-right'>更新时间</TableHead>
                   <TableHead className='text-right'>操作</TableHead>
@@ -203,7 +201,7 @@ export function PublishedModelsPage() {
                           {model.published ? null : (
                             <Badge
                               variant='outline'
-                              title='根路由当前未公布该模型。发布操作无法改变这一点，需要先启用并登录对应 Provider。'
+                              title='先启用该模型并登录对应的平台，再发布。'
                             >
                               {`未公布：${UNPUBLISHED_REASON_LABELS[model.unpublishedReason ?? UnpublishedReason.UNSPECIFIED] ?? '原因未知'}`}
                             </Badge>
@@ -316,8 +314,8 @@ export function PublishedModelsPage() {
                         <Button
                           variant='outline'
                           size='icon'
-                          title='改'
-                          aria-label='改'
+                          title='编辑'
+                          aria-label='编辑'
                           onClick={() => openEdit(model)}
                         >
                           <Pencil />
@@ -325,8 +323,8 @@ export function PublishedModelsPage() {
                         <Button
                           variant='ghost'
                           size='icon'
-                          title='删'
-                          aria-label='删'
+                          title='删除'
+                          aria-label='删除'
                           onClick={() => setDeleting(model)}
                         >
                           <Trash2 />
@@ -413,7 +411,7 @@ export function PublishedModelsPage() {
               disabled={busy}
               onClick={() => void confirmDelete()}
             >
-              删掉
+              删除
             </Button>
           </DialogFooter>
         </DialogContent>

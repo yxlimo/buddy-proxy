@@ -16,6 +16,7 @@
 //   upstream  上游挂了 → 重试可能有用
 
 import { SENSENOVA_IAM_BASE, SENSENOVA_PLATFORM_BASE } from "./config.ts";
+import { retryAfterMs } from "../upstream-status.ts";
 import { SenseNovaError, classify, clearSession, type SenseNovaSession } from "./auth.ts";
 
 /** 一次调用怎么发。 */
@@ -24,6 +25,13 @@ export interface PlatformRequest {
   body?: unknown;
   /** 拼在路径后面的查询参数。 */
   query?: Record<string, string | number | undefined>;
+  /**
+   * 另一台机器（平台行把地址指到别处时）。
+   *
+   * 额度要问的是「这个平台在跟谁说话」：行上写的那台与默认的那台不同时，只换
+   * 主机名，路径、请求头、超时与凭据都一样。不给就是默认那台。
+   */
+  base?: string;
 }
 
 /** 把查询参数拼到地址上。空的不拼。 */
@@ -62,7 +70,11 @@ async function requestJson(url: string, session: SenseNovaSession, init: Platfor
   if (!r.ok) {
     // 会话没了就把会话清掉：留着它，下一次还是会拿它去撞同一堵墙。
     if (r.status === 401) clearSession();
-    throw classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
+    const error = classify(r.status, body, `控制台接口 ${new URL(url).pathname} 失败`);
+    // 429 会带 Retry-After（有时只写在正文里）：额度要用它算出「什么时候恢复」，
+    // 而 classify 只看得到状态码与正文，看不到头。只在这一处补上。
+    error.retryAfterMs = retryAfterMs(r, text);
+    throw error;
   }
   // 有些接口用 code 表示业务错误。成功的结果里没有这个字段。
   if (body && typeof body.code === "number" && body.code !== 0) {
@@ -75,6 +87,20 @@ async function requestJson(url: string, session: SenseNovaSession, init: Platfor
 }
 
 /**
+ * 一次控制台调用的地址。
+ *
+ * 没给 base、或给的就是默认那台，照旧把路径接在配置地址后面 —— 环境能把默认地址
+ * 配成带前缀的内网镜像（test/sensenova-intern-ai-check.ts 就是那样），不能在中间
+ * 插一道解析把前缀截掉。给了别的地址（平台行上那台）就按 URL 解析：以它的
+ * origin 为根，用户填的地址带不带 /v1 都不影响路径。
+ */
+function consoleUrl(base: string | undefined, path: string): string {
+  const other = String(base ?? "").trim();
+  if (!other || other === SENSENOVA_PLATFORM_BASE) return `${SENSENOVA_PLATFORM_BASE}/lite${path}`;
+  return new URL(`/lite${path}`, other).toString();
+}
+
+/**
  * 调用控制台的接口（{platform}/lite 底下）。
  *
  * path 从 "/console/v1/…" 开始。
@@ -84,7 +110,7 @@ export async function consoleApi<T>(
   session: SenseNovaSession,
   init: PlatformRequest = {},
 ): Promise<T> {
-  const url = withQuery(`${SENSENOVA_PLATFORM_BASE}/lite${path}`, init.query);
+  const url = withQuery(consoleUrl(init.base, path), init.query);
   return (await requestJson(url, session, init)) as T;
 }
 

@@ -34,10 +34,7 @@ export function CreditLotsTable({ lots }: { lots: CreditLot[] }) {
 
   if (visible.length === 0) {
     return (
-      <EmptyState
-        title='没有积分批次'
-        description='平台未返回积分批次。'
-      />
+      <EmptyState title='没有积分批次' />
     )
   }
 

@@ -89,10 +89,10 @@ describe('主路由模型的公布数', () => {
     renderWithClient({ client, children: <PublishedModelsPage /> })
 
     expect(
-      await screen.findByText('未公布：目标的上游关着')
+      await screen.findByText('未公布：目标的平台关着')
     ).toBeInTheDocument()
     expect(
-      screen.getByText('未公布：目标的上游不列这个模型了')
+      screen.getByText('未公布：目标的平台不列这个模型了')
     ).toBeInTheDocument()
     expect(
       screen.getByText('未公布：没有能用的目标')

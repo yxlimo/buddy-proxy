@@ -17,11 +17,20 @@
   --check          只比对不写：一致退出码 0，有差异退出码 1
   --keep-legacy    保留 qoder / minimax-code / minimax / token-rhythm 这些老名字
 
-只改这三个文件：
+只改这几处：
 
-    ~/.config/opencode/opencode.jsonc                  WSL 的 opencode（JSONC）
+    $OPENCODE_CONFIG（没设就是 ~/.config/opencode/opencode.jsonc）
+        WSL 的 opencode（JSONC）
     ~/.pi/agent/models.json                            WSL 的 pi（JSON）
     /mnt/c/Users/<你>/.config/opencode/opencode.jsonc  Windows 的 opencode（JSONC）
+
+opencode 的配置分几份，深合并、后来的覆盖前面的：远端 .well-known/opencode、
+全局 ~/.config/opencode/opencode.json{,c}、OPENCODE_CONFIG 指的那份、项目级
+opencode.json{,c} 与 .opencode/、OPENCODE_CONFIG_CONTENT。
+
+全局那份是 nix 管的（插件、MCP、compaction 这些基础设施），模型交给本脚本 ——
+写进 OPENCODE_CONFIG 指的那份。那份没有就建，建出来只有 $schema 与 providers：
+mcp / plugins 归 nix，不往那儿抄。
 
 主路由的 provider 名字叫 buddy，显示名 Buddy (主路由)：
   opencode  baseURL = {GATEWAY}/v1     package = @ai-sdk/anthropic（客户端自己拼 /messages）
@@ -35,6 +44,8 @@
 provider 清空）。别的 provider 一个都不动。
 """
 import argparse
+import collections
+import copy
 import json
 import os
 import pathlib
@@ -71,6 +82,17 @@ PI_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"]
 # 存在的目录找。
 WINDOWS_USERS_ROOT = pathlib.Path("/mnt/c/Users")
 
+# opencode 读配置的地方。模型写进 OPENCODE_CONFIG 指的那份，而不是全局那份：
+# 全局那份由 nix 生成（插件、MCP、compaction 这些基础设施），它是只读软链，
+# 而且 nix 每次重建都会盖回去。OPENCODE_CONFIG 那份本来就是给本脚本写的 ——
+# 没有就建。
+OPENCODE_CONFIG_ENV = "OPENCODE_CONFIG"
+OPENCODE_SCHEMA = "https://opencode.ai/config.json"
+
+# 一个目标：显示用的名字、路径、是不是 JSONC、没有时要不要建、是不是归本脚本管。
+# exclusive 的意思是「这份文件只放 providers（外加 $schema）」：别的键不抄过来。
+Target = collections.namedtuple("Target", "label path is_jsonc create exclusive")
+
 
 def windows_opencode_config() -> pathlib.Path | None:
     """Windows 那份 opencode 配置。没有就返回 None（那一处跳过）。"""
@@ -83,20 +105,52 @@ def windows_opencode_config() -> pathlib.Path | None:
     return None
 
 
+def opencode_config_path() -> tuple:
+    """WSL 的 opencode 目标：OPENCODE_CONFIG 指的那份，否则全局那份。
+
+    返回 (路径, 是不是 OPENCODE_CONFIG 指的那份)。环境变量里可能有 ~，
+    要展开；相对路径按当前目录算成绝对的，免得报告里写个相对路径看着像在别处。
+    """
+    raw = os.environ.get(OPENCODE_CONFIG_ENV, "").strip()
+    if raw:
+        path = pathlib.Path(raw).expanduser()
+        if not path.is_absolute():
+            path = pathlib.Path.cwd() / path
+        return path, True
+    return pathlib.Path.home() / ".config/opencode/opencode.jsonc", False
+
+
 def targets() -> list:
     """这次要同步的几处：WSL 的 opencode、WSL 的 pi，Windows 的 opencode（有才有）。"""
+    opencode_path, from_env = opencode_config_path()
     out = [
-        ("opencode (WSL)", pathlib.Path.home() / ".config/opencode/opencode.jsonc", True),
-        ("pi (WSL)", pathlib.Path.home() / ".pi/agent/models.json", False),
+        Target(
+            "opencode (WSL, OPENCODE_CONFIG)" if from_env else "opencode (WSL)",
+            opencode_path,
+            True,
+            True,     # 没有就建：这份文件本来就该由本脚本生成，跳过等于永远不生效
+            from_env, # OPENCODE_CONFIG 那份只放 providers（+ $schema），mcp / plugins 归 nix
+        ),
+        Target("pi (WSL)", pathlib.Path.home() / ".pi/agent/models.json", False, False, False),
     ]
     windows = windows_opencode_config()
     if windows:
-        out.append(("opencode (Windows)", windows, True))
+        # Windows 那份是别人（用户自己）维护的：没有就不写，也不动别的键。
+        out.append(Target("opencode (Windows)", windows, True, False, False))
     return out
 
 # 真正答话的网关（拉到了清单的那个）与写进客户端的 api key。
 GATEWAY = ""
 API_KEY = DEFAULT_API_KEY
+
+
+def sort_efforts(efforts: list) -> list:
+    """档位按强弱排，不按字母（字母序会把 high 排到 low 前面）。
+
+    比对两边都过一遍这个排序：网关报的先后与配置里写的先后不该算差异。
+    """
+    rank = {level: i for i, level in enumerate(PI_LEVELS)}
+    return sorted(efforts, key=lambda e: (rank.get(e, len(PI_LEVELS)), e))
 
 
 def level_map(efforts: list) -> dict:
@@ -158,9 +212,12 @@ def fetch_providers(gateway: str) -> tuple:
 def fetch_models(gateway: str, base_path: str) -> tuple:
     """问网关某个路径现在有哪些模型。
 
-    返回 (模型表, 错误信息)。模型表是 (id, 显示名, 档位, 上下文, 输出上限) 的列表。
+        返回 (模型表, 错误信息)。模型表是 (id, 显示名, 档位, 上下文, 输出上限) 的列表。
     拉不到就返回 (None, 错误信息) —— 不用内置表兜底，写进去的是旧清单，
     比写空更麻烦。
+
+    档位那一格：网关没给 `effort_options` 就是 None（= 这套模型没有档位），
+    不是空列表。比对时要分清「没有这一格」和「有几个档位」，写配置时两者一样。
     """
     url = f"{gateway}{base_path}/v1/models"
     data, err = common.http_get_json(url)
@@ -174,11 +231,14 @@ def fetch_models(gateway: str, base_path: str) -> tuple:
         mid = m.get("id") or ""
         if not mid:
             continue
+        efforts = m.get("effort_options")
+        if not isinstance(efforts, list) or not efforts:
+            efforts = None
         out.append(
             (
                 mid,
                 m.get("display_name") or mid,
-                list(m.get("effort_options") or []),
+                efforts,
                 int(m.get("context_window") or DEFAULT_CONTEXT),
                 int(m.get("max_output_tokens") or DEFAULT_OUTPUT),
             )
@@ -349,6 +409,14 @@ def _key_of(stripped: str) -> str:
     return parts[1]
 
 
+def parse_json(text: str, where: str) -> dict:
+    """解析 JSON；坏了就说清是哪一份，不要让 traceback 淹掉重点。"""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{where} 不是合法 JSON：{exc}") from None
+
+
 def load_jsonc(path: pathlib.Path) -> tuple:
     """读 JSONC：整行的注释摘出来，记住它们属于哪个键。
 
@@ -378,7 +446,7 @@ def load_jsonc(path: pathlib.Path) -> tuple:
             trail_comments[idx] = comment
             code_lines.append(code)
 
-    cfg = json.loads("\n".join(code_lines))
+    cfg = parse_json("\n".join(code_lines), str(path))
 
     # 每行属于哪个顶层键 —— 注释按这个归属。
     owners = []
@@ -477,22 +545,58 @@ def _apply(providers: dict, sources: list, shape, keep_legacy: bool) -> list:
     return removed
 
 
-def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, dry_run: bool, keep_legacy: bool) -> dict:
-    """同步一个目标。返回这次改了什么。"""
-    result = {"label": label, "path": path, "status": "ok", "added": [], "removed": [], "changed": [], "legacy": []}
-    if not path.exists():
-        result["status"] = "missing"
-        return result
+def patch_target(target, sources: list, dry_run: bool, keep_legacy: bool) -> dict:
+    """同步一个目标。返回这次改了什么。
 
-    if is_jsonc:
-        cfg, comments, trailing = load_jsonc(path)
-        old_text = path.read_text(encoding="utf-8")
-    else:
-        old_text = path.read_text(encoding="utf-8")
-        cfg = json.loads(old_text)
+    target.create    没有这个文件就建一个
+    target.exclusive 这份文件归本脚本管：只写 providers（外加 $schema），别的键不抄
+    """
+    label, path, is_jsonc = target.label, target.path, target.is_jsonc
+    result = {
+        "label": label,
+        "path": path,
+        "status": "ok",
+        "added": [],
+        "removed": [],
+        "changed": [],
+        "legacy": [],
+        "created": False,
+    }
+    existed = path.exists()
+    cfg: dict
+    if not existed:
+        if not target.create:
+            result["status"] = "missing"
+            return result
+        # 新建的文件：带 $schema，别的键没有。
+        cfg = {"$schema": OPENCODE_SCHEMA}
         comments, trailing = [], {}
-    providers = cfg.setdefault("providers", {})
-    before = json.loads(json.dumps(providers))
+        old_text = ""
+    else:
+        try:
+            if is_jsonc:
+                cfg, comments, trailing = load_jsonc(path)
+                old_text = path.read_text(encoding="utf-8")
+            else:
+                old_text = path.read_text(encoding="utf-8")
+                cfg = parse_json(old_text, str(path))
+                comments, trailing = [], {}
+        except OSError as exc:
+            result["status"] = "error"
+            result["error"] = f"读不出来：{exc}"
+            return result
+
+    if target.exclusive:
+        # 这份文件只放 providers（外加 $schema）：mcp / plugins 那些归 nix，
+        # 不往这儿抄，也不管原文件里有什么。
+        old_providers = cfg.get("providers")
+        before = copy.deepcopy(old_providers) if isinstance(old_providers, dict) else {}
+        providers = {}
+        cfg = {"$schema": OPENCODE_SCHEMA, "providers": providers}
+        comments, trailing = [], {}
+    else:
+        providers = cfg.setdefault("providers", {})
+        before = copy.deepcopy(providers)
 
     if is_jsonc:
         removed = _apply(providers, sources, opencode_provider, keep_legacy)
@@ -508,6 +612,7 @@ def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, 
 
     result["legacy"] = removed
     result["added"], result["removed"], result["changed"] = _diff_providers(before, providers)
+    result["created"] = not existed
 
     if is_jsonc:
         new_text = dump_jsonc(cfg, comments, trailing)
@@ -519,7 +624,13 @@ def patch_target(label: str, path: pathlib.Path, is_jsonc: bool, sources: list, 
 
     result["changed_file"] = new_text != old_text
     if result["changed_file"] and not dry_run:
-        path.write_text(new_text, encoding="utf-8")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(new_text, encoding="utf-8")
+        except OSError as exc:
+            # 写不进去（比如全局那份是 nix 的只读软链）：报清楚，别让 traceback 淹掉重点。
+            result["status"] = "error"
+            result["error"] = f"写不进去：{exc}"
     return result
 
 
@@ -529,6 +640,10 @@ def report(result: dict, dry_run: bool) -> None:
         print(f"  {label}  {path}")
         print("    没有这个文件，跳过")
         return
+    if result["status"] == "error":
+        print(f"  {label}  {path}")
+        print(f"    !! {result.get('error', '写失败了')}")
+        return
     added, removed, changed = result["added"], result["removed"], result["changed"]
     if not result["changed_file"]:
         print(f"  {label}  {path}")
@@ -536,27 +651,39 @@ def report(result: dict, dry_run: bool) -> None:
         return
     verb = "要改" if dry_run else "已改"
     print(f"  {label}  {path}")
+    if result.get("created"):
+        print(f"    {'要建' if dry_run else '已建'}：新文件")
+        # 新建的文件谈不上「改」：下面几行直接说做了什么。
+        prefix = ""
+    else:
+        prefix = f"{verb}："
     if added:
-        print(f"    {verb}：新增 provider {len(added)} 个 — {', '.join(added)}")
+        print(f"    {prefix}新增 provider {len(added)} 个 — {', '.join(added)}")
     if removed:
-        print(f"    {verb}：删除 provider {len(removed)} 个 — {', '.join(removed)}")
+        print(f"    {prefix}删除 provider {len(removed)} 个 — {', '.join(removed)}")
     if changed:
-        print(f"    {verb}：更新 provider {len(changed)} 个 — {', '.join(changed)}")
+        print(f"    {prefix}更新 provider {len(changed)} 个 — {', '.join(changed)}")
     for legacy in result["legacy"]:
-        print(f"    {verb}：清掉老名字 {legacy}")
+        print(f"    {prefix}清掉老名字 {legacy}")
 
 
 # ------------------------------------------------------------------ 比对（--check）
 
 
 def canonical_gateway_models(models: list) -> dict:
-    """网关的模型表 → {模型 id: {字段: 值}}（字段名用网关那套）。"""
+    """网关的模型表 → {模型 id: {字段: 值}}（字段名用网关那套）。
+
+    档位排过序：网关给的顺序不该算差异（opencode 与 pi 侧都排过）。
+    没有档位是 None，不是 [] —— 「本地没有这一格」也是 None，两边都空
+    不该报差异。
+    """
     out = {}
-    for mid, display, _efforts, context, output in models:
+    for mid, display, efforts, context, output in models:
         out[mid] = {
             "display_name": display,
             "context_window": context,
             "max_output_tokens": output,
+            "efforts": sort_efforts(efforts) if efforts else None,
         }
     return out
 
@@ -571,10 +698,14 @@ def canonical_opencode_models(cfg: dict, provider: str) -> dict:
         return out
     for mid, model in models.items():
         limit = (model or {}).get("limit") or {}
+        reasoning = ((model or {}).get("capabilities") or {}).get("reasoning") or {}
+        effort = reasoning.get("effort")
         out[mid] = {
             "display_name": (model or {}).get("name"),
             "context_window": limit.get("context"),
             "max_output_tokens": limit.get("output"),
+            # 写进去的是模型自己的档位，没写这一格就是没有档位。
+            "efforts": sort_efforts(effort) if isinstance(effort, list) and effort else None,
         }
     return out
 
@@ -597,14 +728,28 @@ def canonical_pi_models(cfg: dict, provider: str) -> dict:
             "display_name": model.get("name"),
             "context_window": model.get("contextWindow"),
             "max_output_tokens": model.get("maxTokens"),
+            # pi 没有「档位表」，只有一张「请求档位 → 上游档位」的映射。
+            # 能问到的档位就是映射值里出现过的那些（去重排序）；全是 None
+            # 的映射（固定档/不能调）等于没有档位。
+            "efforts": _pi_efforts(model.get("thinkingLevelMap")),
         }
     return out
+
+
+def _pi_efforts(levels):
+    # 同一档位会被好几个 pi 档位指到（high、xhigh 都映到 high），映射值去重
+    # 之后剩下的才是「这套模型能用的档位」。
+    if not isinstance(levels, dict):
+        return None
+    offered = [v for v in dict.fromkeys(levels.values()) if isinstance(v, str) and v]
+    return sort_efforts(offered) or None
 
 
 def compare_models(gateway_models: dict, local_models: dict) -> list:
     """网关的模型和本地的比一遍。返回差异的文案列表。
 
     文案：`模型 字段: 网关 X / 本地 Y`（字段不同时），另有缺模型/多模型两行。
+    档位按排序后的清单比，文案里用逗号连起来（`网关 low,high,max / 本地 high`）。
     """
     diffs = []
     for mid in sorted(gateway_models):
@@ -613,11 +758,14 @@ def compare_models(gateway_models: dict, local_models: dict) -> list:
         if local is None:
             diffs.append(f"{mid} model: 网关有 / 本地没有")
             continue
-        for field in ("display_name", "context_window", "max_output_tokens"):
+        for field in ("display_name", "context_window", "max_output_tokens", "efforts"):
             want = gw.get(field)
             have = local.get(field)
             if want == have:
                 continue
+            if field == "efforts":
+                want = ",".join(want) if want else None
+                have = ",".join(have) if have else None
             diffs.append(f"{mid} {field}: 网关 {want} / 本地 {have}")
     for mid in sorted(local_models):
         if mid not in gateway_models:
@@ -625,17 +773,41 @@ def compare_models(gateway_models: dict, local_models: dict) -> list:
     return diffs
 
 
+def pi_expectations(gateway_models: dict) -> dict:
+    """把网关的档位换成 pi 那边「应该写成什么样」。
+
+    pi 没有档位表，只有一张 6 槽到上游档位的映射，而这张映射是有损的：
+    五档（low/medium/high/xhigh/max）压成三个值，三档与五档写出去可能
+    一模一样。所以 pi 侧要比的是「按现在的 level_map 算出来该是什么」，
+    不是网关的原始档位 —— 否则「映射有损」会一直显示成「配置过期」，
+    而那种差异无从修。
+
+    报什么、不报什么：
+      - 网关档位变了、映射后也跟着变 → 报（真漂移）
+      - 网关档位变了、映射后一样 → 不报（pi 表达不出这个差别）
+      - level_map 自己改了规则 → 报（配置相对新代码过期了）
+    """
+    out = {}
+    for mid, fields in gateway_models.items():
+        mapped = [v for v in dict.fromkeys(level_map(fields.get("efforts") or []).values()) if v]
+        out[mid] = {**fields, "efforts": sort_efforts(mapped) or None}
+    return out
+
+
 def check_target(label: str, path: pathlib.Path, is_jsonc: bool, models: list) -> list:
     """比对一个目标文件。返回这个文件上的差异文案。"""
     if not path.exists():
         return []
+    gateway = canonical_gateway_models(models)
     if is_jsonc:
         cfg, _comments, _trailing = load_jsonc(path)
         local = canonical_opencode_models(cfg, ROOT_NAME)
     else:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg = parse_json(path.read_text(encoding="utf-8"), str(path))
         local = canonical_pi_models(cfg, ROOT_NAME)
-    return compare_models(canonical_gateway_models(models), local)
+        # pi 是透传不了的那一侧：比映射后的预期，不比原始档位。
+        gateway = pi_expectations(gateway)
+    return compare_models(gateway, local)
 
 
 def run_check(gateway: str, models: list) -> int:
@@ -645,12 +817,12 @@ def run_check(gateway: str, models: list) -> int:
     print("")
     print("结果：")
     total = 0
-    for label, path, is_jsonc in targets():
-        print(f"  {label}  {path}")
-        if not path.exists():
+    for target in targets():
+        print(f"  {target.label}  {target.path}")
+        if not target.path.exists():
             print("    没有这个文件，跳过")
             continue
-        diffs = check_target(label, path, is_jsonc, models)
+        diffs = check_target(target.label, target.path, target.is_jsonc, models)
         if not diffs:
             print("    一致")
             continue
@@ -713,20 +885,24 @@ def main(argv: list) -> int:
     print("")
 
     results = []
-    for label, path, is_jsonc in targets():
-        results.append(patch_target(label, path, is_jsonc, sources, args.dry_run, args.keep_legacy))
+    for target in targets():
+        results.append(patch_target(target, sources, args.dry_run, args.keep_legacy))
 
     print("结果：")
     for result in results:
         report(result, args.dry_run)
 
     changed = [r for r in results if r.get("changed_file")]
+    errors = [r for r in results if r.get("status") == "error"]
+    written = [r for r in changed if r.get("status") != "error"]
     print("")
     if args.dry_run:
         print(f"dry-run：{len(changed)} 个文件待改，没有写入。")
     else:
-        print(f"写了 {len(changed)} 个文件，其余没动。")
-    return 1 if failures else 0
+        print(f"写了 {len(written)} 个文件，其余没动。")
+    if errors:
+        print(f"有 {len(errors)} 处没写进去（上面报了的那些）。")
+    return 1 if (failures or errors) else 0
 
 
 if __name__ == "__main__":

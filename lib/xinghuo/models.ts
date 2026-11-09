@@ -1,12 +1,13 @@
 // lib/xinghuo/models.ts — 讯飞星火能用的模型，写死的一份。
 //
-// 星火没有可查的模型目录接口，所以这里只写我们真能调的那一个。
-// 上下文长度与输出上限平台没报，不填 —— 填了就是编的。
+// 目录本身从上游拉（`/v2/models`）：这里只提供按 id 查的元数据 —— 上游那份清单
+// 一个参数也不带，上下文长度与输出上限只有这里说得出来。填不出来的不填，
+// 填了就是编的。
 
 import type { CatalogModel } from "../catalog-models.ts";
 
 /**
- * 讯飞的模型：先写死一个。它没有可查的模型目录接口。
+ * 讯飞的模型：先写死一个（目录是上游报的那份，这里是元数据）。
  */
 export const XINGHUO_MODELS: CatalogModel[] = [
   { id: "Spark-X2.6", displayName: "Spark X2.6", reasoning: true, toolCall: true },

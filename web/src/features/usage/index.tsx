@@ -77,7 +77,7 @@ export function UsagePage() {
   return (
     <PageShell
       title='用量'
-      description='走过的请求：token、耗时与明细。只有真正发到 Provider 的请求计入用量，模型名写错或在路由阶段被拒的请求不计入。'
+      description='走过的请求：token、耗时与明细。只统计真正发到平台的请求。'
       actions={
         <Select
           value={windowFilter}
@@ -146,7 +146,7 @@ export function UsagePage() {
 
           <div className='grid gap-4 lg:grid-cols-2'>
             <BreakdownCard
-              title='按 Provider'
+              title='按平台'
               buckets={summary.data?.byUpstream ?? []}
             />
             <BreakdownCard title='按模型' buckets={summary.data?.byModel ?? []} />
@@ -177,9 +177,7 @@ export function UsagePage() {
       <Card>
         <CardHeader>
           <CardTitle className='text-base'>明细</CardTitle>
-          <CardDescription>
-            一次拉最近 {EVENTS_LIMIT} 条，在这一段里翻页。
-          </CardDescription>
+          <CardDescription>最近 {EVENTS_LIMIT} 条。</CardDescription>
         </CardHeader>
         <CardContent>
           <UsageTable

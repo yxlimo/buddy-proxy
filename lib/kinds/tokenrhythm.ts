@@ -4,59 +4,22 @@
 // that can pick by expiry (expiry_first): the periodic scan pins the account
 // whose credit expires first.
 
-import { tokenRhythmCatalogModels } from "../catalog-models.ts";
-import {
-  fromUpstreamStatus,
-  registerKind,
-  type BalanceLotView,
-  type HealthSnapshot,
-  type ProviderRow,
-  type QuotaView,
-} from "./shared.ts";
-import type { TokenRhythmAccountStatus } from "../tokenrhythm/wallet.ts";
-import { TOKENRHYTHM_API_BASE } from "../tokenrhythm/accounts.ts";
-import { tokenRhythmStatus } from "../tokenrhythm/wallet.ts";
+import { catalogModelsFromRow } from "../catalog-models.ts";
+import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
+import { tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
+// 地址在叶子模块里：这一层与 accounts.ts 互相引着，从那边读常量会在模块求值
+// 期撞上「还在初始化」。
+import { TOKENRHYTHM_API_BASE, TOKENRHYTHM_INFER_BASE } from "../tokenrhythm/config.ts";
 import { isRequestMissingBalance, setBalanceAccount } from "../tokenrhythm/balance.ts";
-
-function tokenrhythmQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
-  // 快照里一个平台一段，装着这个平台每个账号的钱包；这一行账号取自己那一个。
-  const all = ((snapshot.tokenrhythm?.[provider.id]?.tenants ?? []) as unknown) as TokenRhythmAccountStatus[];
-  const mine = all.filter((status) => status.accountId === provider.id);
-  const status = mine[0] ?? null;
-  const wallet = status?.wallet ?? null;
-  if (!wallet) return [];
-  const lots: BalanceLotView[] = (status?.credits?.list ?? []).map((lot) => ({
-    id: lot.id,
-    sourceLabel: lot.sourceLabel || lot.source,
-    remainingCny: Number(lot.remainingCny ?? 0),
-    expiresAt: lot.expiresAt ? Date.parse(String(lot.expiresAt)) : 0,
-    status: lot.status || "",
-  }));
-  const nextExpiryAt = status?.credits?.summary?.nextExpiryAt
-    ? Date.parse(String(status.credits.summary.nextExpiryAt))
-    : 0;
-  // 平台用 2099-12-31 标记「永不过期」，那一批不算会过期。
-  const expiringCny = lots
-    .filter((lot) => lot.expiresAt > 0 && lot.expiresAt < PERMANENT_AT)
-    .reduce((sum, lot) => sum + lot.remainingCny, 0);
-  return [
-    {
-      upstreamId: provider.platform,
-      // 一个账号一行一个钱包：面板靠这个分清是哪一条余额。
-      accountId: provider.id,
-      balance: {
-        availableCny: Number(wallet.availableCny ?? 0),
-        currency: wallet.currency || "CNY",
-        lots,
-        nextExpiryAt: Number.isFinite(nextExpiryAt) ? nextExpiryAt : 0,
-        expiringCny,
-      },
-    },
-  ];
-}
-
-/** 平台标记「永不过期」的那一天。 */
-const PERMANENT_AT = Date.parse("2099-12-31T00:00:00Z");
+// 插件 id 从没有依赖的地方读（lib/tokenrhythm/quota-plugin-id.ts）：插件模块与本
+// 模块互相引用，从插件对象上取 id 会在求值期撞上「还在初始化」。
+import { TOKENRHYTHM_WALLET_PLUGIN_ID } from "../tokenrhythm/quota-plugin-id.ts";
+// 引用即登记：登记发生在模块求值期（lib/quota-plugins.ts 的注册表）。读哪一份靠
+// 平台行那一格（quotaPluginIdOf）—— 这里再写一个插件 id，写快照一头与读结论
+// 一头就有了两个来源，两边不一致时面板自相矛盾。
+import "../tokenrhythm/quota-plugin.ts";
+import { tokenRhythmStatus } from "../tokenrhythm/wallet.ts";
+import { fromUpstreamStatus, registerKind } from "./shared.ts";
 
 registerKind({
   kind: "tokenrhythm",
@@ -67,35 +30,23 @@ registerKind({
   // 一个账号一个钱包。赠金会过期，所以它还能按到期先后挑。
   policies: ["single", "fallback", "expiry_first"],
   baseUrl: () => TOKENRHYTHM_API_BASE,
+  // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）：额度请求靠它
+  // 分辨「行上的地址还是默认那台」。
+  defaultBaseUrl: TOKENRHYTHM_INFER_BASE,
+  // 额度插件：钱包那一路。面板建平台时预填这一格（用户可以改）。
+  defaultQuotaPlugin: TOKENRHYTHM_WALLET_PLUGIN_ID,
+  // 推理用的是钱包里的那把 api key：会话只用来登录与查余额。
+  inferWith: "api_key",
+  // 明文 key：转发与「问上游要模型目录」要的是同一把，各自去取一遍就是两份知识。
+  keyOf: (provider, accountId) => tokenRhythmCredentialOf(accountId ?? provider.id)?.apiKey ?? "",
   credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session"),
-  models: () => tokenRhythmCatalogModels(),
-  quotas: (provider, snapshot) => tokenrhythmQuotas(provider, snapshot),
-  outOfCredits: (provider, snapshot) => {
-    // A tenant whose wallet could not be read is "unknown", not "no money".
-    const mine = (snapshot.tokenrhythm?.[provider.id] ?? {}) as any;
-    const tenants = ((mine.tenants ?? []) as any[]).filter((t: any) => t?.wallet);
-    if (!tenants.length) return false;
-    return tenants.every((t: any) => Number(t.wallet?.availableCny ?? 0) <= 0);
-  },
-  recoverAt: (provider, snapshot) => {
-    // 钱包里的余额什么时候到期：先到期的那一批先走。
-    const all = ((snapshot.tokenrhythm?.[provider.id]?.tenants ?? []) as unknown) as TokenRhythmAccountStatus[];
-    const status = all.find((entry) => entry.accountId === provider.id);
-    const wallet = status?.wallet;
-    if (!wallet) return null;
-    const now = Date.now();
-    const lots = status?.credits?.list ?? [];
-    // 还有钱的那批先算：空了的那批到期也变不出钱来。
-    const live = lots.filter((lot) => Number(lot.remainingCny ?? 0) > 0);
-    const candidates = (live.length ? live : lots)
-      .map((lot) => (lot.expiresAt ? Date.parse(String(lot.expiresAt)) : 0))
-      .filter((at) => at > now);
-    if (candidates.length) return Math.min(...candidates);
-    const next = status?.credits?.summary?.nextExpiryAt
-      ? Date.parse(String(status.credits.summary.nextExpiryAt))
-      : 0;
-    return next > now ? next : null;
-  },
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的（目录从上游拉）。
+  models: (provider) => catalogModelsFromRow(provider, () => []),
+  // 额度读的是插件问回来的那一份结论：钱包读不到是「不知道」，不是「没钱」——
+  // 那一条由插件的状态说，这里不重判。
+  quotas: (provider, snapshot) => quotaViewsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  outOfCredits: (provider, snapshot) => outOfCreditsOf(provider, snapshot, quotaPluginIdOf(provider)),
+  recoverAt: (provider, snapshot) => recoverAtOf(provider, snapshot, quotaPluginIdOf(provider)),
   // 定时扫描余额，把「现在该用哪个账户」钉下来（赠金最先到期的那个）。
   // 钉住的单位是平台：一副账号里哪个先用是平台的事。
   scan: async (provider) => {
@@ -104,3 +55,4 @@ registerKind({
   // The hook of expiry_first: the platform says this account has no money left.
   isRequestMissingBalance: (error) => isRequestMissingBalance(error),
 });
+

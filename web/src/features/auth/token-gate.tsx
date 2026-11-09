@@ -69,8 +69,7 @@ export function TokenGate({ children }: { children: React.ReactNode }) {
           </CardTitle>
           <CardDescription>
             访问令牌在网关的 <code className='font-mono'>/data/admin-token</code>{' '}
-            文件里。它与 agent 侧的 API KEY 是两回事，仅供面板使用。访问令牌会保存在
-            这台机器的 localStorage 中。
+            文件里，只用于面板登录。
           </CardDescription>
         </CardHeader>
         <CardContent>

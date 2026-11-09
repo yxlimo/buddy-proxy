@@ -54,11 +54,12 @@ export async function toZcode(
         sessionId,
       }),
     settle,
+    ctx.availability,
   );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     // retry-after 是上游说的「过多久再来」：挂到错误上，冷却与等待都照它算。
-    const error = upstreamStatusError(response.status, text, "ZCode ", retryAfterMs(response) ?? undefined);
+    const error = upstreamStatusError(response.status, text, "ZCode ", retryAfterMs(response, text) ?? undefined);
     // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。
     settle.failure(error);
     throw error;

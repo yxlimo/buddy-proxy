@@ -15,11 +15,10 @@
 // key_type 省略时，平台按控制台默认给（我们这边显式写死，免得平台改默认）。
 //
 // 完整的 key 只在创建的那一次回答里出现（api_key_plain），列表里永远是
-// 掩码。所以创建它的那个函数必须负责把它存起来。
+// 掩码。所以账号要用的那把 key 由用户自己在面板上填（见 writeSenseNovaKey），
+// 网关不替人建：建出来的那把用户既不知道也换不掉。
 
 import { consoleApi } from "./platform.ts";
-import { listModels } from "./models.ts";
-import { senseNovaApiKey } from "./config.ts";
 import { setSecret } from "../store.ts";
 import { accountId, storedAccount, type SenseNovaSession } from "./auth.ts";
 import type { PlatformKey, PlatformKeys } from "../platform-keys.ts";
@@ -106,60 +105,24 @@ export async function revokeApiKey(session: SenseNovaSession, id: string): Promi
 }
 
 /**
- * 新建的 key 在推理端点上不是立刻就能用的。
+ * 写这个账号的推理 key。
  *
- * 实测：刚建好的那把 key 打 {base}/models 会得到 401 Forbidden；过十来秒再
- * 打就好了。平台建 key 和推理端点认 key 不是同一件事，中间有一段传播时间。
+ * 只改 key 那一格：账号密码原样留着（把它们清掉等于把登录态清了）。
+ * 空的那把表示清掉它（面板上重填一次就是替换的意思）。
  *
- * 所以这里轮询一下，别让调用方拿着一个还没生效的 key 去发请求。
+ * 返回写进去的段数（0/1）：面板要按段报回写了什么。
  */
-export async function waitForKeyUsable(
-  apiKey: string,
-  opts: { attempts?: number; delayMs?: number } = {},
-): Promise<boolean> {
-  const attempts = opts.attempts ?? 6;
-  const delayMs = opts.delayMs ?? 3000;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      await listModels(apiKey);
-      return true;
-    } catch {
-      if (i === attempts - 1) break;
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
-  }
-  return false;
-}
-
-/**
- * 账号要用的 key。
- *
- * 谁优先：显式传进来的 > 数据库里这个账号自己的 > 平台新建的。
- * 换过的 key 得算数，所以前两种都算数；只有都没有的时候才去平台建一个，
- * 而且建完必须马上存——完整的 key 只在创建的那一次回答里出现。
- */
-export async function ensureApiKey(
-  session: SenseNovaSession,
-  name: string,
-  current?: string | null,
-  keyType: SenseNovaKeyType = KEY_TYPE_TOKEN_PLAN,
-  providerId = "sensenova",
-): Promise<string | null> {
+export function writeSenseNovaKey(providerId: string, apiKey: string): number {
+  const key = String(apiKey ?? "").trim();
   const stored = storedAccount(providerId);
-  const existing = current ?? senseNovaApiKey(stored?.apiKey) ?? "";
-  if (existing) return existing;
-  const created = await createApiKey(session, name, keyType);
-  if (!created.plainKey) {
-    throw new Error("平台创建了 key，但没有把完整的 key 交回来");
+  if (!key) {
+    // 没有记录就没什么可清的：别凭空造一条只有空 key 的凭据。
+    if (!stored) return 0;
+    setSecret(accountId(providerId), "account", { ...stored, apiKey: null });
+    return 0;
   }
-  setSecret(accountId(providerId), "account", { ...stored, apiKey: created.plainKey });
-  console.log(`[SENSENOVA] 新建的 key：${created.displayname}（${created.keyType}）`);
-  // 存下来了，但推理端点可能还没认它。等一下，省得下一个请求就撞 401。
-  const usable = await waitForKeyUsable(created.plainKey);
-  if (!usable) {
-    console.log("[SENSENOVA] 新建的 key 在推理端点上还没生效，稍后重试即可");
-  }
-  return created.plainKey;
+  setSecret(accountId(providerId), "account", { ...(stored ?? {}), apiKey: key });
+  return 1;
 }
 
 /** 一把 key，换成三家平台共同的形状。 */
@@ -173,14 +136,11 @@ function toPlatformKey(key: SenseNovaApiKey): PlatformKey {
   };
 }
 
-/** 建 key 时用的名字。平台控制台上看得到这个名字。 */
-export const SENSE_NOVA_KEY_NAME = "buddy";
-
 /**
  * SenseNova 的 key 管理，三家平台统一的形状。
  *
  * 平台的接口在实现里（控制台那套 metered api-keys）；这里只是把它包的形状
- * 换成三家一样的那种。面板还没做这个操作：现在只有网关自己在用 ensure。
+ * 换成三家一样的那种。面板还没做这个操作：现在只有探针在用。
  */
 export const senseNovaKeys: PlatformKeys<SenseNovaSession> = {
   what: "SenseNova",
@@ -192,13 +152,5 @@ export const senseNovaKeys: PlatformKeys<SenseNovaSession> = {
   delete: async ({ session }, id) => {
     await revokeApiKey(session, id);
   },
-  ensure: async ({ session, keyType, providerId }, current) =>
-    ensureApiKey(
-      session,
-      SENSE_NOVA_KEY_NAME,
-      current ?? null,
-      (keyType as SenseNovaKeyType) ?? KEY_TYPE_TOKEN_PLAN,
-      providerId ?? "sensenova",
-    ),
 };
 

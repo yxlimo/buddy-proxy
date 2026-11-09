@@ -41,8 +41,10 @@ export const PING_MS = configNumber("MINIMAX_PING_MS", 15000);
 /**
  * What to tell the operator when the credential is unusable.
  *
- * Not a module-level constant: auth.ts reaches back into this module, so
- * AUTH_MODE may still be uninitialized when this file's body runs.
+ * Not a module-level constant: this module and auth.ts are in one import
+ * cycle, so this file's body can run while auth.ts's body is still pending
+ * and AUTH_MODE has no value yet. Reading it when the hint is asked for
+ * avoids that.
  */
 export function reloginHint(): string {
   return AUTH_MODE === "oauth"
@@ -107,10 +109,14 @@ export function classify(status: number, code?: number): string {
  * mode we own the session, so refresh once and retry; in file mode we only
  * re-read, because the desktop app owns that refresh. One attempt each, then
  * give up.
+ *
+ * `signal` 是「客户端走了」那个信号：给了就交给 fetch，客户端走了就把这条
+ * 上游请求停掉（上游还在算就是在计费）。
  */
 export async function minimaxChat(
   body: Json,
   providerId = "minimax",
+  signal?: AbortSignal,
 ): Promise<Response> {
   let cred;
   try {
@@ -121,7 +127,7 @@ export async function minimaxChat(
 
   const bodyText = JSON.stringify(body);
   const send = (token: string) =>
-    fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText });
+    fetch(UPSTREAM, { method: "POST", headers: upstreamHeaders(token, bodyText), body: bodyText, signal });
 
   const r = await send(cred.accessToken);
 

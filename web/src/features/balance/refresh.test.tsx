@@ -53,7 +53,7 @@ describe('刷新额度', () => {
 
     renderWithClient({ client, children: <BalancePage /> })
 
-    expect(await screen.findByText('Provider 没有报额度。')).toBeInTheDocument()
+    expect(await screen.findByText('平台没有报额度。')).toBeInTheDocument()
     expect(calls).toEqual([false])
   })
 
@@ -62,7 +62,7 @@ describe('刷新额度', () => {
     const { client, calls } = setup()
 
     renderWithClient({ client, children: <BalancePage /> })
-    await screen.findByText('Provider 没有报额度。')
+    await screen.findByText('平台没有报额度。')
 
     await user.click(screen.getByRole('button', { name: '刷新额度' }))
 
@@ -76,7 +76,7 @@ describe('刷新额度', () => {
     const { client, calls } = setup({ hang: true })
 
     renderWithClient({ client, children: <BalancePage /> })
-    await screen.findByText('Provider 没有报额度。')
+    await screen.findByText('平台没有报额度。')
 
     await user.click(screen.getByRole('button', { name: '刷新额度' }))
 
@@ -92,7 +92,7 @@ describe('刷新额度', () => {
     const { client } = setup({ fail: true })
 
     renderWithClient({ client, children: <BalancePage /> })
-    await screen.findByText('Provider 没有报额度。')
+    await screen.findByText('平台没有报额度。')
 
     await user.click(screen.getByRole('button', { name: '刷新额度' }))
 

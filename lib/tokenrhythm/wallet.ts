@@ -10,10 +10,19 @@
 // models. Two rows of the same platform are two accounts with two wallets.
 
 import { platformApi } from "./platform.ts";
-import { tokenRhythmKeys } from "./keys.ts";
-import { loadSession, sessionFor, sessionId, tokenRhythmCredentialOf, type TokenRhythmSession } from "./accounts.ts";
+import {
+  loadSession,
+  sessionFor,
+  sessionId,
+  tokenRhythmCredentialOf,
+  TokenRhythmError,
+  type TokenRhythmErrorKind,
+  type TokenRhythmSession,
+} from "./accounts.ts";
+import { TOKENRHYTHM_API_BASE } from "./config.ts";
 import { accountsOfPlatform, provider } from "../providers.ts";
 import { platformOf } from "../platforms.ts";
+import { quotaEndpointBase } from "../quota-plugins.ts";
 
 export interface TokenRhythmWallet {
   currency: string;
@@ -71,8 +80,19 @@ export function platformOfAccount(id: string): string {
   return platformOf(id) ? id : (provider(id)?.platform ?? id);
 }
 
+/**
+ * 钱包该问哪一台：平台行把地址指到别处时就问那一台。
+ *
+ * 在钱包这一层算，不在插件里算：钱包是缓存的（一个平台一份，路由与面板读的
+ * 是同一份），同一个平台两份地址会让两边拿到不同机器上的数。
+ */
+function walletEndpointBase(accountId: string): string {
+  const row = provider(accountId);
+  return row ? quotaEndpointBase(row, TOKENRHYTHM_API_BASE) : TOKENRHYTHM_API_BASE;
+}
+
 export async function wallet(session: TokenRhythmSession, accountId = session.accountId): Promise<TokenRhythmWallet> {
-  const data = await platformApi<any>("/api/wallet/summary", session);
+  const data = await platformApi<any>("/api/wallet/summary", session, { base: walletEndpointBase(accountId) });
   // A fresh wallet means the cached view is stale: which account runs out
   // first may have changed, and the next request has to decide again. Only
   // this platform's view goes — another platform's accounts did not change.
@@ -88,10 +108,14 @@ export async function wallet(session: TokenRhythmSession, accountId = session.ac
   };
 }
 
-export async function credits(session: TokenRhythmSession): Promise<TokenRhythmCredits> {
+export async function credits(
+  session: TokenRhythmSession,
+  accountId = session.accountId,
+): Promise<TokenRhythmCredits> {
   const data = await platformApi<any>(
     "/api/wallet/expiring-credits?page=1&pageSize=50&includeInactive=true&includePermanent=true",
     session,
+    { base: walletEndpointBase(accountId) },
   );
   const list: TokenRhythmGift[] = (Array.isArray(data?.list) ? data.list : []).map((row: any) => ({
     id: String(row?.id ?? ""),
@@ -135,7 +159,19 @@ export interface TokenRhythmAccountStatus {
   wallet: TokenRhythmWallet | null;
   credits: TokenRhythmCredits | null;
   error: string | null;
+  /**
+   * 这次没读到钱袋的原因。
+   *
+   * 额度要分清楚「还没填账号密码」「平台拒了登录」「被限流了」「问不到」：四种在
+   * 面板上是四种话，而且只有其中一种会自己好。字符串错误消息分不出它们。
+   */
+  errorKind?: TokenRhythmWalletFailure | null;
+  /** 平台说多久之后再来（毫秒）；没说就是 null。 */
+  errorRetryAfterMs?: number | null;
 }
+
+/** 没读到钱袋的四种原因：平台的三种拒法，加上「凭据还没填」。 */
+export type TokenRhythmWalletFailure = TokenRhythmErrorKind | "missing";
 
 const mask = (account: string): string =>
   account.length <= 4 ? "***" : `${account.slice(0, 3)}***${account.slice(-2)}`;
@@ -154,6 +190,9 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
       wallet: null,
       credits: null,
       error: stored ? null : "这个账号还没有账号密码",
+      // 没填凭据不是平台拒了：那是用户还没填。
+      errorKind: stored ? null : "missing",
+      errorRetryAfterMs: null,
     };
     out.push(status);
     if (!stored) continue;
@@ -168,18 +207,15 @@ export async function accountStatuses(platform: string): Promise<TokenRhythmAcco
         remainingSec: Math.round(remainingMs / 1000),
         warning: remainingMs > 0 && remainingMs < WARN_MS,
       };
-      // An account with no key cannot serve a request, and the key is only
-      // ever shown in full in the answer to the call that makes it. So the
-      // gateway makes one and keeps it — a new account works without anybody
-      // putting a key in the environment.
-      if (!stored.apiKey) {
-        const made = await tokenRhythmKeys.ensure({ session, providerId: row.id }, null);
-        status.hasKey = Boolean(made);
-      }
+      // An account with no key cannot serve a request. The key is the user's
+      // to fill in (the panel writes it): the gateway does not build one for
+      // them, so an account without one simply stays out.
       status.wallet = await wallet(session, row.id);
-      status.credits = await credits(session);
+      status.credits = await credits(session, row.id);
     } catch (e) {
       status.error = (e as Error).message;
+      status.errorKind = e instanceof TokenRhythmError ? e.kind : "unknown";
+      status.errorRetryAfterMs = e instanceof TokenRhythmError ? e.retryAfterMs : null;
     }
   }
   return out;

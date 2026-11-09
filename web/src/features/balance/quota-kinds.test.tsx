@@ -162,13 +162,99 @@ describe('额度按种类渲染', () => {
     expect(screen.queryAllByText(/¥1,?242\.50/)).toHaveLength(0)
   })
 
-  it('Provider 没有报额度的时候给空状态', async () => {
+  it('平台没有报额度的时候给空状态', async () => {
     const client = mockAdminClient({
       GetBalance: () => create(GetBalanceResponseSchema, { quotas: [] }),
     })
 
     renderWithClient({ client, children: <BalancePage /> })
 
-    expect(await screen.findByText('Provider 没有报额度。')).toBeInTheDocument()
+    expect(await screen.findByText('平台没有报额度。')).toBeInTheDocument()
+  })
+})
+
+/**
+ * 卡片标题写账号的名字，没名字才退回 id。
+ *
+ * 光看 id 认不出是哪个账号：同一个平台下几个账号的 id 都是序号。
+ */
+describe('额度卡标题用账号的名字', () => {
+  function credits() {
+    return create(CreditSummarySchema, { total: 100, used: 0, remaining: 100 })
+  }
+
+  it('有名字：标题是名字，副行写平台与账号 id', async () => {
+    const client = mockAdminClient({
+      GetBalance: () =>
+        create(GetBalanceResponseSchema, {
+          quotas: [
+            create(UpstreamQuotaSchema, {
+              upstreamId: 'minimax',
+              accountId: '8',
+              accountName: 'Token Plan',
+              credits: credits(),
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <BalancePage /> })
+
+    // 标题是名字，id 不当标题。
+    expect(await screen.findByText('Token Plan')).toBeInTheDocument()
+    expect(screen.queryByText('8')).toBeNull()
+    // 副行交代这条额度属于谁。
+    const subtitle = screen.getByText(/minimax/)
+    expect(subtitle).toHaveTextContent('minimax')
+    expect(subtitle).toHaveTextContent('账号 8')
+  })
+
+  it('账号 id 与平台 id 相同：副行只写一遍', async () => {
+    const client = mockAdminClient({
+      GetBalance: () =>
+        create(GetBalanceResponseSchema, {
+          quotas: [
+            create(UpstreamQuotaSchema, {
+              upstreamId: 'qoder-cn',
+              accountId: 'qoder-cn',
+              accountName: 'Sync Bot',
+              credits: credits(),
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <BalancePage /> })
+
+    expect(await screen.findByText('Sync Bot')).toBeInTheDocument()
+    // 同一个 id 不写两遍：副行正好是平台 id。
+    const subtitle = screen.getByText(/qoder-cn/)
+    expect(subtitle).toHaveTextContent(/^qoder-cn$/)
+    expect(screen.queryByText(/账号 qoder-cn/)).toBeNull()
+  })
+
+  it('没名字：标题退回账号 id，副行写平台', async () => {
+    const client = mockAdminClient({
+      GetBalance: () =>
+        create(GetBalanceResponseSchema, {
+          quotas: [
+            create(UpstreamQuotaSchema, {
+              upstreamId: 'minimax',
+              accountId: '8',
+              accountName: '',
+              credits: credits(),
+            }),
+          ],
+        }),
+    })
+
+    renderWithClient({ client, children: <BalancePage /> })
+
+    expect(await screen.findByText('8')).toBeInTheDocument()
+    const subtitle = screen.getByText(/minimax/)
+    expect(subtitle).toHaveTextContent(/^minimax$/)
+    // 没名字就没有「账号 8」这种半截，也不会冒出空串或多余的分隔符。
+    expect(screen.queryByText(/· 账号/)).toBeNull()
+    expect(screen.queryByText(/^·/)).toBeNull()
   })
 })

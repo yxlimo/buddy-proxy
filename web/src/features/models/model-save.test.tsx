@@ -1,4 +1,5 @@
 import { create } from '@bufbuild/protobuf'
+import { Code, ConnectError } from '@connectrpc/connect'
 import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,7 +10,6 @@ import {
   ListPublishedModelsResponseSchema,
   ListUpstreamsResponseSchema,
   PublishedModelSchema,
-  SavePublishedModelResponseSchema,
   UpstreamSchema,
   UpstreamState,
 } from '@/gen/buddy/admin/v1/admin_pb'
@@ -56,7 +56,7 @@ function upstreamHandlers() {
 
 /** 在组下拉里选一个上游组。 */
 async function pickGroup(user: ReturnType<typeof userEvent.setup>) {
-  const trigger = await screen.findByRole('combobox', { name: 'Provider 组' })
+  const trigger = await screen.findByRole('combobox', { name: '平台组' })
   await waitFor(() => {
     expect(trigger).toBeEnabled()
   })
@@ -74,27 +74,28 @@ describe('模型保存失败的时候', () => {
       ...upstreamHandlers(),
       ListPublishedModels: () =>
         create(ListPublishedModelsResponseSchema, { models: [] }),
-      SavePublishedModel: () =>
-        create(SavePublishedModelResponseSchema, {
-          ok: false,
-          message: '模型至少要有一个 Provider',
-        }),
+      // 失败是一次 Connect 错误（SavePublishedModel 没有 ok / message 两格）。
+      SavePublishedModel: () => {
+        throw new ConnectError('模型至少要有一个 Provider', Code.InvalidArgument)
+      },
     })
 
     renderWithClient({ client, children: <PublishedModelsPage /> })
 
-    await user.click(await screen.findByRole('button', { name: '新建' }))
+    await user.click(await screen.findByRole('button', { name: '新增' }))
     await user.type(screen.getByLabelText('对外 id'), 'buddy-max')
 
-    await user.click(screen.getByRole('tab', { name: 'Provider 目标' }))
+    await user.click(screen.getByRole('tab', { name: '平台目标' }))
     await pickGroup(user)
-    await user.type(screen.getByLabelText('上游模型 id'), 'claude-sonnet-4')
+    await user.type(screen.getByLabelText('平台模型 id'), 'claude-sonnet-4')
 
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(
       () => {
-        expect(toastError).toHaveBeenCalledWith('模型至少要有一个 Provider')
+        expect(String(toastError.mock.calls[0]?.[0])).toContain(
+          '模型至少要有一个 Provider'
+        )
       },
       // 整套一起跑的时候这个用例偶尔赶不上 5 秒。
       { timeout: 15000 },
@@ -103,7 +104,7 @@ describe('模型保存失败的时候', () => {
     expect(toastSuccess).not.toHaveBeenCalled()
     // 弹窗留着，用户填的东西还在。
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByLabelText('上游模型 id')).toHaveValue('claude-sonnet-4')
+    expect(screen.getByLabelText('平台模型 id')).toHaveValue('claude-sonnet-4')
   })
 
   it('目标没填全的时候保存按钮是灰的', async () => {
@@ -123,7 +124,7 @@ describe('模型保存失败的时候', () => {
     expect(save).toBeDisabled()
 
     // 目标那一页里，没填全的行有行内提示。
-    await user.click(screen.getByRole('tab', { name: 'Provider 目标' }))
+    await user.click(screen.getByRole('tab', { name: '平台目标' }))
     expect(screen.getByText(/这一行还没填全/)).toBeInTheDocument()
 
     // 填了对外 id 还是不够：目标也是空的。
@@ -131,17 +132,17 @@ describe('模型保存失败的时候', () => {
     await user.type(screen.getByLabelText('对外 id'), 'buddy-max')
     expect(save).toBeDisabled()
 
-    await user.click(screen.getByRole('tab', { name: 'Provider 目标' }))
+    await user.click(screen.getByRole('tab', { name: '平台目标' }))
     await pickGroup(user)
     expect(save).toBeDisabled()
 
-    await user.type(screen.getByLabelText('上游模型 id'), 'claude-sonnet-4')
+    await user.type(screen.getByLabelText('平台模型 id'), 'claude-sonnet-4')
     expect(save).toBeEnabled()
   })
 })
 
 describe('元数据的继承', () => {
-  it('继承上游的不会被写死成具体数字', () => {
+  it('继承平台的不会被写死成具体数字', () => {
     const model = create(PublishedModelSchema, {
       id: 'buddy-max',
       displayName: 'Buddy Max',

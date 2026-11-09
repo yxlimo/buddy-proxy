@@ -11,7 +11,8 @@
 //
 // 覆盖：
 //   1. 账号没额度时，`/v1/models` 仍然列出这个平台的模型；
-//   2. 此时请求这个模型答 503（不是 400/404），带 Retry-After 与恢复时间；
+//   2. 此时请求这个模型答 402（不是 400/404/503），带 Retry-After 与恢复时间；
+//      额度用尽是客户端能动手的事（充值或等额度），所以是 402；
 //   3. 真正不存在的模型名仍然答 400 unknown model；
 //   4. 平台目录为空（还没拿到目录）答 503，不是 400。
 
@@ -79,6 +80,7 @@ function fakeCtx(body: unknown = {}, params: Record<string, string> = {}): FakeC
 
 await import("../lib/kinds/index.ts");
 const { addAccount } = await import("../lib/providers.ts");
+const { setSecret } = await import("../lib/store.ts");
 const { putHealthSnapshot } = await import("../lib/health-cache.ts");
 const { serveModels } = await import("../lib/router/catalog-routes.ts");
 const { handle } = await import("../lib/router/handle.ts");
@@ -91,6 +93,24 @@ const accountId = String(added.id);
 
 const now = Date.now();
 const windowEndsAt = new Date(now + 3600_000).toISOString();
+
+// 这个账号得有一份凭据：这个测试问的是「额度用尽/冷却不让模型从目录里消失」，
+// 不是「没有凭据的平台」。没有凭据的话平台整个进不了目录（那是另一件事，
+// 另一个测试在管）。
+setSecret(`session:provider:${accountId}`, "session", {
+  schemaVersion: 1,
+  clientId: "minimax-code",
+  audience: "minimax",
+  scopes: ["agent.default"],
+  region: "cn",
+  accessToken: "test-token",
+  refreshToken: "test-refresh",
+  tokenType: "Bearer",
+  expiresAtMs: now + 3600_000,
+  generation: 1,
+  loginAtMs: now,
+  refreshedAtMs: now,
+});
 
 /** 套餐窗口见底的快照：这个账号没文本额度了。 */
 function exhaustedSnapshot(): unknown {
@@ -116,7 +136,9 @@ function exhaustedSnapshot(): unknown {
 section("对照组：有额度就能路由");
 
 const healthy = routeInGroup("minimax", MODEL, {
-  platforms: new Map([["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set([MODEL]), untilMs: null }]]),
+  platforms: new Map([
+    ["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set([MODEL]), untilMs: null, state: "ready" }],
+  ]),
 });
 check("有额度时路由拿到了目标", healthy.model === `minimax/${MODEL}`, healthy.model);
 
@@ -137,15 +159,21 @@ check("`/v1/models` 仍然列出这个平台的模型", listed.includes(MODEL), 
  * 2) 同一个模型：503 + Retry-After，不是 400/404
  * ------------------------------------------------------------------ */
 
-section("额度用尽：请求答 503 并说什么时候恢复");
+section("额度用尽：请求答 402 并说什么时候恢复");
 
 const ask = fakeCtx({ model: MODEL });
 await handle(ask as any, "anthropic", "minimax");
-check("状态是 503", ask.status === 503, String(ask.status));
+check("状态是 402", ask.status === 402, String(ask.status));
 check("不是 unknown model（400/404）", ask.status !== 400 && ask.status !== 404, String(ask.status));
+check(
+  "错误类型是 usage_limit_error",
+  String(ask.body?.error?.type ?? "") === "usage_limit_error",
+  JSON.stringify(ask.body?.error),
+);
 const hint = String(ask.body?.hint ?? "");
 check("提示里说得清什么时候恢复", hint.includes("恢复"), hint);
 check("提示里带恢复时间", /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(hint), hint);
+check("提示里点名了是哪个上游", hint.includes("minimax"), hint);
 check("提示里说的是额度，不是「没有这个模型」", !hint.includes("没有这个模型"), hint);
 const retryAfter = Number(ask.headers["retry-after"] ?? 0);
 check("Retry-After 是一个秒数", Number.isFinite(retryAfter) && retryAfter > 0, String(ask.headers["retry-after"]));
@@ -180,7 +208,9 @@ section("目录为空：503，不是 400");
 
 try {
   routeInGroup("minimax", MODEL, {
-    platforms: new Map([["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set<string>(), untilMs: null }]]),
+    platforms: new Map([
+      ["minimax", { kind: "minimax", enabled: true, accounts: 1, ids: new Set<string>(), untilMs: null, state: "ready" }],
+    ]),
   });
   check("目录为空时被拒了", false, "routeInGroup 没有抛错");
 } catch (e) {

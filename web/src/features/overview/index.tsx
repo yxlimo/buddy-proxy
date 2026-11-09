@@ -28,6 +28,20 @@ import { DailyCheckinPanel } from '@/features/benefits/daily-checkin'
 import { useSystemStatus, useUsageSummary } from '@/features/overview/api'
 import { formatCompact, formatCount, formatUptime } from '@/lib/format'
 
+/**
+ * 凭据是哪一种。
+ *
+ * 服务端给的是契约里的枚举值（session / api_key / login / plan_key）：那一串
+ * 对运维等于内部术语，这里换成看得懂的词。没登记的值不摆出来 —— 不把枚举值
+ * 原样给用户看。
+ */
+const CREDENTIAL_KIND_LABELS: Record<string, string> = {
+  session: '登录会话',
+  api_key: 'API Key',
+  login: '账号密码',
+  plan_key: '套餐 key',
+}
+
 export function OverviewPage() {
   const status = useSystemStatus()
   const usage = useUsageSummary({ upstreamId: '', window: 'day' })
@@ -45,7 +59,7 @@ export function OverviewPage() {
   return (
     <PageShell
       title='总览'
-      description='网关当前状态：上游概况与今日用量。'
+      description='网关当前状态：平台概况与今日用量。'
     >
 
       <div className='mb-4'>
@@ -112,15 +126,15 @@ export function OverviewPage() {
           <CardHeader>
             <CardTitle className='flex items-center gap-2 text-base'>
               <Boxes className='size-4' />
-              上游
+              平台
             </CardTitle>
             <CardDescription>
-              开关在「上游」页改，改完立刻生效。
+              开关在「平台」页改，改完立刻生效。
             </CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>
             {data.upstreams.length === 0 ? (
-              <EmptyState title='暂无上游' />
+              <EmptyState title='暂无平台' />
             ) : (
               data.upstreams.map((upstream) => (
                 <div
@@ -136,7 +150,10 @@ export function OverviewPage() {
                     </span>
                     {upstream.credential ? (
                       <span className='text-xs text-muted-foreground'>
-                        凭据 {upstream.credential.kind || '—'}
+                        凭据
+                        {CREDENTIAL_KIND_LABELS[upstream.credential.kind]
+                          ? `：${CREDENTIAL_KIND_LABELS[upstream.credential.kind]}`
+                          : ''}
                       </span>
                     ) : null}
                   </div>
@@ -161,7 +178,7 @@ export function OverviewPage() {
               <Activity className='size-4' />
               今日用量
             </CardTitle>
-            <CardDescription>按上游分的 token 数。</CardDescription>
+            <CardDescription>按平台分的 token 数。</CardDescription>
           </CardHeader>
           <CardContent className='grid gap-3'>
             {usage.isPending ? (

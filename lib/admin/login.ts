@@ -40,9 +40,9 @@ import type { InternAiLogin } from "../intern-ai/login-flow.ts";
 import {
   importToken as importInternAiToken,
   internAiSite,
-  loadSession as loadInternAiSession,
+  storedAccount as storedInternAiAccount,
 } from "../intern-ai/auth.ts";
-import { ensureInternAiKey } from "../intern-ai/transport.ts";
+import { internAiDiscoveryKey } from "../intern-ai/config.ts";
 import { exchangeCode as exchangeInternAiCode } from "../intern-ai/auth.ts";
 
 /** 一次登录的状态。 */
@@ -275,7 +275,7 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
       "no account",
       accountId
         ? `没有这个账号：${accountId}。`
-        : `这个平台还没有账号，先在面板上新增一个。`,
+        : `这个平台还没有账号，请先在面板上新增一个。`,
       400,
     );
   }
@@ -297,12 +297,12 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
         return startInternAi({ accountId: row.id, platform: row.kind, region: row.region });
       case "qiniu":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
-        throw new AuthError("no login", "七牛云不扫码登录，用「API Key」按钮贴一把 key。", 400);
+        throw new AuthError("no login", "七牛云不扫码登录，请用「API Key」按钮保存一把 key。", 400);
       case "xinghuo":
         // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
-        throw new AuthError("no login", "讯飞星火不扫码登录，用「API Key」按钮贴一把 key。", 400);
+        throw new AuthError("no login", "讯飞星火不扫码登录，请用「API Key」按钮保存一把 key。", 400);
       default:
-        throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${upstreamId}`, 400);
+        throw new AuthError("unknown upstream", `这个上游没有登录方式：${upstreamId}`, 400);
     }
   });
   const session: StoredLogin = {
@@ -534,7 +534,7 @@ export function cancelLogin(loginId: string): { ok: boolean; message: string } {
   const current = loadLogin(loginId);
   if (!current) return { ok: false, message: `没有这次登录：${loginId}` };
   if (current.status !== "pending") {
-    return { ok: false, message: `这次登录已经结束了（${current.status}）。` };
+    return { ok: false, message: `这次登录已结束（${current.status}）。` };
   }
   updateLogin(loginId, { status: "cancelled", message: "登录已取消。" });
   return { ok: true, message: "登录已取消。" };
@@ -543,22 +543,6 @@ export function cancelLogin(loginId: string): { ok: boolean; message: string } {
 /* ------------------------------------------------------------------ *
  * 账号密码
  * ------------------------------------------------------------------ */
-
-/**
- * 建推理用的 key，失败不算登录失败。
- *
- * 登录本身是成功的（会话已经存下来了），只是那把 key 没建出来 —— 上游暂时接
- * 不了请求，但登录不算白做：面板上把这件事说清楚，用户再登一次就好。
- */
-async function ensureKeySafe(label: string, make: () => Promise<string>): Promise<boolean> {
-  try {
-    await make();
-    return true;
-  } catch (e) {
-    console.warn(`[${label}] 推理 key 没建出来：${(e as Error)?.message}`);
-    return false;
-  }
-}
 
 /** 账号密码登录的结果。 */
 export interface PasswordLoginResult {
@@ -602,7 +586,7 @@ export async function loginWithPassword(input: {
   if (!row) {
     return {
       ok: false,
-      message: input.accountId ? `没有这个账号：${input.accountId}` : "这个平台还没有账号，先在面板上新增一个。",
+      message: input.accountId ? `没有这个账号：${input.accountId}` : "这个平台还没有账号，请先在面板上新增一个。",
       credentialId: "",
       accountId: "",
     };
@@ -636,9 +620,9 @@ export async function loginWithPassword(input: {
         closePendingLogins(row.id, { ok: true, credentialId });
         return {
           ok: true,
-          message: result.keyReady
+          message: result.hasKey
             ? "SenseNova 登录完成，推理用的 key 已就绪。"
-            : "SenseNova 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
+            : "SenseNova 登录完成，但账号上没有推理用的 API key，请在面板上填一把。",
           credentialId,
           accountId: row.id,
         };
@@ -662,15 +646,15 @@ export async function loginWithPassword(input: {
         closePendingLogins(row.id, { ok: true, credentialId });
         return {
           ok: true,
-          message: result.keyReady
+          message: result.hasKey
             ? "intern-ai 登录完成，推理用的 key 已就绪。"
-            : "intern-ai 登录完成，但推理用的 key 未能创建 —— 上游暂不可用，请重新登录后重试。",
+            : "intern-ai 登录完成，但账号上没有推理用的 API key，请在面板上填一把。",
           credentialId,
           accountId: row.id,
         };
       }
       default: {
-        const message = `这个账号不用账号密码登录：${row.alias || row.id}`;
+        const message = `这个账号不支持账号密码登录：${row.alias || row.id}`;
         closePendingLogins(row.id, { ok: false, message });
         return {
           ok: false,
@@ -707,15 +691,12 @@ function accountFor(upstreamId: string, accountId: string): ProviderRow | null {
  * ------------------------------------------------------------------ */
 
 /**
- * 导入的登录态也要有推理用的 key。
+ * 这个账号上已经有推理用的 key 吗。
  *
- * 推理端点认的是 key，不是那个 uaa-token。所以贴回 token 之后还要建一把
- * Discovery 的 key —— 建完了上游才是 READY 的。
+ * key 由用户自己在面板上填（面板上的 setProviderKeys）：导入登录态不碰它。
  */
-async function ensureImportedInternAiKey(): Promise<void> {
-  const session = loadInternAiSession();
-  if (!session) return;
-  await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session));
+function internAiHasKey(accountId: string): boolean {
+  return Boolean(internAiDiscoveryKey(storedInternAiAccount(accountId)?.discoveryKey));
 }
 
 /**
@@ -730,7 +711,7 @@ export async function exchangeLoginCode(input: {
   code: string;
 }): Promise<PasswordLoginResult> {
   if (input.upstreamId !== "intern-ai") {
-    return { ok: false, message: `这个上游不用授权码：${input.upstreamId}`, credentialId: "", accountId: "" };
+    return { ok: false, message: `这个平台不使用授权码：${input.upstreamId}`, credentialId: "", accountId: "" };
   }
   if (!input.code.trim()) {
     return { ok: false, message: "缺少授权码。", credentialId: "", accountId: "" };
@@ -738,10 +719,11 @@ export async function exchangeLoginCode(input: {
   // 换 token 用 discovery 那个子站（端砚），换出来的 token 两个子站都能用。
   const token = await exchangeInternAiCode(input.code.trim(), internAiSite("discovery"));
   importInternAiToken(token);
-  await ensureImportedInternAiKey();
   return {
     ok: true,
-    message: "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。",
+    message: internAiHasKey(input.accountId)
+      ? "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。"
+      : "凭据已更新，两个子站共用该凭据。账号上没有推理用的 API key，请在面板上填一把。",
     credentialId: providerSecretId(input.accountId),
     accountId: input.accountId,
   };
@@ -759,16 +741,17 @@ export async function importLoginToken(input: {
   token: string;
 }): Promise<PasswordLoginResult> {
   if (input.upstreamId !== "intern-ai") {
-    return { ok: false, message: `这个上游不用回填 token：${input.upstreamId}`, credentialId: "", accountId: "" };
+    return { ok: false, message: `这个平台不使用回填 token：${input.upstreamId}`, credentialId: "", accountId: "" };
   }
   if (!input.token.trim()) {
     return { ok: false, message: "缺少 token。", credentialId: "", accountId: "" };
   }
   importInternAiToken(input.token.trim());
-  await ensureImportedInternAiKey();
   return {
     ok: true,
-    message: "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。",
+    message: internAiHasKey(input.accountId)
+      ? "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。"
+      : "凭据已导入，两个子站共用该凭据。账号上没有推理用的 API key，请在面板上填一把。",
     credentialId: providerSecretId(input.accountId),
     accountId: input.accountId,
   };

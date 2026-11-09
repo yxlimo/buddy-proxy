@@ -29,6 +29,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ModelPicker } from '@/features/models/model-picker'
 import { GroupPicker } from '@/features/models/group-picker'
+import { intFieldProblem } from '@/lib/int-field'
 import { cn } from '@/lib/utils'
 
 /**
@@ -126,8 +127,8 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
 
 /** 继承时把现在实际的值显示出来。 */
 function inheritedHint(value: number | undefined): string {
-  if (value === undefined) return '继承上游'
-  return `继承上游（现在 ${value.toLocaleString()}）`
+  if (value === undefined) return '继承平台'
+  return `继承平台（现在 ${value.toLocaleString()}）`
 }
 
 function toTriState(value: boolean | undefined): TriState {
@@ -227,19 +228,29 @@ export function ModelDialog({
   // 哪个分组里有没填的必填项：分组标题上标红，切过去给行内提示。
   const basicMissing = draft.id.trim().length === 0
   const targetsMissing = filledTargets.length === 0
+  // 两个整数格：继承时不判（那两格灰着，值不属于这一单），填了才判。
+  const contextProblem = draft.contextWindowInherit
+    ? null
+    : intFieldProblem(draft.contextWindow)
+  const outputProblem = draft.maxOutputTokensInherit
+    ? null
+    : intFieldProblem(draft.maxOutputTokens)
 
-  const valid = !basicMissing && !targetsMissing
+  const valid =
+    !basicMissing &&
+    !targetsMissing &&
+    contextProblem === null &&
+    outputProblem === null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-2xl'>
         <DialogHeader>
           <DialogTitle>
-            {model ? '改主路由模型' : '新建一个主路由模型'}
+            {model ? '编辑主路由模型' : '新增主路由模型'}
           </DialogTitle>
           <DialogDescription>
-            对外公布一个 id，背后挂几个上游模型。single 是只走一个目标，
-            fallback 是它挂了再换下一个（按权重从大到小）。
+            对外公布一个 id，背后挂一个或多个平台模型。
           </DialogDescription>
         </DialogHeader>
 
@@ -250,7 +261,7 @@ export function ModelDialog({
               {basicMissing ? <RequiredDot /> : null}
             </TabsTrigger>
             <TabsTrigger value='targets'>
-              Provider 目标
+              平台目标
               {targetsMissing ? <RequiredDot /> : null}
             </TabsTrigger>
           </TabsList>
@@ -268,7 +279,7 @@ export function ModelDialog({
               />
               {basicMissing ? (
                 <p className='text-xs text-destructive'>
-                  对外 id 是必填的：客户端只认这个 id。
+                  对外 id 是必填的。
                 </p>
               ) : null}
             </div>
@@ -306,19 +317,31 @@ export function ModelDialog({
                   id='model-ctx'
                   inputMode='numeric'
                   disabled={draft.contextWindowInherit}
+                  aria-invalid={contextProblem ? true : undefined}
+                  aria-describedby={
+                    contextProblem ? 'model-ctx-problem' : undefined
+                  }
                   placeholder={
                     draft.contextWindowInherit
                       ? inheritedHint(draft.effectiveContextWindow)
-                      : '留空 = 继承上游'
+                      : '留空 = 继承平台'
                   }
                   value={draft.contextWindow}
                   onChange={(event) =>
                     patch({ contextWindow: event.target.value })
                   }
                 />
+                {contextProblem ? (
+                  <p
+                    id='model-ctx-problem'
+                    className='text-xs text-destructive'
+                  >
+                    {contextProblem}
+                  </p>
+                ) : null}
                 <InheritToggle
                   id='model-ctx-inherit'
-                  label='继承上游'
+                  label='继承平台'
                   checked={draft.contextWindowInherit}
                   onChange={(checked) =>
                     patch({
@@ -334,19 +357,31 @@ export function ModelDialog({
                   id='model-out'
                   inputMode='numeric'
                   disabled={draft.maxOutputTokensInherit}
+                  aria-invalid={outputProblem ? true : undefined}
+                  aria-describedby={
+                    outputProblem ? 'model-out-problem' : undefined
+                  }
                   placeholder={
                     draft.maxOutputTokensInherit
                       ? inheritedHint(draft.effectiveMaxOutputTokens)
-                      : '留空 = 继承上游'
+                      : '留空 = 继承平台'
                   }
                   value={draft.maxOutputTokens}
                   onChange={(event) =>
                     patch({ maxOutputTokens: event.target.value })
                   }
                 />
+                {outputProblem ? (
+                  <p
+                    id='model-out-problem'
+                    className='text-xs text-destructive'
+                  >
+                    {outputProblem}
+                  </p>
+                ) : null}
                 <InheritToggle
                   id='model-out-inherit'
-                  label='继承上游'
+                  label='继承平台'
                   checked={draft.maxOutputTokensInherit}
                   onChange={(checked) =>
                     patch({
@@ -371,7 +406,7 @@ export function ModelDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='inherit'>继承上游</SelectItem>
+                    <SelectItem value='inherit'>继承平台</SelectItem>
                     <SelectItem value='yes'>支持</SelectItem>
                     <SelectItem value='no'>不支持</SelectItem>
                   </SelectContent>
@@ -389,7 +424,7 @@ export function ModelDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='inherit'>继承上游</SelectItem>
+                    <SelectItem value='inherit'>继承平台</SelectItem>
                     <SelectItem value='yes'>支持</SelectItem>
                     <SelectItem value='no'>不支持</SelectItem>
                   </SelectContent>
@@ -422,7 +457,7 @@ export function ModelDialog({
           <TabsContent value='targets' className='grid gap-3'>
             {targetsMissing ? (
               <p className='text-xs text-destructive'>
-                至少要有一个填全的目标：Provider 组和上游模型 id 都要填。
+                至少要有一个填全的目标：平台组和平台模型 id 都要填。
               </p>
             ) : null}
             {draft.targets.map((target, index) => (
@@ -431,7 +466,7 @@ export function ModelDialog({
                 className='grid gap-2 rounded-lg border p-3 sm:grid-cols-2'
               >
                 <div className='grid gap-2'>
-                  <Label htmlFor={`target-group-${index}`}>Provider 组</Label>
+                  <Label htmlFor={`target-group-${index}`}>平台组</Label>
                   <GroupPicker
                     id={`target-group-${index}`}
                     value={target.groupName}
@@ -445,7 +480,7 @@ export function ModelDialog({
                   />
                 </div>
                 <div className='grid gap-2'>
-                  <Label htmlFor={`target-model-${index}`}>上游模型 id</Label>
+                  <Label htmlFor={`target-model-${index}`}>平台模型 id</Label>
                   <ModelPicker
                     id={`target-model-${index}`}
                     groupName={target.groupName}
@@ -475,7 +510,7 @@ export function ModelDialog({
                 ) : null}
                 {!targetFilled(target) ? (
                   <p className='text-xs text-destructive sm:col-span-2'>
-                    这一行还没填全：Provider 组和上游模型 id 都要填。
+                    这一行还没填全：平台组和平台模型 id 都要填。
                   </p>
                 ) : null}
                 <div className='flex items-center justify-between gap-2 sm:col-span-2'>
@@ -500,7 +535,7 @@ export function ModelDialog({
                     disabled={draft.targets.length === 1}
                   >
                     <Trash2 />
-                    删掉
+                    删除
                   </Button>
                 </div>
               </div>

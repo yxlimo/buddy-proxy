@@ -38,6 +38,15 @@ check("思考很多但正文有用", !isAllThinking({ completionTokens: 5000, re
 // 正常短答复：思考也少，两条分支都走不到。
 check("短答复、思考也少", !isAllThinking({ completionTokens: 18, reasoningTokens: 6 }));
 
+// 短答复误报：正文就那么长，思考一个也没有 —— 这不是「输出全在思考里」。
+check("短答复、没有思考", !isAllThinking({ completionTokens: 5, reasoningTokens: 0 }));
+check("更短的答复、没有思考", !isAllThinking({ completionTokens: 3, reasoningTokens: 0 }));
+// 有思考 token，但思考没比正文多：正文才是主体。
+check("有思考但没比正文多", !isAllThinking({ completionTokens: 6, reasoningTokens: 1 }));
+// 思考占了绝对多数、正文只剩一点：仍然判成「输出全在思考里」。
+check("思考占绝大多数、正文剩 5", isAllThinking({ completionTokens: 300, reasoningTokens: 295 }));
+check("思考占绝大多数、正文剩 2", isAllThinking({ completionTokens: 4000, reasoningTokens: 3998 }));
+
 // 生效的上限：模拟客户端的上游用它自己发的那个数，不是客户端要的那个。
 // Qoder 固定发 32000，客户端传 4096 也没用（见 lib/qoder/models.ts）。
 check(

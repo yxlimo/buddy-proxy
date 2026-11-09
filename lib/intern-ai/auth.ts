@@ -132,6 +132,13 @@ export type InternAiErrorKind =
 export class InternAiError extends Error {
   kind: InternAiErrorKind;
   status: number;
+  /**
+   * 上游说多久之后再来（毫秒）；没说就是 null。
+   *
+   * 429 会带这个头，而 classify 只看得到状态码与正文。额度用它算「什么时候
+   * 恢复」：平台默认的冷却时长与上游说的可能差很远。
+   */
+  retryAfterMs: number | null = null;
 
   constructor(kind: InternAiErrorKind, message: string, status = 502) {
     super(message);
@@ -589,7 +596,7 @@ export function internAiStatus(providerId = "intern-ai"): Record<string, unknown
     source: sessionId(providerId),
     status: key ? "authenticated" : "missing",
     fingerprint: key ? tokenFingerprint(key) : "",
-    detail: key ? "Discovery 的推理 key" : "账号上没有 Discovery 推理 key，登录后网关会建一把",
+    detail: key ? "Discovery 的推理 key" : "账号上没有 Discovery 推理 key，请在面板上填一把",
     sessionStatus: !session ? "anonymous" : remainingMs > 0 ? "authenticated" : "expired",
     username: session?.username ?? stored?.user ?? "",
     sites: session?.sites.map((s) => s.name).join(", ") ?? "",

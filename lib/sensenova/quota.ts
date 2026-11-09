@@ -26,6 +26,7 @@
 // 所以「还剩多少」要分开看：周期积分看两个窗口的较小值，活动积分单独算。
 
 import { consoleApi } from "./platform.ts";
+import { SENSENOVA_PLATFORM_BASE } from "./config.ts";
 import type { SenseNovaSession } from "./auth.ts";
 
 /** 一个滚动窗口。 */
@@ -221,9 +222,17 @@ export function modelIdsOf(pools: SenseNovaPool[]): string[] {
   return [...seen];
 }
 
-/** 查一次额度。 */
-export async function poolUsage(session: SenseNovaSession): Promise<SenseNovaPoolUsage> {
-  const body = await consoleApi<any>("/console/v1/tokenplan/pool-usage", session);
+/**
+ * 查一次额度。
+ *
+ * endpointBase 是控制台那一台的根：平台行把地址指到了别处时，调用方换成那一台
+ * （主机名换掉，路径、鉴权、超时都不动）。
+ */
+export async function poolUsage(
+  session: SenseNovaSession,
+  endpointBase: string = SENSENOVA_PLATFORM_BASE,
+): Promise<SenseNovaPoolUsage> {
+  const body = await consoleApi<any>("/console/v1/tokenplan/pool-usage", session, { base: endpointBase });
   return parsePoolUsage(body);
 }
 

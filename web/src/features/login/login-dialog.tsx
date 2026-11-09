@@ -29,9 +29,9 @@ import {
   useLoginStatus,
   useLoginWithPassword,
 } from '@/features/login/api'
-import { accountKeys } from '@/features/accounts/api'
-import { upstreamKeys, useUpstreams } from '@/features/upstreams/api'
+import { useUpstreams } from '@/features/upstreams/api'
 import { humanMessage } from '@/lib/errors'
+import { invalidateServerData } from '@/lib/server-data'
 import { formatCountdown } from '@/lib/format'
 
 type LoginDialogProps = {
@@ -70,7 +70,7 @@ export function LoginDialog({
   // 登录成功只说一次。
   const announced = useRef('')
 
-  // 成了：关掉对话框，说一声，刷新账号列表。
+  // 成了：关掉对话框，说一声，把凭据那几摊重新取一遍。
   useEffect(() => {
     if (session?.status !== 'approved') return
     // 「说一声」只说一次；关对话框每次都要做（同一个会话可能被重新打开）。
@@ -78,9 +78,8 @@ export function LoginDialog({
       announced.current = session.loginId
       toast.success(humanMessage(session.message) || '登录完成。')
     }
-    void queryClient.invalidateQueries({ queryKey: accountKeys.all })
-    // 登录好了，上游的状态就变了（从「没登录」变成「就绪」），重取一下。
-    void queryClient.invalidateQueries({ queryKey: upstreamKeys.all })
+    // 登录好了，账号那一行与平台的状态都变了（从「没登录」变成「就绪」）。
+    invalidateServerData(queryClient, 'credentials')
     onOpenChange(false)
   }, [session?.status, session?.loginId, session?.message, onOpenChange, queryClient])
 
@@ -98,13 +97,13 @@ export function LoginDialog({
             <LogIn className='size-4' />
             {title}
           </DialogTitle>
-          <DialogDescription>
-            {/* 还在进行中时，这句话是「下一步该干什么」；结束了的话，结果块
-                里已经有一句结果了，这里别重复。 */}
-            {session && session.status === 'pending'
-              ? humanMessage(session.message)
-              : '本次登录的状态。'}
-          </DialogDescription>
+          {/* 还在进行中时，这句话是「下一步该干什么」；结束了的话，结果块
+              里已经有一句结果了，这里就不说。 */}
+          {session && session.status === 'pending' ? (
+            <DialogDescription>
+              {humanMessage(session.message)}
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
 
         {!session && status.isPending ? (
@@ -417,7 +416,7 @@ function PasswordForm({
             checked={remember}
             onCheckedChange={(checked) => setRemember(checked === true)}
           />
-          记住密码吗（记住的话密码会存进网关的 secrets）
+          记住密码吗（密码会保存在网关上）
         </label>
       ) : null}
       <Button type='submit' disabled={login.isPending} className='w-fit'>
@@ -478,7 +477,7 @@ function TokenForm({
             2. 登录完成后，在同一浏览器中按 F12 打开开发者工具 → Application
             （或 Storage）→ Cookies，找到 uaa-token 并复制其值。
           </li>
-          <li>3. 将该值粘贴到下方，点击「导入」。</li>
+          <li>3. 将该值粘贴到下方，点击「导入 token」。</li>
         </ol>
       </div>
 
@@ -498,7 +497,7 @@ function TokenForm({
         ) : (
           <KeyRound />
         )}
-        导入
+        导入 token
       </Button>
     </form>
   )
@@ -556,7 +555,7 @@ function CodeForm({
         ) : (
           <KeyRound />
         )}
-        换凭据
+        登录
       </Button>
     </form>
   )

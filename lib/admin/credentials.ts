@@ -9,7 +9,217 @@
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { writeQiniuAccount } from "../qiniu/account.ts";
 import { writeXinghuoKey } from "../xinghuo/account.ts";
-import { providerKindOf } from "../providers.ts";
+import { writeOpenPlatformKey } from "../open-platform-credentials.ts";
+import { writeSenseNovaKey } from "../sensenova/keys.ts";
+import { writeInternAiKeys } from "../intern-ai/keys.ts";
+import { writeTokenRhythmKey } from "../tokenrhythm/keys.ts";
+import { quotaPluginOf } from "../quota-plugins.ts";
+import { writePluginField } from "../quota-plugin-credentials.ts";
+import { openPlatformOf, OPEN_PLATFORM_KIND_NAME, type OpenPlatformRow } from "../open-platforms.ts";
+import { isSimulatedClientKind } from "../platform-catalog.ts";
+import { platformOfAny } from "../platforms.ts";
+import { provider, providerKindOf } from "../providers.ts";
+// 失败的机器码与排查用的事实。文案在面板那一侧。
+import type { AdminResult } from "./error-codes.ts";
+
+/**
+ * 这个账号是不是开放平台的账号。
+ *
+ * 开放平台是用户自己加的平台（表里的那一行）。模拟客户端那一族也有平台行，但
+ * 它们靠登录拿会话，不归“填几格 key”这一档 —— 按 kind 分开。
+ *
+ * 有自己那一类凭据形状的开放平台不算「开放平台」这一档：七牛云要两段（推理
+ * key 与门户 cookie），书生·端砚要两段，其余三家各一把。它们凭 kind 分流到
+ * 各自的那一档去 —— 这一档（通用开放平台）是一把推理 key 加额度插件要的那几
+ * 段，段数与位置都不一样。
+ */
+export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null {
+  const row = provider(accountId);
+  if (!row) return null;
+  const open = openPlatformOf(row.platform);
+  if (!open) return null;
+  if (isSimulatedClientKind(open.kind)) return null;
+  return GENERIC_OPEN_PLATFORM_KINDS.has(open.kind) ? open : null;
+}
+
+/**
+ * 凭据形状是「一把推理 key，加上额度插件要的那几段」的那几类开放平台。
+ *
+ * openai 与 anthropic 只差报文方言，凭据完全一样（同一把 x-api-key），所以
+ * 它们走同一档，各写一份就是两份知识。名字分别住在 lib/kinds/openai.ts 与
+ * lib/kinds/anthropic.ts；这里写成字面量是因为那一层会把转发层（lib/router/）
+ * 拖进来，反过来引它就成了环。
+ */
+const GENERIC_OPEN_PLATFORM_KINDS: ReadonlySet<string> = new Set([
+  OPEN_PLATFORM_KIND_NAME,
+  "anthropic",
+]);
+
+/**
+ * 这个账号（或那个平台）属于哪一类上游。
+ *
+ * 账号行说了算；账号行不在（面板上拿到的是平台 id）就按平台 id 认 —— 第一个
+ * 账号的 id 就是平台 id，这一路不是猜类别，是查平台。
+ */
+function kindNameOf(upstreamId: string): string {
+  return providerKindOf(upstreamId)?.kind ?? platformOfAny(upstreamId)?.kind ?? "";
+}
+
+/**
+ * 写一个账号的 API Key 列表。
+ *
+ * upstreamId 是账号行的 id：key 挂在账号下面，同一个平台下有两个账号时各写
+ * 各的。
+ *
+ * 七牛云：推理用的 API key 与门户 cookie 两段。讯飞星火：一把推理用的 key。
+ * 开放平台：一把推理用的 API key（位置就是第一个），后面几把按平台所选额度
+ * 插件的 fields 顺序，一段一段写进插件要的那个位置。
+ *
+ * SenseNova：一把推理用的 key。书生·端砚：两把（Discovery 与 Chat）。TokenRhythm：
+ * 一把推理用的 key。它们的位置都是顺序：第一把是推理用的 key，空的那把表示
+ * 清掉它（与七牛云、讯飞星火一个意思）。
+ *
+ * 只改 key 那一格：账号、密码、会话原样留着（把它们清掉等于把登录态清了）。
+ *
+ * MiniMax Code 网关不收 key：它用登录的会话，套餐额度也跟着会话走。
+ *
+ * key 写在账号自己名下：面板写什么就是什么，环境变量不参与（它会在每次读的
+ * 时候把自己写回数据库，删掉的账号转眼又有一把 key）。
+ */
+export function setProviderKeys(
+  upstreamId: string,
+  keys: string[],
+): AdminResult & { count: number } {
+  // 开放平台的账号：第一把是推理用的 API key（空的那把表示清掉它），后面几把
+  // 是额度插件要的那几段。这条先判：它看的是账号属于哪个平台，比「哪一类
+  // 上游」更具体。
+  const openPlatform = openPlatformOfAccount(upstreamId);
+  if (openPlatform) {
+    const plugin = quotaPluginOf(openPlatform.quotaPlugin?.trim() ?? "");
+    const fields = plugin?.fields ?? [];
+    // 数组比「推理 key + 插件要的那几段」短，说明调用方不知道这个插件要几段
+    // （面板的插件登记表没到手时就会这样）。按位置写下去，缺的那几段会被当成
+    // 空串清掉 —— 那是静默丢凭据。所以先判长度：不够就整单不改，不留半截。
+    if (keys.length < 1 + fields.length) {
+      return {
+        ok: false,
+        code: "ACCOUNT_KEY_COUNT_SHORT",
+        message:
+          `platform ${openPlatform.id} takes ${1 + fields.length} keys (1 inference key + ${fields.length} plugin fields), got ${keys.length}: nothing written`,
+        count: 0,
+      };
+    }
+    // 位置就是顺序：第一把是推理用的 API key（它有自己的位置 :key），后面几把
+    // 按平台所选插件的 fields 顺序，一段一段写进插件要的那个位置。空的那段表示
+    // 清掉它（面板上重填一次就是替换的意思）。
+    const apiKey = String(keys[0] ?? "").trim();
+    let count = writeOpenPlatformKey(upstreamId, apiKey);
+    const parts: string[] = [];
+    if (apiKey) parts.push("API key");
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      if (writePluginField(upstreamId, field.name, String(keys[i + 1] ?? "").trim())) {
+        count++;
+        parts.push(field.label);
+      }
+    }
+    // 平台没选插件（或插件没登记）却给了多于一把 key：多的那些没地方去，忽略
+    // 掉，不报错 —— 用户可能刚改完插件，拦下来反而让人存不下去。
+    let message = parts.length
+      ? `已保存${openPlatform.label}的 ${parts.join(" 与 ")}`
+      : fields.length
+        ? `已清除${openPlatform.label}的凭据`
+        : `已清除${openPlatform.label}的 API key`;
+    if (keys.length > 1 + fields.length) {
+      message += plugin ? "（多余的 key 未保存）" : "（这个平台没有额度插件，多余的 key 未保存）";
+    }
+    return { ok: true, message, count };
+  }
+  const kind = kindNameOf(upstreamId);
+  if (kind === "minimax") {
+    // Code 网关只用会话：额度也走会话，没有要贴的 key。
+    return {
+      ok: false,
+      code: "ACCOUNT_TAKES_NO_KEY",
+      message: `account ${upstreamId} is ${kind}: it logs in, there is no key to write`,
+      count: 0,
+    };
+  }
+  if (kind === "qiniu") {
+    // 七牛云的凭据有两段：推理用的 API key 与门户 cookie（额度只认 cookie）。
+    // 位置就是顺序：第一段是 key，第二段是 cookie。空的那段表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const portalCookie = String(keys[1] ?? "").trim();
+    const count = writeQiniuAccount(upstreamId, { apiKey, portalCookie });
+    const message =
+      count === 0
+        ? "已清除七牛云的凭据"
+        : count === 2
+          ? "已保存 API key 与门户 cookie"
+          : apiKey
+            ? "只保存了 API key（无法查询额度）"
+            : "只保存了门户 cookie（无法推理）";
+    return { ok: true, message, count };
+  }
+  if (kind === "xinghuo") {
+    // 讯飞星火只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const count = writeXinghuoKey(upstreamId, apiKey);
+    return {
+      ok: true,
+      message: count ? "已保存讯飞星火的 API key" : "已清除讯飞星火的 API key",
+      count,
+    };
+  }
+  if (kind === "sensenova") {
+    // SenseNova 只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const count = writeSenseNovaKey(upstreamId, apiKey);
+    return {
+      ok: true,
+      message: count ? "已保存 SenseNova 的 API key" : "已清除 SenseNova 的 API key",
+      count,
+    };
+  }
+  if (kind === "intern-ai") {
+    // 书生·端砚两把：位置 0 是 Discovery 的，位置 1 是 Chat 的。空的那把表示
+    // 清掉它 —— Chat 的那把留着空不算错（网关推理走的是 Discovery）。
+    const discoveryKey = String(keys[0] ?? "").trim();
+    const chatKey = String(keys[1] ?? "").trim();
+    const count = writeInternAiKeys(upstreamId, { discoveryKey, chatKey });
+    const parts: string[] = [];
+    if (discoveryKey) parts.push("Discovery key");
+    if (chatKey) parts.push("Chat key");
+    const message = parts.length
+      ? `已保存书生·端砚的 ${parts.join(" 与 ")}`
+      : "已清除书生·端砚的推理 key";
+    return { ok: true, message, count };
+  }
+  if (kind === "tokenrhythm") {
+    // TokenRhythm 只有一把推理用的 key：位置就是第一个。空的那把表示清掉它。
+    const apiKey = String(keys[0] ?? "").trim();
+    const count = writeTokenRhythmKey(upstreamId, apiKey);
+    return {
+      ok: true,
+      message: count ? "已保存 TokenRhythm 的 API key" : "已清除 TokenRhythm 的 API key",
+      count,
+    };
+  }
+  // 别的平台没有「贴一把 key」这一步：它们的凭据各有各的形状。
+  //
+  // 分两种说：账号行不在（多半是面板拿了个别的 id）与账号在、但这一类不收 key。
+  // 混成一句话的话，面板只能显示一句「这个平台不接受」，而真正的原因是「没有
+  // 这个账号」。
+  const row = provider(upstreamId);
+  return row
+    ? {
+        ok: false,
+        code: "ACCOUNT_TAKES_NO_KEY",
+        message: `account ${upstreamId} is ${row.kind}: it has no api key to write`,
+        count: 0,
+      }
+    : { ok: false, code: "ACCOUNT_NOT_FOUND", message: `no account ${upstreamId}`, count: 0 };
+}
 
 /**
  * 上游报的状态 → 契约里的枚举。
@@ -20,62 +230,6 @@ import { providerKindOf } from "../providers.ts";
  * `fromUpstreamStatus` 那里单独判的。这里的 anonymous 是「有凭据，但还没
  * 过期」—— 账号密码型上游（TokenRhythm）的常态。
  */
-/**
- * 写一个账号的 API Key 列表。
- *
- * upstreamId 是账号行的 id：key 挂在账号下面，同一个平台下有两个账号时各写
- * 各的。
- *
- * 七牛云：推理用的 API key 与门户 cookie 两段。讯飞星火：一把推理用的 key。
- *
- * MiniMax Code 网关不收 key：它用登录的会话，套餐额度也跟着会话走。
- *
- * key 写在账号自己名下：面板写什么就是什么，环境变量不参与（它会在每次读的
- * 时候把自己写回数据库，删掉的账号转眼又有一把 key）。
- */
-export function setProviderKeys(
-  upstreamId: string,
-  keys: string[],
-): { ok: boolean; message: string; count: number } {
-  const kind = providerKindOf(upstreamId);
-  if (kind?.kind === "minimax" || upstreamId === "minimax") {
-    // Code 网关只用会话：额度也走会话，没有要贴的 key。
-    return {
-      ok: false,
-      message: "MiniMax Code 用登录的会话，不用 key（套餐额度也跟着会话走）。",
-      count: 0,
-    };
-  }
-  if (kind?.kind === "qiniu" || upstreamId === "qiniu") {
-    // 七牛云的凭据有两段：推理用的 API key 与门户 cookie（额度只认 cookie）。
-    // 位置就是顺序：第一段是 key，第二段是 cookie。空的那段表示清掉它。
-    const apiKey = String(keys[0] ?? "").trim();
-    const portalCookie = String(keys[1] ?? "").trim();
-    const count = writeQiniuAccount(upstreamId, { apiKey, portalCookie });
-    const message =
-      count === 0
-        ? "清掉了七牛云的凭据"
-        : count === 2
-          ? "写了 API key 与门户 cookie"
-          : apiKey
-            ? "只写了 API key（查不了额度）"
-            : "只写了门户 cookie（不能推理）";
-    return { ok: true, message, count };
-  }
-  if (kind?.kind === "xinghuo" || upstreamId === "xinghuo") {
-    // 讯飞星火只有一把推理用的 API key：位置就是第一个。空的那把表示清掉它。
-    const apiKey = String(keys[0] ?? "").trim();
-    const count = writeXinghuoKey(upstreamId, apiKey);
-    return {
-      ok: true,
-      message: count ? "写了讯飞星火的 API key" : "清掉了讯飞星火的 API key",
-      count,
-    };
-  }
-  // 别的平台没有「贴一把 key」这一步：它们的凭据各有各的形状。
-  return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
-}
-
 export function credentialState(status: string): CredentialState {
   switch (status) {
     case "authenticated":

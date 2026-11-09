@@ -512,6 +512,9 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
         BENEFITS_DISABLED: "1",
         // 定时器关着：不换令牌、不签到、不扫余额 —— 自测不碰任何平台。
         PERIODIC_ENABLED: "false",
+        // 重试的总时限：自测不能真等三分钟（生产是 180 秒，见
+        // lib/router/upstreams/policy.ts 的 ATTEMPT_BUDGET_MS）。
+        ROUTER_RETRY_BUDGET_MS: "10000",
         ...options.env,
         BUDDY_DATA_DIR: dataDir,
         ROUTER_PORT: String(port),

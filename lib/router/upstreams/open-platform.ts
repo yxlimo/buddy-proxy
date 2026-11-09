@@ -5,13 +5,58 @@
 // made — so the difference is passed in.
 
 import type Koa from "koa";
-import { anthropicToOpenAI } from "../../dialect/request.ts";
+import { randomUUID } from "node:crypto";
+import { AuthError } from "../../credential.ts";
+import { anthropicToOpenAI, openaiToAnthropic } from "../../dialect/request.ts";
 import { senseNovaChat } from "../../sensenova/transport.ts";
 import { internAiChat } from "../../intern-ai/transport.ts";
-import { deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
+import { ClientGoneError, deliverAnthropicStream, deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
+import { runUnderClientGone } from "./client-gone.ts";
 import { type UpstreamContext, settlement, upstreamStatusError, underPolicy } from "./policy.ts";
+
+/**
+ * 归因头：这条上游请求是哪个账号发出的。
+ *
+ * 只给开放平台加。模拟客户端（Qoder、WorkBuddy、MiniMax Code、ZCode）的请求要
+ * 跟真桌面端逐字对齐 —— 多一个头就是在说「这条请求不是桌面端发的」。
+ *
+ * 两个头都不是凭据：request id 每次尝试新生成，账号 id 是内部的数字 id。
+ */
+export const REQUEST_ID_HEADER = "x-request-id";
+export const ACCOUNT_ID_HEADER = "x-account-id";
+
+/**
+ * 一次上游尝试带的头：客户端的会话头，加上归因的那两个。
+ *
+ * 归因头放在后面：客户端就算发了同名的头也顶不掉它们 —— 顶掉了，日志就认不出
+ * 这条请求是网关发的还是客户端自己编的。
+ *
+ * 导出：TokenRhythm 走自己的上游实现（同目录的 tokenrhythm.ts），归因头是同一
+ * 件事，不能那边写一份。
+ */
+export function attributionHeaders(
+  clientHeaders: Record<string, string>,
+  requestId: string,
+  accountId: string,
+): Record<string, string> {  return {
+    ...clientHeaders,
+    [REQUEST_ID_HEADER]: requestId,
+    [ACCOUNT_ID_HEADER]: accountId,
+  };
+}
+
+/**
+ * 每次上游尝试一行：这一条请求在上游那边是哪个 id。
+ *
+ * 跟着 ctx.logRoute 走：它只在排查时要对号，常开就是给流量最大的一类平台每次
+ * 请求多打一行。前缀用 [ATTRIB] 而不是 [ROUTE]：grep 的时候要能一眼分出「按
+ * 开关打的归因行」与「策略打的选路行」。也不打 key。
+ */
+function logAttempt(tag: string, accountId: string, requestId: string, model: string): void {
+  console.log(`[ATTRIB] ${tag} account=${accountId} request=${requestId} model=${model}`);
+}
 
 /**
  * 开放平台的推理（OpenAI 方言）。
@@ -32,11 +77,13 @@ export async function toOpenAiPlatform(
     log: string;
     /** 错误提示里怎么称呼它（后面接「上游返回 …」）。 */
     what: string;
-    /** 推理怎么发；第二个参数是这个账号的 id（凭据按账号取）。 */
+    /** 推理怎么发；第二个参数是这个账号的 id（凭据按账号取），后面的
+     * 信号是「客户端走了」那个（交给 fetch）。 */
     chat: (
       openaiBody: Record<string, unknown>,
       headers: Record<string, string>,
       accountId: string,
+      signal?: AbortSignal,
     ) => Promise<Response>;
   },
 ): Promise<void> {
@@ -50,47 +97,320 @@ export async function toOpenAiPlatform(
 
   // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
   const settle = settlement();
-  const response = await underPolicy(
-    route.platform,
-    opts.log,
-    async (account) => {
-      const res = await opts.chat(openaiBody, ctx.clientHeaders, account.id);
-      if (res.ok) return res;
-      // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
-      // 记（onAttempt），这里只负责把错误造出来。
-      //
-      // 错误在这里造（而不是等 underPolicy 回来再造）：策略才知道这个失败等不
-      // 等得起 —— TPM 类限流等得起就自己等，重试同一个账号（见
-      // lib/router/upstreams/policy.ts 的 runWithRateWait）。上游说的
-      // retry-after 也在这里读出来挂到错误上。
-      const text = await res.text().catch(() => "");
-      throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res) ?? undefined);
-    },
-    settle,
-  );
-
-  if (!stream) {
-    const json = await response.json();
-    deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
-    settle.success();
-    return;
-  }
-
-  try {
-    await deliverOpenAIStream(
-      out,
-      response.body!,
-      dialect,
-      route.label ?? model,
-      undefined,
-      ctx.onUsage,
-      (e) => settle.failure(e),
+  // 客户端走了就把上游停掉：上游还在算就是在计费，账号还占着。非流式那条路
+  // 尤其要紧 —— 答复要等整个上游的答复读完才发出去，客户端正好在这中间走。
+  await runUnderClientGone(out, async (guard) => {
+    const response = await underPolicy(
+      route.platform,
+      opts.log,
+      async (account) => {
+        // 归因头在这里生成，不在函数开头：降级换了账号就是另一次尝试，上游那边是
+        // 另一条请求 —— 拿同一个 id 去问厂商会问出两件事。
+        const requestId = randomUUID();
+        if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
+        let res: Response;
+        try {
+          res = await opts.chat(
+            openaiBody,
+            attributionHeaders(ctx.clientHeaders, requestId, account.id),
+            account.id,
+            guard.signal,
+          );
+        } catch (e) {
+          // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却、
+          // 也不会换下一个账号再打一次
+          throw guard.fail(e) ?? e;
+        }
+        if (res.ok) return res;
+        // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。冷却由策略
+        // 记（onAttempt），这里只负责把错误造出来。
+        //
+        // 错误在这里造（而不是等 underPolicy 回来再造）：策略才知道这个失败等不
+        // 等得起 —— TPM 类限流等得起就自己等，重试同一个账号（见
+        // lib/router/upstreams/policy.ts 的 runWithRateWait）。上游说的
+        // retry-after 也在这里读出来挂到错误上。
+        const text = await res.text().catch(() => "");
+        // 客户端已经走了：这一次上游答的什么都不要了，也不能拿它给账号记一笔
+        // （读正文的这会儿正断也不罕见）
+        if (guard.gone()) throw new ClientGoneError();
+        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res, text) ?? undefined);
+      },
+      settle,
+      ctx.availability,
     );
-    settle.success();
-  } catch (e) {
-    settle.failure(e);
-    throw e;
+
+    if (!stream) {
+      let json: any;
+      try {
+        json = await response.json();
+      } catch (e) {
+        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
+        const gone = guard.fail(e);
+        if (gone) {
+          settle.failure(gone);
+          throw gone;
+        }
+        throw e;
+      }
+      deliverJson(out, dialect, "openai", json, route.label ?? model, ctx.onUsage);
+      settle.success();
+      return;
+    }
+    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
+    // lib/router/deliver.ts 的 replyState）。这里的看不盯了。
+    guard.done();
+
+    try {
+      await deliverOpenAIStream(
+        out,
+        response.body!,
+        dialect,
+        route.label ?? model,
+        undefined,
+        ctx.onUsage,
+        (e) => settle.failure(e),
+      );
+      settle.success();
+    } catch (e) {
+      settle.failure(e);
+      throw e;
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * 上游讲 Anthropic Messages 的开放平台
+ * ------------------------------------------------------------------ */
+
+/**
+ * 客户端没说输出上限时发给上游的那个数。
+ *
+ * Anthropic 的 Messages 报文要求必有 max_tokens，不填上游直接 400。这一类平台
+ * 的目录是空的（这一单不播种），所以没有「模型自己的上限」可问 —— 只能给一个
+ * 保守的数。宁可截短也不送一个把上游额度一次吃光的数。
+ */
+const ANTHROPIC_PLATFORM_DEFAULT_MAX_TOKENS = 8192;
+
+/** 上游要的那个协议版本头。换成别的日期，行为会跟着变。 */
+export const ANTHROPIC_VERSION = "2023-06-01";
+
+/**
+ * 流式答复中间的心跳间隔（毫秒）。
+ *
+ * 与 minimax 那一类同一个理由：上游长思考时一个字节都不发，客户端会以为连接
+ * 死了（有的客户端会自己重连，等于再送一份请求出去）。0 是关掉心跳 —— 这里
+ * 不能关，这条路上游真的会停下来想很久。
+ */
+const PING_MS = 15_000;
+
+/**
+ * 推理地址：`{base}/v1/messages`。
+ *
+ * 用户填的 base 里可能已经带了 `/v1`（面板上照着 OpenAI 那一类填的，那边就是
+ * `…/v1`）。直接拼会拼出 `/v1/v1/messages`，所以先看最后一段。
+ *
+ * 地址是平台行上的数据，写入时校验过一次（lib/open-platforms.ts 的
+ * checkBaseUrl），但库里可能有更早写下的行 —— 出去之前再判一次协议：只许
+ * http/https，别的协议一个请求也不发。
+ */
+function anthropicMessagesUrl(base: string): string {
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    throw new AuthError(
+      "the platform has no usable base url",
+      `这个平台的地址不是完整的网址（${base}），发不出请求。在面板上改一下地址。`,
+      500,
+    );
   }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new AuthError(
+      "the platform base url is not http(s)",
+      `这个平台的地址只能走 http 或 https（现在是 ${url.protocol}），请求不会发出去。`,
+      500,
+    );
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  url.pathname = path.endsWith("/v1") ? `${path}/messages` : `${path}/v1/messages`;
+  return url.toString();
+}
+
+/**
+ * 发一个请求到 Anthropic 兼容的推理端点。
+ *
+ * 鉴权按 Anthropic 的约定：`x-api-key` 加上 `anthropic-version`，**不是**
+ * `Authorization: Bearer`。发错了上游回的是鉴权失败，看着像 key 不对，其实
+ * 是头不对。
+ *
+ * `signal` 是「客户端走了」那个信号：给了就交给 fetch，客户端走了就把这条
+ * 上游请求停掉（上游还在算就是在计费）。
+ */
+export async function anthropicPlatformChat(
+  platform: { id: string; label: string; base: string; key: string },
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
+): Promise<Response> {
+  if (!platform.key) {
+    throw new AuthError(
+      `${platform.id} has no inference key`,
+      `${platform.label} 账号上没有推理用的 API key。请在面板上填一把。`,
+      500,
+    );
+  }
+  const endpoint = anthropicMessagesUrl(platform.base);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      // 客户端的会话头先放，鉴权与内容类型后放：会话头能跟着过去，但不能把
+      // 这三样顶掉（顶掉了这把 key 就白配了）。
+      ...extraHeaders,
+      "content-type": "application/json",
+      "x-api-key": platform.key,
+      "anthropic-version": ANTHROPIC_VERSION,
+      Accept: body.stream ? "text/event-stream" : "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; buddy-proxy)",
+    },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok && response.status === 401) {
+    // 401 是**这个账号**接不了：必须带上上游的状态码，策略层才看得见（能降级
+    // 的换下一个账号，single 的记冷却，面板上那个账号才显示不可用）。
+    //
+    // 不带上就会读成「上游 502」（AuthError 的 status 是给客户端看的那个数），
+    // 而 5xx 不算账号的错：冷却不记，面板上这个账号一直写着可用。
+    const text = await response.text().catch(() => "");
+    // 客户端已经走了：这一次答的是 401 也不再重要 —— 拿它报出去会变成一笔
+    // 凭据被拒的账，而客户端连这个答复都没要
+    if (signal?.aborted) throw new ClientGoneError();
+    throw upstreamStatusError(401, text, `${platform.label} `);
+  }
+  return response;
+}
+
+/**
+ * 开放平台的推理（Anthropic 方言）。
+ *
+ * 与 toOpenAiPlatform 是一对：那边上游讲 OpenAI，这边上游讲 Anthropic
+ * Messages。转的只有请求与答复的形状 —— 冷却、降级、限流等待、结算全都走同一
+ * 套（underPolicy / settlement / upstreamStatusError / retryAfterMs）。
+ *
+ * 下游本来就是 anthropic 时请求原样发：多转一次会把 system、cache_control
+ * 这些 Anthropic 自己的东西转丢，而上游其实认得它们。
+ */
+export async function toAnthropicPlatform(
+  ctx: UpstreamContext,
+  body: Record<string, unknown>,
+  route: Route,
+  dialect: Dialect,
+  stream: boolean,
+  out: Koa.Context,
+  opts: {
+    /** 路由日志里的名字。 */
+    log: string;
+    /** 错误提示里怎么称呼它（后面接「上游返回 …」）。 */
+    what: string;
+    /** 推理怎么发；第三个参数是这个账号的 id（凭据按账号取），后面的
+     * 信号是「客户端走了」那个（交给 fetch）。 */
+    chat: (
+      anthropicBody: Record<string, unknown>,
+      headers: Record<string, string>,
+      accountId: string,
+      signal?: AbortSignal,
+    ) => Promise<Response>;
+  },
+): Promise<void> {
+  const anthropicBody: Record<string, unknown> =
+    dialect === "anthropic"
+      ? { ...body }
+      : (openaiToAnthropic(body, ANTHROPIC_PLATFORM_DEFAULT_MAX_TOKENS) as Record<string, unknown>);
+  const model = upstreamModel(route);
+  anthropicBody.model = model;
+  anthropicBody.stream = stream;
+  // 生效上限：客户端给了就是它的，没给才是上面那个默认值。日志拿它算用掉多少。
+  if (typeof anthropicBody.max_tokens === "number") ctx.upstreamMaxTokens = anthropicBody.max_tokens;
+  if (ctx.logRoute) {
+    console.log(`[ROUTE] ${opts.log} model=${route.model} stream=${stream}`);
+  }
+
+  // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
+  const settle = settlement();
+  // 客户端走了就把上游停掉：上游还在算就是在计费，账号还占着。非流式那条路
+  // 尤其要紧 —— 答复要等整个上游的答复读完才发出去，客户端正好在这中间走。
+  await runUnderClientGone(out, async (guard) => {
+    const response = await underPolicy(
+      route.platform,
+      opts.log,
+      async (account) => {
+        // 同上：每次尝试一个新的 request id，账号 id 就是这次真正发请求的那个。
+        const requestId = randomUUID();
+        if (ctx.logRoute) logAttempt(opts.log, account.id, requestId, route.model);
+        let res: Response;
+        try {
+          res = await opts.chat(
+            anthropicBody,
+            attributionHeaders(ctx.clientHeaders, requestId, account.id),
+            account.id,
+            guard.signal,
+          );
+        } catch (e) {
+          // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却、
+          // 也不会换下一个账号再打一次
+          throw guard.fail(e) ?? e;
+        }
+        if (res.ok) return res;
+        // 上游拒了：那是账号的失败（能降级的才记冷却），不是答复到手。错误在这里
+        // 造出来，策略才看得到上游的状态与 retry-after。
+        const text = await res.text().catch(() => "");
+        // 客户端已经走了：这一次上游答的什么都不要了，也不能拿它给账号记一笔
+        // （读正文的这会儿正断也不罕见）
+        if (guard.gone()) throw new ClientGoneError();
+        throw upstreamStatusError(res.status, text, opts.what, retryAfterMs(res, text) ?? undefined);
+      },
+      settle,
+      ctx.availability,
+    );
+
+    if (!stream) {
+      let json: any;
+      try {
+        json = await response.json();
+      } catch (e) {
+        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
+        const gone = guard.fail(e);
+        if (gone) {
+          settle.failure(gone);
+          throw gone;
+        }
+        throw e;
+      }
+      deliverJson(out, dialect, "anthropic", json, route.label ?? model, ctx.onUsage);
+      settle.success();
+      return;
+    }
+    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
+    // lib/router/deliver.ts 的 replyState）。这里的看不盯了。
+    guard.done();
+
+    try {
+      await deliverAnthropicStream(
+        out,
+        response.body!,
+        dialect,
+        route.label ?? model,
+        PING_MS,
+        ctx.onUsage,
+        (e) => settle.failure(e),
+      );
+      settle.success();
+    } catch (e) {
+      // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
+      settle.failure(e);
+      throw e;
+    }
+  });
 }
 
 /**
@@ -113,7 +433,7 @@ export async function toSenseNova(
   await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
     log: "sensenova",
     what: "SenseNova ",
-    chat: (openaiBody, headers, accountId) => senseNovaChat(openaiBody, accountId, headers),
+    chat: (openaiBody, headers, accountId, signal) => senseNovaChat(openaiBody, accountId, headers, signal),
   });
 }
 
@@ -133,6 +453,6 @@ export async function toInternAi(
   await toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
     log: "intern-ai",
     what: "书生·端砚",
-    chat: (openaiBody, headers, accountId) => internAiChat(openaiBody, accountId, headers),
+    chat: (openaiBody, headers, accountId, signal) => internAiChat(openaiBody, accountId, headers, signal),
   });
 }

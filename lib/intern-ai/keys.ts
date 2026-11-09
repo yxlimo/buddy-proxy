@@ -18,8 +18,8 @@
 // 两条都要紧的规矩：
 //
 //   完整的 key 只在创建的那一次回答里出现。Discovery 是在 data.key，Chat 是
-//   在 data.token.token（多套了一层）。列表里永远是掩码。所以建 key 的那个
-//   函数必须负责把它存起来。
+//   在 data.token.token（多套了一层）。列表里永远是掩码。所以账号要用的那把
+//   key 由用户自己在面板上填（见 writeInternAiKeys），网关不替人建。
 //
 //   建 key 要带幂等键。Discovery 的接口要求 `Idempotency-Key` 头；同一个键重
 //   发一次不会建出两把 key（-15109）。
@@ -28,16 +28,11 @@ import crypto from "node:crypto";
 import {
   INTERN_AI_CHAT_BASE,
   INTERN_AI_DISCOVERY_BASE,
-  internAiChatKey,
-  internAiDiscoveryKey,
 } from "./config.ts";
 import { consoleApi } from "./platform.ts";
 import { accountId, storedAccount, type InternAiSession } from "./auth.ts";
 import { setSecret } from "../store.ts";
 import type { PlatformKey, PlatformKeys } from "../platform-keys.ts";
-
-/** 两个子站的 key 各是什么。 */
-export type InternAiSiteName = "discovery" | "chat";
 
 /** Discovery（TokenPlan）的一把 key。 */
 export interface DiscoveryApiKey {
@@ -244,47 +239,38 @@ export async function deleteChatToken(session: InternAiSession, token: string, i
 }
 
 /**
- * 一个子站要用的推理 key。
+ * 写这个账号的两把推理 key。
  *
- * 谁优先：显式传进来的 > 数据库里这个账号自己的 > 平台新建的。
- * 换过的 key 得算数，所以前两种都算数；只有都没有的时候才去平台建一个，
- * 而且建完必须马上存——完整的 key 只在创建的那一次回答里出现。
+ * 位置 0 是 Discovery 的，位置 1 是 Chat 的。空的那把表示清掉它（与七牛云、
+ * 讯飞星火一个意思）。
+ *
+ * 只改 key 那两格：账号密码原样留着（把它们清掉等于把登录态清了）。
+ *
+ * 返回写进去的段数（0/1/2）：面板要按段报回写了什么。
  */
-export async function ensureApiKey(
-  session: InternAiSession,
-  site: InternAiSiteName,
-  token: string,
-  name: string,
-  current?: string | null,
-  providerId = "intern-ai",
-): Promise<string | null> {
+export function writeInternAiKeys(
+  providerId: string,
+  parts: { discoveryKey?: string; chatKey?: string },
+): number {
+  const discoveryKey = String(parts.discoveryKey ?? "").trim();
+  const chatKey = String(parts.chatKey ?? "").trim();
   const stored = storedAccount(providerId);
-  const existing =
-    current ?? (site === "discovery" ? internAiDiscoveryKey(stored?.discoveryKey) : internAiChatKey(stored?.chatKey));
-  if (existing) return existing;
-
-  let plain: string | undefined;
-  if (site === "discovery") {
-    const created = await createDiscoveryKey(session, token, name);
-    if (!created.plainKey) {
-      // -15108：平台建了 key 但不把完整值给回来。
-      throw new Error("平台创建了 key，但没有把完整的 key 交回来");
-    }
-    plain = created.plainKey;
-  } else {
-    const created = await createChatToken(session, token, name);
-    if (!created.plainToken) {
-      throw new Error("平台创建了 token，但没有把完整的 token 交回来");
-    }
-    plain = created.plainToken;
+  if (!discoveryKey && !chatKey) {
+    // 没有记录就没什么可清的：别凭空造一条只有空 key 的凭据。
+    if (!stored) return 0;
+    setSecret(accountId(providerId), "account", {
+      ...stored,
+      discoveryKey: null,
+      chatKey: null,
+    });
+    return 0;
   }
-
   setSecret(accountId(providerId), "account", {
-    ...stored,
-    ...(site === "discovery" ? { discoveryKey: plain } : { chatKey: plain }),
+    ...(stored ?? {}),
+    discoveryKey: discoveryKey || null,
+    chatKey: chatKey || null,
   });
-  console.log(`[INTERN-AI] ${site} 子站：新建了一把推理 key`);
-  return plain;
+  return (discoveryKey ? 1 : 0) + (chatKey ? 1 : 0);
 }
 
 /** 一把 key，换成三家平台共同的形状。 */
@@ -298,14 +284,11 @@ function toPlatformKey(key: DiscoveryApiKey): PlatformKey {
   };
 }
 
-/** 建 key 时用的名字。平台控制台上看得到这个名字。 */
-export const INTERN_AI_KEY_NAME = "buddy";
-
 /**
  * 书生·端砚 Discovery 子站的 key 管理，三家平台统一的形状。
  *
  * 平台的接口在实现里（那套 tokenplan api-keys）；这里只是把它包的形状换成
- * 三家一样的那种。面板还没做这个操作：现在只有网关自己在用 ensure。
+ * 三家一样的那种。面板还没做这个操作：现在只有探针在用。
  */
 export const internAiKeys: PlatformKeys<InternAiSession> = {
   what: "书生·端砚",
@@ -321,13 +304,4 @@ export const internAiKeys: PlatformKeys<InternAiSession> = {
   enable: async ({ session, token }, id) => {
     await enableDiscoveryKey(session, token ?? "", id);
   },
-  ensure: async ({ session, token, providerId }, current) =>
-    ensureApiKey(
-      session,
-      "discovery",
-      token ?? "",
-      INTERN_AI_KEY_NAME,
-      current ?? null,
-      providerId ?? "intern-ai",
-    ),
 };

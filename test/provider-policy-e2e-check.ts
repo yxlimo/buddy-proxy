@@ -34,6 +34,18 @@ const MODEL = "deepseek-v4.1-flash-1017";
 let pass = 0;
 let fail = 0;
 
+/** 账号 id 里可能有正则的元字符，拼进正则前先转义。 */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** 网关里那些账号的 id（按建出来的先后排）。断言用它们，别写死 id。 */
+function accountIds(gw: Gateway): string[] {
+  const ids = gw.accounts ?? [];
+  if (ids.length < 2) throw new Error(`账号 id 不齐：${ids.join(",")}`);
+  return ids;
+}
+
 function check(name: string, ok: boolean, detail = ""): void {
   if (ok) {
     pass++;
@@ -256,6 +268,26 @@ async function startGateway(): Promise<Gateway> {
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   );
+  // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：中转站那一行，
+  // 测试自己写进网关那个库。
+  seed
+    .prepare(
+      "INSERT OR IGNORE INTO platform " +
+        "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)",
+    )
+    .run(
+      "tokenrhythm",
+      "TokenRhythm",
+      `${inferenceBase}/v1`,
+      // 目录是上游那一份：路由要先有目录才接请求（这一行空着的话，请求会被
+      // 「目录还没拿到」挡掉，测的就不是换租户了）。
+      JSON.stringify({ items: ["deepseek-v4.1-flash-1017"], traits: {}, fetchedAt: 0 }),
+      "",
+      "tokenrhythm",
+      Date.now(),
+      Date.now(),
+    );
   const accounts: string[] = [];
   for (const index of [1, 2, 3]) {
     const made = await call(gw, "AddAccount", { platform: "tokenrhythm", alias: `中转站 ${index}` });
@@ -391,7 +423,10 @@ console.log("场景一：单一 —— 第一个账号接不了，不换");
     check("答复是第二个账号给的", String(after.body?.choices?.[0]?.message?.content ?? "").includes("tenant 2"), after.text.slice(0, 200));
     check(
       "日志里说了为什么换",
-      /account=tokenrhythm cannot serve it \([^)]*\), trying tokenrhythm-2/.test(gw.log()),
+      new RegExp(
+        `account=${escapeRegExp(accountIds(gw)[0])} cannot serve it \\([^)]*\\), ` +
+          `trying ${escapeRegExp(accountIds(gw)[1])}`,
+      ).test(gw.log()),
       gw.log().slice(-400),
     );
 
@@ -451,7 +486,10 @@ console.log("场景五：降级 —— 第一个账号没钱，换到下一个")
     check("答复是第二个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 2"), res.text.slice(0, 200));
     check(
       "日志里说了是没钱所以换",
-      /account=tokenrhythm cannot serve it \([^)]*(no-balance|quota)[^)]*\), trying tokenrhythm-2/.test(gw.log()),
+      new RegExp(
+        `account=${escapeRegExp(accountIds(gw)[0])} cannot serve it ` +
+          `\\([^)]*(no-balance|quota)[^)]*\\), trying ${escapeRegExp(accountIds(gw)[1])}`,
+      ).test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {
@@ -514,7 +552,10 @@ console.log("场景六之二：余额到期优先 —— 那个账号没钱时�
     check("答复是另一个账号给的", String(res.body?.choices?.[0]?.message?.content ?? "").includes("tenant 1"), res.text.slice(0, 200));
     check(
       "日志里说了余额不足所以重新扫描",
-      /account=tokenrhythm-2 cannot serve it \([^)]*(no-balance|quota)[^)]*\), rescanning the balances/.test(gw.log()),
+      new RegExp(
+        `account=${escapeRegExp(accountIds(gw)[1])} cannot serve it ` +
+          `\\([^)]*(no-balance|quota)[^)]*\\), rescanning the balances`,
+      ).test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {
@@ -630,8 +671,8 @@ if (panelBuilt && !browserSkipped) {
     check("策略选择器点开了", openedSelect.code === 0, openedSelect.out.slice(-200));
     const picked = await ab(browserSession, ["find", "role", "option", "click", "--name", "降级"]);
     check("选了「降级」", picked.code === 0, picked.out.slice(-200));
-    const toasted = await ab(browserSession, ["wait", "--text", "策略改成了降级"]);
-    check("面板说策略改好了", toasted.code === 0, toasted.out.slice(-200));
+    const toasted = await ab(browserSession, ["wait", "--text", "策略已改为降级"]);
+    check("面板说策略已改为降级", toasted.code === 0, toasted.out.slice(-200));
 
     const shown = await abRetry(browserSession, ["find", "role", "combobox", "text", "--name", "生效策略（tokenrhythm）"], 5);
     check("面板上显示的是降级", shown.out.includes("降级"), shown.out.slice(-200));

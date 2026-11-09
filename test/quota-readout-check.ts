@@ -2,13 +2,14 @@
 //
 //   node --experimental-strip-types test/quota-readout-check.ts
 //
-// 覆盖三件事：
+// 覆盖四件事：
 //
 //   1. MiniMax Code 的套餐额度用会话就能读（每个账号都有，不靠 plan key）；
 //   2. SenseNova 池子里的两种积分分开：30 天到期的是积分，5 小时重置的是
 //      套餐额度（按百分比）；
 //   3. ZCode 的额度接口要 X-Device-Mid 才答，而且上游会用 200 带业务码报
-//      「额度用尽」——那不是答复。
+//      「额度用尽」——那不是答复；
+//   4. 额度属于谁：平台 id、账号 id、账号名字由账号行定，kind 不自己拍。
 //
 // 上游那边是假的：本地起一个 HTTP 服务冒充开放平台与 ZCode。
 
@@ -205,10 +206,41 @@ const poolUsage = {
   ],
 };
 
-const quotas = senseNova?.quotas?.(
-  { id: "sensenova", kind: "sensenova", alias: "", region: "", enabled: true, policy: "single", createdAt: 0, updatedAt: 0 },
-  { sensenova: { sensenova: { pools: poolUsage } } } as any,
-) ?? [];
+// 额度是插件问回来的那一份结论：面板读的是快照的插件桶（插件 id → 账号 id）。
+// 这里用插件自己的翻译函数把答复摆成那一份 —— 与网关真跑一轮的结果同一个形状，
+// 下面的数字断言才是对着真口径的。
+const { senseNovaPoolsViews } = await import("../lib/sensenova/quota-plugin.ts");
+// 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
+// 测试自己造一行。
+const { insertVendorPlatform } = await import("./vendor-platform.ts");
+insertVendorPlatform("sensenova", "sensenova", { quotaPlugin: "sensenova-pools" });
+
+const SENSE_ROW = {
+  id: "sensenova",
+  platform: "sensenova",
+  kind: "sensenova",
+  alias: "",
+  region: "",
+  enabled: true,
+  weight: 100,
+  policy: "single",
+  createdAt: 0,
+  updatedAt: 0,
+} as any;
+const senseSnapshot = {
+  plugins: {
+    "sensenova-pools": {
+      [SENSE_ROW.id]: {
+        state: "ok",
+        views: senseNovaPoolsViews(SENSE_ROW, poolUsage as any),
+        recoverAt: null,
+        message: "",
+      },
+    },
+  },
+} as any;
+
+const quotas = senseNova?.quotas?.(SENSE_ROW, senseSnapshot) ?? [];
 
 const quota = quotas[0];
 check("有额度", quota !== undefined, JSON.stringify(quotas));
@@ -344,6 +376,86 @@ check(
   answer?.content?.[0]?.text === "ok",
   JSON.stringify(answer),
 );
+
+/* ------------------------------------------------------------------ *
+ * 四、额度属于谁：平台 id、账号 id、名字
+ *
+ * kind 只回答「这家平台怎么读快照」，归属是账号行的事（上游出口一处定下来）。
+ * 每个 kind 各写一遍迟早写错：2026-11-09 四个 kind 把平台 id 填成了账号 id，
+ * 面板把「8」当成上游，刷新额度问错了范围。这里的账号 id 故意不叫 minimax
+ * ——两个 id 长得一样时分不出是谁写错了。
+ * ------------------------------------------------------------------ */
+
+section("额度属于谁");
+
+const { store } = await import("../lib/store.ts");
+const { putHealthSnapshot } = await import("../lib/health-cache.ts");
+const { upstreamQuotas } = await import("../lib/admin/upstreams.ts");
+
+const identityNow = Date.now();
+store()
+  .prepare(
+    "INSERT INTO provider (id, platform, alias, enabled, weight, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?)",
+  )
+  .run("8", "minimax", "Token Plan", 100, identityNow, identityNow);
+
+putHealthSnapshot({
+  minimax: {
+    "8": {
+      credits: [
+        { granted: 100, remaining: 60, consumed: 40, expireAtMs: identityNow + 7 * 24 * 3600_000, creditType: 2 },
+      ],
+    },
+  },
+} as any);
+
+const ownership = (await upstreamQuotas("minimax")).find((view) => view.accountId === "8");
+check("这个账号有一份额度", Boolean(ownership), JSON.stringify(ownership));
+check("upstreamId 是平台 id", ownership?.upstreamId === "minimax", String(ownership?.upstreamId));
+check("accountId 是账号 id", ownership?.accountId === "8", String(ownership?.accountId));
+check("accountName 是账号行上的名字", ownership?.accountName === "Token Plan", String(ownership?.accountName));
+
+// 契约那一格：面板的卡片标题用它，没有名字才是空串。
+const { quotaMessage } = await import("../lib/admin/service.ts");
+const contracted = ownership ? quotaMessage(ownership) : null;
+check("契约里带着名字", contracted?.accountName === "Token Plan", String(contracted?.accountName));
+
+// 合并的那一步也要带上名字：同一个账号的两条（一条余额、一条积分）合成一条时，
+// 归属跟着第一条走。漏了这一格，面板上的账号卡片就只剩 id。
+const { mergeQuotas } = await import("../lib/admin/upstreams.ts");
+
+const mergedNamed = mergeQuotas([
+  {
+    upstreamId: "minimax",
+    accountId: "8",
+    accountName: "Token Plan",
+    balance: { availableCny: 10, currency: "CNY", lots: [], nextExpiryAt: 0, expiringCny: 0 },
+  },
+  {
+    upstreamId: "minimax",
+    accountId: "8",
+    accountName: "Token Plan",
+    credits: { total: 100, used: 40, remaining: 60, lots: [], note: "" },
+  },
+]);
+check("合并后带着名字", mergedNamed?.accountName === "Token Plan", String(mergedNamed?.accountName));
+check("合并后 upstreamId 取第一条", mergedNamed?.upstreamId === "minimax", String(mergedNamed?.upstreamId));
+check("合并后 accountId 取第一条", mergedNamed?.accountId === "8", String(mergedNamed?.accountId));
+
+// 没有名字就是空串：不编一个名字，也不借隔壁账号的名字。
+const mergedUnnamed = mergeQuotas([
+  {
+    upstreamId: "minimax",
+    accountId: "8",
+    balance: { availableCny: 10, currency: "CNY", lots: [], nextExpiryAt: 0, expiringCny: 0 },
+  },
+  {
+    upstreamId: "minimax",
+    accountId: "8",
+    credits: { total: 100, used: 40, remaining: 60, lots: [], note: "" },
+  },
+]);
+check("没有名字就是空串", mergedUnnamed?.accountName === "", JSON.stringify(mergedUnnamed?.accountName));
 
 fake.close();
 

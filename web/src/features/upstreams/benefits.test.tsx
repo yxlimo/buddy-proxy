@@ -8,7 +8,6 @@ import {
   GetBenefitStatusResponseSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
-  ListProviderKindsResponseSchema,
   ListUpstreamsResponseSchema,
   ProviderPolicy,
   RunBenefitNowResponseSchema,
@@ -109,8 +108,6 @@ function setup(options: Options = {}) {
           ]),
         ],
       }),
-    ListProviderKinds: () =>
-      create(ListProviderKindsResponseSchema, { kinds: [] }),
     ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
     ListCredentials: () =>
       create(ListCredentialsResponseSchema, { credentials: [] }),

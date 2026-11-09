@@ -247,7 +247,7 @@ console.log("场景一：503 与 400 —— 客户端拿到 503");
         ],
       },
     });
-    check("发布模型成功了", saved.body?.ok === true, JSON.stringify(saved.body));
+    check("发布模型成功了", saved.status === 200 && Boolean(saved.body?.id), JSON.stringify(saved.body));
 
     const answered = await ask(gw, "pub-mixed");
     check("客户端拿到 503", answered.status === 503, `${answered.status} ${answered.text.slice(0, 200)}`);
@@ -281,7 +281,7 @@ console.log("场景二：两个都是 4xx —— 客户端拿到第一个的错"
         ],
       },
     });
-    check("发布模型成功了", saved.body?.ok === true, JSON.stringify(saved.body));
+    check("发布模型成功了", saved.status === 200 && Boolean(saved.body?.id), JSON.stringify(saved.body));
 
     const answered = await ask(gw, "pub-both");
     check("客户端拿到 4xx", answered.status === 400, `${answered.status} ${answered.text.slice(0, 200)}`);
@@ -320,7 +320,7 @@ console.log("场景三：两个目标都失败 —— 提示里把每个目标�
         ],
       },
     });
-    check("发布模型成功了", saved.body?.ok === true, JSON.stringify(saved.body));
+    check("发布模型成功了", saved.status === 200 && Boolean(saved.body?.id), JSON.stringify(saved.body));
     // 这个模型答 429：额度用完（业务码 2053）。
     minimaxPlans = {
       [MODEL_B]: {
@@ -370,7 +370,7 @@ console.log("场景四：只有一个目标失败 —— 提示里不挂汇总")
         targets: [{ groupName: "minimax", upstreamModel: MODEL_A, weight: 1, enabled: true }],
       },
     });
-    check("发布模型成功了", saved.body?.ok === true, JSON.stringify(saved.body));
+    check("发布模型成功了", saved.status === 200 && Boolean(saved.body?.id), JSON.stringify(saved.body));
 
     const answered = await ask(gw, "pub-one");
     check("客户端拿到的是 400", answered.status === 400, `${answered.status} ${answered.text.slice(0, 200)}`);

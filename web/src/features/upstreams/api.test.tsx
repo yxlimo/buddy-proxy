@@ -137,11 +137,7 @@ describe('上游页的 hook', () => {
           platform: input.platform ?? '',
           alias: input.alias ?? '',
         })
-        return create(AddAccountResponseSchema, {
-          ok: true,
-          message: '加上了',
-          id: 'minimax-2',
-        })
+        return create(AddAccountResponseSchema, { id: 'minimax-2' })
       },
     })
 
@@ -172,7 +168,7 @@ describe('上游页的 hook', () => {
         create(ListUpstreamsResponseSchema, { upstreams: [platform()] }),
       AddAccount: (input) => {
         sent.push(input.alias ?? '')
-        return create(AddAccountResponseSchema, { ok: true, id: 'minimax-2' })
+        return create(AddAccountResponseSchema, { id: 'minimax-2' })
       },
     })
 
@@ -223,7 +219,7 @@ describe('上游页的 hook', () => {
         })
         return create(SetPlatformPolicyResponseSchema, {
           ok: true,
-          message: '策略改成了降级',
+          message: '策略已改为降级。',
         })
       },
     })

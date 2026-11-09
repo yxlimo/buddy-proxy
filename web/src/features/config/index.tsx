@@ -178,8 +178,8 @@ export function ConfigPage() {
   // 面板能改的那几个今天都是热的，但那是服务端的事。
   const pendingRestart = config.data?.pendingRestart ?? false
   const effectText = pendingRestart
-    ? '改动会写进数据库，改完要重启才生效。被环境变量挡着的那些，等环境变量撤了才生效。'
-    : '改动会写进数据库，改完立刻生效。'
+    ? '改动写进数据库，改完要重启才生效。'
+    : '改动写进数据库，改完立刻生效。'
 
   const save = async (key: string, value: string, clear: boolean) => {
     setBusy(true)
@@ -199,7 +199,7 @@ export function ConfigPage() {
   return (
     <PageShell
       title='配置'
-      description='各设置项当前生效的值，以及值的来源：环境变量、数据库覆盖或默认值。部署里钉住的（环境变量）说了算，面板写的值在库里等着。上游的开关在「上游」页。'
+      description='各设置项当前生效的值和值的来源。环境变量优先，部署里钉住的值面板改不动。'
     >
 
       {groups.length === 0 ? (
@@ -280,8 +280,7 @@ export function ConfigPage() {
                             item.overrideValue !== item.value ? (
                               // 面板写了、但环境变量在用：这份在库里等着。
                               <div className='text-xs text-muted-foreground'>
-                                面板里的值 {item.overrideValue}
-                                （环境变量在用，等它撤了才轮到这个）
+                                面板里的值 {item.overrideValue}（环境变量在用）
                               </div>
                             ) : null}
                           </TableCell>
@@ -366,7 +365,7 @@ export function ConfigPage() {
             />
             <p className='text-xs text-muted-foreground'>
               {editing?.secret
-                ? '该项的值不可读取（只写不读）。留空表示不修改，填写新值即可更新。'
+                ? '该项的值读不出来。留空表示不修改。'
                 : pendingRestart
                   ? '写入数据库后，重启才生效。'
                   : '写入数据库后立即生效。'}

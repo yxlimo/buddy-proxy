@@ -278,7 +278,7 @@ export async function workbuddyChat(
       );
       logUpstreamBody(res.status, detail);
       // 上游说的「过多久再试」：冷却到那时候为止（路由层看这个，不自己猜）。
-      const wait = retryAfterMs(res);
+      const wait = retryAfterMs(res, detail);
       if (wait !== null) withCooldownUntil(error, Date.now() + wait);
       throw error;
     }

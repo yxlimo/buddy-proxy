@@ -1,0 +1,8 @@
+{
+  "upstream": "https://tokenrhythm.studio/v1/models",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"data\":[{\"id\":\"deepseek-v4.1-flash-1017\"},{\"id\":\"synthetic-model-a\"},{\"id\":\"synthetic-model-b\"},{\"id\":\"synthetic-model-c\"}]}"
+}

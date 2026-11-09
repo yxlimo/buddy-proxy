@@ -1,6 +1,6 @@
 {
   "name": "buddy-proxy",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Ten model providers behind OpenAI and Anthropic compatible APIs",
   "packageManager": "pnpm@12.16.1",
   "type": "module",

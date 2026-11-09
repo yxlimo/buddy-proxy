@@ -8,11 +8,23 @@
 // quotas / outOfCredits / recoverAt。
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { catalogModelsFromRow } from "../catalog-models.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
+import { declareNoQuotaPlugin } from "../quota-plugins.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { xinghuoInferenceKey, xinghuoStatus } from "./account.ts";
 import { XINGHUO_INFER_BASE } from "./config.ts";
 import { XINGHUO_MODELS, xinghuoCatalogModels } from "./models.ts";
+
+/**
+ * 代码里那一份目录：元数据表的出处。
+ *
+ * 星火的 /v2/models 报得出来，但参数一个也不带（只有 id / object / created /
+ * owned_by / permission / root）：上下文长度与输出上限只有这张表里有。所以行里
+ * 的 id 去这里查，行里自己记着的参数优先。
+ */
+const CODE_CATALOG = xinghuoCatalogModels(XINGHUO_MODELS);
+const CODE_BY_ID = new Map(CODE_CATALOG.map((model) => [model.id, model]));
 
 export const xinghuoKind = registerCompatiblePlatform({
   kind: "xinghuo",
@@ -20,12 +32,23 @@ export const xinghuoKind = registerCompatiblePlatform({
   // 面板上填一把 key 就行：没有登录这一说。
   login: "api_key",
   baseUrl: () => XINGHUO_INFER_BASE,
+  // 这一类默认指哪台（地址是适配器自己的能力描述，不是平台清单）。
+  defaultBaseUrl: XINGHUO_INFER_BASE,
+  // 只有这一把 key：它既是推理凭据，也是这个账号唯一的凭据。
+  inferWith: "api_key",
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),
-  // 目录写死：星火没有可查的模型目录接口。
-  models: () => xinghuoCatalogModels(XINGHUO_MODELS),
+  // 目录是平台那一行说了算：行里的 id 与顺序就是公布的，元数据去代码表里查
+  // （行里记着的参数优先）。行读不到不退回代码目录：目录归上游之后，代码表只剩
+  // 「按 id 取元数据」这一个用途，拿它当目录会把上游没报的模型报出去。
+  models: (provider) => catalogModelsFromRow(provider, () => [], (id) => CODE_BY_ID.get(id)),
 });
 
 // 只有一把 API Key：没有会话，也没有额度接口要登。
 declareNoLoginFlow("xinghuo", "星火用 API Key，没有会话登录");
+
+// 星火没有额度接口：面板上那一格写的是「未知」，不是 0 —— 上游没有额度可问，
+// 说成 0 就是拿「没钱」去顶「没人问得到」。
+declareNoQuotaPlugin("xinghuo", "星火没有额度接口，面板上只能显示「未知」");
+

@@ -53,9 +53,9 @@ export const CREDENTIAL_STATE_LABELS: Record<CredentialState, string> = {
 export const UNPUBLISHED_REASON_LABELS: Record<UnpublishedReason, string> = {
   [UnpublishedReason.UNSPECIFIED]: '未公布',
   [UnpublishedReason.DISABLED]: '模型被停用了',
-  [UnpublishedReason.UPSTREAM_DISABLED]: '目标的上游关着',
-  [UnpublishedReason.NO_CREDENTIAL]: '目标的上游没登录',
-  [UnpublishedReason.MODEL_GONE]: '目标的上游不列这个模型了',
+  [UnpublishedReason.UPSTREAM_DISABLED]: '目标的平台关着',
+  [UnpublishedReason.NO_CREDENTIAL]: '目标的平台没登录',
+  [UnpublishedReason.MODEL_GONE]: '目标的平台不列这个模型了',
   [UnpublishedReason.TARGET_DISABLED]: '目标被停用了',
   [UnpublishedReason.NO_TARGET]: '没有能用的目标',
 }

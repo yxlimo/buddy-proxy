@@ -1,6 +1,11 @@
 // lib/router/account-cooldown.ts — 一次失败值多少冷却。
 //
-// 四类失败，四种冷却：
+// 记冷却的只有三类：限流、凭据被拒、额度见底。别的失败都不记 —— 它们说的
+// 不是「这个账号不能用了」。
+//
+// 前提：没有别的账号可换时不记（hasAlternative）。只有一个账号的平台记了冷却，
+// 那一段时间里它一个上游请求都不打，而客户端拿到的还是同一条报错 —— 什么也没
+// 换好，只是不打了。
 //
 //   限流（rate-limit：超了 RPM/TPM）
 //       固定 1 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来。
@@ -20,28 +25,60 @@
 //       额度是一次性的（等窗口），限流是分钟级的（等一分钟）—— 两者的等待
 //       不是一回事，所以分开算。
 //
-//   连接与超时（connection、timeout）
-//       固定 1 分钟。连接断掉不是账号的错 —— 一个只有单个账号的平台会被
-//       自己的超时下线好几分钟。上游自己说了「过多久再来」（retry-after），
-//       就照它说的来。
+//   凭据被拒与余额见底（credential、no-balance）
+//       固定 5 分钟；上游自己说了「过多久再来」（retry-after），就照它说的来
+//       —— 那时候一个短的等待是对的。套餐窗口说的是额度，跟这两类没关系，
+//       不参与。
 //
-//   别的可降级失败（server、credential、no-balance）
-//       固定 5 分钟；但上游自己说了「过多久再来」（retry-after），就照它说的
-//       来 —— 那时候一个短的等待是对的，套餐窗口跟服务挂了没关系。
+// 不记账的：
+//
+//   连接（connection）
+//       连接被上游掐断不是「这个账号不能用了」：同一个账号的下一个请求很可能
+//       就通了（上游抽了一下、复用的连接被断掉、中间的代理掐了）。
+//       记 1 分钟的话，只有一个账号的平台那一分钟里一个上游请求都不打 ——
+//       一次连接重置把整个平台下线一分钟，比这个故障本身还严重。
+//
+//   超时不记账（timeout）
+//       超时说的是「这一条请求等太久了」，不是「这个账号不能用了」。记冷却会
+//       把一个好好的账号挡在门外好几分钟，而这一条请求慢，换哪个账号都可能
+//       一样慢。答复照旧是那条超时错误，客户端自己决定要不要重发。
+//
+//   等过了自己的限流窗口（rateWaited 标记）
+//       也不记账：它接不了不是因为坏了，等好了就能接；记冷却反而把它（和别的
+//       请求）一起挡在门外。标记只贴在「最终那个错误本身还是限流」的错误上
+//       （见 policy.ts 的 stop）：它的语义是「这个限流是我们替它等过的」，不是
+//       「这个账号这一轮里等过什么」—— 贴在被拒（401）、额度见底（402）上，
+//       下面这条就变成「坏凭据永不冷却」。
+//
+//   上游 5xx（server）不记账
+//       —— 它说的是「这个请求这次没成事」，不是「这个账号不能用了」。算到账号
+//       头上，同一个平台上别的模型会跟着下线五分钟，fallback 的第二个目标也
+//       会被跳过（2026-10-28 实测：一个模型回 500，整个平台 503、第二个目标
+//       没被试）。换下一个目标、下一个账号就够了。
 //
 // 只有可降级的失败才记冷却：请求本身的问题（400/404/413）不记 —— 一个坏请求
 // 不该把账号封掉，换一个账号也是一样的结果。
+//
+// 上面这几条判据都住在**这一层**，不挂在某个调用点上：派发失败（policy.ts 的
+// onAttempt）与流式答复的结算（Settlement.failure）问的是同一个问题 ——「这次
+// 失败值多少冷却」。判据留在调用点的话，同一个超时在两条路上会有两种待遇
+// （一条记冷却、一条不记），排查时看到的账也对不上。
+//
+// 因此这个函数是纯记账：读快照、算时刻、返回 decision 或 null，没有副作用。
+// 写不写、写多少由调用方按 decision 做。
 
 import {
   MAX_COOLDOWN_MS,
-  networkCooldownMs,
   rateCooldownMs,
   unavailableCooldownMs,
-  isIgnoredPlanWindow,
 } from "../cooldown.ts";
-import { peekHealthSnapshot } from "../health-cache.ts";
 import { cooldownUntilOf } from "../upstream-status.ts";
+import { exhaustedPlanWindowEndsAt, planWindowEndsAt } from "../plan-window.ts";
 import { classifyUpstreamError, isDegradableUpstreamError } from "./provider-selection.ts";
+
+// 套餐窗口那一问住在 lib/plan-window.ts：admin 层也算同一个时间，它不引路由层。
+// 这里转出去，调用方的 import 不用改。
+export { planWindowEndsAt } from "../plan-window.ts";
 
 /** 恢复时间之后再多留一分钟：上游说的那一刻是开始恢复，不是那一刻就好。 */
 export const COOLDOWN_GRACE_MS = 60_000;
@@ -65,18 +102,53 @@ export interface CooldownDecision {
 }
 
 /**
+ * 一个带标记的错误：它这一次等过了自己的限流窗口。
+ *
+ * 标记挂在错误对象上，跟着错误走到结算那一层：只记在这个模块里看不到，因为
+ * 谁等过是重试循环（policy.ts 的 runWithRetries）说了算。
+ */
+export interface RateWaited {
+  rateWaited?: boolean;
+}
+
+/** 记一笔：这个失败等过了自己的限流窗口。 */
+export function withRateWaited<T extends object>(error: T): T {
+  (error as T & RateWaited).rateWaited = true;
+  return error;
+}
+
+/** 这个失败等过了吗。 */
+export function rateWaitedOf(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as RateWaited).rateWaited === true;
+}
+
+/**
  * 这次失败要让那个账号冷却多久。
  *
  * 不可降级的失败没有冷却：换一个账号也是一样的结果，把账号放下去只会让可用
- * 的账号更少。
+ * 的账号更少；超时、连接断掉与等过限流的也不记（理由见文件顶上）。
+ *
+ * `hasAlternative` 说「有没有别的账号可换」：没有就不记冷却（理由见文件顶上）。
  */
 export function cooldownForFailure(
   accountId: string,
   error: unknown,
   now = Date.now(),
+  hasAlternative = true,
 ): CooldownDecision | null {
+  // 没有别的账号可换：记冷却只会让这个平台在一段时间里一个上游请求都不打，
+  // 而客户端拿到的还是同一条报错。让它继续试、把上游的话原样交出去。
+  if (!hasAlternative) return null;
   if (!isDegradableUpstreamError(error)) return null;
   const failure = classifyUpstreamError(error);
+  // 超时不记账：这一条请求等得太久了，不是这个账号不能用了（见文件顶上的分类）。
+  if (failure.kind === "timeout") return null;
+  // 连接被上游掐断也不记账：它说的不是「这个账号不能用了」，下一个请求很可能
+  // 就通了。记 1 分钟的话，只有一个账号的平台那一分钟里一个上游请求都不打。
+  if (failure.kind === "connection") return null;
+  // 等过了限流的账号正在等自己的窗口恢复：它接不了不是因为坏了。
+  if (rateWaitedOf(error)) return null;
   // 上游 5xx 不是账号的错。
   //
   // 它说的是「这个请求这次没成事」：可能就那一个模型挂了，也可能是上游抽了
@@ -124,14 +196,9 @@ export function cooldownForFailure(
       };
     }
   }
-  // 没有上游给的恢复时间：用固定值。连接与超时是 1 分钟 —— 那不是账号的错，
-  // 按 5 分钟算的话一个只有单个账号的平台会被自己的超时下线好几分钟。
-  // 额度用完也是固定值：额度是真的用完了，等窗口（5 分钟）。
-  const fixed =
-    failure.kind === "connection" || failure.kind === "timeout"
-      ? networkCooldownMs()
-      : unavailableCooldownMs();
-  return { untilMs: now + fixed, reason: failure.kind, source: "fixed" };
+  // 没有上游给的恢复时间：用固定值 —— 凭据被拒与余额见底是 5 分钟（额度用完
+  // 落到这里时也是 5 分钟）。
+  return { untilMs: now + unavailableCooldownMs(), reason: failure.kind, source: "fixed" };
 }
 
 /**
@@ -233,91 +300,6 @@ function normalizeZone(zone: string): string {
   const found = /^([+-])(\d{2}):?(\d{2})$/.exec(zone);
   if (!found) return "+08:00";
   return `${found[1]}${found[2]}:${found[3]}`;
-}
-
-/**
- * 账号当前的套餐窗口什么时候结束。
- *
- * 健康快照里的 tokenPlan.windows：每个窗口有 5 小时与 7 天两个到期时间。
- *
- * 先看「见底」的窗口：额度用完了的那个窗口，账号才能真的干活，要等它结束。
- * 见底的窗口有多个（5 小时与 7 天都见底）时取最晚的那个 —— 少一个都不行。
- *
- * 没有见底的窗口，就退回「还没到的最早那个到期点」：那时候额度还在，窗口
- * 什么时候换跟恢复时间没关系，只是没有更好的说法。
- */
-export function planWindowEndsAt(accountId: string, now = Date.now()): number | null {
-  const snapshot = peekHealthSnapshot<any>();
-  const mine = snapshot?.data?.minimax?.[accountId];
-  const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
-  // 见底的窗口：它们结束了账号才有额度。
-  let exhausted: number | null = null;
-  // 所有还没到的到期点：没有见底的窗口时的退路。
-  let soonest: number | null = null;
-  for (const window of windows) {
-    if (isIgnoredPlanWindow(window)) continue;
-    for (const key of ["intervalEndsAt", "weeklyEndsAt"]) {
-      const at = timeMs(window?.[key]);
-      if (!at || at <= now) continue;
-      if (soonest === null || at < soonest) soonest = at;
-    }
-    // 这一格见底了（百分比 0）：这一格的结束时间就是它的恢复时间。
-    const intervalAt = timeMs(window?.intervalEndsAt);
-    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
-      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
-    }
-    const weeklyAt = timeMs(window?.weeklyEndsAt);
-    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
-      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
-    }
-  }
-  return exhausted ?? soonest;
-}
-
-/**
- * 见底的窗口什么时候结束（没有见底的窗口就是 null）。
- *
- * 这才是「额度什么时候回来」：窗口还有额度的时候，它的到期点跟恢复时间无关
- * —— 那只是一个窗口边界，账号现在就能干活。
- */
-function exhaustedPlanWindowEndsAt(accountId: string, now = Date.now()): number | null {
-  const snapshot = peekHealthSnapshot<any>();
-  const mine = snapshot?.data?.minimax?.[accountId];
-  const windows = Array.isArray(mine?.tokenPlan?.windows) ? mine.tokenPlan.windows : [];
-  let exhausted: number | null = null;
-  for (const window of windows) {
-    if (isIgnoredPlanWindow(window)) continue;
-    const intervalAt = timeMs(window?.intervalEndsAt);
-    if (intervalAt > now && percentLeft(window?.intervalPercent) <= 0) {
-      if (exhausted === null || intervalAt > exhausted) exhausted = intervalAt;
-    }
-    const weeklyAt = timeMs(window?.weeklyEndsAt);
-    if (weeklyAt > now && percentLeft(window?.weeklyPercent) <= 0) {
-      if (exhausted === null || weeklyAt > exhausted) exhausted = weeklyAt;
-    }
-  }
-  return exhausted;
-}
-
-/**
- * 这一格还剩多少额度（百分比）。
- *
- * 平台没报这个数字就当它还有额度（100）：没有数字不等于没有额度。
- */
-function percentLeft(value: unknown): number {
-  if (value === null || value === undefined || value === "") return 100;
-  const text = String(value).replace("%", "").trim();
-  const raw = Number(text);
-  return Number.isFinite(raw) ? raw : 100;
-}
-
-/** 平台给的时间：毫秒或者 ISO 字符串。 */
-function timeMs(value: unknown): number {
-  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : 0;
-  const text = String(value ?? "").trim();
-  if (!text) return 0;
-  const parsed = Date.parse(text);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 /**

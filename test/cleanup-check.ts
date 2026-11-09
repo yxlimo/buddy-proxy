@@ -9,7 +9,7 @@
 //   1. 用量表里的「模拟客户端」记的是 kind 的名字（qoder 与 qoder-cn 都是
 //      「Qoder」），不是上游的 id —— 这一条是真的发一次请求、读数据库里那一行；
 //   2. /health 不再有 enabled 段，开关只在 providers 段里；
-//   3. 三家平台的 key 管理是一个接口（list/create/delete/ensure）；
+//   3. 三家平台的 key 管理是一个接口（list/create/delete，不含 ensure：
 //   4. 模型目录的缓存是一份，缓存到期才问上游，空清单不写进去；
 //   5. 开放平台的推理：没有 key 与 401 两种错误。
 
@@ -256,7 +256,7 @@ const made = await fetch(`${BASE}/buddy.admin.v1.AdminService/AddAccount`, {
   headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
   body: JSON.stringify({ platform: "qoder-cn", alias: "测试 Qoder CN" }),
 }).then((r) => r.json().catch(() => null));
-check("qoder-cn 的账号加出来了", made?.ok === true, JSON.stringify(made));
+check("qoder-cn 的账号加出来了", typeof made?.id === "string" && Boolean(made.id), JSON.stringify(made));
 const switched = await fetch(`${BASE}/buddy.admin.v1.AdminService/SetAccountEnabled`, {
   method: "POST",
   headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
@@ -314,15 +314,23 @@ const platforms = [
 
 for (const [name, keys] of platforms) {
   check(
-    `${name}：list/create/delete/ensure 都在`,
-    ["list", "create", "delete", "ensure"].every((k) => typeof (keys as any)[k] === "function"),
+    `${name}：list/create/delete 都在`,
+    ["list", "create", "delete"].every((k) => typeof (keys as any)[k] === "function"),
     Object.keys(keys).join(","),
   );
   check(`${name}：有名字`, typeof keys.what === "string" && keys.what.length > 0, String(keys.what));
+  // 「没有 key 就建一把」这条路已经废了：开放平台侧的 key 一律由用户自己填
+  // （面板上的 setProviderKeys）。接口里留着 ensure，网关就会替人建一把建出来
+  // 用户看不到也换不掉的 key。
+  check(
+    `${name}：接口里没有 ensure 了`,
+    typeof (keys as any).ensure !== "function",
+    Object.keys(keys).join(","),
+  );
 }
 
-// SenseNova 的 create 认 ctx.keyType：同一族接口里 ensure 认、create 也认，
-// 形状才是一套（这一轮改的）。
+// SenseNova 的 create 认 ctx.keyType：同一族接口里 create 认，形状才是一套
+// （这一轮改的）。
 const { KEY_TYPE_METERED, KEY_TYPE_TOKEN_PLAN } = await import("../lib/sensenova/keys.ts");
 const fakeSession = {
   cookie: "c",

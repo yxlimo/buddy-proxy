@@ -105,7 +105,7 @@ export function UsageTable({
       {
         id: 'upstream',
         accessorKey: 'upstreamId',
-        header: 'Provider',
+        header: '平台',
         filterFn: 'equalsString',
         cell: ({ row }) => (
           <span className='text-xs'>{row.original.upstreamId || '—'}</span>
@@ -245,7 +245,7 @@ export function UsageTable({
     <div className='flex flex-col gap-4'>
       <DataTableToolbar
         table={table}
-        searchPlaceholder='搜索模型或错误…'
+        searchPlaceholder='搜索…'
         extra={
           <>
             <Select
@@ -257,10 +257,10 @@ export function UsageTable({
               }
             >
               <SelectTrigger className='h-8 w-40'>
-                <SelectValue placeholder='全部 Provider' />
+                <SelectValue placeholder='全部平台' />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL}>全部 Provider</SelectItem>
+                <SelectItem value={ALL}>全部平台</SelectItem>
                 {upstreamOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}

@@ -55,7 +55,7 @@ run = "node --experimental-strip-types test/privacy-check.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:deliver:backpressure", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:dialect:cache", "test:client:gone", "test:log:scrub", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config", "test:privacy"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:minimax:cycle", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:account-id", "test:open-platform:admin", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:open-platform:kind", "test:anthropic-platform", "test:open-platform:account", "test:credential:fault", "test:admin:parity", "test:platform:availability", "test:admin", "test:open-platforms", "test:platform:migration", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:workbuddy:catalog:tool", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:deliver:backpressure", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:dialect:cache", "test:client:gone", "test:log:scrub", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config", "test:privacy"]
 
 
 [tasks."helper:sync"]
@@ -65,6 +65,14 @@ run = "python3 helper/buddy_sync.py"
 [tasks."helper:todo"]
 description = "Wait for the MiniMax quota and send the .buddy-todo.md to a session of this directory"
 run = "python3 helper/buddy_todo.py"
+
+[tasks."helper:catalog"]
+description = "Regenerate the WorkBuddy cn catalogue from the desktop client's product config"
+run = "node --experimental-strip-types scripts/workbuddy-catalog.ts"
+
+[tasks."helper:catalog:check"]
+description = "Check the WorkBuddy cn catalogue against the desktop client's product config (exit 1 when it is outdated)"
+run = "node --experimental-strip-types scripts/workbuddy-catalog.ts --check"
 
 [tasks."test:helper"]
 description = "Check the buddy-helper scripts offline (the quota parsing, the session lookup, the commands, the archive)"
@@ -110,9 +118,25 @@ run = "node --experimental-strip-types test/cleanup-check.ts"
 description = "Check the cleanup on the panel side: the upstream switch, the credential ids, the retention setting"
 run = "node --experimental-strip-types test/cleanup-admin-check.ts"
 
+[tasks."test:account-id"]
+description = "Check the account id migration: the old platform-name ids become numbers, the credentials and cooldowns follow"
+run = "node --experimental-strip-types test/account-id-migration-check.ts"
+
 [tasks."test:quota"]
 description = "Check the quota readout: the MiniMax plan by session, the SenseNova pools, the ZCode quota"
 run = "node --experimental-strip-types test/quota-readout-check.ts"
+
+[tasks."test:quota:plugin"]
+description = "Check the quota plugins: the registry, 七牛's plugin, and the open platform reading its quota through a plugin"
+run = "node --experimental-strip-types test/quota-plugin-check.ts"
+
+[tasks."test:quota:plugins:three"]
+description = "Check the three platforms' quota plugins: SenseNova's pools, TokenRhythm's wallet, 书生·端砚's credits"
+run = "node --experimental-strip-types test/quota-plugins-three-check.ts"
+
+[tasks."test:quota:state"]
+description = "Check the quota states: the seven a probe can end in, and what the platform does with each"
+run = "node --experimental-strip-types test/quota-state-check.ts"
 
 [tasks."test:dead-session"]
 description = "Check that a refused session is not asked about again"
@@ -145,6 +169,14 @@ run = "node --experimental-strip-types test/token-plan-check.ts"
 [tasks."test:model-visibility"]
 description = "Check that a spent account hides no model (503 with Retry-After, not 400)"
 run = "node --experimental-strip-types test/model-visibility-check.ts"
+
+[tasks."test:platform:availability"]
+description = "Check whether a platform can take requests (no account, off, no credential, ready, out of credits, cooling)"
+run = "node --experimental-strip-types test/platform-availability-check.ts"
+
+[tasks."test:credential:fault"]
+description = "Check what the route and the dispatch say when a credential is expired or cannot be read (no network)"
+run = "node --experimental-strip-types test/credential-fault-check.ts"
 
 [tasks."test:deliver:frames"]
 description = "Check the frames the client reads (a message_start without a message gets one)"
@@ -182,6 +214,10 @@ run = "node --experimental-strip-types test/log-scrub-check.ts"
 description = "Check the cooldown: a failed account is set aside, and how long (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/cooldown-check.ts"
 
+[tasks."test:cooldown:single"]
+description = "Check that a platform with nobody to switch to does not record a cooldown (a fake upstream, no tokens spent)"
+run = "node --experimental-strip-types test/cooldown-single-check.ts"
+
 [tasks."test:rate:wait"]
 description = "Check that a rate limit the gateway can wait out is waited out (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/rate-wait-check.ts"
@@ -197,6 +233,10 @@ run = "node --experimental-strip-types test/aggregate-error-check.ts"
 [tasks."test:aggregate:usage"]
 description = "Check that a request that never reached the upstream still leaves a usage row (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/aggregate-usage-check.ts"
+
+[tasks."test:minimax:cycle"]
+description = "Check that the MiniMax modules load, whichever one is the entry"
+run = "node --experimental-strip-types test/minimax-module-cycle-check.ts"
 
 [tasks."test:minimax:credits:view"]
 description = "Check that the panel's credit list leaves the expired lots out (the same rule the routing uses)"
@@ -222,6 +262,30 @@ depends = ["test:admin:policy"]
 [tasks."test:admin:policy"]
 description = "Check the upstream provider policy (read, write, validation, the check-in accounts)"
 run = "node --experimental-strip-types test/provider-policy-check.ts"
+
+[tasks."test:open-platforms"]
+description = "Check the platform data source: the table, the id rules, the catalogue the simulated clients do not fetch"
+run = "node --experimental-strip-types test/open-platforms-check.ts"
+
+[tasks."test:platform:migration"]
+description = "Check the simulated-client platform rows: seeded at startup, idempotent across restarts, an old database upgraded"
+run = "node --experimental-strip-types test/platform-migration-check.ts"
+
+[tasks."test:open-platform:account"]
+description = "Check the open platform account's credential: the key, the panel's view, clearing it, deleting the account"
+run = "node --experimental-strip-types test/open-platform-account-check.ts"
+
+[tasks."test:open-platform:kind"]
+description = "Check the open platform kind: the registration, the catalogue, the forwarding and the automatic catalogue fetch (a fake upstream)"
+run = "node --experimental-strip-types test/open-platform-kind-check.ts"
+
+[tasks."test:open-platform:admin"]
+description = "Check the open platform panel's API: the five methods and the three new fields in the list"
+run = "node --experimental-strip-types test/open-platform-admin-check.ts"
+
+[tasks."test:anthropic-platform"]
+description = "Check the Anthropic-speaking open platform: the dialect, the auth headers, the stream and the usage (a fake upstream)"
+run = "node --experimental-strip-types test/anthropic-platform-check.ts"
 
 [tasks."test:sensenova:intern"]
 description = "Check SenseNova and 书生·端砚 offline: their catalogues, keys and quotas, against a fake upstream"
@@ -251,6 +315,10 @@ run = "node --experimental-strip-types test/config-restart-check.ts"
 description = "Check the upstream states, the credential enum and the unpublished reasons"
 run = "node --experimental-strip-types test/admin-state-check.ts"
 
+[tasks."test:admin:parity"]
+description = "Check that the panel and the route say the same thing (no account, off, no credential)"
+run = "node --experimental-strip-types test/admin-parity-check.ts"
+
 [tasks."test:intern-ai"]
 description = "Run the tests for the intern-ai module (no network)"
 run = "node --experimental-strip-types test/intern-ai-check.ts"
@@ -275,6 +343,16 @@ run = "node --experimental-strip-types test/xinghuo-check.ts"
 description = "Check the root route end to end (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/route-e2e-check.ts"
 
+[tasks."test:e2e:matrix"]
+description = "Run the end-to-end matrix (platforms, logins, catalogue, weights, restart) against a fake upstream — slow, so not part of `test`"
+run = "node --experimental-strip-types test/matrix-e2e-check.ts"
+
+# 要真浏览器（agent-browser）与构建过的面板（web/dist），所以不进 `test` 的 depends。
+# 面板没构建时打印原因并跳过（exit 0）；REQUIRE_BROWSER=1 时跳过了算失败。
+[tasks."test:e2e:panel"]
+description = "Click through the panel in a real browser (the model dialog, the greyed-out saves, the refresh button) — needs `cd web && pnpm build`"
+run = "node --experimental-strip-types test/panel-e2e-check.ts"
+
 [tasks."test:qoder:benefits"]
 description = "Check which Qoder campaigns are worth claiming"
 run = "node --experimental-strip-types test/qoder-benefits-check.ts"
@@ -283,9 +361,29 @@ run = "node --experimental-strip-types test/qoder-benefits-check.ts"
 description = "Check the WorkBuddy catalogue in the database: it survives a restart, and a stale one still counts"
 run = "node --experimental-strip-types test/workbuddy-catalog-check.ts"
 
+[tasks."test:workbuddy:catalog:tool"]
+description = "Check the tool that writes the WorkBuddy cn table: the values, the filter, and a stable file"
+run = "node --experimental-strip-types test/workbuddy-catalog-tool-check.ts"
+
 [tasks."test:catalog:persist"]
 description = "Check the model catalogue that lives in the database: it survives a restart, and a stale one still counts"
 run = "node --experimental-strip-types test/catalog-persist-check.ts"
+
+[tasks."test:model-catalog"]
+description = "Check the known model catalogue that ships with the repo: the shape, the lookup, and that no credential leaked into it"
+run = "node --experimental-strip-types test/model-catalog-check.ts"
+
+[tasks."test:model-overrides"]
+description = "Check the model metadata a person writes: the merge order, the replacement, the validation, and that nothing changes without one"
+run = "node --experimental-strip-types test/model-overrides-check.ts"
+
+[tasks."test:model-traits"]
+description = "Check the common table: the data's shape, the id normalisation, and the two-level lookup (exact, then unambiguous prefix/suffix)"
+run = "node --experimental-strip-types test/model-traits-check.ts"
+
+[tasks."test:model-traits:tool"]
+description = "Check scripts/model-traits.ts against a fake upstream: no overwriting what a person wrote, deterministic output, honest skips"
+run = "node --experimental-strip-types test/model-traits-tool-check.ts"
 
 [tasks."test:refresh-flow"]
 description = "Check the shared refresh flow: not due, refused, failed, no session"

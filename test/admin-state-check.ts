@@ -291,27 +291,28 @@ section("上游的状态");
 
 // 先把这个平台下的账号建出来：账号 id 由服务起（`qoder`、`qoder-2`……）。
 const qoderAccountId = await addAccount("qoder", "Qoder 主账号");
-check("账号加得出来", qoderAccountId === "qoder", qoderAccountId);
+// 账号 id 是自增数，跟平台 id 无关：后面的凭据都挂在它上面。
+check("账号加得出来", /^\d+$/.test(qoderAccountId), qoderAccountId);
 
 // 1. 开关关着。
-await setEnabled("qoder", false);
+await setEnabled(qoderAccountId, false);
 check("开关关着 → UPSTREAM_STATE_DISABLED", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_DISABLED", await upstreamStateOf("qoder"));
 
 // 2. 开着，但没有会话。
-await setEnabled("qoder", true);
-deleteSecret("session:provider:qoder");
+await setEnabled(qoderAccountId, true);
+deleteSecret(`session:provider:${qoderAccountId}`);
 deleteCached("login:state-test-pending");
 check("没有会话 → UPSTREAM_STATE_NO_CREDENTIAL", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_NO_CREDENTIAL", await upstreamStateOf("qoder"));
 
 // 3. 会话过期了。
-writeSecret("session:provider:qoder", "session", qoderSession(-1000));
+writeSecret(`session:provider:${qoderAccountId}`, "session", qoderSession(-1000));
 check("会话过期 → UPSTREAM_STATE_CREDENTIAL_EXPIRED", (await upstreamStateOf("qoder")) === "UPSTREAM_STATE_CREDENTIAL_EXPIRED", await upstreamStateOf("qoder"));
 
 // 4. 登录被拒了（cache 里有一次失败的登录）。
 writeCached("login:state-test-failed", {
   loginId: "state-test-failed",
   upstreamId: "qoder",
-  accountId: "qoder",
+  accountId: qoderAccountId,
   status: "failed",
   method: "device",
   authorizationUrl: "",
@@ -329,7 +330,7 @@ check("登录被拒 → UPSTREAM_STATE_CREDENTIAL_REJECTED", (await upstreamStat
 writeCached("login:state-test-pending", {
   loginId: "state-test-pending",
   upstreamId: "qoder",
-  accountId: "qoder",
+  accountId: qoderAccountId,
   status: "pending",
   method: "device",
   authorizationUrl: "https://example.invalid/authorize",
@@ -346,7 +347,7 @@ check("正在登录 → UPSTREAM_STATE_LOGGING_IN", (await upstreamStateOf("qode
 // 6. 额度用尽。
 deleteCached("login:state-test-pending");
 deleteCached("login:state-test-failed");
-writeSecret("session:provider:qoder", "session", qoderSession(3600_000));
+writeSecret(`session:provider:${qoderAccountId}`, "session", qoderSession(3600_000));
 qoderQuotaRaw = {
   userQuota: { total: 100, used: 100, remaining: 0 },
   addOnQuota: { total: 0, used: 0, remaining: 0 },
@@ -392,7 +393,7 @@ check(
 
 section("模型目录");
 
-await setEnabled("qoder", true);
+await setEnabled(qoderAccountId, true);
 const withQoder = await admin("ListModels", { upstreamId: "qoder" });
 check(
   "Qoder 开着的时候列它的模型",
@@ -400,7 +401,7 @@ check(
   JSON.stringify(withQoder).slice(0, 200),
 );
 
-await setEnabled("qoder", false);
+await setEnabled(qoderAccountId, false);
 const withoutQoder = await admin("ListModels", { upstreamId: "qoder" });
 check(
   "Qoder 关着的时候一个模型也不列（那个 bug 的回归测试）",
@@ -412,7 +413,7 @@ const allOff = await admin("ListModels", {});
 check("所有上游都关着的时候目录是空的", (allOff.models ?? []).length === 0, JSON.stringify(allOff).slice(0, 200));
 
 // 从关到开：立刻就有模型了。
-await setEnabled("qoder", true);
+await setEnabled(qoderAccountId, true);
 const backOn = await admin("ListModels", { upstreamId: "qoder" });
 check(
   "从关到开，目录立刻出来（不用重启）",
@@ -436,7 +437,7 @@ async function saveModel(id: string, enabled: boolean, targets: any[]): Promise<
   const res = await admin("SavePublishedModel", {
     model: { id, displayName: id, strategy: "single", enabled, targets },
   });
-  if (res.ok !== true) throw new Error(`存 ${id} 失败：${JSON.stringify(res)}`);
+  if (res?.id !== id) throw new Error(`存 ${id} 失败：${JSON.stringify(res)}`);
 }
 
 const qoderTarget = { groupName: "qoder", upstreamModel: "glm-5.3", weight: 1, enabled: true };
@@ -447,7 +448,7 @@ check("模型被停用 → UNPUBLISHED_REASON_DISABLED", (await reasonOf("r-disa
 
 // 2. 目标的上游关着。
 await saveModel("r-upstream-off", true, [qoderTarget]);
-await setEnabled("qoder", false);
+await setEnabled(qoderAccountId, false);
 check("上游关着 → UNPUBLISHED_REASON_UPSTREAM_DISABLED", (await reasonOf("r-upstream-off")) === "UNPUBLISHED_REASON_UPSTREAM_DISABLED", await reasonOf("r-upstream-off"));
 
 // 3. 目标被停用了。
@@ -458,14 +459,14 @@ check("目标被停用 → UNPUBLISHED_REASON_TARGET_DISABLED", (await reasonOf(
 //    目录不是上游能服务什么的完整清单（5784714：workbuddy.cn 实测能答目录里
 //    没有的模型），所以「目录里没有」不再算没公布的理由 —— 照样公布，理由留空。
 //    面板的接口会拦没人声明过的名字，所以直接写库。
-await setEnabled("qoder", true);
+await setEnabled(qoderAccountId, true);
 await saveModel("r-gone", true, [qoderTarget]);
 retarget("r-gone", "no-such-model");
 await saveModel("r-reload", true, [qoderTarget]); // 存一次 = 重读一次目录
 check("目录里没有这个模型 → 照样公布（不是 MODEL_GONE）", (await reasonOf("r-gone")) === "", await reasonOf("r-gone"));
 
 // 5. 上游没登录。
-deleteSecret("session:provider:qoder");
+deleteSecret(`session:provider:${qoderAccountId}`);
 await saveModel("r-no-credential", true, [qoderTarget]);
 check("上游没登录 → UNPUBLISHED_REASON_NO_CREDENTIAL", (await reasonOf("r-no-credential")) === "UNPUBLISHED_REASON_NO_CREDENTIAL", await reasonOf("r-no-credential"));
 
@@ -478,7 +479,7 @@ check("没有目标 → UNPUBLISHED_REASON_NO_TARGET", (await reasonOf("r-no-tar
 
 // 7. 有的目标能用有的不能：公布了，理由留空。
 //    权重大的那个是上游不认的模型，小的那个能用 —— 照样公布。
-writeSecret("session:provider:qoder", "session", qoderSession(3600_000));
+writeSecret(`session:provider:${qoderAccountId}`, "session", qoderSession(3600_000));
 await saveModel("r-mixed", true, [qoderTarget]);
 writeTarget("r-mixed", "qoder", "no-such-model", 10);
 await saveModel("r-reload-2", true, [qoderTarget]); // 存一次 = 重读一次目录

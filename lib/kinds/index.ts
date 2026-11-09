@@ -21,5 +21,11 @@ import "./qoder.ts";
 import "./workbuddy.ts";
 import "./tokenrhythm.ts";
 import "./zcode.ts";
+// 开放平台：用户在面板上加的那些平台（表里的行）都是这一类。放在最后：它排在
+// 面板的 kind 列表末尾（下面的顺序就是注册表的顺序）。
+import "./openai.ts";
+// 上游讲 Anthropic Messages 的那一类开放平台：同样是「用户自己加」的形态，
+// 只是报文形状与鉴权头不一样。
+import "./anthropic.ts";
 
 export { tokenPlanView } from "./shared.ts";

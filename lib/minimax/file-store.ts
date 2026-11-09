@@ -28,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { AuthError, DEFAULT_CLIENT_ID, DEFAULT_REGION } from "../credential.ts";
 import type { Credential } from "../credential.ts";
+import { WARN_MS } from "./warn-ms.ts";
 
 export interface StoredCredential {
   schemaVersion: number;
@@ -59,7 +60,6 @@ export interface AuthState {
 const CLIENT_ID = configString("MINIMAX_CLIENT_ID", DEFAULT_CLIENT_ID);
 const REGION = configString("MINIMAX_REGION", DEFAULT_REGION);
 const CACHE_MS = configNumber("MINIMAX_AUTH_CACHE_MS", 5000);
-const WARN_MS = configNumber("MINIMAX_AUTH_WARN_MS", 10 * 60 * 1000);
 
 /** Explicit dir wins; otherwise try the native home, then the Windows drive mount. */
 export function authDir(): string {
@@ -75,10 +75,12 @@ export function authDir(): string {
  * Read a JSON file without throwing. The app writes atomically, but a reader can
  * still land on a half-written file, so an unreadable/unparsable file counts as
  * "not available right now" and the other source is tried instead.
+ *
+ * The shape is the caller's business: the two files here hold different things.
  */
-function readJsonSafe(file: string): unknown {
+function readJsonSafe<T>(file: string): T | null {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    return JSON.parse(fs.readFileSync(file, "utf8")) as T;
   } catch {
     return null;
   }
@@ -116,10 +118,10 @@ export function readFileCredential(force = false): Credential {
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.cred;
 
   const dir = authDir();
-  const state = readJsonSafe(path.join(dir, "auth-state.json")) as AuthState | null;
-  const store = readJsonSafe(path.join(dir, "auth.json")) as
-    | { records?: Record<string, StoredCredential> }
-    | null;
+  const state = readJsonSafe<AuthState>(path.join(dir, "auth-state.json"));
+  const store = readJsonSafe<{ records?: Record<string, StoredCredential> }>(
+    path.join(dir, "auth.json"),
+  );
 
   const { rec, fallback } = pickRecord(state, store);
   const remainingMs = rec.expiresAtMs - Date.now();
@@ -194,5 +196,3 @@ export function fileCredentialStatus(): Record<string, unknown> {
     return { source: authDir(), status: "unavailable", error: err.message, hint: err.hint };
   }
 }
-
-export const FILE_WARN_MS = WARN_MS;

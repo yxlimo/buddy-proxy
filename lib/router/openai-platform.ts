@@ -28,16 +28,20 @@ interface OpenAiPlatform {
  *
  * 请求体是 OpenAI 形状的，原样发过去；答案也是 OpenAI 形状的，原样回来。
  * 上游报错了就把它的原话带回去 —— 平台自己的话比「上游失败了」有用。
+ *
+ * `signal` 是「客户端走了」那个信号：给了就交给 fetch，客户端走了就把这条
+ * 上游请求停掉（上游还在算就是在计费）。
  */
 export async function openAiPlatformChat(
   platform: OpenAiPlatform,
   body: Record<string, unknown>,
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Response> {
   if (!platform.key) {
     throw new AuthError(
       `${platform.id} has no inference key`,
-      `${platform.label} 账号上没有推理用的 API key。在面板里重新登录一次，网关会建一把。`,
+      `${platform.label} 账号上没有推理用的 API key。请在面板上填一把。`,
       500,
     );
   }
@@ -51,11 +55,12 @@ export async function openAiPlatformChat(
       ...extraHeaders,
     },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok && response.status === 401) {
     throw new AuthError(
       `${platform.id} rejected the key`,
-      `${platform.label} 拒绝了推理用的 API key（HTTP 401）。重新登录一次，网关会换一把。`,
+      `${platform.label} 拒绝了推理用的 API key（HTTP 401）。在面板上换一把。`,
       502,
     );
   }

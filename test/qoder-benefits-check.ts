@@ -174,20 +174,22 @@ check(
 console.log("");
 console.log("签到结果：签到了就是签到了");
 
-// The first account of a platform gets the platform's id as its own id.
+// 账号 id 是自增整数，与平台 id 无关：凭据与调用都揣账号自己的 id。
 const cn = addAccount({ platform: "qoder-cn" });
 const global = addAccount({ platform: "qoder" });
-check("加好了中国区的账号", cn.ok === true && cn.id === "qoder-cn", JSON.stringify(cn));
-check("加好了全球区的账号", global.ok === true && global.id === "qoder", JSON.stringify(global));
+const cnId = String(cn.id ?? "");
+const globalId = String(global.id ?? "");
+check("加好了中国区的账号", cn.ok === true && Boolean(cnId), JSON.stringify(cn));
+check("加好了全球区的账号", global.ok === true && Boolean(globalId) && globalId !== cnId, JSON.stringify(global));
 
-setSecret("session:provider:qoder-cn", "session", {
+setSecret(`session:provider:${cnId}`, "session", {
   accessToken: "cn-token",
   refreshToken: "cn-refresh",
   expiresAtMs: Date.now() + 3600_000,
   generation: 1,
   region: "cn",
 });
-setSecret("session:provider:qoder", "session", {
+setSecret(`session:provider:${globalId}`, "session", {
   accessToken: "global-token",
   refreshToken: "global-refresh",
   expiresAtMs: Date.now() + 3600_000,
@@ -216,7 +218,7 @@ function daily(key: string, status: string, startAt = nowSec - 60, endAt = nowSe
   lists["cn-token"] = [daily("act-replay", "CLAIMABLE")];
   claims["act-replay"] = { status: 200, body: { replayed: true } };
   hits.length = 0;
-  const outcome = await runQoderBenefits("qoder-cn");
+  const outcome = await runQoderBenefits(cnId);
   check("重放：发了一次领取请求", hits.includes("POST /sash/api/v1/me/campaigns/act-replay/claim"), hits.join(","));
   check("重放：没有积分", outcome.credits === 0, String(outcome.credits));
   check("重放：今天算签到了", outcome.signedIn === true, JSON.stringify(outcome));
@@ -231,7 +233,7 @@ function daily(key: string, status: string, startAt = nowSec - 60, endAt = nowSe
     status: 200,
     body: { benefit: { amount: 100, kind: "RESOURCE_PACKAGE_SOURCE_BONUS" } },
   };
-  const outcome = await runQoderBenefits("qoder-cn");
+  const outcome = await runQoderBenefits(cnId);
   check("到账：积分是 100", outcome.credits === 100, String(outcome.credits));
   check("到账：今天算签到了", outcome.signedIn === true, JSON.stringify(outcome));
 }
@@ -242,10 +244,10 @@ function daily(key: string, status: string, startAt = nowSec - 60, endAt = nowSe
   lists["cn-token"] = [daily("act-memo", "CLAIMED")];
   claims["act-memo"] = { status: 200, body: { replayed: true } };
   hits.length = 0;
-  const first = await runQoderBenefits("qoder-cn");
+  const first = await runQoderBenefits(cnId);
   check("第一轮：发了一次领取请求", hits.includes("POST /sash/api/v1/me/campaigns/act-memo/claim"), hits.join(","));
   hits.length = 0;
-  const second = await runQoderBenefits("qoder-cn");
+  const second = await runQoderBenefits(cnId);
   check("第二轮：没有再发领取请求", !hits.some((h) => h.includes("/claim")), hits.join(","));
   check("第二轮：说了已领过", second.report.some((l) => l.includes("已领过")), second.report.join(" | "));
   check("第二轮：没有积分", second.credits === 0, String(second.credits));
@@ -267,7 +269,7 @@ function daily(key: string, status: string, startAt = nowSec - 60, endAt = nowSe
       endAt: nowSec - 3600,
     },
   ];
-  const outcome = await runQoderBenefits("qoder");
+  const outcome = await runQoderBenefits(globalId);
   check("全球区：签到状态看不到", outcome.statusUnavailable === true, JSON.stringify(outcome));
   check("全球区：不说平台没有每日签到", outcome.noDailyCheckin === undefined, JSON.stringify(outcome));
   check("全球区：没有签到", outcome.signedIn === false, JSON.stringify(outcome));

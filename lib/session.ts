@@ -43,7 +43,7 @@ export function readSession<T>(id: string, valid: (raw: any) => boolean = hasTok
 
 /** How to get rid of a credential and log in again. */
 export function clearHint(id: string): string {
-  return `清掉数据库里的这条凭据（node router-proxy.ts --clear ${id}）后重启，服务会重新登录`;
+  return `清除数据库里的这条凭据（node router-proxy.ts --clear ${id}）后重启，服务会重新登录`;
 }
 
 /**

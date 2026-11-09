@@ -16,17 +16,28 @@
 //   1. 短冷却不能盖掉长冷却；
 //   2. 额度见底的窗口说了算（周额度见底就等周窗口，不等 5 小时那个）；
 //   3. 额度类的失败取最晚的恢复时间，别的失败取上游说的那个；
-//   4. 连接与超时只冷却 1 分钟（不是 5 分钟），但上游自己说了就照它说的来。
+//   4. 连接断掉不记账（上游自己说了 retry-after 也不记）：连接被掐断不是
+//      「这个账号不能用了」；超时同理，而凭据被拒照旧记 5 分钟。
 
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { startGateway as startHarness } from "./harness.ts";
 
 const SERVICE = "/buddy.admin.v1.AdminService";
 const MODEL = "MiniMax-M3.1-Flash";
+
+/**
+ * 测试自己那条连接等锁多久（毫秒）。网关那边的库也是 5 秒（lib/store.ts）。
+ *
+ * 少了它，CI 上会撞「database is locked」：网关刚删完冷却那一行，它的写
+ * 事务可能还没完全结束（或者在做检查点），测试紧接着自己写一行就撞上排他
+ * 锁。node:sqlite 默认不等待，撞上立刻抛错 —— 本机快，撞不上。
+ */
+const BUSY_TIMEOUT_MS = 5000;
 
 // 本进程里直接跑几段算法，所以给本进程一个自己的数据目录 —— 跟网关那份、
 // 跟真的那份都无关。（网关的子进程各自用自己的目录，这里不传给他们。）
@@ -56,6 +67,8 @@ interface Plan {
   body: unknown;
   /** 流式答复：写完第一帧就断（socket destroy），模拟中途断流。 */
   breakStream?: boolean;
+  /** 前几次调用把连接掐了（socket destroy），模拟上游自己断连接。 */
+  resetTimes?: number;
 }
 
 let plans: Record<string, Plan> = {};
@@ -145,6 +158,12 @@ const upstream = http.createServer((req, res) => {
     if (!plan) {
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: `没有这个账号：${who}` } }));
+      return;
+    }
+    // 连接被上游掐了：一个字节都没答就断（网关那边看到的是 ECONNRESET）。
+    if (plan.resetTimes && plan.resetTimes > 0) {
+      plan.resetTimes -= 1;
+      req.socket.destroy();
       return;
     }
     // 流式请求答的是帧，不是整块 JSON。
@@ -237,8 +256,7 @@ async function startGateway(dataDir?: string): Promise<Gateway> {
   };
 
   // 账号与凭据：只在这个测试自己的库里。
-  const seed = new DatabaseSync(path.join(dir, "buddy.db"));
-  seed.exec("PRAGMA busy_timeout = 5000");
+  const seed = new DatabaseSync(path.join(dir, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   const insertSecret = seed.prepare(
     "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
@@ -326,7 +344,8 @@ async function chatStream(gw: Gateway): Promise<{ status: number; text: string }
 
 /** 库里那一行冷却。 */
 function cooldownRow(dataDir: string, providerId: string): { untilMs: number; reason: string } | null {
-  const db = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  // 读同样会被写事务挡住，所以这条连接也要等锁。
+  const db = new DatabaseSync(path.join(dataDir, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   try {
     const row = db
       .prepare("SELECT until_ms, reason FROM cooldown WHERE provider_id = ?")
@@ -340,7 +359,7 @@ function cooldownRow(dataDir: string, providerId: string): { untilMs: number; re
 
 /** 往库里写一行冷却（测试自己写的，跟网关写的是同一张表）。 */
 function writeCooldown(dataDir: string, providerId: string, untilMs: number, reason = "test"): void {
-  const db = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  const db = new DatabaseSync(path.join(dataDir, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   try {
     db.prepare(
       "INSERT INTO cooldown (provider_id, until_ms, reason, updated_at) VALUES (?, ?, ?, ?) " +
@@ -411,7 +430,7 @@ console.log("场景一：限流 —— 换到下一个账号，冷却到「重�
     check("冷却的理由写下来了", row?.reason === "rate-limit", String(row?.reason));
     check(
       "日志里看得见冷却",
-      /cooling down \(until [^)]+\), trying minimax-2/.test(gw.log()),
+      new RegExp(`cooling down \\(until [^)]+\\), trying ${gw.accounts[1]}`).test(gw.log()),
       gw.log().slice(-600),
     );
   } finally {
@@ -536,7 +555,7 @@ console.log("场景五：单一策略 —— 冷却的时候直接说，不去�
 }
 
 console.log("");
-console.log("场景六：流式答复 —— 流完了才算成功，中途断了要记冷却");
+console.log("场景六：流式答复 —— 流完了才算成功，中途断了不记冷却");
 
 {
   // 6a：流正常结束 → 冷却被清掉（成功才清）。
@@ -575,15 +594,17 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
 }
 
 {
-  // 6b：流在第一帧之后断了 → 那个账号要记冷却，而且原来那行冷却不能被清掉。
+  // 6b：流在第一帧之后断了 → 连接断掉不是账号的错：不记冷却，而且原来那行
+  //     已经过了期的冷却也不能被清掉（失败不清账）。
   plans = { 1: { status: 200, body: {}, breakStream: true }, 2: { status: 200, body: {} } };
   calls.length = 0;
 
   const gw = await startGateway();
   try {
     await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
-    // 一行已经过了期的冷却：断流不能把它清掉。
-    writeCooldown(gw.dataDir, gw.accounts[0], Date.now() - 1000, "test");
+    // 一行已经过了期的冷却：断流既不能写新的一行，也不能把它清掉。
+    const expired = Date.now() - 1000;
+    writeCooldown(gw.dataDir, gw.accounts[0], expired, "test");
     const answered = await chatStream(gw);
     check(
       "断流：客户端看到的是错误事件",
@@ -592,14 +613,61 @@ console.log("场景六：流式答复 —— 流完了才算成功，中途断�
     );
     const row = cooldownRow(gw.dataDir, gw.accounts[0]);
     check(
-      "断流：那个账号记了冷却，理由看得出是失败",
-      row !== null && row.reason === "connection",
+      "断流：没有给这个账号记冷却（连接断掉不是账号的错）",
+      row !== null && row.untilMs === expired && row.reason === "test",
       JSON.stringify(row),
     );
+    await new Promise((r) => setTimeout(r, 200));
     check(
-      "断流：日志里看得见冷却",
-      /cooling down until/.test(gw.log()),
+      "断流：日志里写的是「不冷却」",
+      /not cooling down/.test(gw.log()),
       gw.log().slice(-600),
+    );
+  } finally {
+    await gw.stopAndWait();
+    fs.rmSync(gw.dataDir, { recursive: true, force: true });
+  }
+}
+
+console.log("");
+console.log("场景七：连接断掉 —— 不记冷却，紧接着的下一个请求照旧打上游");
+
+{
+  // 账号 1 的上游把前三次连接掐了，之后照旧答。账号 2 是好的。
+  //
+  // 降级下有人可换：账号 1 只被叫三次（首次 + 两档退避），三次都断就换人 ——
+  // 不能把一个账号打满 180 秒才轮到下一个。
+  plans = {
+    1: { status: 200, body: answerBody("first account"), resetTimes: 3 },
+    2: { status: 200, body: answerBody("second account") },
+  };
+  calls.length = 0;
+
+  const gw = await startGateway();
+  try {
+    await call(gw, "SetPlatformPolicy", { platform: "minimax", policy: "PROVIDER_POLICY_FALLBACK" });
+
+    const first = await chat(gw);
+    check(
+      "客户端拿到的是成功（降级到了第二个账号）",
+      first.status === 200,
+      `${first.status} ${first.text.slice(0, 200)}`,
+    );
+    check(
+      "第一个账号被叫了三次就换人（有人可换就不用把它打满）",
+      calls.join(",") === "1,1,1,2",
+      calls.join(","),
+    );
+
+    const row = cooldownRow(gw.dataDir, gw.accounts[0]);
+    check("冷却表里没有这个账号的行（连接断掉不记账）", row === null, JSON.stringify(row));
+
+    const second = await chat(gw);
+    check("第二个请求也成功了", second.status === 200, `${second.status} ${second.text.slice(0, 200)}`);
+    check(
+      "第二个请求还是先打第一个账号（它没有被冷却）",
+      calls.join(",") === "1,1,1,2,1",
+      calls.join(","),
     );
   } finally {
     await gw.stopAndWait();
@@ -621,7 +689,7 @@ console.log("算法：冷却的四条规矩");
   setCooldown("acct-long", long, "rate-limit");
   setCooldown("acct-long", Date.now() + 5 * 60_000, "server");
   const until = cooldownUntil("acct-long");
-  const db = new DatabaseSync(path.join(UNIT_DIR, "buddy.db"));
+  const db = new DatabaseSync(path.join(UNIT_DIR, "buddy.db"), { timeout: BUSY_TIMEOUT_MS });
   const reason = String(
     (db.prepare("SELECT reason FROM cooldown WHERE provider_id = ?").get("acct-long") as any)?.reason ?? "",
   );
@@ -687,25 +755,33 @@ console.log("算法：冷却的四条规矩");
   // 冷却的话，同一平台上别的模型会跟着下线，fallback 的第二个目标也被跳过。
   check("上游 5xx → 不冷却账号（哪怕它给了 retry-after）", serverDecision === null, JSON.stringify(serverDecision));
 
-  // 4. 连接与超时不是账号的错：只冷却 1 分钟；上游自己说了就照它说的来。
+  // 4. 连接不是账号的错：一个也不记。上游自己说了 retry-after 也不记 ——
+  //    连接被掐断说的是「这一次没成事」，不是「这个账号不能用了」。
+  //    超时同理，见下面那段。
   const connectionError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
   const connectionDecision = cooldownForFailure("acct-connection", connectionError, now);
   check(
-    "连接类失败 → 固定 1 分钟（不是 5 分钟）",
-    connectionDecision !== null &&
-      connectionDecision.source === "fixed" &&
-      Math.abs(connectionDecision.untilMs - (now + 60_000)) <= 1000,
+    "连接类失败 → 不记账（没有冷却）",
+    connectionDecision === null,
     JSON.stringify(connectionDecision),
   );
 
+  // 超时不记账：超时说的是「这一条请求等得太久」，不是「这个账号不能用了」。
+  // 记冷却会把一个好账号挡在门外好几分钟，而答复照旧是那条超时错误 —— 客户端
+  // 自己会重试。
   const timeoutError = Object.assign(new Error("timeout"), { name: "TimeoutError" });
   const timeoutDecision = cooldownForFailure("acct-timeout", timeoutError, now);
+  check("超时类失败 → 不记账（没有冷却）", timeoutDecision === null, JSON.stringify(timeoutDecision));
+
+  // 对照组一：凭据被拒照旧记 5 分钟 —— 别把「超时不记」做成了一律不记。
+  const refusedError = withUpstreamStatus(new AuthError("凭据被拒", "", 502), 401);
+  const refusedDecision = cooldownForFailure("acct-refused", refusedError, now);
   check(
-    "超时类失败 → 固定 1 分钟（不是 5 分钟）",
-    timeoutDecision !== null &&
-      timeoutDecision.source === "fixed" &&
-      Math.abs(timeoutDecision.untilMs - (now + 60_000)) <= 1000,
-    JSON.stringify(timeoutDecision),
+    "凭据被拒 → 照旧记 5 分钟（对照组：不是一律不记）",
+    refusedDecision !== null &&
+      refusedDecision.reason === "credential" &&
+      Math.abs(refusedDecision.untilMs - (now + 5 * 60_000)) <= 1000,
+    JSON.stringify(refusedDecision),
   );
 
   // 上游 5xx（没给 retry-after）同样不冷却账号：账号本身没毛病。
@@ -723,10 +799,8 @@ console.log("算法：冷却的四条规矩");
     now,
   );
   check(
-    "连接类失败但上游说了 40 秒 → 用上游的 40 秒（不是 1 分钟）",
-    attachedConnectionDecision !== null &&
-      attachedConnectionDecision.source === "the upstream's answer" &&
-      Math.abs(attachedConnectionDecision.untilMs - (now + 40_000)) <= 1000,
+    "连接类失败但上游说了 40 秒 → 还是不记账",
+    attachedConnectionDecision === null,
     JSON.stringify(attachedConnectionDecision),
   );
 }
@@ -782,6 +856,84 @@ console.log("算法：限流是分钟级的 —— 冷却一分钟，不是一�
       quotaDecision.source === "fixed" &&
       Math.abs(quotaDecision.untilMs - (now + 5 * 60_000)) <= 1_000,
     JSON.stringify(quotaDecision),
+  );
+}
+
+console.log("");
+console.log("回归：测试自己的连接要等锁（CI 上撞过 database is locked）");
+{
+  // 让 store 把这个库建出来（cooldown 表在里面）。
+  const { store } = await import("../lib/store.ts");
+  store();
+  const dbFile = path.join(UNIT_DIR, "buddy.db");
+
+  // 持锁的是另一个线程：主线程写库时是同步阻塞的，锁只能由别处放开。
+  const holder = new Worker(
+    [
+      'const { DatabaseSync } = process.getBuiltinModule("node:sqlite");',
+      'const { parentPort } = process.getBuiltinModule("node:worker_threads");',
+      `const db = new DatabaseSync(process.env.LOCK_DB, { timeout: ${BUSY_TIMEOUT_MS} });`,
+      'db.exec("BEGIN IMMEDIATE");',
+      'db.prepare("INSERT INTO cooldown (provider_id, until_ms, reason, updated_at) VALUES (?, ?, ?, ?)")',
+      '  .run("lock-holder", Date.now() + 600000, "lock", Date.now());',
+      'parentPort.postMessage("locked");',
+      "setTimeout(() => {",
+      '  db.exec("COMMIT");',
+      "  db.close();",
+      '  parentPort.postMessage("released");',
+      "}, 250);",
+    ].join("\n"),
+    { eval: true, env: { ...process.env, LOCK_DB: dbFile } },
+  );
+
+  const seen: string[] = [];
+  let holderError = "";
+  holder.on("message", (m: unknown) => {
+    seen.push(String(m));
+  });
+  holder.on("error", (e: unknown) => {
+    holderError = String(e);
+  });
+  const waitFor = async (what: string, ms = 5000): Promise<boolean> => {
+    const deadline = Date.now() + ms;
+    while (!seen.includes(what)) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return true;
+  };
+
+  const locked = await waitFor("locked");
+  const until = Date.now() + 60_000;
+  const started = Date.now();
+  let failure: unknown = null;
+  try {
+    writeCooldown(UNIT_DIR, "waited-while-locked", until, "test");
+  } catch (e) {
+    failure = e;
+  }
+  const waited = Date.now() - started;
+  // 「没有抛错」不够：还得真的撞上锁等过（不然这条断言什么都没证明）。
+  check(
+    `锁着的时候写冷却没有抛错（等到了锁释放，${waited}ms）`,
+    failure === null && locked && waited >= 100,
+    [
+      failure instanceof Error ? `${failure.message} ${(failure as { code?: string }).code ?? ""}` : String(failure),
+      locked ? "" : "持锁的线程没拿到锁",
+      holderError,
+    ]
+      .filter(Boolean)
+      .join(" / "),
+  );
+
+  await waitFor("released");
+  await holder.terminate();
+
+  const row = cooldownRow(UNIT_DIR, "waited-while-locked");
+  check(
+    "锁释放之后写进去的那一行是对的",
+    row !== null && row.untilMs === until && row.reason === "test",
+    JSON.stringify(row),
   );
 }
 

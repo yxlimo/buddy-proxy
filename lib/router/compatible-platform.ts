@@ -38,8 +38,30 @@ export interface CompatiblePlatform {
   what?: string;
   /** 登录办法。key 类平台通常是 "api_key"。 */
   login: ProviderKind["login"];
+  /**
+   * 这一类上游发推理请求时拿哪一份凭据。
+   *
+   * 开放平台都是 key 鉴权，所以这一项基本是 "api_key"；写在这里是为了让
+   * 每一类都明说自己的推理凭据是哪一份，不靠默认值猜。
+   */
+  inferWith: ProviderKind["inferWith"];
   /** 要不要区域。 */
   needsRegion?: boolean;
+  /**
+   * 这一类平台默认的推理地址（不给就是没有）。
+   *
+   * 跟其它能力格一起登记进注册表：额度请求靠它分辨「行上的地址还是默认那台」
+   * （lib/quota-plugins.ts 的 quotaEndpointBase）。行上的地址还等于它时，额度问
+   * 插件自己那台（门户、控制台、钱包）；用户把行指到别处时，跟着行走。
+   */
+  defaultBaseUrl?: string;
+  /**
+   * 这一类平台默认用哪个额度插件（不给就是没有额度接口）。
+   *
+   * 登记时一次成形：面板建平台时拿它预填那一格（用户可以改），平台行上填的是
+   * 用户最后选的那个。
+   */
+  defaultQuotaPlugin?: string;
   /** 支持的生效策略。默认 ["single", "fallback"]。 */
   policies?: ProviderKind["policies"];
   /** 推理端点的基础地址（`/chat/completions` 由工厂接上）。 */
@@ -51,6 +73,13 @@ export interface CompatiblePlatform {
    * 的，而 `provider` 只说明是哪个平台。
    */
   keyOf(provider: ProviderRow, accountId?: string): string;
+  /**
+   * 问上游要模型目录时带的鉴权头。不给就按 Bearer 发。
+   *
+   * 与推理那一条路分开：绝大多数上游两处一个样，但 Anthropic 那一族不是
+   * （目录也只认 `x-api-key`），所以方言要说得出自己的头。
+   */
+  catalogAuth?(key: string): Record<string, string>;
   /** 模型目录。 */
   models(provider: ProviderRow): CatalogModel[];
   /** 额度视图。不给就是没有。 */
@@ -78,7 +107,14 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     // 平台直接转发：agent 写的请求原样过去，会话相关的头也跟着过去。
     openPlatform: true,
     policies: platform.policies ?? ["single", "fallback"],
+    ...(platform.defaultBaseUrl ? { defaultBaseUrl: platform.defaultBaseUrl } : {}),
+    ...(platform.defaultQuotaPlugin ? { defaultQuotaPlugin: platform.defaultQuotaPlugin } : {}),
     baseUrl: platform.baseUrl,
+    inferWith: platform.inferWith,
+    // 明文 key 也登记到注册表上：转发层与「问上游要模型目录」要的是同一把，
+    // 各自去各家私有的 getter 取一遍就是两份知识。
+    keyOf: platform.keyOf,
+    ...(platform.catalogAuth ? { catalogAuth: platform.catalogAuth } : {}),
     credential: platform.credential ?? (() => missingCredential()),
     models: platform.models,
     quotas: platform.quotas ?? (() => []),
@@ -88,7 +124,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
       toOpenAiPlatform(ctx, body, route, dialect, stream, out, {
         log: platform.kind,
         what: platform.what ?? platform.label,
-        chat: (openaiBody, headers, accountId) => {
+        chat: (openaiBody, headers, accountId, signal) => {
           const row = rowOf(accountId, platform.kind, route.platform);
           return openAiPlatformChat(
             {
@@ -99,6 +135,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
             },
             openaiBody,
             headers,
+            signal,
           );
         },
       }),

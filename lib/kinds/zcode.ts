@@ -21,7 +21,7 @@ function zcodeQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView
   if (!buckets.length) return [];
   return [
     {
-      upstreamId: provider.id,
+      upstreamId: provider.platform,
       accountId: provider.id,
       // Start Plan 的额度是 token 桶：它是一份「还剩多少 token」的额度。
       credits: {
@@ -47,6 +47,8 @@ registerKind({
   login: "browser",
   policies: ["single", "fallback"],
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
+  // 推理用的就是凭据文件里那份 JWT：会话本身就是推理凭据。
+  inferWith: "session",
   credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session"),
   models: () => zcodeCatalogModels(zcodeModelsInUse()),
   quotas: (provider, snapshot) => zcodeQuotas(provider, snapshot),

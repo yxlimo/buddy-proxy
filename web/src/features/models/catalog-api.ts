@@ -3,17 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ListModelsRequestSchema } from '@/gen/buddy/admin/v1/admin_pb'
 import { UpstreamState } from '@/gen/buddy/admin/v1/admin_pb'
 import { useAdminClient } from '@/features/auth/client-provider'
-
-const catalogKeys = {
-  /**
-   * 目录的缓存键带上了上游的状态。
-   *
-   * 上游关着的时候 ListModels 不返回它的模型 —— 开关变了、目录也变了，
-   * 键不变的话界面上会留着上一次的目录（看着像还有模型，其实已经关了）。
-   */
-  models: (upstreamId: string, state: UpstreamState) =>
-    ['catalog', upstreamId, state] as const,
-}
+import { queryKeys } from '@/lib/query-keys'
 
 /**
  * 某个上游组的模型目录。
@@ -24,7 +14,9 @@ const catalogKeys = {
 export function useCatalogModels(upstreamId: string, state: UpstreamState) {
   const client = useAdminClient()
   return useQuery({
-    queryKey: catalogKeys.models(upstreamId, state),
+    // 键带上了上游的状态：上游关着的时候 ListModels 不返回它的模型，开关变了
+    // 目录也变了，键不变的话界面上会留着上一次那份（看着像还有模型）。
+    queryKey: queryKeys.catalog.models(upstreamId, state),
     queryFn: () =>
       client.listModels(
         create(ListModelsRequestSchema, { upstreamId })

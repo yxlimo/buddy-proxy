@@ -19,11 +19,10 @@ import {
 import { qoderChatCompletion, LimitError } from "../../qoder/transport.ts";
 import type { QoderRegion } from "../../qoder/auth.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../../qoder/legacy.ts";
-import { ClientGoneError } from "../deliver.ts";
 import { deliverJson, deliverOpenAIChunks, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { platformOf } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { asClientGone, watchClientGone } from "./client-gone.ts";
+import { runUnderClientGone } from "./client-gone.ts";
 import { type UpstreamContext, settlement, underPolicy } from "./policy.ts";
 
 /**
@@ -86,71 +85,61 @@ export async function toQoder(
   // 非流式那条路尤其要紧：答复要等整个上游的答复读完才发出去，客户端在这
   // 中间走了（超时、按了取消），没人停上游的话它就接着算到超时（2026-11-03，
   // 作者复查发现）。
-  const watch = watchClientGone(out);
-  let upstream: Response;
-  try {
-    upstream = await underPolicy(
+  await runUnderClientGone(out, async (guard) => {
+    const upstream = await underPolicy(
       route.platform,
       "qoder",
       (account) =>
         qoderWithRetry(
           () =>
-            qoderChatCompletion(openaiBody, { stream, providerId: account.id, region, signal: watch.signal }).catch((e) => {
+            qoderChatCompletion(openaiBody, { stream, providerId: account.id, region, signal: guard.signal }).catch((e) => {
               // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却。
-              throw asClientGone(e, watch);
+              throw guard.fail(e) ?? e;
             }),
           ctx.qoderMaxAttempts,
         ),
       settle,
+      ctx.availability,
     );
-  } catch (e) {
-    // 客户端走了不是上游的错：不能因此给账号记冷却，也不能换账号再打一次。
-    // 先翻译再停：`watch.gone()` 靠那个信号判，信号要先在才能判准。
-    const failure = asClientGone(e, watch);
-    watch.stop();
-    throw failure;
-  }
-
-  if (!stream) {
-    let json: any;
-    try {
-      json = await upstream.json();
-    } catch (e) {
-      // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
-      const failure = asClientGone(e, watch);
-      if (failure instanceof ClientGoneError) {
-        settle.failure(failure);
-        throw failure;
+    if (!stream) {
+      let json: any;
+      try {
+        json = await upstream.json();
+      } catch (e) {
+        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
+        const gone = guard.fail(e);
+        if (gone) {
+          settle.failure(gone);
+          throw gone;
+        }
+        throw e;
       }
-      throw e;
-    } finally {
-      watch.stop();
+      deliverJson(out, dialect, "openai", json, route.label ?? upstreamModel(route), ctx.onUsage);
+      settle.success();
+      return;
     }
-    deliverJson(out, dialect, "openai", json, route.label ?? upstreamModel(route), ctx.onUsage);
-    settle.success();
-    return;
-  }
-  // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
-  // lib/router/deliver.ts 的 replyState）。这里的 watch 在上游回第一帧之前就
-  // 停了 —— 流式那条路的客户端走了，靠的是答复那一层自己的监听器与看门狗。
-  watch.stop();
+    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
+    // lib/router/deliver.ts 的 replyState）。这里的看不盯了 —— 流式那条路的
+    // 客户端走了，靠的是答复那一层自己的监听器与看门狗。
+    guard.done();
 
-  try {
-    await deliverOpenAIStream(
-      out,
-      upstream.body!,
-      dialect,
-      route.label ?? upstreamModel(route),
-      undefined,
-      ctx.onUsage,
-      (e) => settle.failure(e),
-    );
-    settle.success();
-  } catch (e) {
-    // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
-    settle.failure(e);
-    throw e;
-  }
+    try {
+      await deliverOpenAIStream(
+        out,
+        upstream.body!,
+        dialect,
+        route.label ?? upstreamModel(route),
+        undefined,
+        ctx.onUsage,
+        (e) => settle.failure(e),
+      );
+      settle.success();
+    } catch (e) {
+      // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
+      settle.failure(e);
+      throw e;
+    }
+  });
 }
 
 /**
@@ -198,6 +187,7 @@ export async function toQoderLegacy(
         ctx.legacyRetryMs,
       ),
     settle,
+    ctx.availability,
   );
 
   if (!stream) {
@@ -231,7 +221,7 @@ export function legacyError(error: { code?: string; message?: string; status?: n
   if (error.status === 403 && /pricing/i.test(error.message ?? "")) {
     return new AuthError(
       "the qoder account has no credits left",
-      "Qoder 的额度用完了（套餐和加购都没了）。充值，或等额度重置后再试。",
+      "Qoder 的额度已用尽（套餐与加购额度均无）。请充值，或等额度重置后重试。",
       402,
       "usage_limit_error",
     );
