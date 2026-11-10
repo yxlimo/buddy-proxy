@@ -361,12 +361,99 @@ console.log("降级的分类");
 }
 
 {
-  // Qoder 的排队：请求在同一个账号上等，不是额度用尽，所以不换账号。
-  const { LimitError } = await import("../lib/qoder/transport.ts");
-  const busy = new LimitError("qoder model is queued (HTTP 429)", "排队", 30);
-  const failure = classifyUpstreamError(busy);
-  check("Qoder 的排队 → 不降级", failure.degradable === false, failure.kind);
-  check("Qoder 的排队 → busy", failure.kind === "busy", failure.kind);
+  // Qoder 的排队：上游把模型排进了队列。模型没槽位不等于账号坏了：
+  // 另一个上游有自己的队列，所以这是可降级的；冷却不写它（见
+  // lib/router/account-cooldown.ts）。
+  const { QueuedError } = await import("../lib/qoder/queue.ts");
+  const { cooldownForFailure } = await import("../lib/router/account-cooldown.ts");
+  const queued = new QueuedError("qoder model is still queued after 2 attempts", "排队", 60);
+  const failure = classifyUpstreamError(queued);
+  check("Qoder 的排队 → 降级（另一个上游有自己的队列）", failure.degradable === true, failure.kind);
+  check("Qoder 的排队 → queued", failure.kind === "queued", failure.kind);
+  check("Qoder 的排队 → 上游没有给过状态（200 的流里说的）", failure.status === null, String(failure.status));
+  check(
+    "Qoder 的排队 → 不记冷却（账号没坏，它别的模型还能用）",
+    cooldownForFailure("acct-queued", queued) === null,
+    JSON.stringify(cooldownForFailure("acct-queued", queued)),
+  );
+  check(
+    "Qoder 的排队 → 同一个账号不再重打（不在瞬时失败那一类里）",
+    classifyUpstreamError(queued).kind !== "server" && classifyUpstreamError(queued).kind !== "connection",
+    failure.kind,
+  );
+  // 那个 429 是**网关**替客户端说的（过一会儿再来），上游从没回过 —— 排队那句话
+  // 是在 200 的流里说的。它不该进「上游说过」那一格：进了的话，重试用尽那条
+  // 路会把客户端那句「等到它给的时间再试，仍在排队」重建成「上游返回 429。」。
+  check(
+    "Qoder 的排队 → 429 是网关说的，不算上游回过的话",
+    upstreamStatusOf(queued) === null,
+    String(upstreamStatusOf(queued)),
+  );
+  check(
+    "Qoder 的排队 → 客户端拿到的还是 429（那是网关的答复）",
+    queued.status === 429,
+    String(queued.status),
+  );
+}
+
+{
+  // 反证：走了 gaveUp 那条路（重试用尽），客户端仍要看到排队那句。
+  //
+  // 这条护的是「那个 429 不算上游说的话」：一旦它又进了「上游说过」那一格，
+  // 这里拿到的 hint 就变成「上游返回 429。」，排队那句就没了。
+  const { QueuedError } = await import("../lib/qoder/queue.ts");
+  const { runWithRetries } = await import("../lib/router/upstreams/policy.ts");
+  const queueHint =
+    "上游把这个模型排进了队列：等到它给的时间再试，仍在排队（共试了 1 次）。";
+  const queued = new QueuedError("qoder model is still queued after 1 attempts", queueHint, 60);
+  let hint = "";
+  try {
+    await runWithRetries(
+      { id: "1" },
+      "排队",
+      async (): Promise<never> => {
+        throw queued;
+      },
+      { sleep: async () => {}, budgetMs: 1 },
+    );
+  } catch (e: any) {
+    hint = String(e?.hint ?? "");
+  }
+  check("排队经过重试用尽那条路，客户端仍看到排队那句", hint === queueHint, hint);
+}
+
+{
+  // 反证：把排队当成不可降级（以前 busy 那个样）→ 第二个账号不会被试。
+  // 这一条不测实现，测的是断言本身的判别力。
+  const { QueuedError } = await import("../lib/qoder/queue.ts");
+  const queued = new QueuedError("qoder model is still queued after 2 attempts", "排队", 60);
+  const tried: string[] = [];
+  let caught: any = null;
+  try {
+    await selectProvider("fallback", three(tried, queued), { degradable: () => false });
+  } catch (e) {
+    caught = e;
+  }
+  check("反证：当作不可降级时第二个账号没被试", tried.join(",") === "first", tried.join(","));
+  check("反证：客户端拿到的是那个排队错", caught === queued, String(caught?.name));
+}
+
+{
+  // 可降级：第二个目标接手（绕过 underPolicy，直接问同一个判据）。
+  const { QueuedError } = await import("../lib/qoder/queue.ts");
+  const queued = new QueuedError("qoder model is still queued after 2 attempts", "排队", 60);
+  const tried: string[] = [];
+  let value: any = null;
+  let caught: any = null;
+  try {
+    value = await selectProvider("fallback", three(tried, queued), {
+      degradable: isDegradableUpstreamError,
+    });
+  } catch (e) {
+    caught = e;
+  }
+  check("排队 → 换到第二个目标", tried.join(",") === "first,second", tried.join(","));
+  check("排队 → 客户端拿到第二个目标的答复", value === "answer from second", String(value ?? caught?.name));
 }
 
 console.log("");
@@ -1322,6 +1409,108 @@ console.log("重试：没有人可换时无限重试，有人可换时试三次�
       rateLimitWaitMs(limited) !== null,
       String(rateLimitWaitMs(limited)),
     );
+  }
+
+  // 21. 排队：换下一个账号，同一个账号只打一次，而且不写冷却。
+  //
+  //     上游把模型排进了队列，等过一次仍是排队。这不是账号的错（它别的模型还能
+  //     用），也不是「请求本身的问题」（另一个账号有自己的队列）。所以：不重打、
+  //     不冷却、换人。
+  {
+    const { underPolicy } = await import("../lib/router/upstreams/policy.ts");
+    const { addAccount, provider, updateProvider } = await import("../lib/providers.ts");
+    const { setPlatformPolicy } = await import("../lib/platforms.ts");
+    const { QueuedError } = await import("../lib/qoder/queue.ts");
+    const { listCooldowns } = await import("../lib/cooldown.ts");
+    setPlatformPolicy("qoder", "fallback");
+
+    const madeA = addAccount({ platform: "qoder", alias: "排队的甲" });
+    const madeB = addAccount({ platform: "qoder", alias: "排队的乙" });
+    if (!madeA.ok || !madeA.id || !madeB.ok || !madeB.id) {
+      throw new Error(`加不了 Qoder 的账号：${madeA.message} ${madeB.message}`);
+    }
+    updateProvider(String(madeA.id), { weight: 900 });
+    updateProvider(String(madeB.id), { weight: 100 });
+    const rowA = provider(String(madeA.id));
+    const rowB = provider(String(madeB.id));
+    if (!rowA || !rowB) throw new Error("找不到刚建的两个 Qoder 账号");
+
+    const rows = [rowA, rowB];
+    const availability: PlatformAvailability = {
+      platform: "qoder",
+      kind: "qoder",
+      state: "ready",
+      usable: rows,
+      serving: rows,
+      cooling: new Map<string, number>(),
+      spent: new Map<string, number | null>(),
+      accounts: rows.length,
+      rows,
+      on: rows.length,
+      advice: "测试用的可用性",
+      catalog: [],
+      ids: [],
+      untilMs: null,
+      reason: "测试用的可用性",
+    };
+
+    const clock = fakeClock();
+    const calls: string[] = [];
+    const queued = () => new QueuedError("qoder model is still queued after 2 attempts", "排队", 60);
+    let value: any = null;
+    let threw: any = null;
+    try {
+      value = await underPolicy(
+        "qoder",
+        "排队",
+        async (account) => {
+          calls.push(account.id);
+          if (account.id === rowA.id) throw queued();
+          return "answer from b";
+        },
+        undefined,
+        availability,
+        { now: clock.now, sleep: clock.sleep },
+      );
+    } catch (e) {
+      threw = e;
+    }
+    check("排队：换到第二个账号并成功", value === "answer from b", String(value ?? threw?.name));
+    check("排队：第一个账号只被叫了一次", calls.filter((id) => id === rowA.id).length === 1, calls.join(","));
+    check("排队：第二个账号只被叫了一次", calls.filter((id) => id === rowB.id).length === 1, calls.join(","));
+    check("排队：策略这一层一次也没等（等在上游那一边）", clock.slept.length === 0, JSON.stringify(clock.slept));
+    check(
+      "排队：冷却表里没有这个账号",
+      listCooldowns().every((row: any) => row.providerId !== rowA.id),
+      JSON.stringify(listCooldowns().filter((row: any) => row.providerId === rowA.id)),
+    );
+
+    // 反证：把排队当不可降级 → 第二个账号不会被试，客户端拿到错误。
+    //
+    // 修过的那条判据（degradable）只要一回头，这条就红。
+    const { selectProvider: select } = await import("../lib/router/provider-selection.ts");
+    const tried: string[] = [];
+    let caught: any = null;
+    try {
+      await select(
+        "fallback",
+        [
+          { id: rowA.id, weight: 900, run: async () => {
+            tried.push(rowA.id);
+            throw queued();
+          } },
+          { id: rowB.id, weight: 100, run: async () => {
+            tried.push(rowB.id);
+            return "answer from b";
+          } },
+        ],
+        { degradable: () => false },
+      );
+    } catch (e) {
+      caught = e;
+    }
+    check("反证：当作不可降级时第二个账号没被试", tried.join(",") === rowA.id, tried.join(","));
+    check("反证：客户端拿到那个排队错", caught?.name === "QueuedError", String(caught?.name));
   }
 
   stopLogging();

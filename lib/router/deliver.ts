@@ -10,12 +10,11 @@ import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../credential.ts";
-import { LimitError } from "../qoder/transport.ts";
 import { anthropicStreamToOpenAI, openaiStreamToAnthropic } from "../dialect/stream.ts";
 import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect/response.ts";
 import { parseLooseJson, readOpenAIChunks, readOrAbort, readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
 import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode } from "../upstream-status.ts";
-import { scrubForLog } from "../log-scrub.ts";
+import { scrubForClient, scrubForLog } from "../log-scrub.ts";
 import { readEnvNumber } from "../env.ts";
 
 export type Dialect = "anthropic" | "openai";
@@ -841,7 +840,9 @@ export async function peekStream(
     // 上游原话进 hint：它才是「为什么拒」，客户端与状态原因都读 hint。
     // message 保持通用 —— 它被当成「哪一类失败」的标签，塞进上游正文会把
     // 分类和面板文案一起搅乱。
-    let said = text.trim().slice(0, 300);
+    // 抹一遍再出去：这句话进客户端读的 hint（上游的正文里可能有 key 片段、
+    // 邮箱、cookie），规矩与日志那边同一套（见 lib/log-scrub.ts）。
+    let said = scrubForClient(text.trim(), 300);
     const parsed = payloadIn(text);
     if (parsed) {
       const detail = parsed?.error ?? parsed;
@@ -852,7 +853,7 @@ export async function peekStream(
         typeof detail === "string"
           ? detail
           : detail?.message || detail?.msg || parsed?.message || parsed?.msg;
-      if (typeof words === "string" && words) said = words;
+      if (typeof words === "string" && words) said = scrubForClient(words, 300);
     }
     console.warn("[DELIVER] 上游在正文里报错：" + scrubForLog(said, 200));
     // 上游有时用 200 回一个错（渠道校验就是）。码要带上，否则日志里看不见
@@ -889,7 +890,9 @@ export async function peekStream(
 export function errorFromUpstreamPayload(detail: any): AuthError {
   return new AuthError(
     `upstream error (${detail?.type ?? detail?.code ?? "unknown"})`,
-    typeof detail?.message === "string" ? detail.message : JSON.stringify(detail).slice(0, 300),
+    typeof detail?.message === "string"
+      ? scrubForClient(detail.message, 300)
+      : scrubForClient(JSON.stringify(detail), 300),
     502,
   );
 }
@@ -1522,20 +1525,6 @@ export function sendError(ctx: Koa.Context, e: unknown, headers: Record<string, 
     }
     ctx.status = 499;
     ctx.body = { error: { type: "api_error", message: "the client went away" } };
-    return;
-  }
-  if (e instanceof LimitError) {
-    if (ctx.res.headersSent) {
-      ctx.res.end();
-      return;
-    }
-    ctx.status = 503;
-    if (Object.keys(extra).length) ctx.set(extra);
-    console.warn(`[DELIVER] 答复 503：${err?.message ?? "request failed"}`);
-    ctx.body = {
-      error: { type: "api_error", message: e.message },
-      hint: e.detail,
-    };
     return;
   }
   const status = typeof err?.status === "number" ? err.status : 500;

@@ -122,7 +122,6 @@ const gw = await startGateway({
     MINIMAX_CODE: "",
     WORKBUDDY_CN: "",
     TOKENRHYTHM: "",
-    QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
     QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
     QODER_GLOBAL_LEGACY_BASE: `${fakeBase}/qoder-global-legacy`,
     QODER_CN_INFER_BASE: `${fakeBase}/qoder-cn`,

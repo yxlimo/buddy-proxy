@@ -13,7 +13,7 @@
 //      换一个也一样没人要；而且那个上游白花钱。
 //
 // 这三件事在非流式那条路上最容易坏：答复要等整个上游的答复读完才发出去，客户端
-// 正好在这中间走。Qoder 的新协议非流式就是这么消费的（await upstream.json()）；
+// 正好在这中间走。Qoder 非流式就是这么消费的（帧读完才组装成一份答复）；
 // WorkBuddy 补的是另一个窗口 —— 上游连答复的头都还没发、workbuddyChat 还挂在
 // cliFetch 上的时候（2026-11-03，作者第三轮点名）。
 
@@ -24,6 +24,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
+import { legacyChunk, legacyEnd } from "./legacy-wire.ts";
 
 const SERVICE = "/buddy.admin.v1.AdminService";
 
@@ -139,18 +140,14 @@ const upstream = http.createServer((req, res) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     };
-    if (url.includes("/model/v1/chat/completions")) {
+    if (url.includes("/agent_chat_generation")) {
       // Qoder：上游在想。客户端在这个窗口里走掉。
       qoderHits++;
       qoderGotIt();
       const timer = setTimeout(() => {
-        json(200, {
-          id: "chatcmpl-fake",
-          object: "chat.completion",
-          model: "fake",
-          choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        });
+        if (res.writableEnded || res.destroyed) return;
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(legacyChunk("ok") + legacyEnd());
       }, THINK_MS);
       res.on("close", () => {
         // 答复还没写出来连接就断了：网关把上游掐掉了。
@@ -225,9 +222,9 @@ async function startGateway(): Promise<Gateway> {
   const gw = await startHarness({
     keepDataDir: true,
     env: {
-      QODER_GLOBAL_INFER_BASE: upstreamBase,
+      // Qoder 只剩一套协议了：假上游在 /agent_chat_generation 上答帧。
+      QODER_GLOBAL_LEGACY_BASE: upstreamBase,
       QODER_GLOBAL_OPENAPI_BASE: upstreamBase,
-      QODER_MAX_ATTEMPTS: "1",
       WORKBUDDY_CHAT_BASE: upstreamBase,
       // 认证与刷新走的是 ENDPOINTS 的基址，不是 chat 的：也指到假上游，
       // 这样这条用例无论走到哪一步都一个真请求都不会发出去。

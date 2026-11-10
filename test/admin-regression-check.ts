@@ -109,10 +109,10 @@ const gw = await startGateway({
   // 目录也是临时的，helper 在子进程死了之后删。
   cleanupDataDir: true,
   env: {
-    QODER_GLOBAL_INFER_BASE: `${mockBase}/qoder-global`,
+    // Qoder 只剩一套协议了：两个区都指向录下来的那一份（假上游按路径给 fixture）。
+    QODER_GLOBAL_LEGACY_BASE: `${mockBase}/qoder-legacy`,
     QODER_GLOBAL_OPENAPI_BASE: `${mockBase}/openapi-global`,
-    QODER_GLOBAL_LEGACY_BASE: `${mockBase}/qoder-global-legacy`,
-    QODER_CN_INFER_BASE: `${mockBase}/qoder-cn`,
+    QODER_CN_INFER_BASE: `${mockBase}/qoder-legacy`,
     QODER_CN_OPENAPI_BASE: `${mockBase}/openapi-cn`,
     WORKBUDDY_CHAT_BASE: `${mockBase}/workbuddy`,
     MINIMAX_BASE_URL: `${mockBase}/minimax/v1`,

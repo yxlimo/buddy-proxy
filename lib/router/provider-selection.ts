@@ -274,15 +274,17 @@ export function isNoBalanceFailure(error: unknown): boolean {
 /** What a failure says about the account that produced it. */
 export function classifyUpstreamError(error: unknown): UpstreamFailure {
   const status = upstreamStatusOf(error);
-  // Qoder's queue: the request waits on the same account and the account
-  // stays. Another account would only be another queue, so this one is not
-  // the account's fault.
+  // The upstream parked the model in a queue and waiting it out did not help.
   //
-  // The relay station's busy is different: it has already been retried on
-  // the same account (the transport does that), so when it still fails the
-  // account cannot serve the request at all right now — and it is counted as
-  // a 5xx, which is degradable.
-  if (isBusy(error)) return { degradable: false, status, kind: "busy" };
+  // Degradable: another target has its own queue, and this one being full says
+  // nothing about that one. Not the account's fault either, so it is not put
+  // aside (see cooldownForFailure): a cooldown takes the account's *other*
+  // models down with it, and those were never queued.
+  //
+  // No status: the queue answer arrives inside a 200 stream, so the upstream
+  // never sent one. The 429 the client finally sees is the gateway's own
+  // answer, not the upstream's.
+  if (isQueued(error)) return { degradable: true, status: null, kind: "queued" };
   // The platform's own code says more than the status does.
   const code = businessCodeOf(error);
   // 「这个免费模型被限流」：换账号没用（限的是模型），也不该把整个账号下线
@@ -302,10 +304,12 @@ export function classifyUpstreamError(error: unknown): UpstreamFailure {
     // 400, 404, 413 and the rest: the request itself.
     return { degradable: false, status, kind: "request" };
   }
+  // The network failure keeps its own name: "the host does not resolve" is a
+  // different problem from "the connection broke", and the two are handled
+  // differently (see TRANSIENT_KINDS in upstreams/policy.ts and
+  // cooldownForFailure in account-cooldown.ts).
   const network = networkReason(error);
-  if (network) {
-    return { degradable: true, status: null, kind: network === "timeout" ? "timeout" : "connection" };
-  }
+  if (network) return { degradable: true, status: null, kind: network };
   return { degradable: false, status: null, kind: "unknown" };
 }
 
@@ -388,11 +392,18 @@ function errorTextOf(error: unknown): string {
   return parts.join("\n");
 }
 
-/** Qoder's queue: the request waits on this account, so the account stays. */
-function isBusy(error: unknown): boolean {
+/**
+ * The upstream parked the model in a queue.
+ *
+ * The type carries the meaning, the way the transports carry theirs: the queue
+ * answer is not a status and not a business code — it is the upstream saying
+ * "no slot for this model right now, and waiting it out did not help" (see
+ * lib/qoder/queue.ts).
+ */
+function isQueued(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const name = String((error as { name?: unknown }).name ?? "");
-  return name === "LimitError";
+  return name === "QueuedError";
 }
 
 /**
@@ -411,6 +422,30 @@ const NETWORK_TIMEOUT_NAMES = new Set([
 ]);
 
 /**
+ * The codes that mean the host cannot be reached at all — not now, not later.
+ *
+ * `ENOTFOUND` is the one that matters: the name is not in the DNS, so every
+ * attempt fails the same way until someone fixes the address or the DNS.
+ * `EAI_FAIL` is the resolver saying the same thing in another dialect,
+ * `ERR_INVALID_URL` is an address that cannot even be parsed, and `ENOTSUP`
+ * is the address family this machine cannot use.
+ */
+const NETWORK_UNREACHABLE_CODES = new Set(["ENOTFOUND", "EAI_FAIL", "ERR_INVALID_URL", "ENOTSUP"]);
+
+/** The codes that mean the connection broke: worth another try on the same account. */
+const NETWORK_CONNECTION_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
  * The network failure behind an error, if that is what it is.
  *
  * A connection that failed, a socket that hung up, a timeout that ran out —
@@ -422,34 +457,71 @@ const NETWORK_TIMEOUT_NAMES = new Set([
  * step down the chain (undici throws `TypeError: terminated` and puts its own
  * error in the cause). Its default body timeout is five minutes, so a stream
  * that goes quiet ends up here — as "timeout", never as "connection".
+ *
+ * The whole chain is read before anything is decided, because the outermost
+ * error is usually undici's own words and nothing else: `TypeError: fetch
+ * failed` says nothing about why. Deciding on it (as this used to) turned a
+ * name that does not resolve into an ordinary broken connection — the same
+ * account was then retried every 2.7s until the attempt budget ran out
+ * (2026-11-10: one upstream host in its region had gone NXDOMAIN, one request
+ * made 67 attempts and hung the client for 180s).
+ *
+ * The three are asked in this order, and the order is the point:
+ *
+ *   1. timeout      — the socket was fine and then went quiet
+ *   2. unreachable  — the name is not in the DNS; nothing will fix it by waiting
+ *   3. connection   — the connection broke, which one more try often fixes
+ *
+ * "unreachable" outranks "connection": when one link in the chain says the
+ * host does not resolve, waiting will not change it.
  */
 function networkReason(error: unknown): string | null {
   const seen = new Set<unknown>();
+  const codes: string[] = [];
+  const names: string[] = [];
+  const messages: string[] = [];
+  let current: any = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    codes.push(String(current.code ?? ""));
+    names.push(String(current.name ?? ""));
+    messages.push(String(current.message ?? "").toLowerCase());
+    current = current.cause;
+  }
+  if (codes.some((code) => NETWORK_TIMEOUT_CODES.has(code)) || names.some((name) => NETWORK_TIMEOUT_NAMES.has(name))) {
+    return "timeout";
+  }
+  if (codes.some((code) => NETWORK_UNREACHABLE_CODES.has(code))) return "unreachable";
+  if (codes.some((code) => NETWORK_CONNECTION_CODES.has(code))) return "connection";
+  // A `fetch failed` with nothing under it is still a broken connection: that
+  // is all anyone can say about it.
+  if (messages.some((message) => message.includes("fetch failed") || message.includes("socket hang up"))) {
+    return "connection";
+  }
+  return null;
+}
+
+/**
+ * The network failure in its own words: the step of the chain that carries a
+ * code, or the last thing said when none of them does.
+ *
+ * The outer error only ever says `fetch failed`, so the reason lives one step
+ * down. Whoever tells the client what happened needs that step — and only that
+ * step: `fetch failed` is the one sentence the client must not be handed.
+ */
+export function networkDetailOf(error: unknown): string {
+  const seen = new Set<unknown>();
+  let withCode = "";
+  let last = "";
   let current: any = error;
   while (current && typeof current === "object" && !seen.has(current)) {
     seen.add(current);
     const code = String(current.code ?? "");
-    const name = String(current.name ?? "");
-    if (NETWORK_TIMEOUT_CODES.has(code) || NETWORK_TIMEOUT_NAMES.has(name)) return "timeout";
-    if (
-      [
-        "ECONNREFUSED",
-        "ECONNRESET",
-        "ETIMEDOUT",
-        "EHOSTUNREACH",
-        "ENETUNREACH",
-        "ENOTFOUND",
-        "EAI_AGAIN",
-        "EPIPE",
-        "UND_ERR_SOCKET",
-        "UND_ERR_CONNECT_TIMEOUT",
-      ].includes(code)
-    ) {
-      return "connection";
-    }
-    const message = String(current.message ?? "").toLowerCase();
-    if (message.includes("fetch failed") || message.includes("socket hang up")) return "connection";
+    const message = String(current.message ?? "");
+    const said = [code, message].filter(Boolean).join(" ");
+    if (said) last = said;
+    if (code && said) withCode = said;
     current = current.cause;
   }
-  return null;
+  return withCode || last;
 }

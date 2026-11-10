@@ -8,19 +8,22 @@
 import { AuthError } from "../../credential.ts";
 import type { WorkBuddyModel } from "../../workbuddy/models.ts";
 import { TokenRhythmNoBalanceError } from "../../tokenrhythm/transport.ts";
-import { byOrder, classifyUpstreamError, describeUpstreamError, isDegradableUpstreamError, isNoBalanceFailure, selectProvider } from "../provider-selection.ts";
+import { byOrder, classifyUpstreamError, describeUpstreamError, isDegradableUpstreamError, isNoBalanceFailure, networkDetailOf, selectProvider } from "../provider-selection.ts";
 import { byWeight } from "../selection.ts";
 import {
   businessCodeOf,
   businessCodeOfBody,
   cooldownUntilOf,
+  upstreamBodyOf,
   upstreamStatusOf,
   withBusinessCode,
   withCooldownUntil,
+  withUpstreamAnswer,
+  withUpstreamBody,
   withUpstreamStatus,
 } from "../../upstream-status.ts";
 import { clearCooldown, setCooldown } from "../../cooldown.ts";
-import { scrubForLog } from "../../log-scrub.ts";
+import { scrubForClient, scrubForLog } from "../../log-scrub.ts";
 import { cooldownForFailure, cooldownStamp, errorTextOf, rateWaitedOf, withRateWaited, type RateWaited } from "../account-cooldown.ts";
 import { readEnvNumber } from "../../env.ts";
 import { type ProviderRow } from "../../providers.ts";
@@ -31,11 +34,14 @@ import { withRetryAfter, ClientGoneError } from "../deliver.ts";
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
-  /** How often a queued legacy request is tried again. */
-  legacyMaxAttempts: number;
+  /**
+   * How long a queued legacy request waits before its one retry.
+   *
+   * Only the wait when the upstream gives no seconds of its own: how many
+   * times a queue is waited out is not a setting (see LEGACY_QUEUE_WAITS in
+   * upstreams/qoder.ts).
+   */
   legacyRetryMs: number;
-  /** How often a failed new-protocol request is tried again. */
-  qoderMaxAttempts: number;
   /** How often a busy relay is tried again, on the same account. */
   tokenRhythmMaxAttempts: number;
   /** Whether a request is written to the log. */
@@ -123,13 +129,14 @@ export function upstreamStatusError(
   console.warn(`[UPSTREAM] ${what}上游 ${status}：${scrubForLog(text, 500)}`);
   const error = new AuthError(
     `upstream HTTP ${status}`,
-    `${what}上游返回 ${status}：${text.slice(0, 300)}`,
+    // 这一句是客户端看的，上游正文里可能带着 key 片段、cookie、邮箱：抹的规矩
+    // 与日志那边同一套（见 scrubForClient）。
+    `${what}上游返回 ${status}：${scrubForClient(text, 300)}`,
     502,
   );
-  withUpstreamStatus(error, status);
-  // 上游自己的正文，原样留在错误上：重试试完了要把这份答复交给客户端（见
-  // upstreamAnswerError），那时候上游的正文已经不在手边了。
-  withUpstreamBody(error, text);
+  // 上游自己的状态与正文一起留着：状态给路由，正文给客户端（重试用尽时它就
+  // 是客户端看到的那一份答复，见 upstreamAnswerError）。两样只留一样是 bug。
+  withUpstreamAnswer(error, status, text);
   const code = businessCodeOfBody(text);
   if (code !== null) withBusinessCode(error, code);
   // 上游说的「过多久再来」：挂到错误上，等得起的时候网关自己等。
@@ -286,6 +293,10 @@ export function transientRetryPlan(): { delaysMs: readonly number[]; repeatLastM
  * 不在这里的：
  *   - timeout：这一次等得太久了，再等一次只是再久一次。超时直接交回客户端，
  *     让它自己决定要不要重试（见 underPolicy 里不写冷却那一条）。
+ *   - unreachable：主机名在 DNS 里查不到 —— 隔 300ms 再问一次还是查不到。
+ *     它是**永久**的错，所以一次就结束；「没有别人可换就一直试到总时限」那条
+ *     豁免也不适用于它（那个豁免是为「上游抽一下」设计的，重试一个不存在的
+ *     主机抽不好任何东西）。
  *   - rate-limit 走等窗口那条路（等的是分钟级的窗口，不是几十毫秒）；
  *     quota / no-balance / credential 是账号真的接不了，再试一次也是一样的答复；
  *     request 是请求本身的问题，换谁都一样；unknown 说不清是什么，不猜。
@@ -305,6 +316,11 @@ function isTimeoutFailure(error: unknown): boolean {
   return classifyUpstreamError(error).kind === "timeout";
 }
 
+/** 这个失败是「上游把模型排进了队列」吗。 */
+function isQueuedFailure(error: unknown): boolean {
+  return classifyUpstreamError(error).kind === "queued";
+}
+
 /**
  * 这个失败的日志怎么说：不记冷却的两种原因分开写。
  *
@@ -313,8 +329,27 @@ function isTimeoutFailure(error: unknown): boolean {
  */
 function whyNotCooling(error: unknown): string {
   if (isTimeoutFailure(error)) return ", timed out, not cooling down";
+  if (isQueuedFailure(error)) return ", the model is queued, not cooling down";
   if (rateWaitedOf(error)) return ", waited for the rate limit, not cooling down";
   return ", not cooling down";
+}
+
+/** 网络类失败的日志：光一个词说不出是哪儿不通。 */
+const NETWORK_KINDS = new Set(["connection", "timeout", "unreachable"]);
+
+/**
+ * 这次失败的日志怎么说。
+ *
+ * 网络类失败只说得出一个词（connection、timeout、unreachable），而真正的原因
+ * 在错误链的下一层（`getaddrinfo ENOTFOUND <那个主机>`）。日志里带上它，
+ * 排查的人就不必再自己去查一次 DNS —— 2026-11-10 那次就是这样认错了对象：
+ * 日志只写「connection」，而那个主机早就是 NXDOMAIN。
+ */
+function describedForLog(error: unknown): string {
+  const described = describeUpstreamError(error);
+  if (!NETWORK_KINDS.has(classifyUpstreamError(error).kind)) return described;
+  const detail = networkDetailOf(error);
+  return detail ? `${described} ${detail}` : described;
 }
 
 /**
@@ -496,7 +531,7 @@ export async function runWithRetries<A extends { id: string }, T>(
       // （上游抽一下，多试几次就通）。
       if (!unbounded && attempts >= BOUNDED_ATTEMPTS) {
         console.log(
-          `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no attempt left (${attempts}/${BOUNDED_ATTEMPTS})`,
+          `[ROUTE] ${what} account=${account.id} ${describedForLog(e)}, no attempt left (${attempts}/${BOUNDED_ATTEMPTS})`,
         );
         stop(e, true);
       }
@@ -504,13 +539,13 @@ export async function runWithRetries<A extends { id: string }, T>(
       const delay = retryDelayMs(retries);
       if (clock() + delay > deadline) {
         console.log(
-          `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, no time left for a ${delay}ms retry`,
+          `[ROUTE] ${what} account=${account.id} ${describedForLog(e)}, no time left for a ${delay}ms retry`,
         );
         stop(e, true);
       }
       retries += 1;
       console.log(
-        `[ROUTE] ${what} account=${account.id} ${describeUpstreamError(e)}, retry ${retries} in ${delay}ms`,
+        `[ROUTE] ${what} account=${account.id} ${describedForLog(e)}, retry ${retries} in ${delay}ms`,
       );
       await nap(delay);
     }
@@ -525,31 +560,6 @@ export async function runWithRetries<A extends { id: string }, T>(
 function withoutRateWaited<T extends object>(error: T): T {
   delete (error as T & RateWaited).rateWaited;
   return error;
-}
-
-/**
- * 上游自己的正文，留在错误上。
- *
- * 客户端要看到的是上游的原话（503 就是 503 + 上游自己那句「服务暂不可用」），
- * 不是网关编的一句话。正文跟着错误走：重试试完了要交出这份答复的时候，上游
- * 那边已经不会再答一次了。
- */
-export interface UpstreamBody {
-  /** 上游自己的正文（原样）。 */
-  upstreamBody?: string;
-}
-
-/** 把上游的正文留在错误上。 */
-function withUpstreamBody<T extends object>(error: T, body: string): T {
-  (error as T & UpstreamBody).upstreamBody = body;
-  return error;
-}
-
-/** 错误里带着的上游正文（没有就是 null）。 */
-function upstreamBodyOf(error: unknown): string | null {
-  if (!error || typeof error !== "object") return null;
-  const body = (error as UpstreamBody).upstreamBody;
-  return typeof body === "string" && body ? body : null;
 }
 
 /**
@@ -580,7 +590,11 @@ function upstreamAnswerOf(error: unknown): { status: number; body: string } | nu
 function upstreamAnswerError(answered: { status: number; body: string }, original: unknown): AuthError {
   const error = new AuthError(
     `upstream HTTP ${answered.status}`,
-    answered.body.slice(0, 4000) || `上游返回 ${answered.status}。`,
+    // 上游的正文原样交给客户端 —— 但先抹一遍：上游回显在 401/忙/风控正文里的
+    // key 片段、cookie、邮箱、JWT 不该直达调用方。抹的规矩与日志那边是同一套
+    // （见 lib/log-scrub.ts 的 scrubForClient），差别只有上限：客户端要看到上游
+    // 说了什么，不是给一行日志留 200 字。
+    scrubForClient(answered.body, 4000) || `上游返回 ${answered.status}。`,
     answered.status,
     answerTypeOf(answered.status),
   );
@@ -646,6 +660,9 @@ export function accountFailure(
   lastError: unknown,
   noBalance: { message: string; hint: string },
 ): Error {
+  // 主机解析不出来：客户端要一句人话（见 unreachableFailure）。
+  const unreachable = unreachableFailure(lastError);
+  if (unreachable) return unreachable;
   if (isNoBalanceFailure(lastError)) {
     const trace = lastError instanceof TokenRhythmNoBalanceError ? lastError.traceId : "";
     const detail = lastError instanceof Error ? lastError.message : "";
@@ -665,6 +682,27 @@ export function accountFailure(
   }
   if (lastError instanceof Error) return lastError;
   return new AuthError(noBalance.message, noBalance.hint, 502);
+}
+
+/**
+ * 主机名解析不出来：客户端看到的那句话。
+ *
+ * Node 与 undici 自己的说法（`fetch failed`、`terminated`）既不是在说客户端的
+ * 请求出了什么事，也不是它能处理的东西；真正的原因在 cause 里（`getaddrinfo
+ * ENOTFOUND 那台主机`），那句话要原样带到眼前 —— 排查的人和客户端都靠它。
+ *
+ * 不是这一类就返回 null：别的失败自己会说话（上游的答复比网关编的一句话有用）。
+ */
+function unreachableFailure(error: unknown): AuthError | null {
+  if (classifyUpstreamError(error).kind !== "unreachable") return null;
+  const detail = networkDetailOf(error);
+  const shaped = new AuthError(
+    "upstream host cannot be resolved",
+    `上游的主机名解析不出来${detail ? `（${detail}）` : ""}：这个地址在 DNS 里查不到，` +
+      "重试同一个地址没有意义。把地址改回可解析的主机之前，这个上游都用不了。",
+    502,
+  );
+  return keepUpstreamTruth(shaped, error);
 }
 
 /**
@@ -835,7 +873,7 @@ export function settlement(): Settlement {
         }
       }
       console.log(
-        `[ROUTE] ${what} account=${accountId} cannot serve it (${describeUpstreamError(error)})` +
+        `[ROUTE] ${what} account=${accountId} cannot serve it (${describedForLog(error)})` +
           (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : ", not cooling down"),
       );
     },
@@ -1029,6 +1067,17 @@ export async function underPolicy<T>(
   }
 
   return selectProvider(policy, candidates, {
+    // 账号层「这个失败要不要换人」的判据。
+    //
+    // 它只看得到 `run` 抛出来的错，而老协议那条路上 `run` 只把流的迭代器交回来
+    // —— 请求是在 underPolicy 返回之后才开始发的（见 lib/router/upstreams/qoder.ts
+    // 的 run：它 return 的是一个还没被 next() 的生成器，读正文、转发给客户端都
+    // 在策略之外）。所以那一路上帧里带的失败（排队、限流、没额度）走不到这里，
+    // 账号层不会因为这些错换人，也不会跳过这个账号。
+    //
+    // 后果要说清楚：老协议那一路的换人是**根路由**（lib/router/handle.ts 的
+    // select）在换 target，不是这里在换账号。账号表只在这里替「连接层就失败」
+    // 的那几种（凭据读不出来、发请求时上游直接 4xx/5xx）做决定。
     degradable: isDegradableUpstreamError,
     onAttempt: (candidate, error) => {
       if (!error) {
@@ -1073,14 +1122,17 @@ export async function underPolicy<T>(
       if (next) switching = `, trying ${next}`;
       else if (moves && policy === "fallback") switching = ", no account left";
       console.log(
-        `[ROUTE] ${what} account=${candidate.id} cannot serve it (${describeUpstreamError(error)})` +
+        `[ROUTE] ${what} account=${candidate.id} cannot serve it (${describedForLog(error)})` +
           switching +
           (decision ? `, cooling down until ${cooldownStamp(decision.untilMs)}` : whyNotCooling(error)),
       );
     },
-    // The caller sees the error the upstream produced, not a new one.
+    // The caller sees the error the upstream produced, not a new one — except
+    // when that error is Node's own words for something the client cannot
+    // read (see unreachableFailure).
     failure: (lastError) =>
-      lastError instanceof Error ? lastError : new AuthError("upstream failed", "上游没有响应。", 502),
+      unreachableFailure(lastError) ??
+      (lastError instanceof Error ? lastError : new AuthError("upstream failed", "上游没有响应。", 502)),
   });
 }
 

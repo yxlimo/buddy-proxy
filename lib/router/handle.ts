@@ -15,14 +15,13 @@ import type { Json } from "../json.ts";
 import Koa from "koa";
 import { configFlag, configNumber } from "../config.ts";
 import { AuthError } from "../credential.ts";
-import { LimitError } from "../qoder/transport.ts";
 import { allPlatforms, platformOfAny } from "../platforms.ts";
 import { upstreamStatusOf } from "../upstream-status.ts";
 import { kindOf } from "../provider-kinds.ts";
 import { recordAggregateUsage } from "../aggregate.ts";
 import type { AggregateEntry } from "./catalog.ts";
 import { select, SelectionStop, byWeight } from "./selection.ts";
-import { describeUpstreamError } from "./provider-selection.ts";
+import { classifyUpstreamError, describeUpstreamError } from "./provider-selection.ts";
 import { recordUsage, maxTotals, usageTotals } from "../usage.ts";
 import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } from "../agent.ts";
 import { workbuddyCatalog } from "../admin/upstreams.ts";
@@ -50,11 +49,9 @@ import { platformAvailabilities, type PlatformAvailability, type PlatformState }
 import { ClientGoneError, sendError } from "./deliver.ts";
 
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
-// The legacy endpoint queues models and reports 429 while a request waits. The
-// CLI retries these, so the proxy does too — with the same shape.
-const LEGACY_MAX_ATTEMPTS = configNumber("QODER_LEGACY_ATTEMPTS", 3);
+// 上游排队时等多久（毫秒）：上游自己说了秒数就用它的，没说就用这个。等几次不是
+// 设置 —— 排队只等一次，实测等完它给的秒数再打还是排队。
 const LEGACY_RETRY_MS = configNumber("QODER_LEGACY_RETRY_MS", 10000);
-const QODER_MAX_ATTEMPTS = configNumber("QODER_MAX_ATTEMPTS", 3);
 const LOG_ROUTE = configFlag("QODER_LOG_ROUTE", false);
 
 type Dialect = "anthropic" | "openai";
@@ -70,9 +67,7 @@ function upstreamContext(
   availabilities?: Map<string, PlatformAvailability>,
 ): UpstreamContext {
   const uctx: UpstreamContext = {
-    legacyMaxAttempts: LEGACY_MAX_ATTEMPTS,
     legacyRetryMs: LEGACY_RETRY_MS,
-    qoderMaxAttempts: QODER_MAX_ATTEMPTS,
     tokenRhythmMaxAttempts: TOKENRHYTHM_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
     // 开放 API 平台直接转发，所以会话相关的头跟着走；模拟客户端的那些
@@ -350,8 +345,44 @@ function pickMostInformativeFailure(failures: { id: string; error: unknown }[]):
  * 用尽等窗口，上游挂了换一个。把每个目标各自的原因说出来，才说得上。
  */
 function summarizeFailures(failures: { id: string; error: unknown }[]): string {
-  const lines = failures.map((one) => `  ${one.id}：${describeTargetFailure(one.error)}`);
+  const lines = failures.map((one) => `  ${one.id}：${describeTargetFailureForClient(one.error)}`);
   return `这个模型有 ${failures.length} 个上游，都失败了：\n${lines.join("\n")}`;
+}
+
+/**
+ * 分类的 kind 怎么说给客户端听。
+ *
+ * kind 是内部词（queued、rate-limit、unreachable）：它属于日志与策略，不是
+ * 写给客户端的。客户端是 agent，它读的是一句人话，而且得能据此行动 —— 排队
+ * 就等一等，额度用完就充值，请求本身有问题就别重试。所以客户端那层翻一遍，
+ * 日志与分类不改：同一个失败在两处各用各的话。
+ */
+const CLIENT_KIND_WORDS: Record<string, string> = {
+  queued: "排队",
+  "rate-limit": "限流",
+  timeout: "上游太慢",
+  connection: "连不上",
+  unreachable: "连不上",
+  credential: "凭据被拒",
+  "no-balance": "余额用尽",
+  quota: "额度用完",
+  server: "上游出错",
+  model: "这个账号用不了这个模型",
+  request: "请求本身有问题",
+  unknown: "原因不明",
+};
+
+/**
+ * 这次失败对客户端怎么说。
+ *
+ * 与 describeTargetFailure 的区别就在这一层：那个是日志，用 kind 原值；这个
+ * 是客户端看到的那句话，用中文短语。上游自己的状态放在括号里——它是客户端
+ * 能据此行动的信息（429 等一会儿、400 别重试），而不是内部术语。
+ */
+function describeTargetFailureForClient(error: unknown): string {
+  const failure = classifyUpstreamError(error);
+  const words = CLIENT_KIND_WORDS[failure.kind] ?? "上游出错";
+  return failure.status === null ? words : `${words}（HTTP ${failure.status}）`;
 }
 
 /** 这个失败有多说明力：数字越小越说明力强。 */
@@ -365,8 +396,6 @@ function failureRank(failure: unknown): number {
 
 /** 客户端会看到的状态码：这个错写出去的时候是什么状态，就是什么。 */
 function clientStatusOf(failure: unknown): number | null {
-  // 上游在排队：客户端看到的是 503（等一会儿就好），不是上游的 429。
-  if (failure instanceof LimitError) return 503;
   if (!failure || typeof failure !== "object") return null;
   const status = Number((failure as { status?: unknown }).status);
   if (Number.isFinite(status) && status > 0) return status;

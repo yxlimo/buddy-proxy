@@ -18,6 +18,7 @@ import http from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
+import { legacyErrorFrame, legacyQueueMessage } from "./legacy-wire.ts";
 
 const SERVICE = "/buddy.admin.v1.AdminService";
 /** 假上游对它答 400（这个上游没有这个模型）。 */
@@ -66,14 +67,16 @@ const upstream = http.createServer((req, res) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     };
-    if (url.includes("/model/v1/chat/completions")) {
+    if (url.includes("/agent_chat_generation")) {
       // 这个场景：上游自己挂了（502）。
       if (qoderBroken) {
         json(502, { error: { message: "upstream exploded", type: "api_error" } });
         return;
       }
-      // Qoder：模型在排队。上游的 429 是「等一会儿」，网关报 503。
-      json(429, { error: { message: "the model is queued", type: "rate_limit_error" } });
+      // Qoder：模型在排队。老协议把这个放在 200 的流里（第一帧就是错误帧），
+      // 网关试满次数后报 503。
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(legacyErrorFrame(legacyQueueMessage(1)));
       return;
     }
     if (url.includes("/messages")) {
@@ -118,10 +121,10 @@ async function startGateway(): Promise<Gateway> {
       MINIMAX_BASE_URL: upstreamBase,
       MINIMAX_API_BASE: upstreamBase,
       MINIMAX_REGION: "cn",
-      QODER_GLOBAL_INFER_BASE: upstreamBase,
+      QODER_GLOBAL_LEGACY_BASE: upstreamBase,
       QODER_GLOBAL_OPENAPI_BASE: upstreamBase,
-      // 上游说在排队时网关会等一下再试。自测不等。
-      QODER_MAX_ATTEMPTS: "1",
+      // 上游说在排队时网关会等它说的秒数再试一次。自测不真等。
+      QODER_LEGACY_RETRY_MS: "10",
     },
   });
   const tokenFile = path.join(gw.dataDir, "admin-token");
@@ -228,7 +231,7 @@ async function ask(gw: Gateway, model: string): Promise<{ status: number; text: 
  * ------------------------------------------------------------------ */
 
 console.log("");
-console.log("场景一：503 与 400 —— 客户端拿到 503");
+console.log("场景一：排队与 400 —— 客户端拿到的是排队那个（429，过一会儿再来）");
 
 {
   const gw = await startGateway();
@@ -240,7 +243,7 @@ console.log("场景一：503 与 400 —— 客户端拿到 503");
         enabled: true,
         strategy: "fallback",
         targets: [
-          // 权重大的先试：Qoder 在排队（网关报 503）。
+          // 权重大的先试：Qoder 在排队（等过一次仍是排队 → 网关报 429）。
           { groupName: "qoder", upstreamModel: "glm-5.3", weight: 2, enabled: true },
           // MiniMax 说没有这个模型（400）。
           { groupName: "minimax", upstreamModel: MODEL_A, weight: 1, enabled: true },
@@ -250,11 +253,25 @@ console.log("场景一：503 与 400 —— 客户端拿到 503");
     check("发布模型成功了", saved.status === 200 && Boolean(saved.body?.id), JSON.stringify(saved.body));
 
     const answered = await ask(gw, "pub-mixed");
-    check("客户端拿到 503", answered.status === 503, `${answered.status} ${answered.text.slice(0, 200)}`);
+    check("客户端拿到 429（过一会儿再来）", answered.status === 429, `${answered.status} ${answered.text.slice(0, 200)}`);
     check(
-      "错的是排队那个（503），不是没有这个模型（400）",
+      "错的是排队那个（429），不是没有这个模型（400）",
       !answered.text.includes("model-A-missing"),
       answered.text.slice(0, 300),
+    );
+    // 两个目标都失败了，所以提示里有汇总。汇总那一层是写给客户端的：分类的
+    // kind 是内部词（queued、request），不能原样让客户端看到。
+    // 只看汇总那几行：错误信封的 message 是另一层（不在这一条的范围里）。
+    const summary = answered.text.slice(answered.text.indexOf("都失败了"));
+    check(
+      "汇总里说的是「排队」，不是 kind 原值 queued",
+      summary.includes("排队") && !summary.includes("queued"),
+      summary,
+    );
+    check(
+      "汇总里那个 400 说的是「请求本身有问题」",
+      summary.includes("请求本身有问题"),
+      summary,
     );
   } finally {
     gw.stop();
@@ -339,14 +356,23 @@ console.log("场景三：两个目标都失败 —— 提示里把每个目标�
       answered.text.slice(0, 400),
     );
     check(
-      "提示里说了第一个目标：额度用尽",
-      answered.text.includes(`minimax/${MODEL_B}`) && answered.text.includes("quota"),
+      "提示里说了第一个目标：额度用完",
+      answered.text.includes(`minimax/${MODEL_B}`) && answered.text.includes("额度用完"),
       answered.text.slice(0, 600),
     );
     check(
-      "提示里说了第二个目标：上游 502",
-      answered.text.includes(`qoder/${MODEL_BROKEN}`) && answered.text.includes("502"),
+      "提示里说了第二个目标：上游出错（带上游自己的状态）",
+      answered.text.includes(`qoder/${MODEL_BROKEN}`) && answered.text.includes("上游出错（HTTP 502）"),
       answered.text.slice(0, 600),
+    );
+    // 汇总那一层是写给客户端的，内部词（quota、server、rate-limit）不能漏出去。
+    const summary = answered.text.slice(answered.text.indexOf("都失败了"));
+    check(
+      "汇总里没有内部 kind 词",
+      !["quota", "server", "rate-limit", "queued", "no-balance", "HTTP 429 429"].some((word) =>
+        summary.includes(word),
+      ),
+      summary,
     );
   } finally {
     gw.stop();

@@ -83,7 +83,6 @@ const gatewayEnv: Record<string, string> = {
   // 上游全关：这一轮只关心配置。开关在数据库里（provider.enabled），
   // 下面用面板的 SetUpstreamEnabled 改它。
   // 万一有请求打出去，也只打到本机。
-  QODER_GLOBAL_INFER_BASE: `${fakeBase}/qoder-global`,
   QODER_GLOBAL_OPENAPI_BASE: `${fakeBase}/openapi-global`,
   QODER_GLOBAL_LEGACY_BASE: `${fakeBase}/qoder-global-legacy`,
   QODER_CN_INFER_BASE: `${fakeBase}/qoder-cn`,
@@ -249,7 +248,7 @@ check(
 check(
   "服务内部的设置看不见",
   !keys.some((k) =>
-    ["QODER_GLOBAL_INFER_BASE", "QODER_POLL_INTERVAL_MS", "HEALTH_CACHE_MS", "ROUTER_PORT", "MINIMAX_API_BASE"].includes(
+    ["QODER_GLOBAL_LEGACY_BASE", "QODER_POLL_INTERVAL_MS", "HEALTH_CACHE_MS", "ROUTER_PORT", "MINIMAX_API_BASE"].includes(
       k,
     ),
   ),
@@ -474,7 +473,7 @@ check(
 );
 
 for (const key of [
-  "QODER_GLOBAL_INFER_BASE",
+  "QODER_GLOBAL_LEGACY_BASE",
   "QODER_POLL_INTERVAL_MS",
   "HEALTH_CACHE_MS",
   "ROUTER_PORT",

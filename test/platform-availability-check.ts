@@ -482,7 +482,6 @@ const gw = await startGateway({
   env: {
     BENEFITS_DISABLED: "1",
     // 上游指向本机的假上游：一个字都不出机器。
-    QODER_GLOBAL_INFER_BASE: `${fake.base}/qoder-global`,
     QODER_GLOBAL_OPENAPI_BASE: `${fake.base}/openapi-global`,
     QODER_GLOBAL_LEGACY_BASE: `${fake.base}/qoder-global-legacy`,
   },

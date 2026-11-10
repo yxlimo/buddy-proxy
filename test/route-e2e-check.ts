@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { startFakeQoder } from "./fake-qoder-upstream.ts";
+import { decodeLegacyBody, legacyChunk, legacyEnd, legacyErrorFrame, legacyModelKey, legacyQueueMessage, legacyStatusErrorFrame } from "./legacy-wire.ts";
 import { startGateway, type Gateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -68,24 +69,24 @@ const upstreamBase = fake.base;
  * `{ errorFrame }` 是「上游答 200，但第一帧就是一个错误对象」—— 它跟一个 5xx
  * 不是一件事：状态是成功的，错在流里。
  */
-const scripts: Record<string, (number | { errorFrame: string })[]> = {};
+const scripts: Record<string, (number | { errorFrame: string } | { queue: number })[]> = {};
 
 /** 剧本那个假上游收到的推理请求：上游的模型名。 */
 const scriptCalls: string[] = [];
 
-/** 一个按剧本回答的假上游（Qoder 新协议的形状）。 */
+/** 一个按剧本回答的假上游（Qoder 那一套协议的帧）。 */
 async function startScriptedUpstream(): Promise<{ base: string; close: () => void }> {
   const server = http.createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
     let body: any = {};
     try {
-      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      body = decodeLegacyBody(Buffer.concat(chunks).toString("utf8"));
     } catch {
-      /* not JSON */
+      /* 不是这个协议的正文 */
     }
-    const model = String(body.model ?? "");
-    if (!(req.url ?? "").includes("/model/v1/chat/completions")) {
+    const model = legacyModelKey(body);
+    if (!(req.url ?? "").includes("/agent_chat_generation")) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end("{}");
       return;
@@ -94,60 +95,21 @@ async function startScriptedUpstream(): Promise<{ base: string; close: () => voi
     const step = scripts[model]?.shift() ?? 200;
     if (typeof step !== "number") {
       // 200 的流，第一帧就是上游在说它不行（生产实录里 fallback 的第三跳就是
-      // 这样：状态 200，流里第一帧一个 403）。
+      // 这样：状态 200，流里第一帧一个错）。500 是「上游自己挂了」：换一个目标
+      // 有可能答得上，这一层就该换。
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.write(`data: ${JSON.stringify({ error: { message: step.errorFrame } })}\n\n`);
-      res.end();
+      if ("queue" in step) res.end(legacyErrorFrame(legacyQueueMessage(step.queue)));
+      else res.end(legacyStatusErrorFrame(500, step.errorFrame));
       return;
     }
     const status = step;
     if (status !== 200) {
-      // 429 的形状按 Qoder 的「繁忙」来：它带一个自己说的等待秒数（这里是 1 秒，
-      // 不然它自己的重试会睡十秒）。
       res.writeHead(status, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify(
-          status === 429
-            ? { message: `剧本说 ${model} 这一次是 429`, retryAfterSeconds: 1 }
-            : { error: { message: `剧本说 ${model} 这一次是 ${status}`, type: "server_error" } },
-        ),
-      );
+      res.end(JSON.stringify({ error: { message: `剧本说 ${model} 这一次是 ${status}`, type: "server_error" } }));
       return;
     }
-    const usage = { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 };
-    if (body.stream === true) {
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      const frame = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
-      frame({
-        id: "chatcmpl-scripted",
-        object: "chat.completion.chunk",
-        created: 1700000000,
-        model,
-        choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
-      });
-      frame({
-        id: "chatcmpl-scripted",
-        object: "chat.completion.chunk",
-        created: 1700000000,
-        model,
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        usage,
-      });
-      res.write("data: [DONE]\n\n");
-      res.end();
-      return;
-    }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify({
-        id: "chatcmpl-scripted",
-        object: "chat.completion",
-        created: 1700000000,
-        model,
-        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-        usage,
-      }),
-    );
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(legacyChunk("ok") + legacyEnd());
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as { port: number }).port;
@@ -195,9 +157,11 @@ async function startRouter(opts: { cleanupDataDir?: boolean; inferBase?: string 
       // 开关不在环境里了：它在数据库的 provider.enabled 上（一行一个账号），
       // 重启也还在。开头用面板的 SetAccountEnabled 把这个账号打开。
       // 上游指向假上游：一个字都不出机器。
-      QODER_GLOBAL_INFER_BASE: `${infer}/qoder-global`,
+      QODER_GLOBAL_LEGACY_BASE: `${infer}/qoder-global-legacy`,
       QODER_GLOBAL_OPENAPI_BASE: `${upstreamBase}/openapi-global`,
-      QODER_GLOBAL_LEGACY_BASE: `${upstreamBase}/qoder-global-legacy`,
+      // 排队那条路的等待：真值（10 秒）在这个测试里等不起。上游自己说了秒数就
+      // 用它的（假上游说 1 秒）。
+      QODER_LEGACY_RETRY_MS: "50",
     },
     keepDataDir: opts.cleanupDataDir !== true,
     cleanupDataDir: opts.cleanupDataDir === true,
@@ -280,9 +244,9 @@ async function chat(
   return { status: res.status, json, text };
 }
 
-/** 假上游收到过的推理请求（只看推理那条路）。 */
-function inferCalls(): { model: string; stream: boolean }[] {
-  return fake.seen.map((s) => ({ model: s.model, stream: s.stream }));
+/** 假上游收到过的推理请求（只看推理那条路）：上游的 key、正文里的消息。 */
+function inferCalls(): { model: string; stream: boolean; messages: unknown[] }[] {
+  return fake.seen.map((s) => ({ model: s.model, stream: s.stream, messages: s.messages }));
 }
 
 /** 读数据库里的表。 */
@@ -510,9 +474,10 @@ check(
   JSON.stringify(inferCalls()),
 );
 check(
-  "Anthropic 方言的请求体是 OpenAI 形状（上游那边是 OpenAI 方言）",
-  inferCalls()[0]?.stream === false,
-  JSON.stringify(inferCalls()),
+  "Anthropic 方言的请求体到了上游是 OpenAI 的形状",
+  Array.isArray(inferCalls()[0]?.messages) &&
+    (inferCalls()[0]?.messages as any[]).some((m: any) => m?.role === "user" && m?.content === "hi"),
+  JSON.stringify(inferCalls()[0]?.messages),
 );
 
 // Anthropic 方言的流式。
@@ -672,13 +637,12 @@ check(
   /upstream|上游|HTTP/i.test(String(dead.json?.error?.message ?? "")),
   JSON.stringify(dead.json),
 );
-// 每个目标都回 500：瞬时失败没有次数上限 —— 在同一个账号上一直重试到这一轮
-// 的总时限，才轮到换目标。所以这里数的是「两个目标都被试过、各自都重试过」。
+// 每个目标都回 500：一个目标失败就换下一个，两个都被试过。
 const bothTargets = inferCalls();
 check(
-  "两个目标都试过了（每个都重试过）",
-  bothTargets.length > 2 && new Set(bothTargets.map((c) => c.model)).size === 2,
-  JSON.stringify(bothTargets),
+  "两个目标都试过了",
+  bothTargets.length >= 2 && new Set(bothTargets.map((c) => c.model)).size === 2,
+  JSON.stringify(bothTargets.map((c) => c.model)),
 );
 
 section("single：只走权重最大的那个");
@@ -716,10 +680,10 @@ fake.reset();
 const singleFail = await chat("e2e-single-fail");
 check(
   "single 不该退到第二个目标",
-  // 第一个目标回 500，瞬时失败在同一个账号上一直重试到这一轮的总时限 —— 重试
-  // 是同一个账号，不是换目标：所以第二个目标一次也不该被叫到。
-  inferCalls().length > 1 && inferCalls().every((c) => c.model === "kmodel"),
-  `HTTP ${singleFail.status} ${JSON.stringify(inferCalls())}`,
+  // 一个目标失败就是这个模型失败：single 没有第二个目标可换，第一个试过一次
+  // 就结束了。
+  inferCalls().every((c) => c.model === "kmodel"),
+  `HTTP ${singleFail.status} ${JSON.stringify(inferCalls().map((c) => c.model))}`,
 );
 
 section("目标关掉了就不该被试");
@@ -825,77 +789,53 @@ async function publishScripted(id: string, upstreamModel: string): Promise<void>
   });
 }
 
-// 1. 503 一次后成功。
+// 上游拒了之后，客户端拿到什么、账号记账记成什么。
+//
+// 这一条链路（老协议）的请求是在策略的重试循环**之后**才发出去的：它返回的是
+// 一个「帧的生成器」，第一帧要等答复那一层去读，那时策略已经回来了。所以
+// 「同一个账号上再试一次」不再由策略做 —— 这一段查的是从这里往后实际成立的
+// 性质：客户端看得到上游的原话、账号不被冤枉地记冷却、下一个目标照样能接手。
+//
+// 排队是例外，它有自己的重试（见下面第 4 段）。
+
+// 1. 5xx：客户端拿到网关的 502，答复里是上游自己的话；账号不冷却。
 await publishScripted("e2e-retry-503", "rmodel");
 scripts.rmodel = [503];
 scriptCalls.length = 0;
 const onceFailing = await chatWatchingCooldowns("e2e-retry-503");
+check("5xx：客户端拿到 502", onceFailing.answered.status === 502, `HTTP ${onceFailing.answered.status}`);
 check(
-  "503 一次后成功：客户端拿到 200",
-  onceFailing.answered.status === 200,
-  `HTTP ${onceFailing.answered.status} ${onceFailing.answered.text.slice(0, 200)}`,
-);
-check(
-  "503 一次后成功：答案有内容",
-  Boolean(onceFailing.answered.json?.choices?.[0]?.message?.content),
+  "5xx：答复里带着上游那句 503",
+  /503/.test(String(onceFailing.answered.json?.hint ?? onceFailing.answered.json?.error?.message ?? "")),
   JSON.stringify(onceFailing.answered.json).slice(0, 200),
 );
-check("503 一次后成功：上游被调了两次", scriptCalls.join(",") === "rmodel,rmodel", scriptCalls.join(","));
+check("5xx：上游被调了一次", scriptCalls.join(",") === "rmodel", scriptCalls.join(","));
 check(
-  "503 一次后成功：重试期间没有写过冷却（只在全部尝试失败后才记）",
+  "5xx：请求期间没有写过冷却",
   onceFailing.wroteCooldown === false,
   "请求期间冷却表里出现过这个账号",
 );
-check("503 一次后成功：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
-check(
-  "503 一次后成功：日志里看得见重试",
-  /retry 1 in 300ms/.test(retryGw.log()),
-  retryGw.log().split("\n").filter((l) => l.includes("retry")).slice(0, 2).join(" | "),
-);
+check("5xx：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
 
-// 2. 500 两次后成功：任何 5xx 都重试，不只是 503。
-await publishScripted("e2e-retry-500", "fmodel");
-scripts.fmodel = [500, 500];
-scriptCalls.length = 0;
-const twiceFailing = await chatWatchingCooldowns("e2e-retry-500");
-check(
-  "500 两次后成功：客户端拿到 200",
-  twiceFailing.answered.status === 200,
-  `HTTP ${twiceFailing.answered.status} ${twiceFailing.answered.text.slice(0, 200)}`,
-);
-check("500 两次后成功：上游被调了三次", scriptCalls.join(",") === "fmodel,fmodel,fmodel", scriptCalls.join(","));
-check(
-  "500 两次后成功：重试期间没有写过冷却",
-  twiceFailing.wroteCooldown === false,
-  "请求期间冷却表里出现过这个账号",
-);
-check("500 两次后成功：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
-
-// 3. 503 一直失败：没有次数上限，一路重试到这一轮的总时限才停手。
-//    客户端拿到的是上游那份答复（503 + 上游的正文），不是网关自己编的一句。
+// 2. 一直 5xx：还是那个 502，不换话术，也不写冷却。
+//    5xx 不是账号的错（见 lib/router/account-cooldown.ts）。
 await publishScripted("e2e-retry-always", "xmodel");
 scripts.xmodel = new Array(50).fill(503);
 scriptCalls.length = 0;
 const alwaysFailing = await chat("e2e-retry-always");
-check("503 一直失败：客户端拿到失败", alwaysFailing.status >= 500, `HTTP ${alwaysFailing.status}`);
+check("一直 5xx：客户端拿到 502", alwaysFailing.status === 502, `HTTP ${alwaysFailing.status}`);
 check(
-  "503 一直失败：客户端拿到的是上游那个 503（不是网关的 502）",
-  alwaysFailing.status === 503,
-  `HTTP ${alwaysFailing.status}`,
+  "一直 5xx：答复里是上游那句 503",
+  /503/.test(String(alwaysFailing.json?.hint ?? alwaysFailing.json?.error?.message ?? "")),
+  `HTTP ${alwaysFailing.status} ${String(alwaysFailing.json?.hint ?? alwaysFailing.text).slice(0, 200)}`,
 );
 check(
-  "503 一直失败：上游被重试了很多次（不是一次就放弃）",
-  scriptCalls.length > 1 && scriptCalls.every((m) => m === "xmodel"),
-  scriptCalls.join(","),
-);
-// 5xx 不是账号的错（见 lib/router/account-cooldown.ts）：一直失败也不写冷却。
-check(
-  "503 一直失败：账号仍然没有冷却（5xx 不写冷却）",
+  "一直 5xx：账号仍然没有冷却",
   cooldownOf(qoderAccount?.id ?? "qoder") === null,
   JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")),
 );
 
-// 4. 流式：503 后成功 —— 答复一个字都还没写给客户端，所以能再试一次。
+// 3. 流式也要一样：答复一个字都还没写给客户端时，失败就是失败，不是半份事件流。
 await publishScripted("e2e-retry-stream", "smodel");
 scripts.smodel = [503];
 scriptCalls.length = 0;
@@ -905,44 +845,92 @@ const streamedRetry = await fetch(`${base}/v1/chat/completions`, {
   body: JSON.stringify({ model: "e2e-retry-stream", messages: [{ role: "user", content: "say ok" }], stream: true }),
 });
 const streamedRetryText = await streamedRetry.text();
-check("流式 503 后成功：状态码是 200", streamedRetry.status === 200, `HTTP ${streamedRetry.status}`);
+check("流式 5xx：状态码是 502", streamedRetry.status === 502, `HTTP ${streamedRetry.status}`);
 check(
-  "流式 503 后成功：是 SSE",
-  (streamedRetry.headers.get("content-type") ?? "").includes("text/event-stream"),
-  streamedRetry.headers.get("content-type") ?? "",
+  "流式 5xx：客户端拿到的不是事件流（一个 SSE 头都没发）",
+  !String(streamedRetry.headers.get("content-type") ?? "").includes("text/event-stream"),
+  String(streamedRetry.headers.get("content-type")),
 );
-check("流式 503 后成功：只有一份答复（[DONE] 一次）", streamedRetryText.split("[DONE]").length === 2, streamedRetryText.slice(0, 300));
-check("流式 503 后成功：上游被调了两次", scriptCalls.join(",") === "smodel,smodel", scriptCalls.join(","));
-check("流式 503 后成功：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
+check("流式 5xx：答复里是上游那句 503", /503/.test(streamedRetryText), streamedRetryText.slice(0, 300));
+check("流式 5xx：账号没有冷却", cooldownOf(qoderAccount?.id ?? "qoder") === null, JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")));
 
-// 5. 429（Qoder 的「后端都忙」）：不进瞬时重试，也不会和瞬时重试叠成九次。
+// 4. 排队（模型没排上）：这不是「账号坏了」。
 //
-// Qoder 对这个状态有自己的重试（qoderMaxAttempts，同一个账号上遥）：那是已有
-// 的行为，不该被瞬时重试再套一层。
-await publishScripted("e2e-retry-429", "tmodel");
-scripts.tmodel = [429, 429, 429];
+// 老协议把排队放在 200 的流里：第一帧就是错误帧，说还要等多少秒。实测那几秒
+// 兑现不了 —— 等完再打还是同一个排队帧 —— 所以只等一次，再打一次仍排不上就
+// 交出去：客户端拿 429（过一会儿再来），账号不记冷却。
+await publishScripted("e2e-retry-queue", "qmodel");
+scripts.qmodel = [{ queue: 1 }, { queue: 1 }, { queue: 1 }];
 scriptCalls.length = 0;
-const logBefore429 = retryGw.log().length;
-const rateLimited = await chat("e2e-retry-429");
-const log429 = retryGw.log().slice(logBefore429);
-check("429：客户端拿到失败", rateLimited.status >= 400, `HTTP ${rateLimited.status}`);
+clearCooldowns();
+const logBeforeQueue = retryGw.log().length;
+const queued = await chat("e2e-retry-queue");
+const queueLog = retryGw.log().slice(logBeforeQueue);
+const queueHint = String(queued.json?.hint ?? queued.json?.error?.message ?? queued.text);
+check("排队：客户端拿到失败", queued.status >= 400, `HTTP ${queued.status}`);
+check("排队：客户端拿到的是 429（过一会儿再来）", queued.status === 429, `HTTP ${queued.status}`);
 check(
-  "429：上游被调了三次 —— Qoder 自己的繁忙重试，不是三个瞬时重试",
-  scriptCalls.join(",") === "tmodel,tmodel,tmodel",
+  "排队：等过一次又打了一次（共两次）",
+  scriptCalls.join(",") === "qmodel,qmodel",
+  scriptCalls.join(","),
+);
+check("排队：给客户端的话说的是排队", queueHint.includes("排队"), queueHint.slice(0, 200));
+check(
+  "排队：给客户端的话说的是「等过它给的时间仍没排上」",
+  queueHint.includes("等到它给的时间"),
+  queueHint.slice(0, 200),
+);
+check(
+  "排队：不说成限流 / 冷却（那不是这个错的意思）",
+  !/限流|冷却中|cooling down|RESOURCE_LIMIT|10605|p4/.test(queueHint),
+  queueHint.slice(0, 200),
+);
+check(
+  "排队：日志里的分类是 queued",
+  queueLog.includes("queued"),
+  queueLog.split("\n").filter((l) => l.includes("queued") || l.includes("queue")).slice(0, 3).join(" | "),
+);
+check(
+  "排队：账号没有冷却",
+  cooldownOf(qoderAccount?.id ?? "qoder") === null,
+  JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")),
+);
+
+// 4b. 排队了要换下一个目标：第一个目标只被调一次（等过一次），换完就成功。
+//
+// 分类说排队可降级（另一个上游有自己的队列），根路由就换人 —— 客户端拿答复，
+// 不是拿错误。
+await publish({
+  id: "e2e-queue-then-ok",
+  displayName: "排队后换一个目标",
+  strategy: "fallback",
+  targets: [
+    { groupName: "qoder", upstreamModel: "qmodel", weight: 10 },
+    { groupName: "qoder", upstreamModel: "gmodel", weight: 1 },
+  ],
+});
+scripts.qmodel = [{ queue: 1 }, { queue: 1 }];
+scripts.gmodel = [];
+scriptCalls.length = 0;
+clearCooldowns();
+const switched = await chat("e2e-queue-then-ok");
+check(
+  "排队后换目标：客户端拿到成功答复",
+  switched.status === 200 && /ok/.test(switched.text),
+  `${switched.status} ${switched.text.slice(0, 200)}`,
+);
+check(
+  "排队后换目标：排队那个目标只被调两次（首次 + 等过一次），然后就换人",
+  scriptCalls.join(",") === "qmodel,qmodel,gmodel",
   scriptCalls.join(","),
 );
 check(
-  "429：日志里一次瞬时重试都没有",
-  !/retry 1\/2 in 300ms/.test(log429),
-  log429.split("\n").filter((l) => l.includes("retry")).slice(0, 3).join(" | "),
-);
-check(
-  "429：这一次的分类是 busy（不是瞬时失败）",
-  log429.includes("(busy HTTP 429)"),
-  log429.split("\n").filter((l) => l.includes("429")).slice(0, 3).join(" | "),
+  "排队后换目标：账号没有冷却",
+  cooldownOf(qoderAccount?.id ?? "qoder") === null,
+  JSON.stringify(cooldownOf(qoderAccount?.id ?? "qoder")),
 );
 
-// 6. 401：凭据被拒，一次就结束；single 策略下没有别的账号可换，不记冷却。
+// 5. 401：凭据被拒，一次就结束；single 策略下没有别的账号可换，不记冷却。
 await publishScripted("e2e-retry-401", "cmodel");
 scripts.cmodel = [401, 401, 401];
 scriptCalls.length = 0;
@@ -957,7 +945,7 @@ check(
   JSON.stringify(refusedRow),
 );
 
-// 7. 超时（上游 408）：不重试，也不写冷却。
+// 6. 超时（上游 408）：不重试，也不写冷却。
 //
 // 超时说的是「这一条请求等太久了」，不是「这个账号不能用了」：记冷却会把一个
 // 好好的账号挡在门外好几分钟。答复照旧是那条超时错误，客户端自己决定要不要重发。
@@ -970,8 +958,8 @@ const timedOut = await chatWatchingCooldowns("e2e-retry-timeout");
 check("超时：客户端拿到失败", timedOut.answered.status >= 500, `HTTP ${timedOut.answered.status}`);
 check("超时：上游只被调了一次（不重试）", scriptCalls.join(",") === "omodel", scriptCalls.join(","));
 check(
-  "超时：客户端拿到的是超时那条（408），不是被包装成 5xx 的上游答复",
-  timedOut.answered.status === 502 && /upstream HTTP 408/.test(String(timedOut.answered.json?.error?.message ?? "")),
+  "超时：答复里说的是上游那个 408",
+  timedOut.answered.status === 502 && /408/.test(String(timedOut.answered.json?.hint ?? timedOut.answered.json?.error?.message ?? "")),
   `HTTP ${timedOut.answered.status} ${String(timedOut.answered.json?.error?.message ?? timedOut.answered.text).slice(0, 200)}`,
 );
 check(
@@ -985,9 +973,9 @@ check(
   JSON.stringify(cooldownOf(timeoutAccountId)),
 );
 check(
-  "超时：日志里说了超时、不冷却",
-  retryGw.log().includes("timed out, not cooling down"),
-  retryGw.log().split("\n").filter((l) => l.includes("timeout")).slice(0, 3).join(" | "),
+  "超时：日志里说了不冷却",
+  /not cooling down/.test(retryGw.log()),
+  retryGw.log().split("\n").filter((l) => l.includes("408")).slice(0, 3).join(" | "),
 );
 
 /* ------------------------------------------------------------------ *

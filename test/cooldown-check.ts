@@ -755,6 +755,20 @@ console.log("算法：冷却的四条规矩");
   // 冷却的话，同一平台上别的模型会跟着下线，fallback 的第二个目标也被跳过。
   check("上游 5xx → 不冷却账号（哪怕它给了 retry-after）", serverDecision === null, JSON.stringify(serverDecision));
 
+  // 3b. 模型在排队：也不是账号的错。上游把这个模型排进了队列、等过一次仍排不上
+  //     —— 账号别的模型现在就能接，记冷却会把它们跟着下线。降不降级由分类说了
+  //     算（排队是可降级的），与冷却无关。
+  {
+    const { QueuedError } = await import("../lib/qoder/queue.ts");
+    const queuedError = new QueuedError(
+      "qoder model is still queued after 2 attempts",
+      "上游把这个模型排进了队列：等到它给的时间再试，仍在排队（共试了 2 次）。",
+      60,
+    );
+    const queuedDecision = cooldownForFailure("acct-queued", queuedError, now);
+    check("模型排队 → 不冷却账号", queuedDecision === null, JSON.stringify(queuedDecision));
+  }
+
   // 4. 连接不是账号的错：一个也不记。上游自己说了 retry-after 也不记 ——
   //    连接被掐断说的是「这一次没成事」，不是「这个账号不能用了」。
   //    超时同理，见下面那段。

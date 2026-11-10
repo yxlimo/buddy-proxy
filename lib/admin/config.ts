@@ -73,7 +73,6 @@ const DESCRIPTIONS: Record<string, string> = {
   ADMIN_CORS_ORIGINS: "允许跨域访问管理接口的来源，逗号分隔。空表示不允许（面板和网关同源）",
   REQUIRE_API_KEY: "开启后，调用网关的 agent 必须带 API KEY；关闭则任何请求都放行",
   USAGE_RETENTION_DAYS: "用量记录保留多少天",
-  QODER_LEGACY_ATTEMPTS: "Qoder 老协议最多试几次",
 };
 
 /**
@@ -86,7 +85,6 @@ const LABELS: Record<string, string> = {
   ADMIN_CORS_ORIGINS: "允许的跨域来源",
   REQUIRE_API_KEY: "是否开启 API KEY 验证",
   USAGE_RETENTION_DAYS: "用量保留天数",
-  QODER_LEGACY_ATTEMPTS: "Qoder 老协议重试次数",
 };
 
 /** 值的结尾像密钥的，就不给人看。 */

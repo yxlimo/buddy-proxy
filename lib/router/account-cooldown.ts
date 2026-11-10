@@ -30,6 +30,16 @@
 //       —— 那时候一个短的等待是对的。套餐窗口说的是额度，跟这两类没关系，
 //       不参与。
 //
+//   不可达（unreachable）
+//       主机名在 DNS 里查不到、地址根本解析不出来。这是唯一**在没有别的账号可
+//       换时也记**冷却的失败：别的那几条不记，是因为「记了只是不打上游，客户端
+//       拿到的还是同一条报错」；这一条不一样 —— 一直打一个解析不出来的地址，
+//       客户端要白等到总时限才拿到答复（2026-11-10：qoder 全球区只有一个账号，
+//       一次请求打了 67 次、挂了 180 秒，而那个主机早就是 NXDOMAIN）。时长用
+//       「不可用」那个常量（5 分钟，ACCOUNT_COOLDOWN_MS 可以改）：主机不是被
+//       限流一分钟，也不是永远坏死 —— DNS 改回来、上游换了机器就好了，隔几分
+//       钟再看一眼正是对的。
+//
 // 不记账的：
 //
 //   连接（connection）
@@ -55,6 +65,12 @@
 //       头上，同一个平台上别的模型会跟着下线五分钟，fallback 的第二个目标也
 //       会被跳过（2026-10-28 实测：一个模型回 500，整个平台 503、第二个目标
 //       没被试）。换下一个目标、下一个账号就够了。
+//
+//   模型排队（queued）不记账
+//       —— 上游把这个模型排进了队列，账号本身没坏：它的别的模型现在就能接。
+//       记冷却等于让那些根本没排队的模型跟着下线。换不换目标由分类的
+//       degradable 说了算（排队是可降级的：另一个上游有自己的队列），与冷却
+//       无关。
 //
 // 只有可降级的失败才记冷却：请求本身的问题（400/404/413）不记 —— 一个坏请求
 // 不该把账号封掉，换一个账号也是一样的结果。
@@ -137,11 +153,17 @@ export function cooldownForFailure(
   now = Date.now(),
   hasAlternative = true,
 ): CooldownDecision | null {
+  if (!isDegradableUpstreamError(error)) return null;
+  const failure = classifyUpstreamError(error);
+  // 主机名解析不出来：这条不适用「没有别人可换就不记」。别的不记，是因为记
+  // 了只是不打上游、客户端拿到的还是同一条报错；这一条记了有实际好处 —— 下一
+  // 个请求不必再把同一个解析不出来的地址打到总时限（理由见文件顶上）。
+  if (failure.kind === "unreachable") {
+    return { untilMs: now + unavailableCooldownMs(), reason: failure.kind, source: "fixed" };
+  }
   // 没有别的账号可换：记冷却只会让这个平台在一段时间里一个上游请求都不打，
   // 而客户端拿到的还是同一条报错。让它继续试、把上游的话原样交出去。
   if (!hasAlternative) return null;
-  if (!isDegradableUpstreamError(error)) return null;
-  const failure = classifyUpstreamError(error);
   // 超时不记账：这一条请求等得太久了，不是这个账号不能用了（见文件顶上的分类）。
   if (failure.kind === "timeout") return null;
   // 连接被上游掐断也不记账：它说的不是「这个账号不能用了」，下一个请求很可能
@@ -156,6 +178,9 @@ export function cooldownForFailure(
   // 第二个目标也会被跳过（2026-10-28 实测：一个模型回 500，整个平台 503、
   // 第二个目标没被试）。换下一个目标、下一个账号就够了，不写冷却。
   if (failure.kind === "server") return null;
+  // 模型在排队不是账号的错：账号本身好好的，它别的模型现在就能接（见文件
+  // 顶上）。
+  if (failure.kind === "queued") return null;
   if (failure.kind === "rate-limit") {
     // 限流是分钟级的：超了一分钟，等一分钟就够。按 5 分钟算的话，一个只漏了
     // 一分钟的账号会被下线五分钟，同平台别的模型跟着一起被挡。

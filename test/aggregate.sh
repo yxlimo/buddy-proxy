@@ -106,7 +106,7 @@ code=$(curl -s -o $LOG_DIR/aggregate-auto.json -w '%{http_code}' \
 echo ""
 echo "a model from the database"
 
-saved=$(admin SavePublishedModel '{"model":{"id":"smart","displayName":"Smart","strategy":"fallback","enabled":true,"targets":[{"groupName":"qoder","upstreamModel":"glm-5.3","weight":1,"position":0,"enabled":true},{"groupName":"workbuddy-cn","upstreamModel":"glm-5.3-flash","weight":1,"position":1,"enabled":true}]}}' \
+saved=$(admin SavePublishedModel '{"model":{"id":"smart","displayName":"Smart","strategy":"fallback","enabled":true,"targets":[{"groupName":"minimax","upstreamModel":"MiniMax-M3.1-Flash","weight":1,"position":0,"enabled":true},{"groupName":"workbuddy-cn","upstreamModel":"glm-5.3-flash","weight":1,"position":1,"enabled":true}]}}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
 [ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
 
@@ -124,7 +124,8 @@ code=$(curl -s -o $LOG_DIR/aggregate-smart.json -w '%{http_code}' \
 echo ""
 echo "the fallback"
 
-# The first target has no fixture in the mock, so it fails; the second answers.
+# The request carries tools, and the mock has no answer of that shape for the first
+# target, so it fails; the second answers.
 node --experimental-strip-types test/aggregate-setup.ts clear-usage > /dev/null
 code=$(curl -s -o $LOG_DIR/aggregate-fallback.json -w '%{http_code}' \
   -X POST "$BASE/v1/chat/completions" -H 'content-type: application/json' \
@@ -132,7 +133,7 @@ code=$(curl -s -o $LOG_DIR/aggregate-fallback.json -w '%{http_code}' \
 [ "$code" = "200" ] && check "the second target answers" 1 || check "the second target answers" 0
 
 usage=$(admin GetUsageSummary '{}')
-first=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(int(b["summary"]["failed"]) for b in d.get("byUpstream",[]) if b["key"]=="qoder"))')
+first=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(int(b["summary"]["failed"]) for b in d.get("byUpstream",[]) if b["key"]=="minimax"))')
 second=$(echo "$usage" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(int(b["summary"]["succeeded"]) for b in d.get("byUpstream",[]) if b["key"]=="workbuddy-cn"))')
 [ "$first" -ge 1 ] && check "the failure is counted against the first target" 1 || check "the failure is counted against the first target" 0
 [ "$second" -ge 1 ] && check "the success is counted against the second target" 1 || check "the success is counted against the second target" 0
