@@ -9,7 +9,8 @@
 
 import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
-import { withBusinessCode, withUpstreamStatus } from "../upstream-status.ts";
+import { withBusinessCode, withUpstreamAnswer, withUpstreamBody } from "../upstream-status.ts";
+import { scrubForClient } from "../log-scrub.ts";
 import { tokenRhythmCredentialOf, type TokenRhythmCredential } from "./accounts.ts";
 import { TOKENRHYTHM_INFER_BASE } from "./config.ts";
 
@@ -70,8 +71,14 @@ export class TokenRhythmBusyError extends Error {
   }
 }
 
-/** Whether the platform's own answer says it is busy. */
-function isBusy(status: number, code: unknown): boolean {
+/**
+ * Whether the relay's own answer says it is busy.
+ *
+ * 名字里的 `Relay` 不能省：这里判的是中转站（TokenRhythm）那一家的答复形状，
+ * 不是「这次请求忙不忙」的通用判断。叫 `isBusy` 会让人以为它是别处删掉的那个
+ * 同名函数又回来了。
+ */
+function isRelayBusy(status: number, code: unknown): boolean {
   if (status === 429) return true;
   if (status !== 503) return false;
   const text = String(code ?? "").toUpperCase();
@@ -84,6 +91,18 @@ function busyDetail(body: any): { code: string; traceId: string } {
     code: String(body?.code ?? ""),
     traceId: String(body?.traceId ?? body?.trace_id ?? ""),
   };
+}
+
+/**
+ * 中转站那句原话，抹过再交出去；它没说就返回 null（让网关自己那句顶上）。
+ *
+ * 这句会进客户端看到的东西（TokenRhythmBusyError / TokenRhythmNoBalanceError 的
+ * message，续而进 policy.ts 的 hint）。中转站的正文里可能写着 key 片段、邮箱，
+ * 所以抹的规矩与日志那边是同一套（见 lib/log-scrub.ts 的 scrubForClient）。
+ */
+function upstreamSaid(message: unknown): string | null {
+  if (typeof message !== "string") return null;
+  return scrubForClient(message, 300) || null;
 }
 
 /**
@@ -123,14 +142,18 @@ export async function tokenRhythmChat(
     body: JSON.stringify(payload),
   });
   if (!response.ok && response.status === 401) {
+    // 正文要读：401 的正文往往就是 `invalid api key` 那一句，排查时最需要它。
+    // 读不到就挂空串 —— 宁可客户端拿到一句空话，也别把「上游为什么拒」丢了。
+    const text = await response.text().catch(() => "");
     const error = new AuthError(
       "tokenrhythm rejected the key",
       `TokenRhythm 拒绝了账号 ${accountId} 的 key（HTTP 401）。`,
       502,
     );
-    // The client sees the gateway's status; the upstream's own status says
-    // whether the next account would do better.
-    withUpstreamStatus(error, 401);
+    // The client sees the gateway's status; the upstream's own status (and its
+    // own body, whenever the retries run out) says whether the next account
+    // would do better.
+    withUpstreamAnswer(error, 401, text);
     throw error;
   }
   if (!response.ok && response.status === 402) {
@@ -143,7 +166,7 @@ export async function tokenRhythmChat(
     }
     const detail = busyDetail(parsed);
     throw new TokenRhythmNoBalanceError(
-      parsed?.message ?? "账户余额不足，请充值后重试",
+      upstreamSaid(parsed?.message) ?? "账户余额不足，请充值后重试",
       detail.traceId,
     );
   }
@@ -156,22 +179,36 @@ export async function tokenRhythmChat(
       /* not JSON */
     }
     const detail = busyDetail(parsed);
-    if (isBusy(response.status, detail.code)) {
+    if (isRelayBusy(response.status, detail.code)) {
       const retryAfter = Number(response.headers.get("retry-after") ?? 0);
-      throw new TokenRhythmBusyError(
-        parsed?.message ?? "服务繁忙，请稍后重试",
-        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2,
-        detail.traceId,
+      // 正文要带，状态不带。
+      //
+      // 中转站的 429/503 说的是「服务繁忙，过会儿再来」，不是「你这个账号这一
+      // 分钟被限流了」。把它的 429 挂到错误上，分类就从 server 变成 rate-limit：
+      // 忙时会给账号记一分钟冷却，策略还会在请求里替它等限流窗口 —— 而「等」
+      // 已经花了两单才从降级路径上拿掉（见 lib/qoder/queue.ts）。所以状态留这
+      // 个类自己的 503（见上面那个类的说明），只把上游原话挂上去：重试用尽时
+      // 客户端读的是上游那句，而不是网关编的一句「上游返回 503。」。
+      throw withUpstreamBody(
+        new TokenRhythmBusyError(
+          upstreamSaid(parsed?.message) ?? "服务繁忙，请稍后重试",
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2,
+          detail.traceId,
+        ),
+        text,
       );
     }
     const error = new AuthError(
       `upstream HTTP ${response.status}`,
-      `TokenRhythm 上游返回 ${response.status}：${text.slice(0, 300)}`,
+      // 客户端看到的是这一句：上游正文里可能带着 key 片段与邮箱，打出去之前抹一遍。
+      `TokenRhythm 上游返回 ${response.status}：${scrubForClient(text, 300)}`,
       502,
     );
     // The client sees the gateway's status; the upstream's own status says
-    // whether the next account would do better (a 400 is the request's fault).
-    withUpstreamStatus(error, response.status);
+    // whether the next account would do better (a 400 is the request's fault),
+    // and its own body goes with it: that answer is what the client reads when
+    // the retries run out.
+    withUpstreamAnswer(error, response.status, text);
     const code = busyDetail(parsed).code;
     if (code) withBusinessCode(error, code);
     throw error;

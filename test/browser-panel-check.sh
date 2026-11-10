@@ -148,7 +148,7 @@ ITEMS=$(js <<'EOF'
     const m = r.querySelector('.font-mono');
     return m ? m.textContent.trim() : '';
   }).filter(Boolean);
-  const internal = ['QODER_GLOBAL_INFER_BASE', 'QODER_POLL_INTERVAL_MS', 'HEALTH_CACHE_MS',
+  const internal = ['QODER_GLOBAL_LEGACY_BASE', 'QODER_POLL_INTERVAL_MS', 'HEALTH_CACHE_MS',
     'ROUTER_PORT', 'MINIMAX_API_BASE', 'QODER_POLL_TIMEOUT_MS'];
   return JSON.stringify({
     rows: rows.length,
@@ -198,7 +198,7 @@ for line in open(sys.argv[1]):
         keys.extend(json.loads(line))
     except Exception:
         pass
-internal = {"QODER_GLOBAL_INFER_BASE", "QODER_POLL_INTERVAL_MS", "QODER_POLL_TIMEOUT_MS",
+internal = {"QODER_GLOBAL_LEGACY_BASE", "QODER_POLL_INTERVAL_MS", "QODER_POLL_TIMEOUT_MS",
             "HEALTH_CACHE_MS", "ROUTER_PORT", "MINIMAX_API_BASE", "MINIMAX_WATCH_MS"}
 print("internal=" + ",".join(sorted(set(keys) & internal)))
 print("keys=" + ",".join(sorted(set(keys))))

@@ -55,7 +55,7 @@ run = "node --experimental-strip-types test/privacy-check.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:minimax:cycle", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:account-id", "test:open-platform:admin", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:open-platform:kind", "test:anthropic-platform", "test:open-platform:account", "test:credential:fault", "test:admin:parity", "test:platform:availability", "test:admin", "test:open-platforms", "test:platform:migration", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:workbuddy:catalog:tool", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:deliver:backpressure", "test:peek:stream", "test:stream:idle", "test:empty-answer", "test:dialect:stream", "test:dialect:cache", "test:client:gone", "test:log:scrub", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:qoder:legacy", "test:helper", "test:config", "test:privacy"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:minimax:cycle", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:account-id", "test:open-platform:admin", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:open-platform:kind", "test:anthropic-platform", "test:open-platform:account", "test:credential:fault", "test:admin:parity", "test:platform:availability", "test:admin", "test:open-platforms", "test:platform:migration", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:workbuddy:catalog:tool", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:cooldown:single", "test:unreachable", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:deliver:backpressure", "test:peek:stream", "test:stream:idle", "test:empty-answer", "test:dialect:stream", "test:dialect:cache", "test:client:gone", "test:log:scrub", "test:scrub:client", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:qoder:legacy", "test:qoder:models", "test:helper", "test:config", "test:privacy"]
 
 
 [tasks."helper:sync"]
@@ -214,9 +214,17 @@ run = "node --experimental-strip-types test/client-gone-check.ts"
 description = "Check that log scrubbing keeps the readable parts and drops identifiers, tokens, and usage counts stay"
 run = "node --experimental-strip-types test/log-scrub-check.ts"
 
+[tasks."test:scrub:client"]
+description = "Check that the upstream body handed to the client is scrubbed too (the same rules as the log)"
+run = "node --experimental-strip-types test/client-scrub-check.ts"
+
 [tasks."test:cooldown"]
 description = "Check the cooldown: a failed account is set aside, and how long (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/cooldown-check.ts"
+
+[tasks."test:unreachable"]
+description = "Check that an unresolvable upstream host is tried once and then set aside (an unresolvable address, no tokens spent)"
+run = "node --experimental-strip-types test/unreachable-check.ts"
 
 [tasks."test:cooldown:single"]
 description = "Check that a platform with nobody to switch to does not record a cooldown (a fake upstream, no tokens spent)"
@@ -362,8 +370,12 @@ description = "Check which Qoder campaigns are worth claiming"
 run = "node --experimental-strip-types test/qoder-benefits-check.ts"
 
 [tasks."test:qoder:legacy"]
-description = "Check the legacy protocol's queue answer: it is retried, waited out by the seconds it gives, and logged"
+description = "Check the legacy protocol's queue answer: it is waited out once, then handed over (degradable, no cooldown), and logged"
 run = "node --experimental-strip-types test/qoder-legacy-check.ts"
+
+[tasks."test:qoder:models"]
+description = "Check which key each Qoder model goes out as, over the one protocol both regions serve"
+run = "node --experimental-strip-types test/qoder-models-check.ts"
 
 [tasks."test:workbuddy:catalog"]
 description = "Check the WorkBuddy catalogue in the database: it survives a restart, and a stale one still counts"

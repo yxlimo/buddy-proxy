@@ -1,8 +1,10 @@
 // lib/log-scrub.ts — 把正文里的敏感值抹掉，只留能读懂这句话的部分。
 //
 // 上游的正文不能丢（只看状态码分不出「风控」「参数不认」「模型没有」），但
-// 正文里也可能带着账号标识、邮箱、令牌这样的东西。stdout 是容器日志：它会被
-// 复制、归档、发到别处 —— 那里不该有这些。所以打出去之前先抹一遍。
+// 正文里也可能带着账号标识、邮箱、令牌这样的东西。两个地方会把它读出去：
+// stdout（容器日志，会被复制、归档、发到别处）和客户端的答复（网关把上游那句
+// 原话交给调用方，见 policy.ts 的 upstreamAnswerError）。两处抹的是同一套规矩，
+// 所以只有一份实现，出口两个。
 //
 // 抹的是「值」，不是「字段名」：字段名留着（`token` 这个字段还在，只是值没了），
 // 这样读日志的人还看得懂那句话在说什么。
@@ -138,11 +140,8 @@ function isSafeField(key: string): boolean {
  * SSE 帧（`data: {...}`）是**一帧一帧**地拆。流式上游的正文就是多帧，整段
  * 当一坨去 parse 一定失败 —— 那整条「按字段抹」的规则对流式上游就一点用没有
  * （2026-11-03，作者复查发现）。
- *
- * `maxLength`：留多长。凭据日志留 200（那里要的是「上游说了什么」），控制台
- * 留 500（那里要的是「出了什么事」）。
  */
-export function scrubForLog(text: string, maxLength = 200): string {
+function scrubText(text: string, maxLength: number): string {
   const original = (text || "").trim();
   if (!original) return "";
   const frames = framesOf(original);
@@ -164,6 +163,32 @@ export function scrubForLog(text: string, maxLength = 200): string {
   // 最后一遍按形态抹（邮箱、令牌样的长串、JWT）：JSON 里那些装在字符串值里的
   // 也要抹 —— 按字段名抹不到它们。
   return scrubPatterns(out).slice(0, maxLength);
+}
+
+/**
+ * 写进日志的那一份（stdout）。
+ *
+ * `maxLength`：留多长。凭据日志留 200（那里要的是「上游说了什么」），控制台
+ * 留 500（那里要的是「出了什么事」）。
+ */
+export function scrubForLog(text: string, maxLength = 200): string {
+  return scrubText(text, maxLength);
+}
+
+/**
+ * 交给客户端的那一份（回复里的 message 与 hint）。
+ *
+ * 与 scrubForLog 是同一套规矩 —— 字段名、UUID、令牌与邮箱形态、SSE 逐帧都是
+ * 同一个实现：上游回显在 401/忙/风控正文里的 key 片段、cookie、邮箱、JWT 不会
+ * 因为换了个出口就漏出去（只抹日志那一侧等于把敏感值直接送到调用方）。
+ *
+ * 与 scrubForLog 的差别只有一处：上限更大。客户端要看的是上游说了什么，4000
+ * 那个数是它自己定过的（见 upstreamAnswerError）；日志那边 200 是给「一行日志」
+ * 留的位置。日志那边若将来追加什么只有日志才需要的东西（标注、前缀），那是日志
+ * 的写法，不进客户端这一份 —— 这里只给抹过的那段正文。
+ */
+export function scrubForClient(text: string, maxLength = 4000): string {
+  return scrubText(text, maxLength);
 }
 
 /**
@@ -257,7 +282,20 @@ function parseMaybeJson(raw: string): any {
 }
 
 /**
- * 文本里那些「不靠字段名」的形态：邮箱、令牌样的长串、JWT。
+ * Cookie 形状：`acw_tc=0bc1…`、`session=eyJ…`。名字留着，值抹掉。
+ *
+ * 会话 cookie 常常被上游（或者中间那层 CDN）回显在正文里，而它不是 JSON 字段
+ * —— 按名字抹的那一张表接不住，按文本抹的那几条规则也接不住（值里既没有 `sk-`
+ * 前缀、也没有点分三段）。所以按「名字=值」的样子接。
+ *
+ * 两头都收紧，免得把参数值也抹了：值要 32 个字符以上，而且不带点、斜杠、连字符
+ * —— 那三样是模型名与地址的特征（`model=claude-3-5-sonnet-20241022`），会话值
+ * 里没有。值后面紧跟这三样时不算命中：那是更长的一段，只看前半截会漏下后半截。
+ */
+const COOKIE_PAIR = /\b([A-Za-z_][A-Za-z0-9_.-]{0,30})=([A-Za-z0-9+/=%_]{32,})(?![A-Za-z0-9+/=%_.-])/g;
+
+/**
+ * 文本里那些「不靠字段名」的形态：邮箱、令牌样的长串、JWT、cookie。
  */
 function scrubPatterns(text: string): string {
   let out = text;
@@ -267,5 +305,7 @@ function scrubPatterns(text: string): string {
   out = out.replace(/\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, REDACTED);
   // 引号里的长串（不带点的那种）。
   out = out.replace(/"[A-Za-z0-9_-]{40,}"/g, REDACTED);
+  // cookie 形状：名字留着，值抹掉。
+  out = out.replace(COOKIE_PAIR, `$1=${REDACTED}`);
   return out;
 }

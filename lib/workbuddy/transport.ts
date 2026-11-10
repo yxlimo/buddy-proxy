@@ -23,12 +23,13 @@
 import type { Json } from "../json.ts";
 import { createHash } from "node:crypto";
 import { AuthError } from "../credential.ts";
-import { withCooldownUntil, withUpstreamStatus, withBusinessCode, retryAfterMs } from "../upstream-status.ts";
+import { withCooldownUntil, withUpstreamAnswer, withBusinessCode, retryAfterMs } from "../upstream-status.ts";
 import { DEFAULT_SYSTEM, rewriteSystemContent } from "./identity.ts";
 import { logCredentialRejection, logUpstreamBody, logUpstreamPayload } from "./upstream-log.ts";
 import { businessCodeOfBody } from "../upstream-status.ts";
 import { businessCodeOfPayload, isBusinessErrorEnvelope } from "../upstream-status.ts";
 import { ClientGoneError } from "../router/deliver.ts";
+import { scrubForClient } from "../log-scrub.ts";
 import {
   chatBase,
   chatHeaders,
@@ -250,14 +251,16 @@ export async function workbuddyChat(
       // 正文里可能有账号标识，不进 stdout；走凭据日志（数据卷里的 auth.log）。
       logCredentialRejection(res.status, providerId, detail);
       // 平台拒了这个令牌：这里不换令牌（换令牌是定时器的事，它临期就换）。
-      // 换个说法报出去。
-      throw withUpstreamStatus(
+      // 换个说法报出去，上游的状态与正文一起带着：客户端要看到的是上游自己
+      // 那句「为什么拒」，不是网关替它编的一句。
+      throw withUpstreamAnswer(
         new AuthError(
           `upstream rejected the credential (HTTP ${res.status})`,
-          `WorkBuddy 拒绝了当前凭据：${detail.slice(0, 200)}`,
+          `WorkBuddy 拒绝了当前凭据：${scrubForClient(detail, 200)}`,
           503,
         ),
         res.status,
+        detail,
       );
     }
 
@@ -268,13 +271,14 @@ export async function workbuddyChat(
         await backoff(attempt, Number.isFinite(retryAfter) ? retryAfter : 0);
         continue;
       }
-      const error = withUpstreamStatus(
+      const error = withUpstreamAnswer(
         new AuthError(
           `upstream error (HTTP ${res.status})`,
-          detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
+          scrubForClient(detail, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
           res.status === 429 ? 429 : 502,
         ),
         res.status,
+        detail,
       );
       logUpstreamBody(res.status, detail);
       // 上游说的「过多久再试」：冷却到那时候为止（路由层看这个，不自己猜）。
@@ -288,14 +292,16 @@ export async function workbuddyChat(
       logUpstreamBody(res.status, detail);
       // The client sees the gateway's status; the upstream's own status says
       // whether another account would do better (a 400 is the request's fault,
-      // and every account would fail the same way).
-      const error = withUpstreamStatus(
+      // and every account would fail the same way). Its own body goes with the
+      // status: that answer is what the client reads when the retries run out.
+      const error = withUpstreamAnswer(
         new AuthError(
           `upstream error (HTTP ${res.status})`,
-          detail.slice(0, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
+          scrubForClient(detail, 300) || `WorkBuddy 返回了 HTTP ${res.status}`,
           502,
         ),
         res.status,
+        detail,
       );
       // 渠道校验是 11128，日志里要能一眼看出是风控，不是参数写错。
       const code = businessCodeOfBody(detail);
@@ -382,7 +388,10 @@ export async function aggregateStream(response: Response, model: string, signal?
           const error = chunk.error as any;
           throw new AuthError(
             `upstream error (${error.code ?? error.type ?? "unknown"})`,
-            typeof error.message === "string" ? error.message : JSON.stringify(error).slice(0, 300),
+            // 这一帧自己的错误也是上游说的：客户端会读到它，抹一遍再放上去。
+            typeof error.message === "string"
+              ? scrubForClient(error.message, 300)
+              : scrubForClient(JSON.stringify(error), 300),
             502,
           );
         }
@@ -393,7 +402,11 @@ export async function aggregateStream(response: Response, model: string, signal?
           const code = businessCodeOfPayload(chunk) ?? 0;
           const said = typeof chunk.msg === "string" ? chunk.msg : typeof chunk.message === "string" ? chunk.message : "";
           throw withBusinessCode(
-            new AuthError(`upstream rejected the request (${code})`, said.slice(0, 300) || "upstream rejected the request", 502),
+            new AuthError(
+              `upstream rejected the request (${code})`,
+              scrubForClient(said, 300) || "upstream rejected the request",
+              502,
+            ),
             code,
           );
         }

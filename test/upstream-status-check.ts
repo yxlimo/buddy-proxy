@@ -10,16 +10,19 @@
 // 所以传输层必须把它带在错误上。
 //
 // 覆盖：
-//   1. Qoder 的 400：上游的状态在错误上，客户端拿到的还是网关的 502；
-//   2. Qoder 的 429：排队（LimitError），不可降级；
-//   3. WorkBuddy 的 400：同上；
-//   4. 上游的 400 判成「请求本身的问题」，不降级；
-//   5. undici 的 body/headers 超时判成 timeout（不是 connection）。
+//   1. Qoder 老协议的 500 / 401：客户端拿到网关的 502/503，而上游的状态与正文进了日志；
+//   2. WorkBuddy 的 400：上游的状态在错误上；
+//   3. 上游的 400 判成「请求本身的问题」，不降级；
+//   4. undici 的 body/headers 超时判成 timeout（不是 connection）。
+//
+// Qoder 的排队不在这里：它现在是老协议的告诉方式（200 的帧里一个错误帧），
+// 认它、等它、据它记 busy 都在 test/qoder-legacy-check.ts 里查。
 
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { legacyStatusErrorFrame } from "./legacy-wire.ts";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-status-"));
 process.env.BUDDY_DATA_DIR = tmp;
@@ -52,7 +55,7 @@ await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = (server.address() as any).port;
 
 // Qoder 的地址是模块加载时读的，所以环境要先把地址换掉。
-process.env.QODER_GLOBAL_INFER_BASE = `http://127.0.0.1:${port}`;
+process.env.QODER_GLOBAL_LEGACY_BASE = `http://127.0.0.1:${port}`;
 process.env.WORKBUDDY_CHAT_BASE = `http://127.0.0.1:${port}`;
 
 /* ------------------------------------------------------------------ *
@@ -100,9 +103,10 @@ setSecret(`session:provider:${workbuddyId}`, "session", {
   refreshedAtMs: now,
 });
 
-const { qoderChatCompletion } = await import("../lib/qoder/transport.ts");
+const { legacyChatCompletion } = await import("../lib/qoder/legacy.ts");
+const { legacyWithRetry } = await import("../lib/router/upstreams/qoder.ts");
 const { workbuddyChat } = await import("../lib/workbuddy/transport.ts");
-const { upstreamStatusOf } = await import("../lib/upstream-status.ts");
+const { upstreamBodyOf, upstreamStatusOf } = await import("../lib/upstream-status.ts");
 const { classifyUpstreamError, describeUpstreamError } = await import(
   "../lib/router/provider-selection.ts"
 );
@@ -138,99 +142,86 @@ async function warningsDuring(run: () => Promise<unknown>): Promise<string[]> {
   return warnings;
 }
 
-console.log("");
-console.log("Qoder：上游的 400");
+/** 把这个生成器读完（错误照样抛出来）。 */
+async function drain(gen: AsyncGenerator<unknown>): Promise<unknown[]> {
+  const out: unknown[] = [];
+  for await (const chunk of gen) out.push(chunk);
+  return out;
+}
 
-{
-  status = 400;
-  body = JSON.stringify({ error: { message: "参数错" } });
-  const error = await caught(() =>
-    qoderChatCompletion(
-      { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: qoderId, region: "global" },
-    ),
+/**
+ * 按网关的样子问一次 Qoder：老协议那条路，正文是该编的码。
+ *
+ * 上游只答状态与正文，所以这里测的是「上游拒了之后网关怎么说」——
+ * 编码与签名不是这个文件的事。
+ */
+function qoderLegacy(): Promise<Response> {
+  return legacyChatCompletion(
+    {
+      messages: [{ role: "user", content: "hi" }],
+      modelKey: "gmodel",
+      displayName: "GLM-5.3",
+      maxTokens: 32,
+      reasoning: true,
+    },
+    { providerId: qoderId, region: "global" },
   );
-  check("上游的状态在错误上", upstreamStatusOf(error) === 400, String(upstreamStatusOf(error)));
-  check("客户端拿到的还是网关的 502", error?.status === 502, String(error?.status));
-  check("上游的原文还在", String(error?.hint ?? "").includes("400"), String(error?.hint));
-  const failure = classifyUpstreamError(error);
-  check("400 是请求本身的问题", failure.degradable === false, failure.kind);
-  check("日志里说的是 400", failure.status === 400, String(failure.status));
 }
 
 console.log("");
-console.log("Qoder：上游的 429（排队）");
+console.log("Qoder：老协议上游的 500 与 401（状态与正文要进日志）");
 
-{
-  status = 429;
-  body = JSON.stringify({
-    code: "10605",
-    message: JSON.stringify({ isQueued: true, retryAfterSeconds: 30, message: "排队中" }),
-  });
-  const error = await caught(() =>
-    qoderChatCompletion(
-      { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: qoderId, region: "global" },
-    ),
-  );
-  check("是排队（LimitError）", error?.name === "LimitError", String(error?.name));
-  check("上游的状态在错误上", upstreamStatusOf(error) === 429, String(upstreamStatusOf(error)));
-  const failure = classifyUpstreamError(error);
-  check("排队不降级", failure.degradable === false, failure.kind);
-  check("日志里说的是 busy", failure.kind === "busy", failure.kind);
-}
-
-console.log("");
-console.log("Qoder：上游的 500 与排队的正文要进日志");
-
-{
-  status = 500;
-  body = JSON.stringify({ error: "internal server error" });
-  const warnings = await warningsDuring(() =>
-    qoderChatCompletion(
-      { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: qoderId, region: "global" },
-    ),
-  );
+// 上游为什么拒，只有正文里有，而日志与用量表只记 message。容器一重建，hint
+// 就没了，所以这一行是唯一留得住的地方（2026-11-10 那次排查就卡在这里）。
+for (const [code, said] of [
+  [500, "internal server error"],
+  [401, "token expired"],
+] as const) {
+  status = code;
+  body = JSON.stringify({ error: said });
+  const warnings = await warningsDuring(() => caught(() => qoderLegacy()));
+  const error = await caught(() => qoderLegacy());
+  check(`${code}：客户端拿到的是网关的 502`, error?.status === 502, String(error?.status));
   check(
-    "500 打了 [UPSTREAM]",
+    `${code}：打了 [UPSTREAM]`,
     warnings.some((w) => w.includes("[UPSTREAM]")),
     JSON.stringify(warnings),
   );
   check(
-    "500 的正文留在了日志里",
-    warnings.some((w) => w.includes("internal server error")),
+    `${code}：上游的状态留在了日志里`,
+    warnings.some((w) => w.includes(String(code))),
     JSON.stringify(warnings),
   );
   check(
-    "500 的状态留在了日志里",
-    warnings.some((w) => w.includes("500")),
+    `${code}：正文留在了日志里`,
+    warnings.some((w) => w.includes(said)),
     JSON.stringify(warnings),
+  );
+  // 状态与正文要么都有要么都没有（见 upstream-status.ts 的 withUpstreamAnswer）：
+  // 那个状态是客户端最终看到的那句答复的根据，而重试用尽后上游不会再答一遍。
+  check(
+    `${code}：正文跟着状态一起留在错误上`,
+    upstreamBodyOf(error) === body,
+    String(upstreamBodyOf(error)),
   );
 }
 
+console.log("");
+console.log("Qoder：老协议帧里带的状态也带上那一帧自己的正文");
+
 {
-  status = 429;
-  body = JSON.stringify({
-    code: "10605",
-    message: JSON.stringify({ isQueued: true, retryAfterSeconds: 30, message: "排队中" }),
-  });
-  const warnings = await warningsDuring(() =>
-    qoderChatCompletion(
-      { model: "test", messages: [{ role: "user", content: "hi" }] },
-      { stream: false, providerId: qoderId, region: "global" },
-    ),
-  );
+  // 真形状：一条 200 的流，第一帧的壳上写着 500（test/legacy-wire.ts 的
+  // legacyStatusErrorFrame）。那个状态与它自己那句话要一起留在错误上。
+  status = 200;
+  body = legacyStatusErrorFrame(500, "upstream frame failed", "500");
+  const error = await caught(() => drain(legacyWithRetry(() => qoderLegacy(), 10_000, async () => {})));
+  check("帧里的状态在错误上", upstreamStatusOf(error) === 500, String(upstreamStatusOf(error)));
   check(
-    "排队打了 [UPSTREAM]",
-    warnings.some((w) => w.includes("[UPSTREAM]")),
-    JSON.stringify(warnings),
+    "帧自己的正文跟着状态一起在错误上",
+    upstreamBodyOf(error) === JSON.stringify({ code: "500", message: "upstream frame failed" }),
+    String(upstreamBodyOf(error)),
   );
-  check(
-    "排队说了等多久",
-    warnings.some((w) => w.includes("30 秒后重试")),
-    JSON.stringify(warnings),
-  );
+  check("客户端拿到的是网关的 502", error?.status === 502, String(error?.status));
 }
 
 console.log("");

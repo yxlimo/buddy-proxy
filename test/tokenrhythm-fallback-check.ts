@@ -149,13 +149,14 @@ process.env.TOKENRHYTHM_INFER_BASE = `http://127.0.0.1:${inferencePort}/v1`;
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
 insertVendorPlatform("tokenrhythm", "tokenrhythm", { quotaPlugin: "tokenrhythm-wallet" });
-const { addAccount, provider: accountRow } = await import("../lib/providers.ts");
+const { addAccount } = await import("../lib/providers.ts");
 const { saveSession, saveTokenRhythmCredential } = await import("../lib/tokenrhythm/accounts.ts");
 
-/** 建第 n 个账号（第 1 个的 id 就是平台 id），带上凭据与会话。 */
+/** 建第 n 个账号，带上凭据与会话。id 用表给的那个（平台名不再是账号 id）。 */
 function makeAccount(n: number): string {
-  const id = n === 1 ? "tokenrhythm" : `tokenrhythm-${n}`;
-  if (!accountRow(id)) addAccount({ platform: "tokenrhythm" });
+  const made = addAccount({ platform: "tokenrhythm" });
+  if (!made.ok || !made.id) throw new Error(`建不了 TokenRhythm 账号：${made.message}`);
+  const id = String(made.id);
   saveTokenRhythmCredential(id, {
     account: `1900000000${n}`,
     password: `pw${n}`,
@@ -193,9 +194,7 @@ console.log("");
 console.log("余额不足时换租户");
 
 const ctx: any = {
-  legacyMaxAttempts: 1,
   legacyRetryMs: 0,
-  qoderMaxAttempts: 1,
   tokenRhythmMaxAttempts: 1,
   logRoute: true,
   workbuddyMaxOutput: () => 64000,

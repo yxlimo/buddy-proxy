@@ -22,6 +22,31 @@ export interface UpstreamBusinessCode {
 }
 
 /**
+ * An error whose own `status` is the gateway's answer, not the upstream's.
+ *
+ * 有的失败是网关**自己**造一个状态码告诉客户端该干什么的：排队就是（网关说
+ * 429 —— 过一会儿再来），上游其实从没回过 429（它在 200 的流里说了句「排队」）。
+ * 这种错误的 `status` 不是上游说过的话，不该进「上游说过」那一格（见
+ * upstreamStatusOf）：进了的话，重试用尽时客户端拿到的是根据状态回编的一句
+ * 「上游返回 429。」，而原先那句「等到它给的时间再试，仍在排队」被盖掉了。
+ */
+export interface GatewayOwnStatus {
+  /** Set when `status` is what the gateway told the client, not what the upstream sent. */
+  gatewayOwnStatus?: true;
+}
+
+/**
+ * 说清楚：这个错误的 `status` 是网关自己的答复，不是上游的。
+ *
+ * 只影响「上游说过什么」那个判断：错误自己的 `status` 照旧发给客户端（客户端
+ * 拿到的还是 429），只是它不再被当成上游回过的话。
+ */
+export function withGatewayOwnStatus<T extends object>(error: T): T {
+  (error as T & GatewayOwnStatus).gatewayOwnStatus = true;
+  return error;
+}
+
+/**
  * An error that carries the moment the account is free again.
  *
  * The upstream says it in two ways: a `retry-after` header, or a time in the
@@ -40,17 +65,79 @@ export function withUpstreamStatus<T extends object>(error: T, status: number): 
   return error;
 }
 
+/** An error that carries the upstream's own body. */
+export interface UpstreamBody {
+  /** The upstream's own body, as it arrived. */
+  upstreamBody?: string;
+}
+
+/**
+ * Keep the upstream's own body on an error.
+ *
+ * The client reads the upstream's answer when the retries run out (see
+ * upstreamAnswerError in lib/router/upstreams/policy.ts), and by then the
+ * upstream will not answer again — the body has to ride on the error.
+ *
+ * The text has to be the upstream's own: a body rebuilt from a parsed payload,
+ * or the gateway's own sentence about the failure, would show the client
+ * something the upstream never said.
+ *
+ * 这个函数单独用是可以的，但只在错误**已经**带着自己的状态时：那时候状态与
+ * 正文两样都在（不然就是「只有状态、没有正文」那个 bug）。中转站「忙」就是这种
+ * 情形：它那个 503 是类自己的答复（分类要留在 server），不是上游回过的状态，
+ * 所以只能补正文（见 lib/tokenrhythm/transport.ts）。
+ */
+export function withUpstreamBody<T extends object>(error: T, body: string): T {
+  (error as T & UpstreamBody).upstreamBody = body;
+  return error;
+}
+
+/** The upstream's own body, if the error carries one. */
+export function upstreamBodyOf(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const body = (error as UpstreamBody).upstreamBody;
+  return typeof body === "string" && body ? body : null;
+}
+
+/**
+ * Keep the upstream's own answer on an error: its status and its body together.
+ *
+ * The rule this pins down, and the one to check whenever another upstream is
+ * added: a status on the error takes its body with it, both or neither. The
+ * status tells the router which account failed; the body is what the client
+ * reads once the retries run out (see upstreamAnswerError in
+ * lib/router/upstreams/policy.ts). A status without a body leaves the client
+ * with a sentence the gateway made up, and no way to see what the upstream
+ * said — so a rejection that carries only the status is a bug, not a choice
+ * between two equally good answers.
+ *
+ * `body` is the upstream's own text, not a rebuilt one: the raw reply as it
+ * arrived (`res.text()`), never a sentence put back together from a parsed
+ * payload and never the gateway's own wrapper around it.
+ */
+export function withUpstreamAnswer<T extends object>(error: T, status: number, body: string): T {
+  return withUpstreamBody(withUpstreamStatus(error, status), body);
+}
+
 /** Keep the platform's own code on an error. */
 export function withBusinessCode<T extends object>(error: T, code: number | string): T {
   (error as T & UpstreamBusinessCode).businessCode = code;
   return error;
 }
 
-/** The status the upstream sent, if the error carries one. */
+/**
+ * The status the upstream sent, if the error carries one.
+ *
+ * `status` 是退路：传输层把上游的状态放在 `upstreamStatus` 上，而平台自己的
+ * 错误类型则直接把上游的状态放在 `status` 里。退路只对后者成立 —— 错误自己
+ * 声明了 `status` 是网关答复的那些（withGatewayOwnStatus）不走退路：它们说的
+ * 不是上游说过的话。
+ */
 export function upstreamStatusOf(error: unknown): number | null {
   if (!error || typeof error !== "object") return null;
   const err = error as UpstreamStatus & { status?: unknown };
-  for (const value of [err.upstreamStatus, err.status]) {
+  const own = (error as GatewayOwnStatus).gatewayOwnStatus === true;
+  for (const value of own ? [err.upstreamStatus] : [err.upstreamStatus, err.status]) {
     const n = Number(value);
     if (Number.isFinite(n) && n > 0) return n;
   }

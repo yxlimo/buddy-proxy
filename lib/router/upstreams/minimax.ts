@@ -8,7 +8,8 @@ import { openaiToAnthropic } from "../../dialect/request.ts";
 import { MINIMAX_MODELS } from "../../minimax/models.ts";
 import { gatewayErrorMessage, minimaxChat, PING_MS } from "../../minimax/transport.ts";
 import { ClientGoneError, deliverAnthropicStream, deliverJson, type Dialect } from "../deliver.ts";
-import { withBusinessCode, withCooldownUntil, withUpstreamStatus, retryAfterMs } from "../../upstream-status.ts";
+import { withBusinessCode, withCooldownUntil, withUpstreamAnswer, retryAfterMs } from "../../upstream-status.ts";
+import { scrubForClient } from "../../log-scrub.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { runUnderClientGone } from "./client-gone.ts";
 import { type UpstreamContext, keepUpstreamTruth, settlement, underPolicy } from "./policy.ts";
@@ -140,8 +141,12 @@ export async function toMinimax(
  *
  * 必须抛，不能返回 Response——策略（underPolicy）只看得见异常。
  * 返回一个 429 给它，等于什么都没说，账号也就不会换。
+ *
+ * 导出是给离线测试用的（test/cooldown-single-check.ts 最后那一节）：它拿一个
+ * 假的 429 答复进来，验的是「上游那份正文留在了错误上」。别处的调用点仍只有
+ * 上面那一处。
  */
-async function minimaxRejection(res: Response): Promise<AuthError> {
+export async function minimaxRejection(res: Response): Promise<AuthError> {
   const text = await res.text().catch(() => "");
   let parsed: any = null;
   try {
@@ -150,8 +155,13 @@ async function minimaxRejection(res: Response): Promise<AuthError> {
     /* not JSON */
   }
   const { type, message } = gatewayErrorMessage(res.status, parsed, text);
-  const error = new AuthError(message, "", res.status, type);
-  withUpstreamStatus(error, res.status);
+  // 这句 message 是上游自己的话（gatewayErrorMessage 从正文里挑的），客户端
+  // 会读到它：抹一遍再放上去（规矩与日志那边同一套，见 scrubForClient）。
+  const error = new AuthError(scrubForClient(message, 4000), "", res.status, type);
+  // 上游自己的状态与正文一起留着：重试用尽时客户端看到的就是这一份答复（见
+  // policy.ts 的 upstreamAnswerError）。只留状态的话，客户端拿到的是网关编的
+  // 一句「上游返回 429。」，上游到底说了什么就看不到了。
+  withUpstreamAnswer(error, res.status, text);
   // 上游说的「过多久再试」：冷却到那时候为止（路由层看这个，不自己猜）。
   const wait = retryAfterMs(res, text);
   if (wait !== null) withCooldownUntil(error, Date.now() + wait);

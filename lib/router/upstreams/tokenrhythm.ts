@@ -28,7 +28,7 @@ import { provider } from "../../providers.ts";
 import { platformOf, platformPolicy } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
-import { type UpstreamContext, upstreamStatusError, accountFailure } from "./policy.ts";
+import { type UpstreamContext, upstreamStatusError, accountFailure, keepUpstreamTruth } from "./policy.ts";
 // 归因头与开放平台同一份（它对我们就是第三方 API），不在这边另写一份。
 import { attributionHeaders } from "./open-platform.ts";
 
@@ -278,13 +278,24 @@ async function tokenRhythmChatWithRetry(
         continue;
       }
       if (e instanceof TokenRhythmBusyError) {
-        throw new AuthError(
-          "tokenrhythm is busy",
-          `TokenRhythm 现在繁忙（${e.message}）。这是上游的临时状态，稍后重试即可；` +
-            `同一个账号上已经重试过 ${Math.max(maxAttempts - 1, 0)} 次，还是这个排队。` +
-            `${e.traceId ? `traceId=${e.traceId}` : ""}`.trim(),
-          503,
-          "api_error",
+        // 上游那句原话要跟着走。
+        //
+        // 这一层包了一个新的错误（客户端看到的是网关的状态与一句人话），而正文
+        // 只挂得住跟它一起：不带上，重试用尽之后客户端读到的就是网关编的「上游
+        // 返回 503。」，中转站那句「服务繁忙，请稍后重试」就没了（它现在只能从
+        // `${e.message}` 里活下来，那是网关抖出来的，不是上游的原文）。
+        // keepUpstreamTruth 只搬上游的状态/码/正文：这个包壳自己的 503 与分类
+        // 不改。
+        throw keepUpstreamTruth(
+          new AuthError(
+            "tokenrhythm is busy",
+            `TokenRhythm 现在繁忙（${e.message}）。这是上游的临时状态，稍后重试即可；` +
+              `同一个账号上已经重试过 ${Math.max(maxAttempts - 1, 0)} 次，还是这个排队。` +
+              `${e.traceId ? `traceId=${e.traceId}` : ""}`.trim(),
+            503,
+            "api_error",
+          ),
+          e,
         );
       }
       throw e;

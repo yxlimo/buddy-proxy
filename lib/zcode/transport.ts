@@ -12,7 +12,7 @@
 import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
-import { scrubForLog } from "../log-scrub.ts";
+import { scrubForClient, scrubForLog } from "../log-scrub.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
 import { matchZcodeModel, zcodeEffortFor } from "./models.ts";
 
@@ -210,7 +210,8 @@ export async function zcodeChat(
     console.warn(`[ZCODE] 上游 ${response.status} ${ZCODE_MESSAGES_URL}：${scrubForLog(text, 500)}`);
     throw new AuthError(
       `upstream HTTP ${response.status}`,
-      `ZCode 上游返回 ${response.status}：${text.slice(0, 300)}`,
+      // 客户端看到的是这一句：上游正文里可能带着账号标识，抹一遍再放上去。
+      `ZCode 上游返回 ${response.status}：${scrubForClient(text, 300)}`,
       502,
     );
   }
@@ -297,7 +298,11 @@ function businessFailure(text: string): AuthError | null {
   if (!Number.isFinite(code) || code === 0) return null;
   const message = String(body?.msg ?? body?.message ?? "上游报了业务错误");
   if (code === 1005) {
-    return new AuthError("zcode quota exceeded", `ZCode 的套餐额度用尽了：${message}`, 402);
+    return new AuthError("zcode quota exceeded", `ZCode 的套餐额度用尽了：${scrubForClient(message, 300)}`, 402);
   }
-  return new AuthError(`zcode business error ${code}`, `ZCode 上游报了错误（${code}）：${message}`, 502);
+  return new AuthError(
+    `zcode business error ${code}`,
+    `ZCode 上游报了错误（${code}）：${scrubForClient(message, 300)}`,
+    502,
+  );
 }

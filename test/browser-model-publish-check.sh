@@ -79,9 +79,8 @@ FAKE="http://127.0.0.1:$FAKE_PORT"
 # 网关交给 test/serve.ts：端口由共享 helper 挑，假上游的地址用 --env 传。
 READY="$(mktemp -d)/ready.json"
 node --experimental-strip-types test/serve.ts --data-dir "$DATA_DIR" --ready-file "$READY" \
-  --env "QODER_GLOBAL_INFER_BASE=$FAKE/qoder-global" \
   --env "QODER_GLOBAL_OPENAPI_BASE=$FAKE/openapi-global" \
-  --env "QODER_GLOBAL_LEGACY_BASE=$FAKE/qoder-global-legacy" \
+  --env "QODER_GLOBAL_LEGACY_BASE=$FAKE/qoder-legacy" \
   > "$DATA_DIR/router.log" 2>&1 &
 ROUTER_PID=$!
 

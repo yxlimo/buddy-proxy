@@ -150,9 +150,9 @@ function seedSessions(dataDir: string, env: Record<string, string>): void {
 function upstreamEnv(base: string): Record<string, string> {
   if (!base) return {};
   return {
-    QODER_GLOBAL_INFER_BASE: `${base}/qoder-global`,
-    QODER_GLOBAL_LEGACY_BASE: `${base}/qoder-global-legacy`,
-    QODER_CN_INFER_BASE: `${base}/qoder-cn`,
+    // Qoder 两个区都只说一套协议了：假上游按路径给答复，所以两个区指向同一份。
+    QODER_GLOBAL_LEGACY_BASE: `${base}/qoder-legacy`,
+    QODER_CN_INFER_BASE: `${base}/qoder-legacy`,
     QODER_GLOBAL_OPENAPI_BASE: `${base}/openapi-global`,
     QODER_CN_OPENAPI_BASE: `${base}/openapi-cn`,
     WORKBUDDY_CHAT_BASE: `${base}/workbuddy`,

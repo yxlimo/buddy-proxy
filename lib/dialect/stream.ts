@@ -3,6 +3,7 @@ import { cachedInputOfOpenAI } from "./cache.ts";
 import { AuthError } from "../credential.ts";
 import { randomUUID } from "node:crypto";
 import { readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
+import { scrubForClient } from "../log-scrub.ts";
 
 
 /* ------------------------------------------------------------------ *
@@ -232,7 +233,9 @@ export async function* anthropicStreamToOpenAI(
       const detail = evt.error ?? evt;
       throw new AuthError(
         `upstream stream error (${detail?.type ?? "unknown"})`,
-        typeof detail?.message === "string" ? detail.message : JSON.stringify(detail).slice(0, 300),
+        typeof detail?.message === "string"
+          ? scrubForClient(detail.message, 300)
+          : scrubForClient(JSON.stringify(detail), 300),
         502,
       );
     }
