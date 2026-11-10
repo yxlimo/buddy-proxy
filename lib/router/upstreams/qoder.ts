@@ -1,30 +1,28 @@
-// lib/router/upstreams/qoder.ts — Qoder, both protocols.
+// lib/router/upstreams/qoder.ts — Qoder.
 //
-// The new protocol answers with an OpenAI stream; the legacy (COSY) one
-// answers in Qoder's own frame format, which is unwrapped into plain
-// chunks here.
+// One protocol, the CLI's own (COSY): its answer is Qoder's own frame format,
+// which is unwrapped into plain chunks here.
 
 import type { Json } from "../../json.ts";
 import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../../credential.ts";
-import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode } from "../../upstream-status.ts";
-import { scrubForLog } from "../../log-scrub.ts";
+import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode, withUpstreamAnswer } from "../../upstream-status.ts";
+import { scrubForClient, scrubForLog } from "../../log-scrub.ts";
 import { anthropicToOpenAI, effortOf } from "../../dialect/request.ts";
 import {
-  qoderProtocolForRegion,
   resolveModelRoute,
   QODER_CLIENT_MAX_TOKENS,
   type QoderModel,
 } from "../../qoder/models.ts";
-import { qoderChatCompletion, LimitError, parseLimitError } from "../../qoder/transport.ts";
+import { QueuedError, parseLimitError } from "../../qoder/queue.ts";
 import type { QoderRegion } from "../../qoder/auth.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../../qoder/legacy.ts";
-import { deliverJson, deliverOpenAIChunks, deliverOpenAIStream, type Dialect } from "../deliver.ts";
+import { deliverJson, deliverOpenAIChunks, type Dialect } from "../deliver.ts";
 import { platformOf } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { runUnderClientGone } from "./client-gone.ts";
 import { type UpstreamContext, settlement, underPolicy } from "./policy.ts";
+import { runUnderClientGone } from "./client-gone.ts";
 
 /**
  * The thinking level a request asks for.
@@ -67,84 +65,11 @@ export async function toQoder(
   if (ctx.logRoute) {
     console.log(`[ROUTE] model=${route.model} region=${region} effort=${effort ?? "-"} -> upstream key=${key}`);
   }
-  if (model && qoderProtocolForRegion(model, region) === "legacy") {
-    await toQoderLegacy(ctx, openaiBody, model, dialect, stream, out, region, route.label, route.platform);
-    return;
-  }
-
-  openaiBody.model = key;
-  // The official client sends the limit from its own catalog, whatever the
-  // caller asked for; the gateway ignores it and cuts the answer at the
-  // model's real limit.
-  openaiBody.max_tokens = QODER_CLIENT_MAX_TOKENS;
-  // 记下真正发出去的上限：日志要拿它和 reasoning 一起看。
-  ctx.upstreamMaxTokens = QODER_CLIENT_MAX_TOKENS;
-  // 流式答复是在 underPolicy 返回之后才消费的：冷却由调用方在流结束时结算。
-  const settle = settlement();
-  // 客户端走了就把上游停掉：上游还在算就是在计费，账号还占着。
-  //
-  // 非流式那条路尤其要紧：答复要等整个上游的答复读完才发出去，客户端在这
-  // 中间走了（超时、按了取消），没人停上游的话它就接着算到超时（2026-11-03，
-  // 作者复查发现）。
-  await runUnderClientGone(out, async (guard) => {
-    const upstream = await underPolicy(
-      route.platform,
-      "qoder",
-      (account) =>
-        qoderWithRetry(
-          () =>
-            qoderChatCompletion(openaiBody, { stream, providerId: account.id, region, signal: guard.signal }).catch((e) => {
-              // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却。
-              throw guard.fail(e) ?? e;
-            }),
-          ctx.qoderMaxAttempts,
-        ),
-      settle,
-      ctx.availability,
-    );
-    if (!stream) {
-      let json: any;
-      try {
-        json = await upstream.json();
-      } catch (e) {
-        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
-        const gone = guard.fail(e);
-        if (gone) {
-          settle.failure(gone);
-          throw gone;
-        }
-        throw e;
-      }
-      deliverJson(out, dialect, "openai", json, route.label ?? upstreamModel(route), ctx.onUsage);
-      settle.success();
-      return;
-    }
-    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
-    // lib/router/deliver.ts 的 replyState）。这里的看不盯了 —— 流式那条路的
-    // 客户端走了，靠的是答复那一层自己的监听器与看门狗。
-    guard.done();
-
-    try {
-      await deliverOpenAIStream(
-        out,
-        upstream.body!,
-        dialect,
-        route.label ?? upstreamModel(route),
-        undefined,
-        ctx.onUsage,
-        (e) => settle.failure(e),
-      );
-      settle.success();
-    } catch (e) {
-      // 中途断的流：那个账号要记冷却，而且原来那行冷却不能被清掉。
-      settle.failure(e);
-      throw e;
-    }
-  });
+  await toQoderLegacy(ctx, openaiBody, model, key, dialect, stream, out, region, route.label, route.platform);
 }
 
 /**
- * The legacy (COSY) protocol, for the models the new one refuses.
+ * The CLI's own (COSY) protocol — the only one the upstream has.
  *
  * Its response is Qoder's own frame format, so the frames are unwrapped into
  * plain OpenAI chunks and then converted like any other upstream. The non-
@@ -154,7 +79,8 @@ export async function toQoder(
 export async function toQoderLegacy(
   ctx: UpstreamContext,
   openaiBody: Record<string, unknown>,
-  model: QoderModel,
+  model: QoderModel | undefined,
+  key: string,
   dialect: Dialect,
   stream: boolean,
   out: Koa.Context,
@@ -163,57 +89,80 @@ export async function toQoderLegacy(
   platform = "qoder",
 ): Promise<void> {
   const settle = settlement();
-  // 旧协议发的是同一个固定上限（下面 parameters 里的 max_tokens）。
+  // 老协议发的是同一个固定上限（下面 parameters 里的 max_tokens）。
   ctx.upstreamMaxTokens = QODER_CLIENT_MAX_TOKENS;
-  const chunks = await underPolicy(
-    platform,
-    "qoder",
-    async (account) =>
-      legacyWithRetry(
-        () =>
-          legacyChatCompletion(
-            {
-              messages: Array.isArray(openaiBody.messages) ? openaiBody.messages : [],
-              tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
-              modelKey: model.key,
-              displayName: model.name,
-              // The same number the simulated client sends.
-              maxTokens: QODER_CLIENT_MAX_TOKENS,
-              reasoning: model.reasoning,
-              contextWindow: model.context,
-            },
-            { providerId: account.id, region },
-          ),
-        ctx.legacyMaxAttempts,
-        ctx.legacyRetryMs,
-      ),
-    settle,
-    ctx.availability,
-  );
+  // An id that is not in the catalogue is passed through unchanged: the upstream
+  // rejects it with a clear message, which beats the proxy guessing at one.
+  const modelKey = model?.key ?? key;
+  const answeredAs = label ?? model?.id ?? modelKey;
+  // 客户端走了就把上游停掉：上游还在算就是在计费，账号还占着。
+  //
+  // 非流式那条路尤其要紧：答复要等整个上游的答复读完才发出去，客户端在这
+  // 中间走了（超时、按了取消），没人停上游的话它就接着算到超时（2026-11-03，
+  // 作者复查发现）。
+  await runUnderClientGone(out, async (guard) => {
+    const chunks = await underPolicy(
+      platform,
+      "qoder",
+      async (account) =>
+        legacyWithRetry(
+          () =>
+            legacyChatCompletion(
+              {
+                messages: Array.isArray(openaiBody.messages) ? openaiBody.messages : [],
+                tools: Array.isArray(openaiBody.tools) ? openaiBody.tools : undefined,
+                modelKey,
+                displayName: model?.name ?? modelKey,
+                // The same number the simulated client sends.
+                maxTokens: QODER_CLIENT_MAX_TOKENS,
+                reasoning: model?.reasoning ?? false,
+                contextWindow: model?.context,
+              },
+              { providerId: account.id, region, signal: guard.signal },
+            ).catch((e) => {
+              // 客户端走了不是上游的错：策略看到的是这个，它才不会给账号记冷却。
+              throw guard.fail(e) ?? e;
+            }),
+          ctx.legacyRetryMs,
+        ),
+      settle,
+      ctx.availability,
+    );
 
-  if (!stream) {
-    // The legacy protocol has no non-streaming answer, so the chunks are
-    // collected and reassembled into one completion.
-    let completion: Json;
+    if (!stream) {
+      // The legacy protocol has no non-streaming answer, so the chunks are
+      // collected and reassembled into one completion.
+      let completion: Json;
+      try {
+        completion = await collectOpenAIChunks(chunks, answeredAs);
+      } catch (e) {
+        // 客户端走了不是上游的错：账号不该记冷却，这个请求也不该再打一次。
+        const gone = guard.fail(e);
+        if (gone) {
+          settle.failure(gone);
+          throw gone;
+        }
+        // 帧读到一半断了：那是上游的失败，账号要记冷却。
+        settle.failure(e);
+        throw e;
+      }
+      deliverJson(out, dialect, "openai", completion, answeredAs, ctx.onUsage);
+      settle.success();
+      return;
+    }
+
+    // 流式那条路：答复是边读边发的，客户端走了由答复那一层管（见
+    // lib/router/deliver.ts 的 replyState）。这里不再盯 —— 流式那条路的客户端
+    // 走了，靠的是答复那一层自己的监听器与看门狗。
+    guard.done();
     try {
-      completion = await collectOpenAIChunks(chunks, model.id);
+      await deliverOpenAIChunks(out, chunks, dialect, answeredAs, ctx.onUsage, (e) => settle.failure(e));
+      settle.success();
     } catch (e) {
-      // 帧读到一半断了：那是上游的失败，账号要记冷却。
       settle.failure(e);
       throw e;
     }
-    deliverJson(out, dialect, "openai", completion, label ?? model.id, ctx.onUsage);
-    settle.success();
-    return;
-  }
-
-  try {
-    await deliverOpenAIChunks(out, chunks, dialect, label ?? model.id, ctx.onUsage, (e) => settle.failure(e));
-    settle.success();
-  } catch (e) {
-    settle.failure(e);
-    throw e;
-  }
+  });
 }
 
 /**
@@ -308,7 +257,7 @@ function isNoCreditRefusal(error: { status?: number; message?: string }): boolea
   return error.status === 403 && /pricing/i.test(error.message ?? "");
 }
 
-export function legacyError(error: { code?: string; message?: string; status?: number }): AuthError {
+export function legacyError(error: { code?: string; message?: string; status?: number; text?: string }): AuthError {
   logLegacyFrameError(error);
   // A 403 with a pricing link is the platform saying the account has no
   // credits left. Saying so is more use than the code it answers with.
@@ -320,11 +269,20 @@ export function legacyError(error: { code?: string; message?: string; status?: n
       "usage_limit_error",
     );
   }
-  return new AuthError(
+  const refused = new AuthError(
     `legacy upstream error (${error.code ?? "unknown"})`,
-    `${error.message ?? "upstream failed"}${error.status ? ` (HTTP ${error.status})` : ""}`,
+    // 这一帧自己的那句话是客户端看的（它进 hint）：抹一遍再给出去。
+    `${scrubForClient(error.message ?? "upstream failed", 300)}${error.status ? ` (HTTP ${error.status})` : ""}`,
     error.status && error.status >= 500 ? 502 : 503,
   );
+  // 帧里那个状态也要带在错误上：路由靠它分清「请求本身的问题」与「这个账号
+  // 接不了」。没额度那一支已经自己说了（402 / usage_limit_error），不盖它。
+  //
+  // 状态与正文一起带：重试用尽之后客户端读的是上游这一帧自己的正文，而不是
+  // 网关根据状态回编的一句「上游返回 500。」（见 lib/upstream-status.ts 的
+  // withUpstreamAnswer）。这一帧没有正文时正文就是空：那说的是「上游没说
+  // 什么」，不是网关自己编了一句。
+  return error.status ? withUpstreamAnswer(refused, error.status, error.text ?? "") : refused;
 }
 
 /** Waits, the way the retry loop does. Injectable so a test can watch it. */
@@ -333,21 +291,21 @@ export type LegacySleep = (ms: number) => Promise<void>;
 const realSleep: LegacySleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 排队等到重试次数用尽。
+ * 排队等过一次仍是排队：交出去。
  *
  * 以前这里抛的是 legacyError，它对 403 给 503 —— 分类按 5xx 把它当「上游挂了」：
- * 健康账号被记冷却，而策略还会在同一个账号上再跑一轮 legacyWithRetry（客户
- * 端最坏等 240s+）。可排队说的是「模型没排上」，不是「这个账号接不了」：换一个
- * 账号只是换一条队，等下去也没意义。
+ * 健康账号被记冷却，而策略还会在同一个账号上再跑一轮（客户端最坏等 240s+）。
  *
- * LimitError 是这条链路上现成的那个形状（新协议排队就是它），分类把它算 busy：
- * 不降级、不写冷却、也不在同一账号上重来。不为它新加状态或分支。
+ * `QueuedError` 说的是「这个模型在上游没排上，等过了也没排上」：分类把它当成
+ * 可降级的失败（换一个目标：另一个上游有自己的队列）且不写冷却（账号没坏，它
+ * 别的模型现在就能接）。见 lib/qoder/queue.ts。
  */
-function queueExhausted(error: { code?: string; message?: string }, attempts: number): LimitError {
+function queueExhausted(error: { code?: string; message?: string }, attempts: number): QueuedError {
   logLegacyFrameError(error);
-  return new LimitError(
+  return new QueuedError(
     `qoder model is still queued after ${attempts} attempts`,
-    `模型排队：上游排了几轮都没排上（试了 ${attempts} 次）。请稍后重试。`,
+    `上游把这个模型排进了队列：等到它给的时间再试，仍在排队（共试了 ${attempts} 次）。` +
+      "换一个上游或换一个模型才有用，稍后再试这个模型。",
     queueSeconds(error),
   );
 }
@@ -366,22 +324,33 @@ function queueSeconds(error: { message?: string }): number {
 }
 
 /**
+ * 排队等几次。一次 —— 实测的结论，不是保守。
+ *
+ * 上游给的秒数兑现不了：等满 60 秒再打，第一帧还是同一个排队答复（2026-11-11
+ * 实测，两个账号、`p4` 队列）。多等几轮只是把客户端挂在连接上，不是恢复。所以
+ * 等一次，再打一次，仍是排队就交出去：
+ *
+ *   - 交出去，策略才能换下一个目标（分类把排队算可降级）；
+ *   - 同一个账号不再重打（排队不在瞬时失败那一类里，见 policy.ts）。
+ */
+const LEGACY_QUEUE_WAITS = 1;
+
+/**
  * The legacy endpoint answers 429 with `provider_error` / "All backends failed"
  * while the model is queued or the account is rate limited, and the CLI retries
  * such a request rather than failing it. The first frame tells us whether the
  * attempt was queued, so the retry happens before any bytes reach the client.
  *
  * The queue answer also says how long to wait; that wait is taken from it when
- * it says so (see `legacyWaitMs`), and the number of attempts stays the only
- * budget — there is no second clock on top of it.
+ * it says so (see `legacyWaitMs`). The wait happens once (LEGACY_QUEUE_WAITS),
+ * because the seconds the upstream gives are not a promise it keeps.
  *
- * When the attempts run out while the model is still queued, the answer is a
- * `LimitError` (see `queueExhausted`): the model has no slot, the account is
- * fine.
+ * When the wait does not help, the answer is a `QueuedError` (see
+ * `queueExhausted`): the model has no slot, the account is fine, and another
+ * target is worth trying.
  */
 export async function* legacyWithRetry(
   send: () => Promise<Response>,
-  maxAttempts: number,
   retryMs: number,
   sleep: LegacySleep = realSleep,
 ): AsyncGenerator<Json> {
@@ -391,16 +360,16 @@ export async function* legacyWithRetry(
     try {
       const first = await frames.next();
 
-      if (!first.done && first.value.error && attempt < maxAttempts && isRetryableLegacy(first.value.error)) {
+      if (!first.done && first.value.error && attempt <= LEGACY_QUEUE_WAITS && isRetryableLegacy(first.value.error)) {
         const waitMs = legacyWaitMs(first.value.error, retryMs);
         // 等多久只有这一行留得住：下一次尝试成功的话，别的日志里一点痕迹都没有。
-        console.warn(`[UPSTREAM] Qoder 老协议排队，第 ${attempt} 次重试前等 ${waitMs}ms`);
+        console.warn(`[UPSTREAM] Qoder 老协议排队，等 ${waitMs}ms 后再试一次`);
         await sleep(waitMs);
         continue;
       }
       if (!first.done) {
         if (first.value.error) {
-          // 排队排到重试次数用尽：这不是「这个账号坏了」，是模型没排上。
+          // 等过一次还是排队：这不是「这个账号坏了」，是模型没排上。
           if (isRetryableLegacy(first.value.error)) throw queueExhausted(first.value.error, attempt);
           throw legacyError(first.value.error);
         }
@@ -443,7 +412,7 @@ export function legacyWaitMs(error: { message?: string }, fallbackMs: number): n
  * Whether a legacy frame says the model is only waiting for a slot.
  *
  * 只看结构，不在正文里找字：`10605` / `RESOURCE_LIMIT` 这几个字符完全可能
- * 是请求 id 或时间戳的一部分，扫字符串把它们当成排队，白白等两轮 60 秒。
+ * 是请求 id 或时间戳的一部分，扫字符串把它们当成排队，白白多等一轮 60 秒。
  * 结构就是那个结构：帧里的 code，或者嵌套那一层的 subCode / isQueued。
  * 解析不出来的就不猜。
  *
@@ -473,30 +442,6 @@ function saysQueued(text: string): boolean {
   return inner.subCode === "RESOURCE_LIMIT" || outer.subCode === "RESOURCE_LIMIT";
 }
 
-/**
- * The upstream answers 403/429 when the model is queued or every backend for it
- * is busy — the CLI retries these, so the proxy does too. The request has not
- * produced any bytes yet, so the retry is invisible to the client.
- */
-export async function qoderWithRetry(
-  send: () => Promise<Response>,
-  maxAttempts: number,
-  logRoute = false,
-): Promise<Response> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await send();
-    } catch (e) {
-      if (e instanceof LimitError && attempt < maxAttempts) {
-        if (logRoute) console.log(`[ROUTE] upstream busy, retry ${attempt}/${maxAttempts - 1} in ${e.retryAfterSec}s`);
-        await new Promise((r) => setTimeout(r, e.retryAfterSec * 1000));
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
 /** Collect a chunk stream into a single chat completion. */
 export async function collectOpenAIChunks(
   chunks: AsyncGenerator<Json>,
@@ -518,7 +463,7 @@ export async function collectOpenAIChunks(
       const code = businessCodeOfPayload(chunk) ?? 0;
       const said = typeof chunk.msg === "string" ? chunk.msg : typeof chunk.message === "string" ? chunk.message : "";
       throw withBusinessCode(
-        new AuthError(`upstream rejected the request (${code})`, said.slice(0, 300) || "upstream rejected the request", 502),
+        new AuthError(`upstream rejected the request (${code})`, scrubForClient(said, 300) || "upstream rejected the request", 502),
         code,
       );
     }

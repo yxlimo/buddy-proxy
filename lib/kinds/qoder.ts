@@ -15,7 +15,7 @@ import {
 import { qoderStatus, regionOf as qoderRegionOf } from "../qoder/auth.ts";
 import { refreshSession as refreshQoderSession } from "../qoder/auth.ts";
 import { qoderModelsForRegion } from "../qoder/models.ts";
-import { ENDPOINTS as QODER_ENDPOINTS } from "../qoder/auth.ts";
+import { ENDPOINTS as QODER_ENDPOINTS, LEGACY_PATH as QODER_LEGACY_PATH } from "../qoder/auth.ts";
 import { runQoderBenefits } from "../qoder/benefits.ts";
 
 function qoderQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaView[] {
@@ -67,7 +67,9 @@ registerKind({
   policies: ["single", "fallback"],
   baseUrl: (provider) => {
     const region = provider.region === "cn" ? "cn" : "global";
-    return QODER_ENDPOINTS[region].infer.replace(/\/model\/v1\/chat\/completions$/, "");
+    // The panel shows the base requests go to, not the full endpoint: the path is
+    // the protocol's, and it is the same in both regions.
+    return QODER_ENDPOINTS[region].inferLegacy.slice(0, -QODER_LEGACY_PATH.length);
   },
   // 推理用的就是登录会话：access token 本身是推理凭据。
   inferWith: "session",

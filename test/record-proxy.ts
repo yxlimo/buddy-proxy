@@ -8,9 +8,8 @@
 //
 // The first path segment picks the upstream:
 //
-//   /qoder-global/...       api2-v2.qoder.sh        (the new protocol)
-//   /qoder-global-legacy/…  api3.qoder.sh           (the legacy protocol)
-//   /qoder-cn/...           gateway.qoder.com.cn    (China: legacy only)
+//   /qoder-legacy/...       api2.qoder.sh           (the CLI's own protocol)
+//   /qoder-cn/...           gateway.qoder.com.cn    (the same, in China)
 //   /openapi-global/...     openapi.qoder.sh
 //   /openapi-cn/...         openapi.qoder.com.cn
 //   /workbuddy/...          www.workbuddy.cn
@@ -24,8 +23,7 @@ import http from "node:http";
 const PORT = Number(process.argv[2] ?? 6699);
 
 const UPSTREAMS: Record<string, string> = {
-  "qoder-global": "https://api2-v2.qoder.sh",
-  "qoder-global-legacy": "https://api3.qoder.sh",
+  "qoder-legacy": "https://api2.qoder.sh",
   "qoder-cn": "https://gateway.qoder.com.cn",
   "openapi-global": "https://openapi.qoder.sh",
   "openapi-cn": "https://openapi.qoder.com.cn",

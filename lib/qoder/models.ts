@@ -1,24 +1,23 @@
-// lib/qoder/models.ts — the Qoder model catalog, in both dialects.
+// lib/qoder/models.ts — the Qoder model catalog.
 //
-// The gateway takes model *keys*, not display names, and there are two key
-// vocabularies, one per protocol:
+// The gateway takes model *keys*, not display names. One protocol speaks them
+// all — the CLI's own (see lib/qoder/legacy.ts) — and it accepts two key
+// vocabularies:
 //
-//   new    api2-v2.qoder.sh/model/v1/chat/completions — plain OpenAI, Bearer only
-//   legacy api3.qoder.sh/algo/…/agent_chat_generation — COSY-signed, Qoder's own
-//          request shape
+//   plain          `auto`, `ultimate`, `efficient`, `qmodel`, `kmodel`, `gmodel`,
+//                  `dmodel`, `mmodel`
+//   version-pinned `dfmodel` (DeepSeek-Flash), `qfmodel` (Qwen3.8-Flash),
+//                  `qmodel_38max` (Qwen3.8-Max), `cmodel` (Cantus),
+//                  `smodel` (Sonus), `gfmodel` (GLM-5.3-Flash),
+//                  `kmodel_latest` (Kimi-K2.8-Preview) — where the free flash
+//                  tiers live
 //
-// The new protocol accepts a small set of keys: `auto`, `ultimate`, `efficient`,
-// `qmodel`, `kmodel`, `gmodel`, `dmodel`, `mmodel`. Everything else — including
-// every display name — comes back as `invalid_model_error` / "Unsupported model".
+// Both vocabularies answer on the same endpoint, in both regions (measured: every
+// key above was accepted on the global and the China host). A display name is
+// not a key: those come back as `invalid_model_error` / "Unsupported model".
 //
-// The legacy protocol accepts the CLI's own catalog keys, which include the
-// version-pinned models the free flash tiers live under. Those are the ones the
-// new protocol refuses: `dfmodel` (DeepSeek-Flash), `qfmodel` (Qwen3.8-Flash),
-// `qmodel_38max` (Qwen3.8-Max), `cmodel` (Cantus), `smodel` (Sonus),
-// `gfmodel` (GLM-5.3-Flash), `kmodel_latest` (Kimi-K2.8-Preview).
-//
-// So a model here carries three things: the id clients use, the key the gateway
-// wants, and which protocol speaks it. The id is the real model name —
+// So a model here carries two things: the id clients use, and the key the gateway
+// wants. The id is the real model name —
 // `deepseek-flash`, not `dfmodel` — because that is what a user recognizes and
 // what the router's `qoder/` prefix namespaces.
 //
@@ -33,8 +32,6 @@
 
 import { configString } from "../config.ts";
 
-export type QoderProtocol = "new" | "legacy";
-
 export interface QoderModel {
   /** Id clients use. The router prefixes it with `qoder/`. */
   id: string;
@@ -47,7 +44,6 @@ export interface QoderModel {
   multiplier?: string;
   /** The key the gateway expects. */
   key: string;
-  protocol: QoderProtocol;
   reasoning: boolean;
   /** Backend the gateway reports for this model, when it reports one. */
   backend?: string;
@@ -140,7 +136,6 @@ export const QODER_MODELS: QoderModel[] = [
     name: "Auto",
     multiplier: "0.5×",
     key: "auto",
-    protocol: "new",
     reasoning: true,
     backend: "qwen3-coder-plus",
     context: 200000,
@@ -149,13 +144,13 @@ export const QODER_MODELS: QoderModel[] = [
     tierFor: (effort) => tierForEffort(effort),
   },
 
-  // Named models the new protocol accepts.
-  { id: "qwen3.7-plus", name: "Qwen3.7-Plus", multiplier: "0.1×", key: "qmodel", protocol: "new", reasoning: false, backend: "bailian-qwen3.7-plus", context: 1000000, maxOutput: 131072, kind: "model" },
+  // The plain keys: the vocabulary the client's own catalogue uses.
+  { id: "qwen3.7-plus", name: "Qwen3.7-Plus", multiplier: "0.1×", key: "qmodel", reasoning: false, backend: "bailian-qwen3.7-plus", context: 1000000, maxOutput: 131072, kind: "model" },
   // The client's catalogue says nothing about this model's context window, so
   // the Qoder client sends none and the gateway applies its own.
-  { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", protocol: "new", reasoning: false, backend: "oem-kimi-k2.7-code", maxOutput: 32768, kind: "model" },
-  { id: "glm-5.3", name: "GLM-5.3", multiplier: "0.8×", key: "gmodel", protocol: "new", reasoning: true, backend: "oem-glm-5", context: 180000, maxOutput: 131072, kind: "model" },
-  { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", multiplier: "0.5×", key: "dmodel", protocol: "new", reasoning: true, backend: "oem-deepseek-v4-pro", context: 1000000, maxOutput: 393216, kind: "model" },
+  { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", multiplier: "0.8×", key: "kmodel", reasoning: false, backend: "oem-kimi-k2.7-code", maxOutput: 32768, kind: "model" },
+  { id: "glm-5.3", name: "GLM-5.3", multiplier: "0.8×", key: "gmodel", reasoning: true, backend: "oem-glm-5", context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", multiplier: "0.5×", key: "dmodel", reasoning: true, backend: "oem-deepseek-v4-pro", context: 1000000, maxOutput: 393216, kind: "model" },
   // Qoder's catalog calls this MiniMax-M3.1-Flash, but the gateway reports the
   // backend it actually used as oem-minimax-m2.5 — a different generation. The
   // id keeps Qoder's wording (that is the name the tier is selected by); the
@@ -164,18 +159,18 @@ export const QODER_MODELS: QoderModel[] = [
   // (1M). The Qoder client advertises 180000 for it, which is the smaller
   // number its backend takes; the vendor's number is what agents expect, and
   // it is what the model itself supports.
-  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", protocol: "new", reasoning: true, backend: "oem-minimax-m2.5", context: 1000000, maxOutput: 131072, kind: "model" },
+  { id: "minimax-m3.1-flash", name: "MiniMax-M3.1-Flash (→ M2.5)", multiplier: "0.1×", key: "mmodel", reasoning: true, backend: "oem-minimax-m2.5", context: 1000000, maxOutput: 131072, kind: "model" },
 
-  // Version-pinned models — the legacy protocol only.
-  { id: "deepseek-flash", name: "DeepSeek-Flash", multiplier: "0×", key: "dfmodel", protocol: "legacy", reasoning: true, context: 1000000, maxOutput: 393216, kind: "model" },
-  { id: "qwen3.8-flash", name: "Qwen3.8-Flash", multiplier: "0×", key: "qfmodel", protocol: "legacy", reasoning: true, context: 180000, maxOutput: 131072, kind: "model" },
-  { id: "qwen3.8-max", name: "Qwen3.8-Max", multiplier: "0.5×", key: "qmodel_38max", protocol: "legacy", reasoning: true, context: 180000, maxOutput: 131072, kind: "model" },
-  { id: "qwen3.7-max", name: "Qwen3.7-Max", multiplier: "0.5×", key: "qmodel_latest", protocol: "legacy", reasoning: false, context: 1000000, maxOutput: 131072, kind: "model" },
-  { id: "kimi-k3", name: "Kimi-K3", multiplier: "1.4×", key: "kmodel_latest", protocol: "legacy", reasoning: false, context: 180000, maxOutput: 131072, kind: "model" },
-  { id: "glm-5.3-flash", name: "GLM-5.3-Flash", multiplier: "0.1×", key: "gfmodel", protocol: "legacy", reasoning: true, context: 1000000, maxOutput: 131072, kind: "model" },
+  // The version-pinned keys: the free flash tiers live under these.
+  { id: "deepseek-flash", name: "DeepSeek-Flash", multiplier: "0×", key: "dfmodel", reasoning: true, context: 1000000, maxOutput: 393216, kind: "model" },
+  { id: "qwen3.8-flash", name: "Qwen3.8-Flash", multiplier: "0×", key: "qfmodel", reasoning: true, context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "qwen3.8-max", name: "Qwen3.8-Max", multiplier: "0.5×", key: "qmodel_38max", reasoning: true, context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "qwen3.7-max", name: "Qwen3.7-Max", multiplier: "0.5×", key: "qmodel_latest", reasoning: false, context: 1000000, maxOutput: 131072, kind: "model" },
+  { id: "kimi-k3", name: "Kimi-K3", multiplier: "1.4×", key: "kmodel_latest", reasoning: false, context: 180000, maxOutput: 131072, kind: "model" },
+  { id: "glm-5.3-flash", name: "GLM-5.3-Flash", multiplier: "0.1×", key: "gfmodel", reasoning: true, context: 1000000, maxOutput: 131072, kind: "model" },
   // Cantus is not in the list: the gateway answers "All backends failed" for it,
-  // while the other legacy models on the same account still work.
-  { id: "sonus", name: "Sonus", multiplier: "0×", key: "smodel", protocol: "legacy", reasoning: true, context: 180000, maxOutput: 65536, kind: "model" },
+  // while the other version-pinned models on the same account still work.
+  { id: "sonus", name: "Sonus", multiplier: "0×", key: "smodel", reasoning: true, context: 180000, maxOutput: 65536, kind: "model" },
 ];
 
 export const DEFAULT_MODEL_ID = "auto";
@@ -185,36 +180,16 @@ export type QoderRegion = "cn" | "global";
 /**
  * The models a region can actually serve.
  *
- * The global gateway runs the new protocol only, and it accepts a small set of
- * keys: the version-pinned models (`dfmodel`, `qfmodel`, `qmodel_38max`,
- * `kmodel_latest`, `gfmodel`, `cmodel`, `smodel`) live on the legacy protocol
- * instead. On the global account that legacy path is not usable — it answers
- * 403 (queued), "All backends failed", and once the day's free count is used
- * up, 110 "Billing daily count exceeded" — so the global catalog leaves those
- * models out instead of advertising something that cannot answer.
- *
- * The CN gateway is the other way round: it has not deployed the new protocol
- * (404/503), and its legacy protocol accepts *both* vocabularies — the plain
- * keys (`qmodel`, `kmodel`, `gmodel`, `dmodel`, `mmodel`) as well as the
- * version-pinned ones. Measured 2026-10-20: 14 of the 17 keys answer, the two
- * effort tiers (`ultimate`, `efficient`) are not in its catalog, and
- * `dfmodel` sits in the queue and never clears.
+ * Both regions serve the whole catalogue; what differs is what the region's own
+ * gateway has deployed. The CN gateway's catalogue has no `dfmodel`: measured
+ * 2026-10-20 it sits in the queue and never clears, so the CN catalogue leaves it
+ * out instead of advertising something that cannot answer.
  */
 const CN_UNAVAILABLE = new Set(["deepseek-flash"]);
 
 export function qoderModelsForRegion(region: QoderRegion): QoderModel[] {
   if (region === "cn") return QODER_MODELS.filter((m) => !CN_UNAVAILABLE.has(m.id));
-  return QODER_MODELS.filter((m) => m.kind === "tier" || m.protocol === "new");
-}
-
-/**
- * Which protocol a region speaks for a model.
- *
- * The model keys are the same in both regions; only the wire format differs.
- */
-export function qoderProtocolForRegion(model: QoderModel, region: QoderRegion): QoderProtocol {
-  if (region === "cn") return "legacy";
-  return model.protocol;
+  return QODER_MODELS;
 }
 
 /** Context window and output cap, as the CLI advertises them. */

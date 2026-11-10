@@ -15,7 +15,7 @@ const region = "cn" as const;
 
 /** The path the router asks for, so the mock finds the fixture. */
 const ROUTE =
-  "/qoder-cn/algo/api/v2/service/pro/sse/agent_chat_generation" +
+  "/qoder-legacy/algo/api/v2/service/pro/sse/agent_chat_generation" +
   "?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1";
 
 console.log(`asking the China region for ${modelKey} — it thinks for a while...`);

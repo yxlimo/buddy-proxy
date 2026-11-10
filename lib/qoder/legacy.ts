@@ -1,11 +1,11 @@
-// lib/qoder/legacy.ts — Qoder's legacy (COSY) protocol.
+// lib/qoder/legacy.ts — Qoder's own (COSY) protocol.
 //
-// The new protocol (api2-v2.qoder.sh) is an OpenAI endpoint and easy to talk to,
-// but it only accepts eight model keys. The legacy protocol (api3.qoder.sh) is
-// the one the CLI itself uses, and it accepts the version-pinned keys that the
-// free flash models live under — `dfmodel` for DeepSeek-Flash, `qfmodel` for
-// Qwen3.8-Flash. It is also the only path the CN region has, since the new
-// protocol is not deployed there.
+// The file keeps its name because the upstream and the CLI call it that, but it
+// is no longer one of two: the official client 1.1.86 has no other protocol —
+// its host table dropped the OpenAI-dialect host, and its `model_server_transport`
+// gate defaults to off. Both regions serve this one (global `api2.qoder.sh`,
+// China `gateway.qoder.com.cn`), and both accept the plain and the version-pinned
+// model keys on it.
 //
 // What it costs is a signed request:
 //
@@ -31,11 +31,11 @@ import type { Json } from "../json.ts";
 import { configString } from "../config.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
-import { scrubForLog } from "../log-scrub.ts";
+import { scrubForClient, scrubForLog } from "../log-scrub.ts";
+import { withUpstreamAnswer } from "../upstream-status.ts";
 import {
   ensureCredential,
   loadSession,
-  deviceIdentity,
   regionOf,
   ENDPOINTS,
   type QoderRegion,
@@ -100,7 +100,6 @@ interface LegacySession {
 
 /** The identity the CLI itself stores in `~/.qoder/.auth/user`. */
 async function buildSession(providerId = "qoder"): Promise<LegacySession> {
-  const region = regionOf(providerId);
   const cred = await ensureCredential(providerId);
   const stored = loadSession(providerId);
   const uid = stored?.userId ?? "";
@@ -122,14 +121,11 @@ async function buildSession(providerId = "qoder"): Promise<LegacySession> {
     .toString("base64");
   const info = aesEncrypt(Buffer.from(JSON.stringify(identity), "utf8"), tempKey).toString("base64");
 
-  // The fingerprint of the account, so the legacy path presents the same
-  // machine as the new one.
-  const fingerprint = deviceIdentity(region);
-  const machine = fingerprint
-    ? { id: fingerprint.machineId, token: fingerprint.machineToken, type: fingerprint.machineType }
-    : stored
-      ? { id: stored.machineId, token: stored.machineToken, type: stored.machineType }
-      : { id: crypto.randomUUID(), token: crypto.randomUUID().replace(/-/g, ""), type: crypto.randomUUID().replace(/-/g, "").slice(0, 18) };
+  // The machine identity the login grant registered. It is what the upstream
+  // already knows this account as, so it is the one to present.
+  const machine = stored
+    ? { id: stored.machineId, token: stored.machineToken, type: stored.machineType }
+    : { id: crypto.randomUUID(), token: crypto.randomUUID().replace(/-/g, ""), type: crypto.randomUUID().replace(/-/g, "").slice(0, 18) };
 
   return { tempKey, cosyKey, info, identity, machineId: machine.id, machineToken: machine.token, machineType: machine.type };
 }
@@ -387,7 +383,22 @@ export async function legacyChatCompletion(
     // 正文只放在 hint 里，而日志与用量表都只记 message。上游为什么拒，
     // 只能靠这一行（容器一重建，hint 就没了）。
     console.warn(`[UPSTREAM] Qoder 老协议上游 ${r.status}：${scrubForLog(text, 500)}`);
-    throw new AuthError(`legacy upstream HTTP ${r.status}`, `Qoder 老协议返回 ${r.status}：${text.slice(0, 300)}`, 502);
+    // 上游自己的状态带在错误上：路由要分清「请求本身的问题」（400，换个账号
+    // 一样错）与「这个账号接不了」（401/5xx，换一个也许行）。少了它，每个失败
+    // 都只是「未知」—— 既不敢重试，也不敢换目标。这是这条链路上唯一一条路了，
+    // 所以它跟以前那条路一样把状态带上。
+    //
+    // 正文跟着状态一起带：那个状态是客户端最终看到的那句答复的根据，而重试用尽
+    // 之后上游不会再答一遍（见 upstream-status.ts 的 withUpstreamAnswer）。只
+    // 带状态的话，客户端拿到的是网关自己编的「上游返回 500。」，上游到底说了
+    // 什么就没了。
+    const error = new AuthError(
+      `legacy upstream HTTP ${r.status}`,
+      // 客户端看到的是这一句：上游正文里可能带着账号标识，抹一遍再放上去。
+      `Qoder 老协议返回 ${r.status}：${scrubForClient(text, 300)}`,
+      502,
+    );
+    throw withUpstreamAnswer(error, r.status, text);
   }
   return r;
 }
@@ -399,7 +410,19 @@ export interface LegacyFrame {
   /** The OpenAI chunk, or undefined for a frame that carried no completion. */
   chunk?: Json;
   /** Set when the frame reported an error. */
-  error?: { code?: string; message?: string; status?: number };
+  error?: {
+    code?: string;
+    message?: string;
+    status?: number;
+    /**
+     * 上游这一帧自己的正文，原样（没有就空）。
+     *
+     * 帧里的那个状态是上游对这条请求的答复状态，所以正文要跟着它一起留给
+     * 路由：重试用尽之后客户端读的是这份正文（见 lib/upstream-status.ts 的
+     * withUpstreamAnswer）。少了它，客户端只能看到网关编的那一句。
+     */
+    text?: string;
+  };
 }
 
 /**
@@ -449,6 +472,9 @@ export async function* readLegacyFrames(body: ReadableStream<Uint8Array>): Async
               code: detail.code ?? outer.code,
               message: detail.message ?? outer.message,
               status,
+              // 上游自己的正文：信封里的 body（它就是那张错误信封），没有就用
+              // 这一帧的原样字节。重建的正文不算（客户端要看到上游的原话）。
+              text: typeof outer.body === "string" ? outer.body : payload,
             },
           };
           continue;

@@ -20,16 +20,20 @@
 //   3. 上游要 600 秒也最多等 60 秒（单次等待的上限）；
 //   4. 帧级错误那一行日志里有上游正文，且不含 cookie / 令牌（两层嵌套也要抹）；
 //      嵌套深过三层就不输出正文，打「(正文未解析)」；
-//   5. 重试用尽：抛的是 LimitError（排队，不是账号坏了），而且策略那一层不会在
-//      同一个账号上再跑一轮（上游只被打 maxAttempts 次）；
+//   5. 等过一次仍是排队：抛的是 QueuedError（排队，不是账号坏了）；分类是 queued
+//      —— 可降级、不记冷却；而且策略那一层不会在同一个账号上再跑一轮，只等一次；
 //   6. 正常帧照旧通过，重试对客户端不可见（一个字都不多发）。
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-legacy-"));
 process.env.BUDDY_DATA_DIR = tmp;
+
+/** 录下来的那些上游答复就在这儿（test/fixture-name.ts 的常量同源）。 */
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 const { legacyWithRetry, isRetryableLegacy, legacyWaitMs, legacyError } = await import(
   "../lib/router/upstreams/qoder.ts"
@@ -235,7 +239,6 @@ section("2b. 重试循环真的等那么久（注入的 sleep，不真等）");
         calls++;
         return calls === 1 ? responseOf(errorFrame(queueMessage(60))) : responseOf(chunkFrame("ok"));
       },
-      3,
       10_000,
       sleep,
     ),
@@ -255,7 +258,6 @@ section("2b. 重试循环真的等那么久（注入的 sleep，不真等）");
         calls++;
         return calls === 1 ? responseOf(errorFrame(queueMessage())) : responseOf(chunkFrame("ok"));
       },
-      3,
       2_500,
       sleep,
     ),
@@ -280,7 +282,6 @@ check("legacyWaitMs 夹到 60 秒", legacyWaitMs({ message: queueMessage(600) },
         calls++;
         return calls === 1 ? responseOf(errorFrame(queueMessage(600))) : responseOf(chunkFrame("ok"));
       },
-      3,
       10_000,
       sleep,
     ),
@@ -315,7 +316,7 @@ function leakyMessage(): string {
 {
   const warnings = await warningsDuring(() =>
     thrownBy(() =>
-      drain(legacyWithRetry(async () => responseOf(errorFrame(leakyMessage())), 1, 10_000, waiter().sleep)),
+      drain(legacyWithRetry(async () => responseOf(errorFrame(leakyMessage())), 10_000, waiter().sleep)),
     ),
   );
   const line = warnings.find((w) => w.includes("老协议帧内错误")) ?? "";
@@ -336,7 +337,6 @@ function leakyMessage(): string {
       drain(
         legacyWithRetry(
           async () => responseOf(errorFrame(JSON.stringify({ code: "500", cookie: syntheticCookie, message: "boom" }))),
-          1,
           10_000,
           waiter().sleep,
         ),
@@ -364,7 +364,7 @@ section("4b. 嵌套深过三层就不输出正文（抹不干净的宁可不说�
   const level2 = JSON.stringify({ level3 });
   const level1 = JSON.stringify({ code: "10605", message: level2, subCode: "RESOURCE_LIMIT" });
   const warnings = await warningsDuring(() =>
-    thrownBy(() => drain(legacyWithRetry(async () => responseOf(errorFrame(level1)), 1, 10_000, waiter().sleep))),
+    thrownBy(() => drain(legacyWithRetry(async () => responseOf(errorFrame(level1)), 10_000, waiter().sleep))),
   );
   const line = warnings.find((w) => w.includes("老协议帧内错误")) ?? "";
   check("打了一行帧内错误", line.length > 0, JSON.stringify(warnings));
@@ -377,7 +377,7 @@ section("4b. 嵌套深过三层就不输出正文（抹不干净的宁可不说�
  * 5. 重试用尽：是排队，不是账号坏了
  * ------------------------------------------------------------------ */
 
-section("5. 重试用尽：是排队，不是账号坏了");
+section("5. 等过一次仍是排队：是排队，不是账号坏了");
 
 // 以前这里抛的是 legacyError：403 给 503，分类按 5xx 当「上游挂了」—— 健康账号
 // 被记冷却，策略还会在同一个账号上再跑一轮重试（客户端最坏等 240s+）。
@@ -392,7 +392,6 @@ section("5. 重试用尽：是排队，不是账号坏了");
           calls++;
           return responseOf(errorFrame(queueMessage(60)));
         },
-        3,
         10_000,
         sleep,
       ),
@@ -401,43 +400,59 @@ section("5. 重试用尽：是排队，不是账号坏了");
     thrown = e;
   }
   const failure = thrown ? classifyUpstreamError(thrown) : null;
+  const { cooldownForFailure } = await import("../lib/router/account-cooldown.ts");
   check("抛了", Boolean(thrown));
-  check("是排队那个形状（LimitError）", thrown?.name === "LimitError", String(thrown?.name));
+  check("是排队那个形状（QueuedError）", thrown?.name === "QueuedError", String(thrown?.name));
   check("分类不是 server", failure?.kind !== "server", String(failure?.kind));
-  check("分类是 busy", failure?.kind === "busy", String(failure?.kind));
-  check("不降级（换一个账号只是换一条队）", failure?.degradable === false, String(failure?.degradable));
+  check("分类是 queued", failure?.kind === "queued", String(failure?.kind));
+  check("降级（另一个目标有自己的队列）", failure?.degradable === true, String(failure?.degradable));
+  check("上游没给过状态（200 的流里说的）", failure?.status === null, String(failure?.status));
+  check("不记冷却（账号没坏）", cooldownForFailure("qoder-legacy-test", thrown) === null, "记了冷却");
   check("上游给的秒数带上（夹到 60 秒）", thrown?.retryAfterSec === 60, String(thrown?.retryAfterSec));
-  check("message 说是排队用尽了", /still queued after 3 attempts/.test(String(thrown?.message)), String(thrown?.message));
-  check("hint 说排了几轮", /排了几轮|试了 3 次/.test(String(thrown?.detail ?? "")), String(thrown?.detail));
-  check("试满了 maxAttempts 次", calls === 3, String(calls));
-  check("等了 maxAttempts - 1 次", waits.length === 2, JSON.stringify(waits));
-  check("每次都按上游说的 60 秒等", waits.every((ms) => ms === 60_000), JSON.stringify(waits));
+  check("message 说等了之后仍是排队", /still queued after 2 attempts/.test(String(thrown?.message)), String(thrown?.message));
+  check("hint 说上游把模型排进了队列", String(thrown?.hint ?? "").includes("排队"), String(thrown?.hint));
+  check(
+    "hint 说等到它给的时间仍没排上（不是只说一句排队）",
+    String(thrown?.hint ?? "").includes("等到它给的时间"),
+    String(thrown?.hint),
+  );
+  check(
+    "hint 不说成限流 / 冷却 / 内部术语",
+    !/限流|冷却中|cooling down|RESOURCE_LIMIT|10605|p4/.test(String(thrown?.hint ?? "")),
+    String(thrown?.hint),
+  );
+  check("客户端看到的类型是 429 那个类型", thrown?.type === "rate_limit_error", String(thrown?.type));
+  check("试了两次（首次 + 等过一次后那一次）", calls === 2, String(calls));
+  check("只等了一次", waits.length === 1, JSON.stringify(waits));
+  check("按上游说的 60 秒等", waits.every((ms) => ms === 60_000), JSON.stringify(waits));
 }
 
-section("5b. 策略那一层不会在同一个账号上再跑一轮（上游只被打 maxAttempts 次）");
+section("5b. 策略那一层不会在同一个账号上再跑一轮");
 
 // 这一条才是那个事故：分类成 server（瞬时失败）时，策略在同一个账号上再跑一整
 // 轮 legacyWithRetry，客户端最坏等 240s+，而排队根本不是账号的问题。
 {
-  const { sleep } = waiter();
-  let calls = 0;
+  const { waits, sleep } = waiter();
+  let sends = 0;
+  let runs = 0;
   let thrown: any;
   try {
     await runWithRetries(
       { id: "qoder-legacy-test" },
       "legacy queue exhausted",
-      async () =>
-        drain(
+      async () => {
+        runs++;
+        return drain(
           legacyWithRetry(
             async () => {
-              calls++;
+              sends++;
               return responseOf(errorFrame(queueMessage(60)));
             },
-            3,
             10_000,
             sleep,
           ),
-        ),
+        );
+      },
       // 策略自己的等待不真等：这一条测的是次数，不是时间。
       { sleep: async () => {} },
     );
@@ -445,7 +460,10 @@ section("5b. 策略那一层不会在同一个账号上再跑一轮（上游只�
     thrown = e;
   }
   check("抛了", Boolean(thrown));
-  check("策略没有在同一个账号上再跑一轮", calls === 3, String(calls));
+  check("策略只把这个账号跑了一轮", runs === 1, String(runs));
+  check("策略没有在同一个账号上再跑一轮（上游被叫两次，就是那一次等待）", sends === 2, String(sends));
+  check("这一轮只等了一次", waits.length === 1, JSON.stringify(waits));
+  check("抛的是排队那个错", thrown?.name === "QueuedError", String(thrown?.name));
 }
 
 section("5c. 不是排队的错误一次都不重试");
@@ -461,7 +479,6 @@ section("5c. 不是排队的错误一次都不重试");
           calls++;
           return responseOf(errorFrame("forbidden", "403", 403));
         },
-        3,
         10_000,
         sleep,
       ),
@@ -484,11 +501,106 @@ section("6. 正常答复照旧通过，重试对客户端不可见");
 {
   const { waits, sleep } = waiter();
   const chunks = await drain(
-    legacyWithRetry(async () => responseOf(chunkFrame("hello "), chunkFrame("world")), 3, 10_000, sleep),
+    legacyWithRetry(async () => responseOf(chunkFrame("hello "), chunkFrame("world")), 10_000, sleep),
   );
   const text = chunks.map((c) => c.choices?.[0]?.delta?.content ?? "").join("");
   check("两帧都出来了", text === "hello world", text);
   check("一次都没等", waits.length === 0, JSON.stringify(waits));
+}
+
+/* ------------------------------------------------------------------ *
+ * 7. 录下来的那份上游答复里没有真东西
+ * ------------------------------------------------------------------ */
+
+section("7. 录下来的那份答复：上游给的值都是同形状的合成值");
+
+{
+  // 仓库是公开的，而这份 fixture 是上游真的答过的那一次。上游给了 cookie、几种
+  // request/trace id、一串时间戳、答复自己的 id 与 created，还有那一趟调用的用量
+  // （token 数、credits）与耗时 —— 那些都是真的，必须换成同形状的合成值。这一条
+  // 是它的判别断言：真值被换回来了就红。
+  const recorded = JSON.parse(
+    fs.readFileSync(path.join(FIXTURES, "post-qoder-legacy-algo-api-v2-service-pro-sse-agent-chat-generation-FetchKeys-llm-model-result-AgentId-agent-common-Encode-1.json"), "utf8"),
+  );
+  const headers = recorded.headers ?? {};
+  // 形状不改（长度、字符集都相近），只把值换成一眼能看出是编的。
+  const expected: Record<string, string> = {
+    "set-cookie": `acw_tc=SYNTHETIC${"0".repeat(54)};path=/;HttpOnly;Max-Age=1800`,
+    "ga-request-id": "0123456789abcdef0123456789abcdef",
+    "sw-trace-id": "fedcba9876543210fedcba9876543210",
+    "x-request-id": "00000000-0000-4000-8000-000000000000",
+    date: "Thu, 01 Jan 2026 00:00:00 GMT",
+    "entry-timestamp": "1700000000000",
+    "leave-timestamp": "1700000000100",
+    "req-arrive-time": "1700000000000",
+    "resp-start-time": "1700000001800",
+  };
+  for (const [name, value] of Object.entries(expected)) {
+    check(`录下来的 ${name} 是合成值`, headers[name] === value, String(headers[name]));
+  }
+  // 答复自己带的 id 与时间戳也是上游给的：整个答复里只应该有一个 id、一个
+  // created，而且都是合成值。
+  const ids = new Set((recorded.body ?? "").match(/\\"id\\":\\"([0-9a-f]+)\\"/g) ?? []);
+  check(
+    "答复里只有一个 id，而且是合成的",
+    ids.size === 1 && [...ids][0] === '\\"id\\":\\"0123456789abcdef0123456789abcd\\"',
+    JSON.stringify([...ids]),
+  );
+  const created = new Set((recorded.body ?? "").match(/\\"created\\":(\d+)/g) ?? []);
+  check(
+    "答复里的时间戳是合成的",
+    created.size === 1 && [...created][0] === '\\"created\\":1700000000',
+    JSON.stringify([...created]),
+  );
+
+  // 用量与耗时是同一场录制的真实测量值：只换外形不保留原值，否则这一节名不副实。
+  // 逐帧解开（`data:` 前缀、外层壳、内层 body 各一次），取带着 usage 的那一帧。
+  const usage = (() => {
+    for (const line of String(recorded.body ?? "").split("\n")) {
+      if (!line.startsWith("data:{")) continue;
+      try {
+        const payload = JSON.parse(JSON.parse(line.slice("data:".length)).body);
+        if (payload?.usage) return payload.usage;
+      } catch {
+        // [DONE] 之类不是 JSON 帧，跳过
+      }
+    }
+    return undefined;
+  })();
+  const usageCase: Array<[string, unknown, unknown]> = [
+    ["completion_tokens", 12, usage?.completion_tokens],
+    ["prompt_tokens", 8, usage?.prompt_tokens],
+    ["total_tokens", 20, usage?.total_tokens],
+    ["completion_tokens_details.reasoning_tokens", 8, usage?.completion_tokens_details?.reasoning_tokens],
+    ["credits", 0.0785, usage?.credits],
+    ["original_credits", 0.0785, usage?.original_credits],
+  ];
+  check("答复里找得到 usage", Boolean(usage), String(JSON.stringify(usage)));
+  for (const [field, expectedValue, actual] of usageCase) {
+    check(`录下来的 usage.${field} 是合成值`, actual === expectedValue, `actual=${String(actual)} expected=${String(expectedValue)}`);
+  }
+
+  const finish = (() => {
+    const matched = /event:finish\ndata:(\{[^\n]*\})/.exec(String(recorded.body ?? ""));
+    try {
+      return matched ? JSON.parse(matched[1]) : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  const durationCase: Array<[string, unknown]> = [
+    ["firstTokenDuration", 1700],
+    ["totalDuration", 3800],
+    ["serverDuration", 100],
+  ];
+  check("答复里有收尾那一帧", Boolean(finish), String(JSON.stringify(finish)));
+  for (const [field, expectedValue] of durationCase) {
+    check(
+      `录下来的 ${field} 是合成值`,
+      finish?.[field] === expectedValue,
+      `actual=${String(finish?.[field])} expected=${String(expectedValue)}`,
+    );
+  }
 }
 
 console.log("");

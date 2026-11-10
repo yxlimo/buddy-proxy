@@ -12,9 +12,13 @@
 //
 // Two regions, one client id:
 //   cn     qoder.cn            openapi.qoder.com.cn   gateway.qoder.com.cn
-//   global qoder.com           openapi.qoder.sh       api2-v2.qoder.sh
+//   global qoder.com           openapi.qoder.sh       api2.qoder.sh
 // The client id differs between prod and the daily/test environments, not between
 // regions — both use the prod one.
+//
+// Both regions speak one inference protocol: the CLI's own (see lib/qoder/legacy.ts).
+// The official client 1.1.86 has no other one — its host table no longer lists the
+// OpenAI-dialect host, and its `model_server_transport` gate defaults to off.
 
 import { configString, configNumber } from "../config.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -36,25 +40,31 @@ export interface QoderEndpoints {
   site: string;
   /** Device token poll / refresh / userinfo. */
   openapi: string;
-  /** New protocol (OpenAI dialect) inference endpoint. */
-  infer: string;
-  /** Old protocol (COSY) inference endpoint, used when the new one is not deployed. */
+  /** The inference endpoint: the CLI's own (COSY) protocol. */
   inferLegacy: string;
 }
+
+/**
+ * The path the CLI's protocol is served on, in both regions.
+ *
+ * Named once because the base URL is derived from the full endpoint
+ * (lib/kinds/qoder.ts shows the panel that base), and the two must not drift.
+ */
+export const LEGACY_PATH = "/algo/api/v2/service/pro/sse/agent_chat_generation";
 
 export const ENDPOINTS: Record<QoderRegion, QoderEndpoints> = {
   cn: {
     site: "https://qoder.cn",
     openapi: configString("QODER_CN_OPENAPI_BASE", "https://openapi.qoder.com.cn").replace(/\/+$/, ""),
-    infer: configString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/model/v1/chat/completions",
-    inferLegacy: configString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
+    inferLegacy: configString("QODER_CN_INFER_BASE", "https://gateway.qoder.com.cn").replace(/\/+$/, "") + LEGACY_PATH,
   },
   global: {
     site: "https://qoder.com",
     openapi: configString("QODER_GLOBAL_OPENAPI_BASE", "https://openapi.qoder.sh").replace(/\/+$/, ""),
-    infer: configString("QODER_GLOBAL_INFER_BASE", "https://api2-v2.qoder.sh").replace(/\/+$/, "") + "/model/v1/chat/completions",
-    // The legacy protocol lives on another host, so it has its own base.
-    inferLegacy: configString("QODER_GLOBAL_LEGACY_BASE", "https://api3.qoder.sh").replace(/\/+$/, "") + "/algo/api/v2/service/pro/sse/agent_chat_generation",
+    // The host the official client 1.1.86 itself defaults to. `api3.qoder.sh`
+    // answers the same protocol and is a working alternative for when this one
+    // is crowded.
+    inferLegacy: configString("QODER_GLOBAL_LEGACY_BASE", "https://api2.qoder.sh").replace(/\/+$/, "") + LEGACY_PATH,
   },
 };
 
@@ -70,7 +80,8 @@ const WARN_MS = configNumber("QODER_AUTH_WARN_MS", 7 * 24 * 60 * 60 * 1000);
 const REFRESH_BUFFER_MS = configNumber("QODER_REFRESH_BUFFER_MS", 24 * 60 * 60 * 1000);
 const POLL_INTERVAL_MS = configNumber("QODER_POLL_INTERVAL_MS", 1000);
 const POLL_TIMEOUT_MS = configNumber("QODER_POLL_TIMEOUT_MS", 5 * 60 * 1000);
-export const USER_AGENT = configString("QODER_USER_AGENT", "qoder/1.1.74");
+// The version is the client's own, and it is what the upstream expects to see.
+export const USER_AGENT = configString("QODER_USER_AGENT", "qoder/1.1.86");
 
 export const QODER_WARN_MS = WARN_MS;
 export const QODER_REFRESH_BUFFER_MS = REFRESH_BUFFER_MS;
