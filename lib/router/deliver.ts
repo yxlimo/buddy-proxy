@@ -31,6 +31,13 @@ const rid = (prefix: string) => prefix + crypto.randomBytes(12).toString("hex");
  * A stream is written frame by frame, so Koa must not also write a body of its
  * own when the middleware chain ends. `respond = false` says that the raw
  * response belongs to us from here on.
+ *
+ * Call this **after** the first frame is in hand, never before: an answer that
+ * fails before its first frame has written nothing, and it is the caller
+ * (sendError) that answers it with a real status code. Taken over too early,
+ * `respond = false` makes Koa skip that body and nobody writes anything — the
+ * client waits for headers that never come. The two assignments are only
+ * needed once there is a frame to write.
  */
 function takeOver(ctx: Koa.Context): void {
   ctx.respond = false;
@@ -458,21 +465,36 @@ async function drainText(reader: ReadableStreamDefaultReader<Uint8Array>, head: 
 /* ---------------- 上游安静了 ---------------- */
 
 /**
- * 上游安静多久算「它不会再说话了」（毫秒）的默认值。
+ * 等上游的**第一帧**多久算「它不会再说话了」（毫秒）的默认值。
+ *
+ * 与流中途那个上限分开取值，因为量的是两件事：推理模型的第一个 token 常常
+ * 要两分多钟（coder-a 那一类），拿中途那个上限去量等待，一条正常在想的流就
+ * 被砍掉；而流开了一半停住三分钟，确实是停住了。
+ *
+ * 导出给测试用：默认值调错（比如忘了改回来）比没有还糟。
+ */
+export const STREAM_FIRST_FRAME_DEFAULT_MS = 300_000;
+
+/**
+ * 流中途两帧之间安静多久算「它不会再说话了」（毫秒）的默认值。
  *
  * 靠 undici 那个 5 分钟的 bodyTimeout 兜底太久了：客户端在这 5 分钟里一个字
  * 都等不到，最后等到的还是 Node 自己那句 `terminated`。推理模型的流里，两帧
  * 之间安静几十秒是正常的，超过这个数就是在挂着，不是在想。
- *
- * 导出给测试用：默认值调错（比如忘了改回来）比没有还糟 —— 一条 thinking 的
- * 流会被砍在中间。
  */
-export const STREAM_IDLE_DEFAULT_MS = 120_000;
+export const STREAM_IDLE_DEFAULT_MS = 180_000;
 
 /**
- * 上游安静多久算「它不会再说话了」（毫秒）。
+ * 等第一帧的上限（毫秒）。
  *
- * 环境变量能改短（ROUTER_STREAM_IDLE_MS）：自测不能真等两分钟。
+ * 环境变量能改（ROUTER_FIRST_FRAME_MS）：自测不能真等五分钟。
+ */
+const STREAM_FIRST_FRAME_MS = readEnvNumber("ROUTER_FIRST_FRAME_MS", STREAM_FIRST_FRAME_DEFAULT_MS);
+
+/**
+ * 流中途两帧之间安静多久算「它不会再说话了」（毫秒）。
+ *
+ * 环境变量能改短（ROUTER_STREAM_IDLE_MS）：自测不能真等三分钟。
  */
 const STREAM_IDLE_MS = readEnvNumber("ROUTER_STREAM_IDLE_MS", STREAM_IDLE_DEFAULT_MS);
 
@@ -482,22 +504,69 @@ function idleSpan(idleMs: number): string {
 }
 
 /**
+ * 两道闸的取值：调用方给的优先，没给就用环境变量那一份。
+ *
+ * 关闸（0 或负数）要打一行 warn：生产旋钮能悄无声息把闸关掉，上游于是可以
+ * 永远不说话，而这条请求一直挂着。关闸本身是允许的（自测要用），但不能是
+ * 悄悄的 —— 出了问题得能在日志里看见是谁把闸关了，关的是哪一道。
+ *
+ * 两个入口（字节流与已经解析好的帧）共用这一份：两道理应同语义，取值也该
+ * 只有一个来源。
+ */
+function idleGates(limits: { firstFrameMs?: number; idleMs?: number }): { firstFrameMs: number; idleMs: number } {
+  const firstFrameMs = limits.firstFrameMs ?? STREAM_FIRST_FRAME_MS;
+  const idleMs = limits.idleMs ?? STREAM_IDLE_MS;
+  if (!(firstFrameMs > 0)) console.warn(`[DELIVER] 首帧上限被设成 ${firstFrameMs}，等第一帧不再有超时`);
+  if (!(idleMs > 0)) console.warn(`[DELIVER] 空闲上限被设成 ${idleMs}，流中途不再有超时`);
+  return { firstFrameMs, idleMs };
+}
+
+/**
+ * 这块字节是不是**只有心跳**。
+ *
+ * SSE 的心跳是一条注释行（`: ping`），有些上游还会偶尔吐一个零长度的块 ——
+ * 两者都不是「答复开始说话了」。这个区分很要紧：第一帧的额度是按「从开始等到
+ * 现在」算的死线（见 withStreamIdle），心跳如果也算一帧，死线就会被一次次提前
+ * 换成中途那个短窗口 —— 一条「先发心跳、再慢慢想两百秒」的流就被砍在中途了。
+ *
+ * 零长度的块同样不算：它连一行都没有。
+ */
+function isHeartbeatOnly(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) return true;
+  const text = new TextDecoder().decode(bytes);
+  return !text.split("\n").some((line) => {
+    const trimmed = line.trim();
+    return trimmed !== "" && !trimmed.startsWith(":");
+  });
+}
+
+/** 这次安静是等第一帧，还是流中途。两个上限不同，句子也要说清是哪一种。 */
+export type StreamPhase = "first-frame" | "mid-stream";
+
+/**
  * 上游不说话了。
  *
  * `name` 是 `TimeoutError`：`classifyUpstreamError` 认这个名字，日志里因此是
  * timeout 而不是 unknown，策略也照「上游太慢」处理（换一个账号也许答得出来）。
  *
- * `message` 是人话：它是客户端唯一能看到的那一句。
+ * `message` 是人话：它是客户端唯一能看到的那一句，所以要说清是等第一帧等到
+ * 了上限，还是流开到一半停住了 —— 那两件事该做的事不一样。
  */
 export class StreamIdleError extends Error {
   readonly idleMs: number;
   readonly label: string;
+  readonly phase: StreamPhase;
 
-  constructor(idleMs: number, label: string) {
-    super(`upstream sent nothing for ${idleSpan(idleMs)} (${label})`);
+  constructor(idleMs: number, label: string, phase: StreamPhase) {
+    super(
+      phase === "first-frame"
+        ? `upstream sent nothing for ${idleSpan(idleMs)} waiting for the first frame (${label})`
+        : `upstream sent nothing for ${idleSpan(idleMs)} mid-stream (${label})`,
+    );
     this.name = "TimeoutError";
     this.idleMs = idleMs;
     this.label = label;
+    this.phase = phase;
   }
 }
 
@@ -506,15 +575,26 @@ export class StreamIdleError extends Error {
  *
  * 量的是**两帧之间**的安静，不是总时长：每收到一帧就重新计时，所以一条很长
  * 但一直在吐字的流（每 10 秒一帧、跑 10 分钟）不会被判超时。一帧都没有的等待
- * 也算安静 —— 推理模型的第一帧可能要几十秒，但超过上限就不是在算，是卡住了。
+ * 也算安静。
+ *
+ * 两个上限、两个值：等**第一帧**用 `firstFrameMs`，之后的每一帧用 `idleMs`。
+ * 量的是同一件事（上游多久没说话），但该等多久不一样 —— 推理模型的第一个
+ * token 常常要两分多钟，而流开到一半停住三分钟就是停住了。实现只有这一份，
+ * 只是第一帧之后换用 `idleMs`。
+ *
+ * 两个阶段量法不同：中途是**滑动**的（每收到一帧就重新计时），首帧是一个**绝对
+ * 死线**（从开始等到现在，谁都不重置）。心跳与零长度的块不是「开始说话了」
+ * （见 isHeartbeatOnly），否则一个先发心跳、再慢慢想的流就会被中途那个短窗口
+ * 砍掉。
  *
  * 超时后把上游那一侧取消掉（不取消，那条连接还挂着，账号也还占着），然后把
- * 错误交给客户端那一层：调用方的 catch 会把它写成一条 error 事件。
+ * 错误交给调用方：第一帧就超时的时候头还没发出去，路由层还能换一个目标；
+ * 中途超时的时候头已经发了，那一层会把它写成一条 error 事件。
  *
  * 只包上游这一侧，不包发往客户端的帧：客户端读得慢是另一件事（见上面的看门
  * 狗），把它也算成「上游安静了」会切掉一条正在正常前进的答复。
  *
- * `idleMs` 给 0 或负数就是不设这道闸。
+ * 上限给 0 或负数就是不设这道闸（两个值各管各的）。
  *
  * 导出给测试用："计时只在有 pending read 的时候走" 这条语义在转发链路上看不
  * 出来（peekStream 与写帧循环一直在读，pending read 总是在），只有在它就是
@@ -523,16 +603,18 @@ export class StreamIdleError extends Error {
 export function withStreamIdle(
   body: ReadableStream<Uint8Array>,
   label: string,
-  idleMs: number = STREAM_IDLE_MS,
+  limits: { firstFrameMs?: number; idleMs?: number } = {},
 ): ReadableStream<Uint8Array> {
-  if (!(idleMs > 0)) {
-    // 生产旋钮能悄无声息把整道闸关掉：调成 0 就是不设上限，上游可以永远不
-    // 说话，而这条请求一直挂着。关闸本身是允许的（自测要用），但不能是悄
-    // 悄关的 —— 出了问题得能在日志里看见是谁把闸关了。
-    console.warn(`[DELIVER] 空闲上限被设成 ${idleMs}，流不再有超时`);
-    return body;
-  }
+  const { firstFrameMs, idleMs } = idleGates(limits);
+  if (!(firstFrameMs > 0) && !(idleMs > 0)) return body;
   const reader = body.getReader();
+  // 还在等第一帧的时候，这个上限量的是一次**死线**，不随读取重置：心跳、零
+  // 长度的块、`event: ping` 这些都不是「上游开始说话了」，按它们重置的话，
+  // 一条「先发心跳、再慢慢想两百秒才出第一个 token」的流就被中途那个短窗口
+  // 砍掉了，首帧那个更长的额度白设。
+  const firstDeadline = firstFrameMs > 0 ? Date.now() + firstFrameMs : 0;
+  // 见到过真正的帧没有：见过之后才换成中途那个滑动的窗口。
+  let sawFrame = false;
   let timer: NodeJS.Timeout | null = null;
   const clearTimer = () => {
     if (!timer) return;
@@ -544,23 +626,42 @@ export function withStreamIdle(
   const nextChunk = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
     new Promise((resolve, reject) => {
       let settled = false;
-      timer = setTimeout(() => {
-        timer = null;
-        if (settled) return;
-        settled = true;
+      const phase: StreamPhase = sawFrame ? "mid-stream" : "first-frame";
+      // 首帧阶段量的是「从现在到那道死线还剩多久」，中途才是「上一帧之后静了多久」。
+      const limit = phase === "first-frame" ? firstFrameMs : idleMs;
+      const waitMs = phase === "first-frame" ? firstDeadline - Date.now() : idleMs;
+      const quiet = (): void => {
         // 上游那一侧停手：安静到这个地步，挂着只是白占连接与账号。
         void reader.cancel("the upstream went quiet").catch(() => {
           /* 上游自己已经结束了 */
         });
-        reject(new StreamIdleError(idleMs, label));
-      }, idleMs);
-      // 这个定时器不该让进程活着。
-      timer.unref?.();
+        reject(new StreamIdleError(limit, label, phase));
+      };
+      if (limit > 0 && waitMs <= 0) {
+        // 死线已经过去了（心跳与零长度的块不会把它往后推）：立刻算超时，
+        // 不必再挂一个马上就到点的定时器。
+        settled = true;
+        quiet();
+        return;
+      }
+      if (limit > 0) {
+        timer = setTimeout(() => {
+          timer = null;
+          if (settled) return;
+          settled = true;
+          quiet();
+        }, waitMs);
+        // 这个定时器不该让进程活着。
+        timer.unref?.();
+      }
       reader.read().then(
         (result) => {
           if (settled) return;
           settled = true;
           clearTimer();
+          // 心跳与零长度的块不算「见到了第一帧」：它们说的是「还活着」，不是
+          // 「开始说话了」。
+          if (!result.done && !isHeartbeatOnly(result.value)) sawFrame = true;
           resolve(result);
         },
         (error) => {
@@ -606,6 +707,104 @@ export function withStreamIdle(
     // 与上面「量的是上游两帧之间的安静」那句话一致。
     { highWaterMark: 0 },
   );
+}
+
+/**
+ * 跑一次，超过 `ms` 就算它不会回来了。
+ *
+ * `onTimeout` 在那里才造错：错里要带的是这一次的 phase 与上限，而不是调用
+ * 时就定下来的那一个（流中途换的是另一个上限）。
+ */
+function within<T>(work: Promise<T>, ms: number, onTimeout: () => Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(onTimeout());
+    }, ms);
+    // 这个定时器不该让进程活着。
+    timer.unref?.();
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * 已经解析好的帧同样要有个尽头（`deliverOpenAIChunks` 走的是这条路）。
+ *
+ * 同语义的意思是同一套东西：首帧是一个**绝对死线**（心跳与零长度的块都不
+ * 重置，尽管这条路上通常没有心跳可看），之后用 `idleMs` 的滑动窗口；超时
+ * 抛同一个 `StreamIdleError`、同样两个 phase 文案 —— 客户端与日志看到的
+ * 完全是同一件事，不管上游是哪一种协议。
+ *
+ * 这条路上原先是靠 undici 那个 5 分钟的 bodyTimeout 兜底的：客户端干等五分
+ * 钟，最后收到的是 Node 自己那句 `terminated`。三个入口现在一张牌。
+ *
+ * 超时之后把上游那一侧的迭代器收掉（`return`）。**不等它**：一条停在「永远
+ * 不会回来的 next」上的迭代器，await 它就是把这个请求挂死在上游身上。
+ */
+export function withIteratorIdle<T>(
+  source: AsyncIterable<T>,
+  label: string,
+  limits: { firstFrameMs?: number; idleMs?: number } = {},
+): AsyncIterable<T> {
+  const { firstFrameMs, idleMs } = idleGates(limits);
+  if (!(firstFrameMs > 0) && !(idleMs > 0)) return source;
+  return {
+    [Symbol.asyncIterator]: () => iterateWithIdle(source, label, firstFrameMs, idleMs),
+  };
+}
+
+async function* iterateWithIdle<T>(
+  source: AsyncIterable<T>,
+  label: string,
+  firstFrameMs: number,
+  idleMs: number,
+): AsyncGenerator<T> {
+  const iterator = source[Symbol.asyncIterator]();
+  // 见 withStreamIdle：首帧量的是死线，不随读取重置。
+  const firstDeadline = firstFrameMs > 0 ? Date.now() + firstFrameMs : 0;
+  let sawFrame = false;
+  try {
+    for (;;) {
+      const phase: StreamPhase = sawFrame ? "mid-stream" : "first-frame";
+      const limit = phase === "first-frame" ? firstFrameMs : idleMs;
+      const waitMs = phase === "first-frame" ? firstDeadline - Date.now() : idleMs;
+      const idle = (): StreamIdleError => new StreamIdleError(limit, label, phase);
+      let next: IteratorResult<T>;
+      if (!(limit > 0)) {
+        // 这一段不设闸（两个值各管各的）。
+        next = await iterator.next();
+      } else if (waitMs <= 0) {
+        // 死线已经到了：不再挂一个马上就到点的定时器，直接算超时。
+        throw idle();
+      } else {
+        next = await within(Promise.resolve(iterator.next()), waitMs, idle);
+      }
+      if (next.done) return;
+      sawFrame = true;
+      yield next.value;
+    }
+  } finally {
+    // 上游那一侧收工。不 await —— 喊停就够了，等一个不回来的 next 就是把
+    // 这条请求挂死在上游身上（见上面的注释）。
+    void Promise.resolve(iterator.return?.(undefined)).catch(() => {
+      /* 已经结束了 */
+    });
+  }
 }
 
 /**
@@ -765,6 +964,7 @@ export async function deliverOpenAIStream(
   onUsage?: (usage: any) => void,
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
+  ctx.res.setHeader("x-request-id", rid("req_"));
   // 客户端走了的时候，这个信号让读上游的那个循环停下来。
   const abort = new AbortController();
   // **先**把「客户端走了」这件事听上，再去等上游的第一帧。
@@ -776,13 +976,10 @@ export async function deliverOpenAIStream(
   state.onGone = () => abort.abort();
   // 客户端在挂上监听器之前就走了：那个事件没人听见。这里补一次。
   if (state.gone) abort.abort();
-  ctx.res.setHeader("x-request-id", rid("req_"));
-  takeOver(ctx);
-  sseHead(ctx);
   let upstream: ReadableStream<Uint8Array>;
   try {
-    // 等上游的**第一帧**也要算进「安静」：包在 peekStream 之前，推理模型那
-    // 几十秒的等待就被同一个上限管着，而不是交给 undici 那 5 分钟。
+    // 等上游的**第一帧**也要算进「安静」，而且量的是**首帧那个上限**（比中途
+    // 那个长：推理模型的第一个 token 常常要两分多钟）。
     upstream = await peekStream(withStreamIdle(body, `model=${model}`), abort.signal);
   } catch (e) {
     if (e instanceof ClientGoneError) {
@@ -790,16 +987,19 @@ export async function deliverOpenAIStream(
       ctx.res.end();
       return;
     }
-    // 头已经发出去了（sseHead 在 peek 之前），这条答复只剩「写一条 error 帧」
-    // 这一种说法：上游连第一帧都没吐就安静了是这样，peek 阶段别的错也是这样。
-    // 往外抛的话，路由层会以为可以换个账号重来 —— 它换来的是第二次 sseHead，
-    // 头已发过，于是 ERR_HTTP_HEADERS_SENT，外加一次白打的上游（还在计费）。
-    console.warn(`[DELIVER] 发给客户端的错误事件：${failureLine(e)}`);
-    await writeFrame(ctx, errorEvent(clientMessageOf(e)));
+    // 第一帧都没读到：**头还没发出去**，所以往外抛 —— 路由层还能换一个账号
+    // 或目标，客户端最后拿到的是真实状态与上游原话。
+    //
+    // 以前这里把错吞成一条 error 帧（头在那之前就发了），换不了目标：生产上
+    // fallback 的第三跳首帧就是 403，客户端拿到的是 200 里藏一句 error。
+    console.warn(`[DELIVER] 上游第一帧就失败了：${failureLine(e)}`);
     reportFailure(onFailure, e);
-    ctx.res.end();
-    return;
+    // 响应从没接管过：它还是 Koa 的，调用方写的 sendError 才会落到 socket 上。
+    throw e;
   }
+  // 第一帧读到了：现在才接管响应、发头。
+  takeOver(ctx);
+  sseHead(ctx);
   // 看门狗断开连接时（客户端不读了）也要停上游：它还在吐字就是在计费。
   onClientGone(ctx, upstream, abort);
   if (dialect === "openai") {
@@ -850,13 +1050,35 @@ export async function deliverAnthropicStream(
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
   ctx.res.setHeader("x-request-id", rid("req_"));
-  takeOver(ctx);
-  sseHead(ctx);
-  // 上游安静了就当作它不会再说话。包在 tee 之前：tee 出来的两条支线都从这
-  // 一个计时走，源头才不会因为没人读而挂在那里（挂着就是在计费）。
-  const upstreamBody = withStreamIdle(body, `model=${model}`);
   // 客户端走了的时候，这个信号让读上游的那个循环停下来。
   const abort = new AbortController();
+  // **先**把「客户端走了」这件事听上，再去等上游的第一帧：第一帧可能要等
+  // 几十秒，这段时间里客户端取消的连接没人听，上游就白算（还在计费）。
+  const state = replyState(ctx);
+  state.onGone = () => abort.abort();
+  if (state.gone) abort.abort();
+  // 上游安静了就当作它不会再说话。包在 tee 之前：tee 出来的两条支线都从这
+  // 一个计时走，源头才不会因为没人读而挂在那里（挂着就是在计费）。
+  let upstream: ReadableStream<Uint8Array>;
+  try {
+    // 第一帧读成功之前不写头：头一落地（flushHeaders），路由层就换不了目标，
+    // 客户端拿到的是 200 里藏一句 error；而这里抛出去，它还能换下一个账号或
+    // 目标。peek 出来的流把第一块字节原样交回给下面（不丢、不重排）。
+    upstream = await peekStream(withStreamIdle(body, `model=${model}`), abort.signal);
+  } catch (e) {
+    if (e instanceof ClientGoneError) {
+      reportClientGone(ctx, onFailure);
+      ctx.res.end();
+      return;
+    }
+    console.warn(`[DELIVER] 上游第一帧就失败了：${failureLine(e)}`);
+    reportFailure(onFailure, e);
+    // 响应从没接管过：它还是 Koa 的，调用方写的 sendError 才会落到 socket 上。
+    throw e;
+  }
+  // 第一帧读到了：现在才接管响应、发头。
+  takeOver(ctx);
+  sseHead(ctx);
   if (dialect === "anthropic") {
     // The bytes go to the client as they are, apart from one thing: the
     // message_start frame names the model, and it has to name the one the
@@ -866,7 +1088,7 @@ export async function deliverAnthropicStream(
     // A copy is parsed on the side for the usage: the upstream puts the input
     // tokens in message_start and the output tokens in message_delta, and
     // nobody reads those unless someone parses them.
-    const [toClient, toParser] = upstreamBody.tee();
+    const [toClient, toParser] = upstream.tee();
     // 看门狗断开连接时（客户端不读了）也要停上游：它还在吐字就是在计费。
     // tee 的两条支线都要取消，源头才停（取消一条，另一条还在读）。
     onClientGoneTee(ctx, [toClient, toParser], abort);
@@ -886,12 +1108,12 @@ export async function deliverAnthropicStream(
     return;
   }
   // 看门狗断开连接时（客户端不读了）也要停上游：它还在吐字就是在计费。
-  onClientGone(ctx, upstreamBody, abort);
+  onClientGone(ctx, upstream, abort);
   try {
-    for await (const chunk of anthropicStreamToOpenAI(upstreamBody, model, onUsage, abort.signal)) {
+    for await (const chunk of anthropicStreamToOpenAI(upstream, model, onUsage, abort.signal)) {
       if (!(await writeFrame(ctx, chunk))) {
         // 客户端走了：上游也别接着算（还在计费），这一条也不该记成成功。
-        await stopUpstream(upstreamBody, abort);
+        await stopUpstream(upstream, abort);
         reportClientGone(ctx, onFailure);
         break;
       }
@@ -948,11 +1170,28 @@ export async function deliverOpenAIChunks(
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
   ctx.res.setHeader("x-request-id", rid("req_"));
+  // 第一帧读成功之前不写头：头一落地（flushHeaders），路由层就换不了目标。
+  // 读不到第一帧就往外抛，那一层还能换下一个账号或目标。
+  //
+  // 这里也计时：已经解析好的帧那个入口原先一点上限都没有，只靠 undici 兼底 ——
+  // 另两个入口都有，三个入口该是一套东西（见 withIteratorIdle）。
+  const iterator = withIteratorIdle(chunks, `model=${model}`)[Symbol.asyncIterator]();
+  let first: IteratorResult<any>;
+  try {
+    first = await iterator.next();
+  } catch (e) {
+    console.warn(`[DELIVER] 上游第一帧就失败了：${failureLine(e)}`);
+    reportFailure(onFailure, e);
+    // 响应从没接管过：它还是 Koa 的，调用方写的 sendError 才会落到 socket 上。
+    throw e;
+  }
+  // 第一帧读到了（或者上游一字不说就收工了，那是空答复）：现在才接管响应、发头。
   takeOver(ctx);
   sseHead(ctx);
+  const source = restoreFirst(first, iterator);
   if (dialect === "openai") {
     try {
-      for await (const chunk of chunks) {
+      for await (const chunk of source) {
         if (chunk?.usage && onUsage) onUsage(chunk.usage);
         if (model && chunk && typeof chunk === "object") chunk.model = model;
         if (!(await writeFrame(ctx, sseData(chunk)))) {
@@ -972,7 +1211,7 @@ export async function deliverOpenAIChunks(
     return;
   }
   try {
-    for await (const chunk of openaiStreamToAnthropic(chunks, model)) {
+    for await (const chunk of openaiStreamToAnthropic(source, model)) {
       if (!(await writeFrame(ctx, chunk))) {
         reportClientGone(ctx, onFailure);
         break;
@@ -986,6 +1225,30 @@ export async function deliverOpenAIChunks(
     reportFailure(onFailure, e);
   }
   ctx.res.end();
+}
+
+/**
+ * Put the frame that was already read back in front of the rest.
+ *
+ * 第一帧是在发头之前读的（那时还不知道该不该发一个 200），但它就是答复的第
+ * 一帧：原样交给后面的循环，不能丢也不能重排。
+ */
+async function* restoreFirst<T>(first: IteratorResult<T>, rest: AsyncIterator<T>): AsyncGenerator<T> {
+  try {
+    if (!first.done) yield first.value;
+    for (;;) {
+      const next: IteratorResult<T> = await rest.next();
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    // 循环提前收工（客户端走了）：上游那一侧的生成器也要停下来（它还在计费）。
+    try {
+      await rest.return?.();
+    } catch {
+      /* 已经结束了 */
+    }
+  }
 }
 
 function errorEvent(message: string): string {

@@ -64,8 +64,11 @@ const upstreamBase = fake.base;
  *
  * 瞬时失败的重试要验的正是「第一次不行、第二次行」：一个只会答同一种结果的
  * 假上游证明不了这件事。剧本按模型名分开，每个场景用自己那个模型。
+ *
+ * `{ errorFrame }` 是「上游答 200，但第一帧就是一个错误对象」—— 它跟一个 5xx
+ * 不是一件事：状态是成功的，错在流里。
  */
-const scripts: Record<string, number[]> = {};
+const scripts: Record<string, (number | { errorFrame: string })[]> = {};
 
 /** 剧本那个假上游收到的推理请求：上游的模型名。 */
 const scriptCalls: string[] = [];
@@ -88,7 +91,16 @@ async function startScriptedUpstream(): Promise<{ base: string; close: () => voi
       return;
     }
     scriptCalls.push(model);
-    const status = scripts[model]?.shift() ?? 200;
+    const step = scripts[model]?.shift() ?? 200;
+    if (typeof step !== "number") {
+      // 200 的流，第一帧就是上游在说它不行（生产实录里 fallback 的第三跳就是
+      // 这样：状态 200，流里第一帧一个 403）。
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ error: { message: step.errorFrame } })}\n\n`);
+      res.end();
+      return;
+    }
+    const status = step;
     if (status !== 200) {
       // 429 的形状按 Qoder 的「繁忙」来：它带一个自己说的等待秒数（这里是 1 秒，
       // 不然它自己的重试会睡十秒）。
@@ -976,6 +988,94 @@ check(
   "超时：日志里说了超时、不冷却",
   retryGw.log().includes("timed out, not cooling down"),
   retryGw.log().split("\n").filter((l) => l.includes("timeout")).slice(0, 3).join(" | "),
+);
+
+/* ------------------------------------------------------------------ *
+ * 流的首帧就报错：真的路由层能不能换目标
+ * ------------------------------------------------------------------ */
+
+section("流的首帧就报错：下一个目标接手");
+
+// 生产实录：fallback 链的第三跳，上游拿 200 回了一个错误事件当第一帧。答复
+// 那一层在读到第一帧之前就把 SSE 头发了（sseHead 里带 flushHeaders），头一落
+// 地，路由层就换不了目标 —— 客户端拿到的是 200 里藏一句 error（2026-11-04）。
+//
+// 现在头只在第一帧读成功之后才发：读不到就往抛，这一层就能接着试下一个目标。
+await publish({
+  id: "e2e-first-frame",
+  displayName: "E2E 首帧报错",
+  strategy: "fallback",
+  targets: [
+    { groupName: "qoder", upstreamModel: "bmodel", weight: 10 },
+    { groupName: "qoder", upstreamModel: "jmodel", weight: 1 },
+  ],
+});
+clearCooldowns();
+scripts.bmodel = [{ errorFrame: "第一跳说不行" }];
+scriptCalls.length = 0;
+const logBeforeFirstFrame = retryGw.log().length;
+const firstFrameRetry = await fetch(`${base}/v1/chat/completions`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model: "e2e-first-frame", messages: [{ role: "user", content: "say ok" }], stream: true }),
+});
+const firstFrameText = await firstFrameRetry.text();
+const firstFrameLog = retryGw.log().slice(logBeforeFirstFrame);
+check("客户端拿到 200", firstFrameRetry.status === 200, `HTTP ${firstFrameRetry.status}`);
+check(
+  "两个目标都被叫过了（第一个首帧就报错）",
+  scriptCalls.join(",") === "bmodel,jmodel",
+  scriptCalls.join(","),
+);
+check("答复是第二个目标的（有正文）", firstFrameText.includes('"content":"ok"'), firstFrameText.slice(0, 300));
+check("答复里没有第一跳那句话", !firstFrameText.includes("第一跳说不行"), firstFrameText.slice(0, 300));
+check("只有一份答复（[DONE] 一次）", firstFrameText.split("[DONE]").length === 2, firstFrameText.slice(0, 300));
+check(
+  "日志里说了换目标",
+  /qoder\/bmodel failed .*trying qoder\/jmodel/.test(firstFrameLog),
+  firstFrameLog.split("\n").filter((l) => l.includes("[ROUTE]")).slice(0, 3).join(" | "),
+);
+check("没有第二次发头（ERR_HTTP_HEADERS_SENT）", !firstFrameLog.includes("ERR_HTTP_HEADERS_SENT"), firstFrameLog.slice(0, 300));
+
+section("整条链首帧就报错：真实状态码与上游原话");
+
+await publish({
+  id: "e2e-first-frame-dead",
+  displayName: "E2E 首帧都报错",
+  strategy: "fallback",
+  targets: [
+    { groupName: "qoder", upstreamModel: "vmodel", weight: 10 },
+    { groupName: "qoder", upstreamModel: "wmodel", weight: 1 },
+  ],
+});
+clearCooldowns();
+scripts.vmodel = [{ errorFrame: "第一跳说不行" }];
+scripts.wmodel = [{ errorFrame: "第二跳也说不行" }];
+scriptCalls.length = 0;
+const allFirstFrame = await fetch(`${base}/v1/chat/completions`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model: "e2e-first-frame-dead", messages: [{ role: "user", content: "say ok" }], stream: true }),
+});
+const allFirstFrameText = await allFirstFrame.text();
+let allFirstFrameJson: any = null;
+try {
+  allFirstFrameJson = JSON.parse(allFirstFrameText);
+} catch {
+  /* not JSON */
+}
+check("客户端拿到的不是 200", allFirstFrame.status !== 200, `HTTP ${allFirstFrame.status}`);
+check("客户端拿到的是 502", allFirstFrame.status === 502, `HTTP ${allFirstFrame.status}`);
+check(
+  "客户端拿到的不是事件流（一个 SSE 头都没发）",
+  !String(allFirstFrame.headers.get("content-type") ?? "").includes("text/event-stream"),
+  String(allFirstFrame.headers.get("content-type")),
+);
+check("两个目标都被叫过了", scriptCalls.join(",") === "vmodel,wmodel", scriptCalls.join(","));
+check(
+  "答复里带着上游原话",
+  /第一跳说不行|第二跳也说不行/.test(String(allFirstFrameJson?.hint ?? "")),
+  allFirstFrameText.slice(0, 300),
 );
 
 /* ------------------------------------------------------------------ *
