@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import type Koa from "koa";
 import { AuthError } from "../../credential.ts";
 import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode } from "../../upstream-status.ts";
+import { scrubForLog } from "../../log-scrub.ts";
 import { anthropicToOpenAI, effortOf } from "../../dialect/request.ts";
 import {
   qoderProtocolForRegion,
@@ -16,7 +17,7 @@ import {
   QODER_CLIENT_MAX_TOKENS,
   type QoderModel,
 } from "../../qoder/models.ts";
-import { qoderChatCompletion, LimitError } from "../../qoder/transport.ts";
+import { qoderChatCompletion, LimitError, parseLimitError } from "../../qoder/transport.ts";
 import type { QoderRegion } from "../../qoder/auth.ts";
 import { legacyChatCompletion, readLegacyFrames } from "../../qoder/legacy.ts";
 import { deliverJson, deliverOpenAIChunks, deliverOpenAIStream, type Dialect } from "../deliver.ts";
@@ -215,10 +216,103 @@ export async function toQoderLegacy(
   }
 }
 
+/**
+ * The longest a queued attempt waits before it is tried again.
+ *
+ * The queue answer says how long it wants us to wait, but that is a hint, not a
+ * contract: a wrong or huge number would park the request for minutes while the
+ * client is still holding the socket open. A minute is the longest the queue
+ * itself hands out, so that is the ceiling here.
+ */
+const LEGACY_MAX_WAIT_MS = 60_000;
+
+/** How many nested JSON strings the log line is willing to unwrap. */
+const LEGACY_LOG_DEPTH = 3;
+
+/** 超出深度时日志里那句话：不输出正文，也不能让它看起来像「上游没说话」。 */
+const UNPARSED_BODY = "(正文未解析)";
+
+/**
+ * The frame's message, scrubbed for the log.
+ *
+ * The message is JSON nested inside a JSON string (the queue answer is two
+ * levels deep), and scrubForLog only reaches the levels it can parse — a
+ * `cookie` one level down would reach the container log untouched. So every
+ * nested layer is scrubbed on its own and written back before the outer layer
+ * is scrubbed.
+ *
+ * 深过 LEGACY_LOG_DEPTH 那一层就不再拆了，正文整段不输出：拆不开的那一层里
+ * 有没有 cookie 只能靠文本规则碰运气，而碰运气不算脱敏。
+ */
+function scrubLegacyMessage(text: string, depth = 0): string {
+  const parsed = parseJsonObject(text);
+  // 不是 JSON：没有嵌套可拆，文本规则已经是全部能做的。
+  if (!parsed) return scrubForLog(text, 500);
+  if (depth >= LEGACY_LOG_DEPTH) return UNPARSED_BODY;
+  return scrubForLog(JSON.stringify(scrubNestedLayers(parsed, depth)), 500);
+}
+
+/** A JSON value as the log line rebuilds it, after scrubbing. */
+type ScrubbedValue = string | number | boolean | null | ScrubbedValue[] | { [key: string]: ScrubbedValue };
+
+function scrubNestedLayers(value: ScrubbedValue, depth: number): ScrubbedValue {
+  if (Array.isArray(value)) return value.map((item) => scrubNestedLayers(item, depth));
+  if (value && typeof value === "object") {
+    const out: Record<string, ScrubbedValue> = {};
+    for (const [key, inner] of Object.entries(value as Record<string, ScrubbedValue>)) {
+      out[key] =
+        typeof inner === "string" && parseJsonObject(inner)
+          ? scrubLegacyMessage(inner, depth + 1)
+          : scrubNestedLayers(inner, depth);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** The text as a JSON object, or undefined when it is not one. */
+function parseJsonObject(text: string): Json | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 上游为什么拒，写进日志。
+ *
+ * The upstream's own words only ever go into `hint`, and the log and the usage
+ * table only keep `message` — so why it refused was unreadable once the
+ * container was rebuilt (2026-11-10: the queue answer was only found by sending
+ * a request by hand). This line is the one place that survives. 排队用尽与
+ * 帧内错误都是上游拒了，两条路都得有这一行。
+ */
+function logLegacyFrameError(error: { code?: string; message?: string }): void {
+  console.warn(
+    `[UPSTREAM] Qoder 老协议帧内错误 ${error.code ?? "unknown"}：${scrubLegacyMessage(error.message ?? "")}`,
+  );
+}
+
+/**
+ * A 403 with a pricing link is the platform saying the account has no credits
+ * left.
+ *
+ * 两个地方认得它（没额度那一支与重试判断），所以只判一遍：判两遍就是同一
+ * 条答复两种待遇的来源。
+ */
+function isNoCreditRefusal(error: { status?: number; message?: string }): boolean {
+  return error.status === 403 && /pricing/i.test(error.message ?? "");
+}
+
 export function legacyError(error: { code?: string; message?: string; status?: number }): AuthError {
+  logLegacyFrameError(error);
   // A 403 with a pricing link is the platform saying the account has no
   // credits left. Saying so is more use than the code it answers with.
-  if (error.status === 403 && /pricing/i.test(error.message ?? "")) {
+  if (isNoCreditRefusal(error)) {
     return new AuthError(
       "the qoder account has no credits left",
       "Qoder 的额度已用尽（套餐与加购额度均无）。请充值，或等额度重置后重试。",
@@ -233,16 +327,63 @@ export function legacyError(error: { code?: string; message?: string; status?: n
   );
 }
 
+/** Waits, the way the retry loop does. Injectable so a test can watch it. */
+export type LegacySleep = (ms: number) => Promise<void>;
+
+const realSleep: LegacySleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 排队等到重试次数用尽。
+ *
+ * 以前这里抛的是 legacyError，它对 403 给 503 —— 分类按 5xx 把它当「上游挂了」：
+ * 健康账号被记冷却，而策略还会在同一个账号上再跑一轮 legacyWithRetry（客户
+ * 端最坏等 240s+）。可排队说的是「模型没排上」，不是「这个账号接不了」：换一个
+ * 账号只是换一条队，等下去也没意义。
+ *
+ * LimitError 是这条链路上现成的那个形状（新协议排队就是它），分类把它算 busy：
+ * 不降级、不写冷却、也不在同一账号上重来。不为它新加状态或分支。
+ */
+function queueExhausted(error: { code?: string; message?: string }, attempts: number): LimitError {
+  logLegacyFrameError(error);
+  return new LimitError(
+    `qoder model is still queued after ${attempts} attempts`,
+    `模型排队：上游排了几轮都没排上（试了 ${attempts} 次）。请稍后重试。`,
+    queueSeconds(error),
+  );
+}
+
+/**
+ * 上游要我们等多少秒，夹到单次等待的那个上限（见 LEGACY_MAX_WAIT_MS）。
+ *
+ * 没有秒数就用上限：这个值只说「过多久再来试」，宁可报大一点，也别给客户端
+ * 一个一定会再排不上的假希望。
+ */
+function queueSeconds(error: { message?: string }): number {
+  const asked = parseLimitError(error.message ?? "")?.retryAfterSec;
+  const maxSec = LEGACY_MAX_WAIT_MS / 1000;
+  const seconds = typeof asked === "number" && Number.isFinite(asked) ? Math.round(asked) : maxSec;
+  return Math.min(Math.max(seconds, 1), maxSec);
+}
+
 /**
  * The legacy endpoint answers 429 with `provider_error` / "All backends failed"
  * while the model is queued or the account is rate limited, and the CLI retries
  * such a request rather than failing it. The first frame tells us whether the
  * attempt was queued, so the retry happens before any bytes reach the client.
+ *
+ * The queue answer also says how long to wait; that wait is taken from it when
+ * it says so (see `legacyWaitMs`), and the number of attempts stays the only
+ * budget — there is no second clock on top of it.
+ *
+ * When the attempts run out while the model is still queued, the answer is a
+ * `LimitError` (see `queueExhausted`): the model has no slot, the account is
+ * fine.
  */
-async function* legacyWithRetry(
+export async function* legacyWithRetry(
   send: () => Promise<Response>,
   maxAttempts: number,
   retryMs: number,
+  sleep: LegacySleep = realSleep,
 ): AsyncGenerator<Json> {
   for (let attempt = 1; ; attempt++) {
     const upstream = await send();
@@ -251,11 +392,18 @@ async function* legacyWithRetry(
       const first = await frames.next();
 
       if (!first.done && first.value.error && attempt < maxAttempts && isRetryableLegacy(first.value.error)) {
-        await new Promise((r) => setTimeout(r, retryMs));
+        const waitMs = legacyWaitMs(first.value.error, retryMs);
+        // 等多久只有这一行留得住：下一次尝试成功的话，别的日志里一点痕迹都没有。
+        console.warn(`[UPSTREAM] Qoder 老协议排队，第 ${attempt} 次重试前等 ${waitMs}ms`);
+        await sleep(waitMs);
         continue;
       }
       if (!first.done) {
-        if (first.value.error) throw legacyError(first.value.error);
+        if (first.value.error) {
+          // 排队排到重试次数用尽：这不是「这个账号坏了」，是模型没排上。
+          if (isRetryableLegacy(first.value.error)) throw queueExhausted(first.value.error, attempt);
+          throw legacyError(first.value.error);
+        }
         if (first.value.chunk) yield first.value.chunk;
       }
       while (true) {
@@ -277,8 +425,52 @@ async function* legacyWithRetry(
   }
 }
 
-export function isRetryableLegacy(error: { code?: string; status?: number }): boolean {
-  return error.status === 429 || error.code === "provider_error";
+/**
+ * How long the next attempt waits.
+ *
+ * The queue answer carries the seconds it wants back (`retryAfterSeconds`, or
+ * `waitTime` in the older spelling) nested inside the frame's message, so it is
+ * parsed rather than read off the text. Without a number the configured wait is
+ * used, and either way the wait is capped — see LEGACY_MAX_WAIT_MS.
+ */
+export function legacyWaitMs(error: { message?: string }, fallbackMs: number): number {
+  const asked = parseLimitError(error.message ?? "")?.retryAfterSec;
+  const waitMs = typeof asked === "number" && Number.isFinite(asked) ? asked * 1000 : fallbackMs;
+  return Math.min(Math.max(waitMs, 0), LEGACY_MAX_WAIT_MS);
+}
+
+/**
+ * Whether a legacy frame says the model is only waiting for a slot.
+ *
+ * 只看结构，不在正文里找字：`10605` / `RESOURCE_LIMIT` 这几个字符完全可能
+ * 是请求 id 或时间戳的一部分，扫字符串把它们当成排队，白白等两轮 60 秒。
+ * 结构就是那个结构：帧里的 code，或者嵌套那一层的 subCode / isQueued。
+ * 解析不出来的就不猜。
+ *
+ * The old spelling is 429 with `provider_error` (every backend for the model is
+ * busy), which the CLI retries just the same.
+ */
+export function isRetryableLegacy(error: { code?: string; status?: number; message?: string }): boolean {
+  // 没额度不是排队：钱没到账排多久也排不上，重试只是白等两轮。
+  if (isNoCreditRefusal(error)) return false;
+  if (error.status === 429 || error.code === "provider_error") return true;
+  if (error.code === "10605") return true;
+  return saysQueued(error.message ?? "");
+}
+
+/**
+ * 正文里那句答复说的是不是「模型在排队」。
+ *
+ * 答复是 JSON 套 JSON：外层说 code/subCode，内层（`message` 那个字符串）说
+ * isQueued 与秒数。两层的 subCode 都认 —— 生产上两层都写过。
+ */
+function saysQueued(text: string): boolean {
+  const outer = parseJsonObject(text);
+  if (!outer) return false;
+  const nested = typeof outer.message === "string" ? parseJsonObject(outer.message) : undefined;
+  const inner = nested ?? outer;
+  if (inner.isQueued === true || outer.isQueued === true) return true;
+  return inner.subCode === "RESOURCE_LIMIT" || outer.subCode === "RESOURCE_LIMIT";
 }
 
 /**
