@@ -15,6 +15,7 @@ import { AuthError } from "../credential.ts";
 import { scrubForClient, scrubForLog } from "../log-scrub.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
 import { matchZcodeModel, zcodeEffortFor } from "./models.ts";
+import { toolNamesOf, zcodeSystem } from "./system.ts";
 
 /** 模型端点。 */
 export const ZCODE_MESSAGES_URL = `${ZCODE_BASE}/api/v1/zcode-plan/anthropic/v1/messages`;
@@ -120,6 +121,9 @@ export function zcodePlatformHeaders(
  * GLM-5.3 写 `thinking: {type:"enabled"}` 加 `output_config: {effort}`，
  * 别的模型只写 `thinking: {type}` —— enabled 或 disabled，取决于档位。
  * `metadata.user_id` 是设备与会话的标识。
+ *
+ * `system` 换成 ZCode 风控认的那三段（见 ./system.ts）：调用方自己那份
+ * 只能当第三段，原样多带一段就是第 4 段，上游回 405 + 3012。
  */
 export function zcodeBody(
   body: Json,
@@ -127,6 +131,10 @@ export function zcodeBody(
   opts: { effort?: string; model?: string; sessionId?: string } = {},
 ): Json {
   const out: Json = { ...body };
+  // Always three segments: the official two plus ours. The caller's own prompt
+  // is inside the third — forwarding it as-is would either replace the
+  // fingerprint or append a fourth segment, and both are 3012.
+  out.system = zcodeSystem(body.system, toolNamesOf(body.tools));
   // 思考怎么发：按官方客户端的规则（config/provider/zcode-builtin.json 的
   // modelApiRules）：
   //
