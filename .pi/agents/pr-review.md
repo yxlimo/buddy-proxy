@@ -5,7 +5,7 @@ inheritSkills: false
 inheritProjectContext: true
 tools: read, grep, find, ls, bash
 thinking: high
-subagentOnlyExtensions: ~/extensions/pi-allow-reads/packages/pi-plugin/src/index.ts
+subagentOnlyExtensions: ~/extensions/pi-subagent-permission/packages/pi-plugin/src/index.ts
 systemPromptMode: replace
 ---
 
