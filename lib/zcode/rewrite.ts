@@ -16,6 +16,17 @@
 //   >
 //   > `foo.ts:10-11`
 //
+// A directive is only drawn from text that reads back cleanly: every attribute
+// a `name="value"` pair with its quotes closed, nothing but whitespace before the
+// closing `}`, nothing after it that still looks like an attribute, and the line
+// numbers whole. A real answer came back with the brace written early —
+// `…explaining why."} file="input.js" start=1 end=1 priority=1}` — and a reader
+// that stopped at the first `}` drew a card out of half a directive: a title with
+// its opening quote still in it, a body cut where the next quote fell, a location
+// read off the wreckage. A card drawn from half a directive is worse than the
+// directive, so when the text does not read back cleanly the whole thing stays as
+// the model wrote it, byte for byte, and the reader gets what it actually said
+//
 // Two entry points, because the answer arrives both ways: whole (a buffered
 // reply, a recorded body) and in pieces (SSE splits the directive anywhere —
 // `::code-com` then `ment{title="…` then `" }`). `codeCommentStream()` holds
@@ -79,91 +90,193 @@ function findDirectiveIn(text: string, from: number): number {
   return -1;
 }
 
+/** The characters an attribute name is made of, and the only thing that may follow a value */
+const isNameChar = (c: string) => /[A-Za-z0-9_-]/.test(c);
+
 /**
- * The index of the `}` that closes the attribute list, or -1 when the text ends
- * first
+ * How long a word after the closing `}` still counts as a stray attribute
  *
- * Quotes first, brace second: `body="… has no key} really"` closes at the brace
- * outside the quotes, not at the one inside
+ * The stream has to answer "stray attribute or prose?" before it can hand the
+ * card over, so the question has to settle within a fixed lookahead. Past this a
+ * word is prose, which is what a model writes after a directive anyway
  */
-function closeIndex(text: string, from: number): number {
-  let quote = "";
-  for (let i = from; i < text.length; i++) {
-    const c = text[i];
-    if (c === "\\") {
-      i++;
-      continue;
-    }
-    if (quote) {
-      if (c === quote) quote = "";
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      quote = c;
-      continue;
-    }
-    if (c === "}") return i;
-  }
-  return -1;
+const MAX_STRAY_NAME = 32;
+
+/** What a `::code-comment{` turned out to be */
+type Directive =
+  /** Read cleanly: a card can be drawn, and the directive runs to `end` */
+  | { kind: "ok"; attrs: Map<string, string>; end: number }
+  /** The text stops before the question can be answered: more may still arrive */
+  | { kind: "open" }
+  /** Not something a card can be drawn from: the bytes stay as the model wrote them */
+  | { kind: "bad" };
+
+/** The two failures, carrying nothing, so every exit can return one of them */
+const UNFINISHED = { kind: "open" } as const;
+const UNREADABLE = { kind: "bad" } as const;
+
+/** One attribute value: what it holds, where it stops, or why it cannot be read */
+type Value = { kind: "ok"; text: string; next: number } | typeof UNFINISHED | typeof UNREADABLE;
+
+/**
+ * The whole number an attribute holds, `null` when it holds anything else, and
+ * `undefined` when the model did not write it at all
+ */
+const writtenInt = (value: string | undefined): number | null | undefined => {
+  if (value === undefined) return undefined;
+  const text = value.trim();
+  return /^\d+$/.test(text) ? Number(text) : null;
+};
+
+/**
+ * Whether the lines a directive names are lines a card can point at
+ *
+ * A `start` that is not a whole number, or an `end` before it, makes the location
+ * wrong rather than the explanation — and a location read off the wrong numbers is
+ * exactly the half-a-card this file exists to prevent
+ */
+function placeable(attrs: Map<string, string>): boolean {
+  const start = writtenInt(attrs.get("start"));
+  const end = writtenInt(attrs.get("end"));
+  if (start === null || end === null) return false;
+  return start === undefined || end === undefined || end >= start;
 }
 
 /**
- * The attributes of one directive, name → value
+ * One attribute value, read strictly: the quotes that open also close, and a
+ * quote inside the value is either escaped or doubled
  *
- * Lenient on purpose: the model drops quotes, forgets a space before the next
- * attribute, or writes `start=10` bare, and none of that is a reason to leave
- * the directive in the answer. A backslash makes the next character ordinary,
- * quoted or not, so a path or a quote inside a value survives
+ * Strict because a model that loses track of its own quotes writes a value whose
+ * end cannot be told from its middle — `body="he said "stop" here"` reads three
+ * ways and none of them is what the model meant. Bare values stay allowed:
+ * `start=10` and `priority=high` are both unambiguous as written
  */
-function parseAttributes(src: string): Map<string, string> {
-  const attrs = new Map<string, string>();
-  let i = 0;
-  while (i < src.length) {
-    while (i < src.length && isSpaceChar(src[i])) i++;
-    if (i >= src.length) break;
-    let keyEnd = i;
-    while (keyEnd < src.length && /[A-Za-z0-9_-]/.test(src[keyEnd])) keyEnd++;
-    if (keyEnd === i) {
-      i++;
-      continue;
-    }
-    const key = src.slice(i, keyEnd).toLowerCase();
-    i = keyEnd;
-    while (i < src.length && isSpaceChar(src[i])) i++;
-    if (src[i] !== "=") {
-      attrs.set(key, "");
-      continue;
-    }
+function readValue(text: string, at: number, ceiling: number, final: boolean): Value {
+  const quote = text[at];
+  let i = at;
+  let value = "";
+  if (quote === '"' || quote === "'") {
     i++;
-    while (i < src.length && isSpaceChar(src[i])) i++;
-    let value = "";
-    const end = src[i];
-    if (end === '"' || end === "'") {
-      i++;
-      while (i < src.length && src[i] !== end) {
-        if (src[i] === "\\" && i + 1 < src.length) {
-          value += src[i + 1];
-          i += 2;
-          continue;
-        }
-        value += src[i];
-        i++;
+    for (;;) {
+      if (i >= text.length) return final ? UNREADABLE : UNFINISHED;
+      if (i > ceiling) return UNREADABLE;
+      const c = text[i];
+      if (c === "\\") {
+        // A backslash makes the next character ordinary, quoted or not, so a
+        // path or a quote inside a value survives it
+        if (i + 1 >= text.length) return final ? UNREADABLE : UNFINISHED;
+        value += text[i + 1];
+        i += 2;
+        continue;
       }
-      i++;
-    } else {
-      while (i < src.length && !isSpaceChar(src[i])) {
-        if (src[i] === "\\" && i + 1 < src.length) {
-          value += src[i + 1];
+      if (c === quote) {
+        // A doubled quote is the value's own quote, the way CSV spells it, so the
+        // delimiters are the pair around it and not this one
+        if (text[i + 1] === quote) {
+          value += quote;
           i += 2;
           continue;
         }
-        value += src[i];
-        i++;
+        return { kind: "ok", text: value, next: i + 1 };
+      }
+      value += c;
+      i++;
+    }
+  }
+  for (;;) {
+    if (i >= text.length) return final ? UNREADABLE : UNFINISHED;
+    if (i > ceiling) return UNREADABLE;
+    const c = text[i];
+    if (isSpaceChar(c) || c === "}") return { kind: "ok", text: value, next: i };
+    // A quote in a bare value is the model opening a string and losing the
+    // opening quote, which leaves no way to say where the value stops
+    if (c === '"' || c === "'") return UNREADABLE;
+    if (c === "\\") {
+      if (i + 1 >= text.length) return final ? UNREADABLE : UNFINISHED;
+      value += text[i + 1];
+      i += 2;
+      continue;
+    }
+    value += c;
+    i++;
+  }
+}
+
+/**
+ * The decision at the closing `}`, which has to be made on what comes after it
+ *
+ * A model that closes the brace early writes `…why."}` and then goes on with
+ * `file="input.js" start=1 end=1 priority=1}`: the brace is in the wrong place and
+ * everything after it was meant to be inside. Prose after a directive is ordinary
+ * (`…} form out of it`), so what makes the tail a stray attribute is a name and an
+ * `=`, and only on the same line — a newline ends the directive either way
+ */
+function settled(text: string, at: number, attrs: Map<string, string>, final: boolean): Directive {
+  let i = at;
+  while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+  if (i >= text.length) {
+    // Whether this line continues into a `file=` is not known yet, and a
+    // directive that turns out to be the broken shape must not be drawn before
+    // that is settled: the stream and the whole text have to agree
+    if (!final) return UNFINISHED;
+  } else if (text[i] !== "\n" && text[i] !== "\r") {
+    let nameEnd = i;
+    while (nameEnd < text.length && nameEnd - i < MAX_STRAY_NAME && isNameChar(text[nameEnd])) nameEnd++;
+    if (nameEnd > i) {
+      let after = nameEnd;
+      while (after < text.length && (text[after] === " " || text[after] === "\t")) after++;
+      if (after >= text.length) {
+        if (!final) return UNFINISHED;
+      } else if (text[after] === "=" && nameEnd - i < MAX_STRAY_NAME) {
+        return UNREADABLE;
       }
     }
-    attrs.set(key, value);
   }
-  return attrs;
+  if (!placeable(attrs)) return UNREADABLE;
+  return { kind: "ok", attrs, end: at };
+}
+
+/**
+ * One directive whose opener ends at `from`, read strictly
+ *
+ * Strict all the way to the closing brace and past it: every attribute is a
+ * `name=value` pair, a quoted value closes, a bare value is a word, nothing but
+ * whitespace stands between the last value and the `}`, and the line numbers are
+ * whole. `final` says whether more text can still arrive, which is the difference
+ * between "not decided yet" and "the model did not write a directive here"
+ */
+function parseDirective(text: string, from: number, final: boolean): Directive {
+  const attrs = new Map<string, string>();
+  // The ceiling is on the directive's own length: `from` points into the middle
+  // of an answer, and the text around it is not what is being measured
+  const ceiling = from + MAX_DIRECTIVE - OPEN.length;
+  let i = from;
+  for (;;) {
+    while (i < text.length && isSpaceChar(text[i])) i++;
+    if (i >= text.length) return final ? UNREADABLE : UNFINISHED;
+    if (i > ceiling) return UNREADABLE;
+    if (text[i] === "}") return settled(text, i + 1, attrs, final);
+    let nameEnd = i;
+    while (nameEnd < text.length && isNameChar(text[nameEnd])) nameEnd++;
+    // No name here is the model losing the shape: a second `=`, a quote, a colon
+    if (nameEnd === i) return UNREADABLE;
+    if (nameEnd >= text.length) return final ? UNREADABLE : UNFINISHED;
+    if (nameEnd > ceiling) return UNREADABLE;
+    const key = text.slice(i, nameEnd).toLowerCase();
+    i = nameEnd;
+    while (i < text.length && isSpaceChar(text[i])) i++;
+    if (i >= text.length) return final ? UNREADABLE : UNFINISHED;
+    // An attribute without a value is not a shape this syntax has, so it is not
+    // one the rewrite guesses at
+    if (text[i] !== "=") return UNREADABLE;
+    i++;
+    while (i < text.length && isSpaceChar(text[i])) i++;
+    if (i >= text.length) return final ? UNREADABLE : UNFINISHED;
+    const value = readValue(text, i, ceiling, final);
+    if (value.kind !== "ok") return value;
+    attrs.set(key, value.text);
+    i = value.next;
+  }
 }
 
 /** The first sentence of a paragraph, which is the label a titleless comment gets */
@@ -182,18 +295,15 @@ function firstSentence(text: string): string {
   return text.trim();
 }
 
-const lineNumber = (value: string | undefined): number | undefined => {
-  const text = (value ?? "").trim();
-  return /^\d+$/.test(text) ? Number(text) : undefined;
-};
-
 /** `foo.ts:10-11` — the file by its last segment, the range only when it says one */
 function location(attrs: Map<string, string>): string {
   const file = (attrs.get("file") ?? "").trim();
   if (!file) return "";
   const name = file.split(/[\\/]/).filter((part) => part.length > 0).pop() ?? file;
-  const lines = [lineNumber(attrs.get("start")), lineNumber(attrs.get("end"))].filter(
-    (line): line is number => line !== undefined,
+  // Both are whole numbers by the time a card is drawn: `placeable` rejected
+  // whatever was not
+  const lines = [writtenInt(attrs.get("start")), writtenInt(attrs.get("end"))].filter(
+    (line): line is number => typeof line === "number",
   );
   if (lines.length === 0) return name;
   const lo = Math.min(...lines);
@@ -257,21 +367,19 @@ function rewritePlainText(
   for (;;) {
     const at = findDirectiveIn(text, from);
     if (at < 0) break;
-    const close = closeIndex(text, at + OPEN.length);
-    // Never closed: what the model wrote stays as it wrote it
-    if (close < 0) break;
-    const attrs = text.slice(at + OPEN.length, close);
-    // The same ceiling the stream uses, or the two would disagree on a stray opener
-    if (OPEN.length + attrs.length + 1 > MAX_DIRECTIVE) {
-      from = close + 1;
+    const directive = parseDirective(text, at + OPEN.length, true);
+    // Read cleanly, or the bytes stay as the model wrote them: a card drawn from
+    // half an answer is worse than the directive the client can still read
+    if (directive.kind !== "ok") {
+      from = at + OPEN.length;
       continue;
     }
     const gap = text.slice(emitted, at);
     const joined = afterBlock && isWhitespace(gap) && gap.length <= MAX_GAP;
     out.push(joined ? "\n\n" : gap);
-    out.push(renderComment(parseAttributes(attrs)));
-    emitted = close + 1;
-    from = close + 1;
+    out.push(renderComment(directive.attrs));
+    emitted = directive.end;
+    from = directive.end;
     afterBlock = true;
   }
   out.push(text.slice(emitted));
@@ -555,11 +663,8 @@ interface PlainRewriter {
 function plainRewriter(): PlainRewriter {
   /** Undecided input: ordinary text plus a possible opener, or one unfinished directive */
   let pending = "";
-  /** How far into the directive `pending` has been scanned; quote state makes rescanning wrong */
-  let pos = 0;
+  /** Whether `pending` starts with an opener, so `parseDirective` reads from its end */
   let inDirective = false;
-  let quote = "";
-  let escaped = false;
   /** The last thing emitted was a block, so a whitespace-only gap before the next one becomes a blank line */
   let afterBlock = false;
 
@@ -567,56 +672,26 @@ function plainRewriter(): PlainRewriter {
     let out = "";
     for (;;) {
       if (inDirective) {
-        let i = pos;
-        for (; i < pending.length && i < MAX_DIRECTIVE; i++) {
-          const c = pending[i];
-          if (escaped) {
-            escaped = false;
-            continue;
-          }
-          if (c === "\\") {
-            escaped = true;
-            continue;
-          }
-          if (quote) {
-            if (c === quote) quote = "";
-            continue;
-          }
-          if (c === '"' || c === "'") {
-            quote = c;
-            continue;
-          }
-          if (c === "}") break;
-        }
-        if (i < pending.length && i < MAX_DIRECTIVE && pending[i] === "}") {
-          out += renderComment(parseAttributes(pending.slice(OPEN.length, i)));
-          pending = pending.slice(i + 1);
-          pos = 0;
+        const directive = parseDirective(pending, OPEN.length, final);
+        // Not decided yet: the rest of the directive may still arrive
+        if (directive.kind === "open") return out;
+        // Not something a card can be drawn from. The opener leaves as it came and
+        // the scan resumes inside the rest, so a later directive still gets its card
+        // and every byte the model wrote is preserved
+        if (directive.kind === "bad") {
+          out += pending.slice(0, OPEN.length);
+          pending = pending.slice(OPEN.length);
           inDirective = false;
-          quote = "";
-          escaped = false;
-          afterBlock = true;
-          continue;
-        }
-        if (i >= MAX_DIRECTIVE) {
-          // Too long to be one of ZCode's comments: give up on this one and keep
-          // reading, so an opener that never closes costs 8192 characters and no more
-          out += pending.slice(0, i);
-          pending = pending.slice(i);
-          pos = 0;
-          inDirective = false;
-          quote = "";
-          escaped = false;
           afterBlock = false;
+          if (pending.length === 0) return out;
           continue;
         }
-        pos = i;
-        if (final) {
-          out += pending;
-          pending = "";
-          pos = 0;
-        }
-        return out;
+        out += renderComment(directive.attrs);
+        pending = pending.slice(directive.end);
+        inDirective = false;
+        afterBlock = true;
+        if (pending.length === 0) return out;
+        continue;
       }
 
       const at = findDirectiveIn(pending, 0);
@@ -624,18 +699,14 @@ function plainRewriter(): PlainRewriter {
         const gap = pending.slice(0, at);
         out += afterBlock && isWhitespace(gap) && gap.length <= MAX_GAP ? "\n\n" : gap;
         pending = pending.slice(at);
-        pos = OPEN.length;
         inDirective = true;
-        quote = "";
-        escaped = false;
         continue;
       }
 
       // Hold the longest tail that could still become an opener: `::code-` waits,
       // `::code-x` does not
       const stop = pending.length - tailPrefix(pending);
-      const plain = pending.slice(0, stop);
-      // Right after a block, whitespace may still be the gap before another one, so
+      const plain = pending.slice(0, stop);      // Right after a block, whitespace may still be the gap before another one, so
       // it waits for the next character instead of being emitted as the author's own
       if (!final && (stop === 0 || (afterBlock && isWhitespace(plain)))) return out;
       // The text ended on something that could have become an opener and never
@@ -647,13 +718,11 @@ function plainRewriter(): PlainRewriter {
       if (final && stop === 0) {
         out += pending;
         pending = "";
-        pos = 0;
         return out;
       }
       out += plain;
       if (!isWhitespace(plain)) afterBlock = false;
       pending = pending.slice(stop);
-      pos = 0;
       if (pending.length === 0) return out;
     }
   };
@@ -665,10 +734,7 @@ function plainRewriter(): PlainRewriter {
         // reach across it: whatever was held was not a directive after all
         const held = pending;
         pending = "";
-        pos = 0;
         inDirective = false;
-        quote = "";
-        escaped = false;
         // Something was written between the last comment and the next one, so
         // they are not adjacent and keep their own spacing
         afterBlock = false;

@@ -387,11 +387,16 @@ console.log("── 6. 结尾扣住的尾巴 ──");
     check(`没有原地打转：${name}`, elapsed < 2000, `${elapsed}ms`);
   }
 
-  // The other end of the same rule: when the last thing out was a complete
-  // directive, nothing is held and flush() says so
+  // The other end of the same rule: a directive that runs to the end of the
+  // answer is decided at flush, not at the push that brought it. The `}` could
+  // still be a brace the model wrote early, with `file=` coming on the same
+  // line — waiting for one more character is what keeps that shape from being
+  // drawn as half a card
   const finished = codeCommentStream();
-  finished.push(`${D}{title="A" body="B."}`);
-  check("结尾是完整的指令：flush 是空的", finished.flush() === "");
+  const atPush = finished.push(`${D}{title="A" body="B."}`);
+  const rest = finished.flush();
+  check("结尾是完整的指令：卡片压在 flush 里交出来", atPush === "" && rest !== "", show([atPush, rest]));
+  check("结尾是完整的指令：flush 之后什么都不剩", finished.flush() === "");
 }
 
 console.log("");
@@ -659,6 +664,47 @@ console.log("── 8. 围栏在任意分块下 ──");
       before.code.join("").includes(OPEN),
       show(before.code.join("")),
     );
+  }
+}
+
+console.log("");
+// ── 9. a directive the model wrote broken ───────────────────────────────
+console.log("── 9. 模型写坏的指令 ──");
+{
+  // The shape a real answer had: the brace after `body` came too early, and the
+  // rest of the attributes followed it. Drawing a card from that leaves the file
+  // and the line numbers on the page as prose — worse than the directive itself
+  const broken =
+    `${D}{title="Guard the index" body="`+
+    "`items[items.length]` is always `undefined`, so the last element is `items[items.length - 1]`; " +
+    'use `.at(-1)` when the intent was the last item."} ' +
+    'file="input.js" start=3 end=3 priority=1}';
+  check("写坏的指令：整条照原文留", rewriteCodeComments(broken) === broken, show(rewriteCodeComments(broken)));
+
+  // The other direction: the same shape, written right, still gets its card
+  const clean =
+    `${D}{title="Guard the index" body="The last element is the item before the length." ` +
+    'file="input.js" start=3 end=3 priority=1}';
+  const drawn = rewriteCodeComments(clean);
+  check("同样的形状写对了仍然改写", !drawn.includes(OPEN) && drawn.includes("Guard the index"), show(drawn));
+
+  // `priority` outside 0-3 is not a reason to leave the directive alone: the rank
+  // is decoration, the explanation is the point
+  const otherRank = `${D}{title="Guard the index" body="B." priority=high}`;
+  const drawnRank = rewriteCodeComments(otherRank);
+  check(
+    "priority 不是 0-3 也照样改写，只是不带档位",
+    !drawnRank.includes(OPEN) && !drawnRank.includes("[P"),
+    show(drawnRank),
+  );
+
+  // Chunk invariance on the broken one: whatever the pieces, the bytes stay
+  for (const size of [1, 3]) {
+    const stream = codeCommentStream();
+    let got = "";
+    for (let i = 0; i < broken.length; i += size) got += stream.push(broken.slice(i, i + size));
+    got += stream.flush();
+    check(`写坏的那条按每 ${size} 个字符切分：仍逐字节未变`, got === broken, show(got));
   }
 }
 
