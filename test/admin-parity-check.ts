@@ -359,14 +359,11 @@ function seedCredentials(kind: string, accountId: string): void {
 
 // 每个 kind 用哪个平台建账号。平台的 id 就是目录里的 id（lib/platform-catalog.ts
 // 的 SIMULATED_CLIENTS 与 PLATFORM_TEMPLATES）：平台全在表里，每一类都造得出账号。
-//
-// zcode 是空串：目录里那一条还在，但 `hidden: true` —— 播种不播它，表里没有
-// 这个平台，也就造不出这一类账号（下面走兜底那一支）。
 const KIND_PLATFORM: Record<string, string> = {
   minimax: "minimax",
   qoder: "qoder",
   workbuddy: "workbuddy-cn",
-  zcode: "",
+  zcode: "zcode",
   sensenova: "sensenova",
   "intern-ai": "intern-ai",
   tokenrhythm: "tokenrhythm",

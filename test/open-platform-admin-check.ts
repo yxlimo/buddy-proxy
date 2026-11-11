@@ -733,19 +733,17 @@ check(
   routerLog().slice(-200),
 );
 
-// hidden 的 zcode：目录里有条目、表里没有行。播出来就是一个地址、目录、额度全空
-// 的平台，面板上看得见却用不了 —— 所以它不在平台列表里。
+// zcode 也在目录里，且不再收起来：目录条目在、表里也有行、面板上看得见。
 //
-// 断言两件事：列表里没有，而且目录里还在。只看「列表里没有」的话，把它从目录里
-// 删掉也能过 —— 那是把「先备着」这条路径删了，不是把它藏起来。
+// 目录里那一条必须留着：它是 zcode 这个 kind 的预置来源，删了平台就无从播种。
 check(
-  "目录里还有 zcode 那一条，而且是 hidden",
-  SIMULATED_CLIENTS.some((c) => c.id === "zcode" && c.hidden === true),
+  "目录里有 zcode 那一条，且不再是 hidden",
+  SIMULATED_CLIENTS.some((c) => c.id === "zcode" && c.hidden === false),
   show(SIMULATED_CLIENTS.filter((c) => c.id === "zcode")),
 );
 check(
-  "hidden 的那一条不在平台列表里",
-  !(await listUpstreams()).some((u: any) => u.id === "zcode"),
+  "zcode 在平台列表里",
+  (await listUpstreams()).some((u: any) => u.id === "zcode"),
   show((await listUpstreams()).map((u: any) => u.id)),
 );
 
@@ -993,8 +991,8 @@ check(
   show(simulatedKinds.map((k: any) => [k.defaultBaseUrl, k.category])),
 );
 check(
-  "hidden 的 zcode 不在答复里",
-  !kindOptions.some((k: any) => k.kind === "zcode" || k.presetId === "zcode"),
+  "zcode 在答复里",
+  kindOptions.some((k: any) => k.kind === "zcode" || k.presetId === "zcode"),
   show(kindOptions.map((k: any) => k.presetId)),
 );
 // 厂商那五家也在能选的两族里（模板表没了，平台行由用户在面板上自己建）：
@@ -1079,25 +1077,21 @@ check(
   `${countPlatforms()} vs ${platformsBeforeSimulated}`,
 );
 
-// 目录里藏起来的那一条（zcode）：面板上看不到，也不给建。
-const hiddenBuild = await guard(() => addPlatform({ kind: "zcode", id: "zcode", label: "ZCode" }));
-check("hidden 的那一条不给建", hiddenBuild === null, show(hiddenBuild));
-// 这一类的每一条都 hidden：说「没有预置、得从预置里选一个」是指着一个空列表让人
-// 选，用户会以为列表没刷新。要说的是「面板不提供新增」—— 机器码就得是这一个。
-const hiddenMessage = errDetail();
+// zcode 现在是真平台（目录里一条、表里一行）：再建同 id 就是撞车。
+const zcodeBuild = await guard(() => addPlatform({ kind: "zcode", id: "zcode", label: "ZCode" }));
+check("zcode 那一行建不了第二次", zcodeBuild === null, show(zcodeBuild));
+const zcodeMessage = errDetail();
 check(
-  "hidden 的机器码说的是这一列不能新建",
-  errCode() === errorCodes.PLATFORM_KIND_NOT_CREATABLE,
-  `${errCode()} / ${hiddenMessage}`,
+  "机器码说的是平台已存在",
+  errCode() === errorCodes.PLATFORM_ALREADY_EXISTS,
+  `${errCode()} / ${zcodeMessage}`,
 );
-check("状态码是 FailedPrecondition", errStatus() === 9, String(errStatus()));
-// 细节里列出的是「这一类只能由预置创建」，不是一份让人选的 id 清单。
+check("状态码是 AlreadyExists", errStatus() === 6, String(errStatus()));
 check(
-  "细节里没有可选的预置 id",
-  !["minimax", "qoder", "workbuddy"].some((id) => hiddenMessage.includes(id)),
-  hiddenMessage,
+  "库里仍然只有一行 zcode",
+  openPlatformOf("zcode") !== null && countPlatforms() === platformsBeforeSimulated,
+  `${String(openPlatformOf("zcode")?.id)} / ${countPlatforms()} vs ${platformsBeforeSimulated}`,
 );
-check("库里没多行", openPlatformOf("zcode") === null && countPlatforms() === platformsBeforeSimulated, show(openPlatformOf("zcode")));
 
 // 改名：模拟客户端那一行的地址是空串，改名不带 baseUrl 也得让过 —— 只改名字、
 // 额度插件、目录那几格。

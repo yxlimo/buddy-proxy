@@ -103,7 +103,6 @@ const SEEDED_IDS = new Set(SIMULATED_CLIENTS.filter((c) => !c.hidden).map((c) =>
 
 /** 目录里会播种的那几条：hidden 的不播（目录里留着条目，表里没有行）。 */
 const SEEDED = SIMULATED_CLIENTS.filter((c) => !c.hidden);
-const HIDDEN = SIMULATED_CLIENTS.filter((c) => c.hidden);
 
 /**
  * 用户自己建的行：不是启动时播进来的那几行。
@@ -222,12 +221,13 @@ for (const client of SEEDED) {
   check(`${client.id} 的地址是空的`, seeded?.baseUrl === "", JSON.stringify(seeded?.baseUrl));
   check(`${client.id} 的目录是空的（那一族的目录由代码给出）`, seeded?.models.items.length === 0, JSON.stringify(seeded?.models));
 }
-// hidden 的那一条目录里有、表里没有：播出来就是一个地址、目录、额度全空的平台，
-// 面板上看得见却用不了。
+// 目录里的每一条都要播成行：`hidden` 是「备着、先不给」的开关，现在全都放开了。
 check(
-  "hidden 的那一条没播成行",
-  HIDDEN.length > 0 && HIDDEN.every((c) => openPlatformOf(c.id) === null),
-  HIDDEN.map((c) => `${c.id}:${openPlatformOf(c.id) !== null}`).join(","),
+  "目录里每一条都播成了行",
+  SIMULATED_CLIENTS.every((c) => openPlatformOf(c.id) !== null),
+  SIMULATED_CLIENTS.filter((c) => openPlatformOf(c.id) === null)
+    .map((c) => c.id)
+    .join(","),
 );
 
 const countBeforeCreate = allPlatforms().length;
@@ -609,16 +609,16 @@ check(
   `${listOpenPlatforms().length} vs ${rowsBeforeSimulated}`,
 );
 
-// 目录里藏起来的那一条（zcode）：面板上根本看不到，也不给建。
-const hiddenPreset = SIMULATED_CLIENTS.find((c) => c.id === "zcode")!;
-const hiddenBuild = createOpenPlatform({
-  id: hiddenPreset.id,
-  label: hiddenPreset.label,
+// 预置的平台已经播成了行，再建一次是「已存在」而不是又插一行。
+const presetAgain = SIMULATED_CLIENTS.find((c) => c.id === "zcode")!;
+const presetBuild = createOpenPlatform({
+  id: presetAgain.id,
+  label: presetAgain.label,
   baseUrl: "",
-  kind: hiddenPreset.kind,
+  kind: presetAgain.kind,
 });
-check("hidden 的那一条不给建", hiddenBuild.ok === false, hiddenBuild.message);
-check("表里也没多出它", openPlatformOf("zcode") === null);
+check("播过的预置再建一次被拒", presetBuild.ok === false, presetBuild.message);
+check("表里还是那一行", openPlatformOf("zcode")?.kind === presetAgain.kind);
 
 // 一个 kind 名下不止一个平台（Qoder 的全球区与中国区）：id 挑的是哪一条。
 const qoderCnPreset = SIMULATED_CLIENTS.find((c) => c.id === "qoder-cn")!;
@@ -740,8 +740,8 @@ check(
   JSON.stringify(simulatedChoices.map((c) => [c.defaultBaseUrl, c.category])),
 );
 check(
-  "hidden 的 zcode 不在里面",
-  !choices.some((c) => c.kind === "zcode" || c.presetId === "zcode"),
+  "zcode 在里面（目录已放开）",
+  choices.some((c) => c.kind === "zcode" && c.presetId === "zcode"),
   choices.map((c) => c.presetId).join(","),
 );
 check(

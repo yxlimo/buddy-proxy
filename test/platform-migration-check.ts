@@ -66,9 +66,7 @@ const { store, closeStore, migrateSimulatedClients, platformPresetRemoved } = aw
   "../lib/store.ts"
 );
 
-/** 该播种的那几条：目录里 hidden 的不播。 */
 const SEEDED = SIMULATED_CLIENTS.filter((c) => !c.hidden);
-const HIDDEN = SIMULATED_CLIENTS.filter((c) => c.hidden);
 
 /**
  * 表里所有平台行的样子（连时间戳一起）。
@@ -114,17 +112,19 @@ for (const client of SEEDED) {
     JSON.stringify(platform?.region),
   );
 }
-// hidden 的目录条目留着，「放开」就是把这一个布尔改成 false —— 条目没了就没有
-// 这个开关了。
+// 目录条目全留着，`hidden` 这个开关也留着 —— 收起来的条目没了就没有开关了。
 check(
-  "目录里 hidden 的那一条还在",
-  SIMULATED_CLIENTS.some((c) => c.id === "zcode" && c.hidden === true),
+  "目录里每一条都是 hidden: false",
+  SIMULATED_CLIENTS.every((c) => c.hidden === false),
   SIMULATED_CLIENTS.map((c) => `${c.id}:${c.hidden}`).join(","),
 );
+// zcode 放开之后跟别的条目一样播种：表里那一行的 kind 与 region 照目录。
+const zcodePreset = SIMULATED_CLIENTS.find((c) => c.id === "zcode");
+const zcodeRow = openPlatformOf("zcode");
 check(
-  "hidden 的那一条没被播进表里",
-  HIDDEN.length > 0 && HIDDEN.every((c) => !booted.some((p) => p.id === c.id)),
-  HIDDEN.map((c) => `${c.id}:${booted.some((p) => p.id === c.id)}`).join(","),
+  "zcode 也按目录播进了表里",
+  zcodePreset !== undefined && zcodeRow?.kind === zcodePreset.kind && zcodeRow?.region === zcodePreset.region,
+  `${String(zcodeRow?.kind)} / ${JSON.stringify(zcodeRow?.region)}`,
 );
 // 厂商那几行（七牛云、星火、SenseNova、端砚、TokenRhythm）不再补：平台行是
 // 用户在面板上自己建的，代码里没有模板表了。表里只有目录里该播的那几条。

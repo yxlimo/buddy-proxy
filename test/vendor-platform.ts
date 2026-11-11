@@ -45,11 +45,15 @@ export function insertVendorPlatform(
   const baseUrl = options.baseUrl ?? declared;
   if (!baseUrl) throw new Error(`kind ${kind} 没有默认地址，造不出这一行`);
   const now = Date.now();
+  // 幂等：预置的平台（模拟客户端那一族）启动时已经被播种了，同样的 id 再插一次
+  // 会撞 UNIQUE。这里存的是「保证这一行在，且是测试要的那个形状」——已存在就覆盖。
   store()
     .prepare(
       "INSERT INTO platform " +
         "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET base_url = excluded.base_url, kind = excluded.kind, " +
+        "quota_plugin = excluded.quota_plugin, updated_at = excluded.updated_at",
     )
     .run(
       id,

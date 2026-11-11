@@ -47,9 +47,10 @@ export interface SimulatedClientPreset {
  * 播种照这张表走，所以 `hidden === false` 的每一行都是「表里必有的一行」：id 与
  * label 是那几个平台的身份，改了就是改调用方的 base_url。
  *
- * `hidden: true` 的那一条**不播种**（ZCode 的会话还没接完）：播出来就是一个地址、
- * 目录、额度全空的平台，面板上看得见却用不了。条目留着，将来放开只改这一个布尔，
- * 下一次启动就播。
+ * `hidden` 是「目录里先备着、面板上还不给」的开关：`hidden: true` 的条目不播种、
+ * 也不出现在「新增平台」的下拉里（它的会话或目录还没接完时，播出来就是一个地址、
+ * 目录、额度全空的平台，面板上看得见却用不了）。放开一条只改这一个布尔，下一次
+ * 启动就播；不想让它再被建就改回 true。现在每一条都是 `hidden: false`。
  */
 export const SIMULATED_CLIENTS: readonly SimulatedClientPreset[] = [
   { key: "minimax", id: "minimax", label: "MiniMax Code", kind: "minimax", region: "cn", hidden: false },
@@ -57,7 +58,7 @@ export const SIMULATED_CLIENTS: readonly SimulatedClientPreset[] = [
   { key: "qoder-cn", id: "qoder-cn", label: "Qoder（中国区）", kind: "qoder", region: "cn", hidden: false },
   { key: "workbuddy-cn", id: "workbuddy-cn", label: "WorkBuddy（中国区）", kind: "workbuddy", region: "cn", hidden: false },
   { key: "workbuddy-global", id: "workbuddy-global", label: "WorkBuddy（国际区）", kind: "workbuddy", region: "global", hidden: false },
-  { key: "zcode", id: "zcode", label: "ZCode", kind: "zcode", region: "", hidden: true },
+  { key: "zcode", id: "zcode", label: "ZCode", kind: "zcode", region: "", hidden: false },
 ];
 
 /**
@@ -72,7 +73,7 @@ export function isSimulatedClientKind(kind: string): boolean {
   return SIMULATED_CLIENTS.some((client) => client.kind === kind);
 }
 
-/** 这个 id 是不是预置的模拟客户端平台（含 hidden 那一条）。 */
+/** 这个 id 是不是预置的模拟客户端平台（目录里的每一条，hidden 的也算）。 */
 export function isSimulatedClientId(id: string): boolean {
   return SIMULATED_CLIENTS.some((client) => client.id === id);
 }
@@ -80,7 +81,7 @@ export function isSimulatedClientId(id: string): boolean {
 /**
  * 面板上看得见、也建得了的那几条模拟客户端（hidden 的除外）。
  *
- * hidden 是「目录里先备着、面板上还不给」的那一条：它在建行时被跳过。读目录
+ * hidden 是「目录里先备着、面板上还不给」：置了 true 的那条在建行时被跳过。读目录
  * 只认这一份，别自己再按 hidden 过一遍 —— 过法不一致就会出现「面板上选了它、
  * 建的时候说没有这一类」。
  */
@@ -222,7 +223,7 @@ export function platformCategoryOfKind(kind: string): PlatformCategory {
  * 面板上「新增平台」那一屏能选的全部：先方言，再模拟客户端。
  *
  * 两族分开报（category）：方言类要用户填 id 与地址，模拟客户端类的 id、地址、
- * 区域都由预置定死 —— 面板按这一格决定问不问那两格。hidden 的那几条不出现，
+ * 区域都由预置定死 —— 面板按这一格决定问不问那两格。hidden 的条目不出现，
  * 它们连建都不给建。
  *
  * 顺序是契约的一部分：面板照答案渲染，不自己排。
