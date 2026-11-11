@@ -5,6 +5,7 @@ import { effortOf, openaiToAnthropic } from "../../dialect/request.ts";
 import { upstreamSessionId } from "../../upstream-session.ts";
 import { zcodeChat } from "../../zcode/transport.ts";
 import { zcodeMaxOutput } from "../../zcode/models.ts";
+import { rewriteAnswerBody, rewriteAnswerStream } from "../../zcode/rewrite-answer.ts";
 import { deliverAnthropicStream, deliverJson, type Dialect } from "../deliver.ts";
 import { upstreamModel, type Route } from "../routes.ts";
 import { retryAfterMs } from "../../upstream-status.ts";
@@ -65,16 +66,21 @@ export async function toZcode(
     throw error;
   }
 
+  // ZCode's own prompt asks for `::code-comment{...}` cards (the official system
+  // prompt carries `### Inline Code Comments`). An agent calling this gateway has
+  // never heard of the form, so the directives are rendered as Markdown on the way
+  // out — text blocks only, everything else byte for byte
+  // (lib/zcode/rewrite-answer.ts).
   if (!stream) {
     const json = await response.json();
-    deliverJson(out, dialect, "anthropic", json, route.label ?? model, ctx.onUsage);
+    deliverJson(out, dialect, "anthropic", rewriteAnswerBody(json), route.label ?? model, ctx.onUsage);
     settle.success();
     return;
   }
   try {
     await deliverAnthropicStream(
       out,
-      response.body!,
+      rewriteAnswerStream(response.body!),
       dialect,
       route.label ?? model,
       0,
