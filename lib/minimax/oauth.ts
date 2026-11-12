@@ -30,9 +30,10 @@ import { providerSecretId } from "../providers.ts";
 import { deleteSecret } from "../store.ts";
 import { registerLoginFlow, type LoginContext, type LoginTicket, type PollResult } from "../login-flow.ts";
 import { WARN_MS } from "./warn-ms.ts";
+import { resolveHost } from "./hosts.ts";
 
 /** Prod OAuth origins per region (packages/oauth-core/src/endpoint-config.ts). */
-export const OAUTH_ORIGINS: Record<string, string> = {
+export const OAUTH_ORIGINS: Record<"cn" | "en", string> = {
   cn: "https://account.minimax.cn",
   en: "https://account.minimax.io",
 };
@@ -41,7 +42,28 @@ const CLIENT_ID = configString("MINIMAX_CLIENT_ID", DEFAULT_CLIENT_ID);
 const AUDIENCE = configString("MINIMAX_AUDIENCE", DEFAULT_AUDIENCE);
 const SCOPES = configString("MINIMAX_SCOPES", DEFAULT_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
 const REGION = configString("MINIMAX_REGION", DEFAULT_REGION);
-const ORIGIN = configString("MINIMAX_OAUTH_ORIGIN", OAUTH_ORIGINS[REGION] ?? OAUTH_ORIGINS.cn);
+/**
+ * Where the login endpoints are.
+ *
+ * Resolved at load, like the rest — lib/config.ts answers a setting once per
+ * process.
+ *
+ * No shared layer, unlike the other hosts: `MINIMAX_API_BASE` moves the
+ * balance, the points and the inference calls, all of which are what an
+ * account spends and what a mirror or a self-test needs to divert. Logging in
+ * is not that — it is the grant that produces the credential the others spend,
+ * and moving it along with them would let one "point the balance at my fake
+ * upstream" setting rewrite the login flow too. So this host answers to its own
+ * setting only, and the region's table behind it.
+ *
+ * The region arrives spelled `cn` / `en` / `global`; resolveHost is the one
+ * place that knows which of those name the same region.
+ */
+const ORIGIN = resolveHost({
+  setting: "MINIMAX_OAUTH_ORIGIN",
+  defaults: OAUTH_ORIGINS,
+  region: REGION,
+});
 const CACHE_MS = configNumber("MINIMAX_AUTH_CACHE_MS", 5000);
 // Refresh when this much life is left. The real client uses 5 min; a 1-hour token
 // means the proxy refreshes roughly once an hour.

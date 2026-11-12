@@ -44,13 +44,13 @@ import { buildRequest } from "./checkin.ts";
 import { resolveHost } from "./hosts.ts";
 
 /** The matrix host (the points). The sign-in gateway is a third host. */
-const AGENT_HOSTS: Record<string, string> = {
+const AGENT_HOSTS: Record<"cn" | "en", string> = {
   cn: "https://agent.minimax.cn",
   en: "https://agent.minimax.io",
 };
 
 /** The web host (the switch). */
-const WEB_HOSTS: Record<string, string> = {
+const WEB_HOSTS: Record<"cn" | "en", string> = {
   cn: "https://www.minimaxi.com",
   en: "https://www.minimax.io",
 };
@@ -70,7 +70,7 @@ const FALLBACK_PATH = "/backend/account/token_plan_credit";
  * goes in exactly as the caller has it; these tables are keyed `cn` / `en`, and
  * resolveHost is where the spelling is normalised.
  */
-function host(setting: string, defaults: Record<string, string>, region: string): string {
+function host(setting: string, defaults: Record<"cn" | "en", string>, region: string): string {
   return resolveHost({ setting, shared: "MINIMAX_API_BASE", defaults, region });
 }
 

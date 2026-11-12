@@ -20,10 +20,13 @@ import type { BenefitOutcome } from "../benefits.ts";
 /**
  * The public gateway per region — the defaults, not the whole story.
  *
+ * Both entries are required by resolveHost, so a table that loses one does not
+ * compile rather than sending a region's sign-in to the other platform.
+ *
  * The two settings that override them are named in publicGatewayOrigin. The
  * LLM gateway is a different host.
  */
-const PUBLIC_GATEWAYS: Record<string, string> = {
+const PUBLIC_GATEWAYS: Record<"cn" | "en", string> = {
   cn: "https://agent.minimaxi.com",
   en: "https://agent.minimax.io",
 };

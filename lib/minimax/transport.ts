@@ -16,6 +16,7 @@ import type { Json } from "../json.ts";
 import { configString, configFlag, configNumber } from "../config.ts";
 import crypto from "node:crypto";
 import { AUTH_MODE, AuthError, readCredential } from "./auth.ts";
+import { resolveHost } from "./hosts.ts";
 
 export const REGION = configString("MINIMAX_REGION", "cn");
 const UA = configString("MINIMAX_USER_AGENT", "MiniMaxCode");
@@ -26,10 +27,37 @@ const ATTRIBUTION = configFlag("MINIMAX_ATTRIBUTION_HEADERS", true);
 const YY_SUFFIX = "ooui";
 const SIGNATURE_SALT = "I*7Cf%WZ#S&%1RlZJ&C2";
 
-export const BASE_URL = configString(
-  "MINIMAX_BASE_URL",
-  REGION === "en" ? "https://agent.minimax.io/mavis/api/v1/llm/v1" : "https://agent.minimax.cn/mavis/api/v1/llm/v1",
-);
+/**
+ * The LLM gateway per region. The instructions live under `/llm/v1`, so an
+ * entry carries the whole path rather than just the origin.
+ */
+const INFER_HOSTS = {
+  cn: "https://agent.minimax.cn/mavis/api/v1/llm/v1",
+  en: "https://agent.minimax.io/mavis/api/v1/llm/v1",
+} as const;
+
+/**
+ * Where the call goes.
+ *
+ * Resolved at load, not per request: lib/config.ts answers a setting once per
+ * process, so asking resolveHost here yields what the module-level constant
+ * used to hold.
+ *
+ * What changes by going through resolveHost: the region spelling. The old
+ * `REGION === "en"` test knew one word for the international region, so an
+ * account or a deployment saying `global` / `international` was sent to the
+ * home region's gateway; regionKey knows all three. And `MINIMAX_API_BASE`
+ * covers this host too, which is the point of a setting that moves the whole
+ * data plane: a self-test or an internal mirror that points the balance and the
+ * points at a fake upstream must not leave the calls that spend the account's
+ * tokens walking to the real platform.
+ */
+export const BASE_URL = resolveHost({
+  setting: "MINIMAX_BASE_URL",
+  shared: "MINIMAX_API_BASE",
+  defaults: INFER_HOSTS,
+  region: REGION,
+});
 export const UPSTREAM = `${BASE_URL}/messages`;
 
 /** The gateway's own address, for the health report. */
