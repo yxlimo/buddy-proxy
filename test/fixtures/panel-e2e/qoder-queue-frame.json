@@ -1,0 +1,8 @@
+{
+  "upstream": "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1",
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream;charset=UTF-8"
+  },
+  "body": "data:{\"headers\":{},\"body\":\"{\\\"code\\\":\\\"403\\\",\\\"message\\\":\\\"{\\\\\\\"code\\\\\\\":\\\\\\\"10605\\\\\\\",\\\\\\\"message\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"errorCode\\\\\\\\\\\\\\\":0,\\\\\\\\\\\\\\\"isQueued\\\\\\\\\\\\\\\":true,\\\\\\\\\\\\\\\"modelKey\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"dfmodel\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"queueCount\\\\\\\\\\\\\\\":1,\\\\\\\\\\\\\\\"queueType\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"p4\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"retryAfterSeconds\\\\\\\\\\\\\\\":60,\\\\\\\\\\\\\\\"serviceAvailable\\\\\\\\\\\\\\\":true,\\\\\\\\\\\\\\\"subCode\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"RESOURCE_LIMIT\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"waitTime\\\\\\\\\\\\\\\":60}\\\\\\\",\\\\\\\"subCode\\\\\\\":\\\\\\\"RESOURCE_LIMIT\\\\\\\"}\\\"}\",\"statusCodeValue\":403,\"statusCode\":\"FORBIDDEN\"}\n\n"
+}

@@ -1,0 +1,8 @@
+{
+  "upstream": "https://account.minimax.cn/oauth2/device/code",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "body": "{\"device_code\":\"a0b-1c2d3e-4f5g6h7i8j9klmnpqrstuvwxyza0b1c2\",\"expires_in\":300,\"interval\":3,\"user_code\":\"AB2C-D3EF\",\"verification_uri\":\"https://account.minimax.cn/oauth-authorize\",\"verification_uri_complete\":\"https://account.minimax.cn/oauth-authorize?user_code=AB2C-D3EF\"}"
+}

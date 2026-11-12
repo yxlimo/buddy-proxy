@@ -36,6 +36,56 @@ echo "  面板 e2e 的数据目录：$DATA_DIR"
 export BUDDY_DATA_DIR="$DATA_DIR"
 export ROUTER_PORT
 
+# ── 上游地址：**这一批用例走到的**上游指到本机的假上游 ────────────────────
+#
+# 面板 e2e 里有几件事只能由上游回答：排队（Qoder 把模型停进队列）、登录的
+# 「发起」那一步（设备码与授权链接）、开放平台的模型目录、以及推理请求本身
+# （WorkBuddy 与 MiniMax Code 那两条）。答复都是录下来的实录
+# （`test/fixtures/panel-e2e/`），由 `tests/panel-upstream.ts` 在
+# 127.0.0.1:6820 上按路径回放；路径对不上的，它答 404。
+#
+# 范围说清楚，别把这句话读成「整套 e2e 一条真请求都没有」：**只有下面这几格
+# 被改指**。别家厂商平台（TokenRhythm / 书生·端砚 / SenseNova / 七牛云 / 讯飞）
+# 的地址是数据 —— 建平台那一行填的 base_url —— 这一批用例不触发它们。签到那条
+# 更是**没有环境变量可覆盖**：`lib/minimax/checkin.ts` 的 `PUBLIC_GATEWAYS`
+# 把 `https://agent.minimaxi.com`（全球区 `agent.minimax.io`）写死在代码里，
+# 所以签到不在这套 e2e 的范围里 —— 面板上「现在签到」这类动作不要在这里点。
+#
+# 这些设置都在网关**启动时读一次**（`lib/config.ts`；`MINIMAX_BASE_URL` 是
+# `lib/minimax/transport.ts` 的模块级常量，`WORKBUDDY_CHAT_BASE` 是第一次用到
+# 时读、之后缓存），所以只能在这儿给：测试进程起来的时候网关已经在跑了。
+# 注释里是原来的值 —— 漏掉一格，那就是一条发往真上游的请求。
+PANEL_E2E_UPSTREAM_PORT="${PANEL_E2E_UPSTREAM_PORT:-6820}"
+UPSTREAM="http://127.0.0.1:${PANEL_E2E_UPSTREAM_PORT}"
+
+# MiniMax Code：设备流的 origin（原值 https://account.minimax.cn），
+# 以及额度那几个查询的基址（原值 https://api.minimax.cn / https://agent.minimax.cn），
+# 和推理那一条（Anthropic 方言，原值 https://agent.minimax.cn/mavis/api/v1/llm/v1；
+# 全球区是 https://agent.minimax.io/…）。读推理基址的是
+# `lib/minimax/transport.ts:29-34` 的 `BASE_URL` / `UPSTREAM`。
+export MINIMAX_OAUTH_ORIGIN="$UPSTREAM"
+export MINIMAX_API_BASE="$UPSTREAM"
+export MINIMAX_BASE_URL="$UPSTREAM"
+
+# WorkBuddy（中国区）：登录的基址与 origin（原值 https://www.workbuddy.cn / https://www.codebuddy.cn）。
+export WORKBUDDY_CN_BASE="$UPSTREAM"
+export WORKBUDDY_CN_ORIGIN="$UPSTREAM"
+
+# WorkBuddy：账号自己那套 API 的基址 —— 推理请求（`lib/workbuddy/auth.ts` 的
+# `chatBase`，被 `lib/workbuddy/transport.ts:219` 用去发推理）与权益、积分
+# （`lib/workbuddy/api.ts:12` 的 `apiBase`）都读它。原值不是一格设置：是账号自己的
+# 域名，中国区 https://www.workbuddy.cn、全球区 https://www.workbuddy.ai /
+# https://www.codebuddy.ai —— 后两个这一批走不到。
+export WORKBUDDY_CHAT_BASE="$UPSTREAM"
+
+# ZCode（原值 https://zcode.z.ai）。
+export ZCODE_BASE_URL="$UPSTREAM"
+
+# Qoder（中国区）：登录轮询与额度（原值 https://openapi.qoder.com.cn），
+# 推理那条老协议（原值 https://gateway.qoder.com.cn）。
+export QODER_CN_OPENAPI_BASE="$UPSTREAM"
+export QODER_CN_INFER_BASE="$UPSTREAM"
+
 APP_PID=""
 WATCHER_PID=""
 

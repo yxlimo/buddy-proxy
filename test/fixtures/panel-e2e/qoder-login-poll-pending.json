@@ -1,0 +1,8 @@
+{
+  "upstream": "https://openapi.qoder.com.cn/api/v1/deviceToken/poll?nonce=a0b1c2d3e4f5g6h7i8j9klmnpqrstuvwxyza&verifier=a0b1c2d3e4f5g6h7i8j9klmnpqrstuvwxyza0b1c2d3&challenge_method=S256",
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"errorCode\":\"NotFound\",\"errorMessage\":\"Not found\",\"requestId\":\"89abcdef-89ab-89ab-89ab-89abcdef0123\"}"
+}

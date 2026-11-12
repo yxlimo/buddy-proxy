@@ -1,0 +1,8 @@
+{
+  "upstream": "https://zcode.z.ai/api/v1/oauth/cli/init",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "body": "{\"code\":0,\"msg\":\"\",\"data\":{\"flow_id\":\"89abcdef01234589abcdef01234589ab\",\"poll_token\":\"89abcdef01234589abcdef01234589abcdef01234589abcdef01234589abcdef\",\"authorize_url\":\"https://chat.z.ai/api/oauth/authorize?client_id=a0b1c2d3e4f5g6h7i8j9klmnpqrst&redirect_uri=https%3A%2F%2Fzcode.z.ai%2Fapi%2Fv1%2Foauth%2Fcli%2Fcallback%2Fzai&state=a0b1c2d3e4f5g6h7i8j9klmnpqrstuvw&response_type=code\",\"expires_at\":1800000000,\"poll_interval_sec\":2},\"logid\":\"89abcdef01234589abcdef01234589abcd\"}"
+}

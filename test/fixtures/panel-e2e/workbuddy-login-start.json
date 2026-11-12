@@ -1,0 +1,8 @@
+{
+  "upstream": "https://www.workbuddy.cn/v2/plugin/auth/state?platform=workbuddy",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "body": "{\"code\":0,\"msg\":\"OK\",\"requestId\":\"89abcdef-89ab-89ab-89ab-89abcdef0123\",\"data\":{\"state\":\"89abcdef-89ab-89ab-89ab-89abcdef0123\",\"authUrl\":\"https://www.workbuddy.cn/login?platform=workbuddy&state=a0b1c2d3e4f5g6h7i8j9klmnpqrstuvwxyza\"}}"
+}
