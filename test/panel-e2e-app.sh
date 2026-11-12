@@ -47,15 +47,18 @@ export ROUTER_PORT
 # 范围说清楚，别把这句话读成「整套 e2e 一条真请求都没有」：**只有下面这几格
 # 被改指** —— 这套用例实际走到的上游。上游地址只要在设置层（`lib/config.ts` 的
 # 三层：环境 → 库 → 默认）里，都能用同一个办法指到本机，不需要为它单独做点什么；
-# 没列出来的是这套用例走不到，所以没给。签到那台主机原来是唯一漏掉设置层的地址
-# （写死在 `lib/minimax/checkin.ts` 的 `PUBLIC_GATEWAYS`），现在也走设置
-# `MINIMAX_PUBLIC_GATEWAY`，下面一并指到了假上游。
+# 没列出来的是这套用例走不到，所以没给。签到那台主机（`lib/minimax/checkin.ts`
+# 的 `publicGatewayOrigin()`）底下没有自己的一行：它的解析顺序是「自己的设置
+# `MINIMAX_PUBLIC_GATEWAY` → 共享的 `MINIMAX_API_BASE` → 按区域默认」，自己的
+# 没设就落到共享那一层，于是跟着下面的 `MINIMAX_API_BASE` 一起指到假上游。
+# 哪天需要「只把签到挪走、其余几台照旧」，才用得着给 `MINIMAX_PUBLIC_GATEWAY`
+# 单独一行。
 #
 # 这些设置都得在网关起来之前给：多数是启动时读一次（`lib/config.ts`；
 # `MINIMAX_BASE_URL` 是 `lib/minimax/transport.ts` 的模块级常量，
-# `WORKBUDDY_CHAT_BASE` 是第一次用到时读、之后缓存），`MINIMAX_PUBLIC_GATEWAY`
-# 虽是按调用读、改完立刻生效，但环境变量本身只在进程启动时进得来 —— 测试进程
-# 起来的时候网关已经在跑了，所以同样只能在这儿给。
+# `WORKBUDDY_CHAT_BASE` 是第一次用到时读、之后缓存）。按调用读的那种（签到那台
+# 主机）也躲不开同一条：环境变量本身只在进程启动时进得来 —— 测试进程起来的时候
+# 网关已经在跑了，所以只能在这儿给。
 # 注释里是原来的值 —— 漏掉一格，那就是一条发往真上游的请求。
 PANEL_E2E_UPSTREAM_PORT="${PANEL_E2E_UPSTREAM_PORT:-6820}"
 UPSTREAM="http://127.0.0.1:${PANEL_E2E_UPSTREAM_PORT}"
@@ -68,11 +71,6 @@ UPSTREAM="http://127.0.0.1:${PANEL_E2E_UPSTREAM_PORT}"
 export MINIMAX_OAUTH_ORIGIN="$UPSTREAM"
 export MINIMAX_API_BASE="$UPSTREAM"
 export MINIMAX_BASE_URL="$UPSTREAM"
-
-# 签到那几条接口的主机（设置 `MINIMAX_PUBLIC_GATEWAY`；不设就按区域取默认，
-# 国内 `https://agent.minimaxi.com`、全球区 `https://agent.minimax.io`）。
-# 读它的是 `lib/minimax/checkin.ts` 的 `publicGatewayOrigin()`。
-export MINIMAX_PUBLIC_GATEWAY="$UPSTREAM"
 
 # WorkBuddy（中国区）：登录的基址与 origin（原值 https://www.workbuddy.cn / https://www.codebuddy.cn）。
 export WORKBUDDY_CN_BASE="$UPSTREAM"

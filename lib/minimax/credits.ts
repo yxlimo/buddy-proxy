@@ -10,20 +10,28 @@
 // money on the platform account — the cash, the vouchers and the credits, with
 // the credits being the ones that were given rather than paid for.
 
-import { configString } from "../config.ts";
+import { resolveHost } from "./hosts.ts";
 
-/** The platform hosts. The key decides which one answers. */
+/**
+ * The platform hosts, keyed by region — `cn` / `en`, the keys every MiniMax
+ * host table uses (see regionKey in hosts.ts). `en` is the region the account
+ * records call `global`.
+ */
 export const MINIMAX_API_HOSTS = {
-  global: "https://api.minimaxi.com",
   cn: "https://api.minimax.cn",
+  en: "https://api.minimaxi.com",
 } as const;
 
-export type MiniMaxRegion = keyof typeof MINIMAX_API_HOSTS;
-
-export function minimaxApiHost(region: MiniMaxRegion = "cn"): string {
-  const explicit = configString("MINIMAX_API_BASE", "");
-  if (explicit) return explicit.replace(/\/+$/, "");
-  return MINIMAX_API_HOSTS[region];
+/**
+ * The balance and token plan host.
+ *
+ * No setting of its own: nothing has ever needed to move these two apart from
+ * the rest of the surface, so `MINIMAX_API_BASE` is the only override here and
+ * the region table is the fallback. A knob of its own would be a panel entry
+ * nobody sets.
+ */
+export function minimaxApiHost(region = "cn"): string {
+  return resolveHost({ shared: "MINIMAX_API_BASE", defaults: MINIMAX_API_HOSTS, region });
 }
 
 /** The money on the account. */
@@ -53,7 +61,7 @@ const num = (v: unknown): number => {
  */
 export async function fetchMiniMaxBalance(
   accessToken: string,
-  region: MiniMaxRegion = "cn",
+  region = "cn",
 ): Promise<MiniMaxBalance | null> {
   try {
     const r = await fetch(`${minimaxApiHost(region)}/account/query_balance`, {
@@ -124,7 +132,7 @@ function percent(raw: unknown): number {
  */
 export async function fetchMiniMaxTokenPlanWithSession(
   accessToken: string,
-  region: MiniMaxRegion = "cn",
+  region = "cn",
 ): Promise<MiniMaxTokenPlan | null> {
   try {
     const r = await fetch(`${minimaxApiHost(region)}/backend/account/token_plan/remains_percent`, {

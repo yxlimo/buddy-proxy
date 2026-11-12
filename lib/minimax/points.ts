@@ -40,9 +40,8 @@
 // Adding them back as a fallback would report a paying account as broke, so
 // leave them alone even when the credit ledger answers nothing.
 
-import { configString } from "../config.ts";
 import { buildRequest } from "./checkin.ts";
-import type { MiniMaxRegion } from "./credits.ts";
+import { resolveHost } from "./hosts.ts";
 
 /** The matrix host (the points). The sign-in gateway is a third host. */
 const AGENT_HOSTS: Record<string, string> = {
@@ -60,21 +59,19 @@ const EXTRA_PATH = "/matrix/api/v1/user/get_user_extra_info";
 const CREDIT_PATH = "/minimax-cloud/api/v1/credit/details";
 const FALLBACK_PATH = "/backend/account/token_plan_credit";
 
-const regionKey = (region: string): string => (region === "en" || region === "global" ? "en" : "cn");
-
 /**
- * The base url for one of the two hosts.
+ * One of the two hosts.
  *
- * `MINIMAX_API_BASE` is read as well: it is the one setting the offline tests
- * already use to point the whole MiniMax surface at a fake upstream, and without
- * it these two calls would reach the real hosts during a test run.
+ * Both are moved by their own setting (`MINIMAX_AGENT_BASE`, `MINIMAX_WEB_BASE`)
+ * and by the shared `MINIMAX_API_BASE`. The shared one matters here: it is what
+ * the offline tests use to keep the whole MiniMax surface off the real
+ * platform, and it has to cover these two calls too — otherwise a test that
+ * thinks it is talking to a fake upstream walks to the real hosts. The region
+ * goes in exactly as the caller has it; these tables are keyed `cn` / `en`, and
+ * resolveHost is where the spelling is normalised.
  */
-function base(setting: string, hosts: Record<string, string>, region: string): string {
-  const own = configString(setting, "");
-  if (own) return own.replace(/\/+$/, "");
-  const shared = configString("MINIMAX_API_BASE", "");
-  if (shared) return shared.replace(/\/+$/, "");
-  return hosts[regionKey(region)];
+function host(setting: string, defaults: Record<string, string>, region: string): string {
+  return resolveHost({ setting, shared: "MINIMAX_API_BASE", defaults, region });
 }
 
 /** A decimal string from the platform: it may carry thousands separators. */
@@ -123,7 +120,7 @@ function signedRequest(
   const built = buildRequest(path, method, token, "", region, Date.now(), payload);
   const url = new URL(built.url);
   return {
-    url: `${base("MINIMAX_AGENT_BASE", AGENT_HOSTS, region)}${url.pathname}${url.search}`,
+    url: `${host("MINIMAX_AGENT_BASE", AGENT_HOSTS, region)}${url.pathname}${url.search}`,
     body: built.body,
     headers: built.headers,
   };
@@ -220,7 +217,7 @@ export function pointsFromLedger(lots: CreditLot[] | null): number | null {
  */
 export async function fetchMiniMaxLedger(
   accessToken: string,
-  region: MiniMaxRegion = "cn",
+  region = "cn",
 ): Promise<CreditLot[] | null> {
   try {
     const req = signedRequest(CREDIT_PATH, "GET", accessToken, region);
@@ -255,7 +252,7 @@ export async function fetchMiniMaxLedger(
  */
 export async function fetchMiniMaxCreditsAndPoints(
   accessToken: string,
-  region: MiniMaxRegion = "cn",
+  region = "cn",
 ): Promise<{ lots: CreditLot[] | null; points: number | null }> {
   const lots = await fetchMiniMaxLedger(accessToken, region);
   return { lots, points: pointsFromLedger(lots) };
@@ -269,7 +266,7 @@ export async function fetchMiniMaxCreditsAndPoints(
  */
 export async function fetchMiniMaxCreditFallback(
   accessToken: string,
-  region: MiniMaxRegion = "cn",
+  region = "cn",
 ): Promise<boolean | null> {
   try {
     const workspace = await selectedWorkspace(accessToken, region);
@@ -280,7 +277,7 @@ export async function fetchMiniMaxCreditFallback(
     };
     if (workspace?.groupId) headers["X-Group-Id"] = workspace.groupId;
     const body = await ask(
-      `${base("MINIMAX_WEB_BASE", WEB_HOSTS, region)}${FALLBACK_PATH}`,
+      `${host("MINIMAX_WEB_BASE", WEB_HOSTS, region)}${FALLBACK_PATH}`,
       "GET",
       headers,
     );

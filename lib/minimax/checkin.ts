@@ -14,13 +14,14 @@
 import { createHash } from "node:crypto";
 import { configString } from "../config.ts";
 import { readCredential } from "./auth.ts";
+import { regionKey, resolveHost } from "./hosts.ts";
 import type { BenefitOutcome } from "../benefits.ts";
 
 /**
  * The public gateway per region — the defaults, not the whole story.
  *
- * `MINIMAX_PUBLIC_GATEWAY` (see publicGatewayOrigin) overrides both regions.
- * The LLM gateway is a different host.
+ * The two settings that override them are named in publicGatewayOrigin. The
+ * LLM gateway is a different host.
  */
 const PUBLIC_GATEWAYS: Record<string, string> = {
   cn: "https://agent.minimaxi.com",
@@ -64,6 +65,15 @@ export interface SigninClaim {
 
 const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 
+/**
+ * The language the client asks its answers in: the international region's own,
+ * Chinese for the home one. Derived from regionKey so the spelling of the
+ * region is read the same way the hosts are.
+ */
+function regionLanguage(region: string): "en" | "zh" {
+  return regionKey(region) === "en" ? "en" : "zh";
+}
+
 /** The client version the simulated client puts in the query string. */
 const APP_VERSION = configString("MINIMAX_APP_VERSION", "5.2.0");
 const REGION = configString("MINIMAX_REGION", "cn");
@@ -71,22 +81,28 @@ const REGION = configString("MINIMAX_REGION", "cn");
 /**
  * Where the public gateway is.
  *
- * A setting, like the other upstream addresses (`MINIMAX_API_BASE` in
- * credits.ts, `SENSENOVA_BASE`, `QODER_CN_INFER_BASE`): environment first,
- * then the database, then the default table above. The panel's sign-in button
- * is the one path this gateway walks on its own, so a self-test and an internal
- * mirror have to be able to aim it at their own host instead of the public one.
+ * Two settings, in the order resolveHost reads them. `MINIMAX_PUBLIC_GATEWAY`
+ * moves this host alone — the panel's sign-in button is the one path the
+ * gateway walks on its own, so a self-test has to be able to aim it without
+ * moving the rest. `MINIMAX_API_BASE` moves the whole MiniMax surface, this
+ * host included: a scan that points the balance and the points at a fake
+ * upstream must not leave the sign-in walking to the real platform.
  *
- * Empty keeps the region's default; set, the one value serves both regions —
- * whoever points it somewhere points both there.
+ * Empty keeps the region's default, and the regions stay apart because the
+ * platform keeps them apart: `agent.minimaxi.com` for `cn`, `.io` elsewhere.
+ * Set, one value serves both regions — whoever points it somewhere sends both
+ * there.
  *
- * Read on every call, not held in a constant: every sign-in reads it, and a
- * change has to be in force for the next one.
+ * `region` is the raw region, as the setting or the account record spells it;
+ * the spelling is normalised once, in resolveHost.
  */
 export function publicGatewayOrigin(region = REGION): string {
-  const explicit = configString("MINIMAX_PUBLIC_GATEWAY", "");
-  if (explicit) return explicit.replace(/\/+$/, "");
-  return PUBLIC_GATEWAYS[region] ?? PUBLIC_GATEWAYS.cn;
+  return resolveHost({
+    setting: "MINIMAX_PUBLIC_GATEWAY",
+    shared: "MINIMAX_API_BASE",
+    defaults: PUBLIC_GATEWAYS,
+    region,
+  });
 }
 
 /**
@@ -129,7 +145,7 @@ export function buildRequest(
 ): { url: string; body?: string; headers: Record<string, string> } {
   const origin = publicGatewayOrigin(region);
   const url = new URL(`${origin}${path}`);
-  const language = region === "en" ? "en" : "zh";
+  const language = regionLanguage(region);
   url.search = new URLSearchParams({
     device_platform: "web",
     biz_id: "3",
@@ -172,7 +188,7 @@ export function buildRequest(
 async function fetchUserId(token: string, region: string): Promise<string> {
   const now = Date.now();
   const url = new URL(`${publicGatewayOrigin(region)}/v1/api/user/info`);
-  const language = region === "en" ? "en" : "zh";
+  const language = regionLanguage(region);
   url.search = new URLSearchParams({
     device_platform: "mcode",
     biz_id: "3",
