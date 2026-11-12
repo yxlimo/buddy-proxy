@@ -76,6 +76,51 @@ export async function seedOpenPlatform(id: string, label: string): Promise<strin
   return id;
 }
 
+/**
+ * 铺一个平台，任一类都行，返回它的 id。
+ *
+ * `kind` 决定的是两件事：路由按它分派，登录也按它分派（哪一页、要不要链接）。
+ * 额度插件给空串 = 不选插件：这些测试都不验额度，别让某一类的默认插件把建平台
+ * 卡住或让它是另一件事的失败。
+ */
+export async function seedPlatform(input: {
+  id: string;
+  label: string;
+  kind: string;
+  baseUrl?: string;
+}): Promise<string> {
+  await adminRpc('AddPlatform', {
+    id: input.id,
+    label: input.label,
+    kind: input.kind,
+    baseUrl: input.baseUrl ?? 'https://probe.example/v1',
+    quotaPlugin: '',
+  });
+  return input.id;
+}
+
+/** 在平台下加一个账号，返回账号 id（凭据落在它上面）。 */
+export async function addAccount(
+  platform: string,
+  alias: string,
+): Promise<string> {
+  const result = await adminRpc<{ id?: string }>('AddAccount', {
+    platform,
+    alias,
+  });
+  const id = String(result.id ?? '');
+  if (!id) throw new Error(`给 ${platform} 加账号没拿到账号 id`);
+  return id;
+}
+
+/** 给开放平台的账号写一把推理用的 key（第一把就是它）。 */
+export async function setAccountKey(
+  accountId: string,
+  key: string,
+): Promise<void> {
+  await adminRpc('SetProviderKeys', { upstreamId: accountId, keys: [key] });
+}
+
 /** 按 id 删掉一个平台（测试自己收尾用，别把数据留给下一个测试）。 */
 export async function dropPlatform(id: string): Promise<void> {
   await adminRpc('DeletePlatform', { id });

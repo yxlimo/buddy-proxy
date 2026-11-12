@@ -11,6 +11,12 @@
 // `~/.cache/ms-playwright` 里下载的 headless shell 缺 libglib / libnss，
 // 一跑就 exit 127。每个 attempt 要一台新的浏览器（引擎的要求），所以
 // `cdpEndpoint` 每次都新起一个进程。
+//
+// 跑完之后 `.e2e/` 里只剩交付物：`report.json`、`junit.xml`、`results/`（trace 与
+// 失败截图）、`logs/app.log`。数据目录、marker、浏览器 profile 都建在那份数据目录
+// 里，`test/panel-e2e-app.sh` 收尾时整个删掉 —— 所以跑完 `/tmp` 里看不到这轮的
+// 东西不是 bug。中途被硬杀（kill -9 那种）时脚本没机会收尾，留一轮下来由下次
+// 启动前那句「删一天以前的」清掉。
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -22,7 +28,12 @@ import { web } from '@e2e-dev/web';
 /** 运行期那些东西（数据目录、app 日志、报告）都落在这里，整目录 gitignore。 */
 const OUTPUT = '.e2e';
 
-/** app 命令把这次运行的数据目录路径写在这儿，测试与凭据靠它找令牌。 */
+/**
+ * app 命令把这次运行的数据目录路径写在这儿，测试与凭据靠它找令牌。
+ *
+ * app 命令退出时会连这个文件带外面的目录一起删掉（`tests/panel.ts` 写死了这条
+ * 路径，所以位置不能挪）。
+ */
 const DATA_DIR_MARKER = `${OUTPUT}/tmp/panel-data-dir`;
 
 /**
@@ -52,6 +63,27 @@ process.on('SIGINT', () => process.exit(1));
 process.on('SIGTERM', () => process.exit(1));
 
 /**
+ * 这一轮浏览器 profile 的落点。
+ *
+ * 建在这次运行的数据目录里，而不是系统临时目录：脚本收尾删数据目录时 profile
+ * 一起没，不用再写一套清理。一个 attempt 一个（引擎每次 attempt 都是全新的上下
+ * 文，共用一个会把上一轮的 localStorage，也就是已登录的令牌，带进来），靠
+ * `mkdtemp` 的随机尾巴各自独立，并发 attempt 也不会撞。
+ *
+ * 读不到 marker 说明网关还没起来 —— 只有异常启动会走到这条退路上，那时 profile
+ * 落回系统临时目录，留下的一轮由脚本启动前那句「删一天以前的」兜底。
+ */
+function chromiumProfile(): string {
+  let base: string;
+  try {
+    base = panelDataDir();
+  } catch {
+    return mkdtempSync(join(tmpdir(), 'e2e-chromium-'));
+  }
+  return mkdtempSync(join(base, 'chromium-'));
+}
+
+/**
  * 起一个系统 chromium，返回它的 CDP 地址。
  *
  * 引擎每个 attempt 都要一台新浏览器，所以这里不缓存 —— 每次调用都是一个新
@@ -59,9 +91,7 @@ process.on('SIGTERM', () => process.exit(1));
  * 端口，地址从 stderr 里那行 `DevTools listening on ws://…` 读出来。
  */
 async function systemChromium(): Promise<string> {
-  // 一个浏览器一个临时 profile：引擎每次 attempt 都是全新的上下文，共用一个
-  // 会把上一轮的 localStorage（已登录的令牌）带进来。
-  const profile = mkdtempSync(join(tmpdir(), 'e2e-chromium-'));
+  const profile = chromiumProfile();
   const child = spawn(
     CHROME,
     [
@@ -98,7 +128,8 @@ async function systemChromium(): Promise<string> {
   });
 }
 
-mkdirSync(dirname(DATA_DIR_MARKER), { recursive: true });
+// marker 由 app 命令自己写（它要 `mkdir -p` 一次），这里只保证 `.e2e/` 在。
+mkdirSync(dirname(dirname(DATA_DIR_MARKER)), { recursive: true });
 
 export default {
   projectId: 'buddy-proxy-panel',
