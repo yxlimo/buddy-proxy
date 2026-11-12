@@ -46,6 +46,7 @@ import {
 } from "./routes.ts";
 import { findAggregate, publishedModel } from "./catalog-routes.ts";
 import { platformAvailabilities, type PlatformAvailability, type PlatformState } from "./availability.ts";
+import { noteUpstreamFailure } from "../upstream-failures.ts";
 import { ClientGoneError, sendError } from "./deliver.ts";
 
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
@@ -574,6 +575,10 @@ async function callUpstream(
         );
     }
     recordRequestUsage(body, route, agent, session, uctx, ctx.status || 200, started, "", kind?.label ?? route.platform);
+    // 这次到底怎么结束的，留一条给判定（lib/admin/platform-state.ts）：上游排队
+    // 不冷却账号，别的证据一个都不动，只有「最近几次请求的结果」能看出一个平台
+    // 压根发不出去。成功也记，否则「每次都在排队」没有可比的基线。
+    noteUpstreamFailure(route.platform, "ok");
   } catch (e) {
     const err = e as AuthError;
     // 客户端走了：答复那一层给客户端的是 499，用量表也记 499，不要记成 500
@@ -590,6 +595,8 @@ async function callUpstream(
       err?.message ?? String(e),
       kind?.label ?? route.platform,
     );
+    // 失败分类（queued / rate-limit / …）就是判定要的那一格，不再自己判一遍。
+    noteUpstreamFailure(route.platform, classifyUpstreamError(e).kind);
     throw e;
   }
 }

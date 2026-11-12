@@ -34,6 +34,9 @@ enum UpstreamState {
   UPSTREAM_STATE_LOGGING_IN = 7;
   // 路由正在绕开这个账号，等到 cooldown_until_ms。
   UPSTREAM_STATE_COOLING = 8;
+  // 上游把这个模型排进队列，最近几次都没排上去。它不是冷却：账号没坏，等上游
+  // 自己放行（排队不冷却账号），所以 recovers_at_ms 是 0。
+  UPSTREAM_STATE_QUEUED = 9;
 }
 
 // 一个上游（MiniMax Code / Qoder 全球区 / Qoder 中国区 / WorkBuddy / TokenRhythm）。
@@ -323,7 +326,8 @@ message ConfigItem {
 
 message ListConfigResponse {
   repeated ConfigItem items = 1;
-  // 有改了还没生效的东西时为真。面板能改的那几个是热的。
+  // 有改了还没生效的东西时为真。这个设置改完是否立刻生效，看这个键是不是热的；
+  // 不是热设置的面板会标出要重启。
   bool pending_restart = 2;
 }
 
@@ -336,7 +340,8 @@ message SetConfigRequest {
 
 message SetConfigResponse {
   bool ok = 1;
-  // 有改了还没生效的东西时为真。面板能改的那几个是热的，改完就生效。
+  // 有改了还没生效的东西时为真。这个设置改完是否立刻生效，看这个键是不是热的；
+  // 不是热设置的面板会标出要重启。
   bool pending_restart = 2;
   string message = 3;
 }

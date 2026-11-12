@@ -3,7 +3,7 @@
 // 签到是幂等的：问两次，平台会答「已经领过了」。所以这里不需要自己的状态
 // 文件，跑一次记一次就行。
 
-import { configFlag, configString } from "../config.ts";
+import { configFlag, configNumber } from "../config.ts";
 import { BenefitsRunner } from "../router/benefits.ts";
 import type { BenefitUpstream } from "../benefits.ts";
 import { listProviders } from "../providers.ts";
@@ -16,8 +16,11 @@ import "../kinds/index.ts";
  *
  * 中国区的日子是按北京时间翻的。间隔是一小时而不是一天：Buddy 那趟活动
  * 只有一到四个小时，已经到账的赠金放着不动就是白等几个小时。
+ *
+ * 这是个数字，就按数字读：当字符串读（默认值空）的话，面板上那个控件的值会是
+ * 空的，而实际生效的是一小时 —— 面板与网关对同一个设置各说各话。
  */
-export const BENEFITS_INTERVAL_MS = Number(configString("BENEFITS_INTERVAL_MS", "") || 60 * 60 * 1000);
+export const BENEFITS_INTERVAL_MS = configNumber("BENEFITS_INTERVAL_MS", 60 * 60 * 1000);
 
 /**
  * 参与签到的账号，而且得是开着的。

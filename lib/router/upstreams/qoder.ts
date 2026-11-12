@@ -9,6 +9,7 @@ import type Koa from "koa";
 import { AuthError } from "../../credential.ts";
 import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode, withUpstreamAnswer } from "../../upstream-status.ts";
 import { scrubForClient, scrubForLog } from "../../log-scrub.ts";
+import { configFlag, markHotSetting } from "../../config.ts";
 import { anthropicToOpenAI, effortOf } from "../../dialect/request.ts";
 import {
   resolveModelRoute,
@@ -291,7 +292,19 @@ export type LegacySleep = (ms: number) => Promise<void>;
 const realSleep: LegacySleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 排队等过一次仍是排队：交出去。
+ * The sentence the client is given for a queued model.
+ *
+ * One sentence for both modes, because the client did not choose the setting:
+ * what it can do about a queued model — another target, or come back later —
+ * is the same whether or not the proxy sat out the upstream's minute. So it
+ * says what the queue means and what to do, and it does not claim that a wait
+ * happened: in the skip mode none did
+ */
+const QUEUE_HINT =
+  "上游把这个模型排进了队列：等到它给的时间再试，可能还在排队。换一个上游或换一个模型才有用，稍后再试这个模型。";
+
+/**
+ * 排队（等过那一次，或跳过那一次）仍是排队：交出去。
  *
  * 以前这里抛的是 legacyError，它对 403 给 503 —— 分类按 5xx 把它当「上游挂了」：
  * 健康账号被记冷却，而策略还会在同一个账号上再跑一轮（客户端最坏等 240s+）。
@@ -300,12 +313,22 @@ const realSleep: LegacySleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 可降级的失败（换一个目标：另一个上游有自己的队列）且不写冷却（账号没坏，它
  * 别的模型现在就能接）。见 lib/qoder/queue.ts。
  */
-function queueExhausted(error: { code?: string; message?: string }, attempts: number): QueuedError {
+function queueExhausted(
+  error: { code?: string; message?: string },
+  attempts: number,
+  queueWaits: number,
+): QueuedError {
   logLegacyFrameError(error);
+  // 跳过等待是个行为变更：日志里要有它的名字，否则「这次为什么没等」只能靠
+  // 去翻配置才知道（见 LEGACY_SKIP_QUEUE_WAIT）。
+  if (queueWaits === 0) {
+    console.warn("[UPSTREAM] Qoder 老协议排队，跳过那一次等待（QODER_SKIP_QUEUE_WAIT 开着）");
+  }
   return new QueuedError(
-    `qoder model is still queued after ${attempts} attempts`,
-    `上游把这个模型排进了队列：等到它给的时间再试，仍在排队（共试了 ${attempts} 次）。` +
-      "换一个上游或换一个模型才有用，稍后再试这个模型。",
+    attempts > 1
+      ? `qoder model is still queued after ${attempts} attempts`
+      : "qoder model is queued (the queue wait is off, so the first answer was the last attempt)",
+    QUEUE_HINT,
     queueSeconds(error),
   );
 }
@@ -324,7 +347,8 @@ function queueSeconds(error: { message?: string }): number {
 }
 
 /**
- * 排队等几次。一次 —— 实测的结论，不是保守。
+ * 排队等几次（QODER_SKIP_QUEUE_WAIT 关着的时候用的那个数）。一次 —— 实测的
+ * 结论，不是保守。
  *
  * 上游给的秒数兑现不了：等满 60 秒再打，第一帧还是同一个排队答复（2026-11-11
  * 实测，两个账号、`p4` 队列）。多等几轮只是把客户端挂在连接上，不是恢复。所以
@@ -334,6 +358,36 @@ function queueSeconds(error: { message?: string }): number {
  *   - 同一个账号不再重打（排队不在瞬时失败那一类里，见 policy.ts）。
  */
 const LEGACY_QUEUE_WAITS = 1;
+
+/**
+ * Whether the one queue wait is skipped. Off by default.
+ *
+ * Off is the behaviour the service has today, and this module does not change
+ * what a request costs without someone saying so: the wait spends a minute of
+ * the client's socket, and turning it off hands that minute back as a second
+ * upstream call instead. That is the operator's call.
+ *
+ * On gives up the chance that the model has a slot within the minute the
+ * upstream asked for. Two days of attempts (119 of them) never showed that
+ * happen: 116 waited the full minute (60.4–61.4s) and were queued again, so the
+ * wait was a stall and not a wait for a slot.
+ */
+const LEGACY_SKIP_QUEUE_WAIT = "QODER_SKIP_QUEUE_WAIT";
+
+// 每个请求都读，所以是热设置：面板（或环境）改了，下一个请求就是新的值，面板
+// 也就不会一直把它标成「待重启」
+markHotSetting(LEGACY_SKIP_QUEUE_WAIT);
+
+/**
+ * How many times a queued attempt waits before it is tried again.
+ *
+ * Read on every call, never into a module constant: the setting is hot, and a
+ * constant read at load would make the panel's change need a restart — the
+ * panel would show the new value while requests kept using the old one
+ */
+function legacyQueueWaits(): number {
+  return configFlag(LEGACY_SKIP_QUEUE_WAIT, false) ? 0 : LEGACY_QUEUE_WAITS;
+}
 
 /**
  * The legacy endpoint answers 429 with `provider_error` / "All backends failed"
@@ -354,13 +408,17 @@ export async function* legacyWithRetry(
   retryMs: number,
   sleep: LegacySleep = realSleep,
 ): AsyncGenerator<Json> {
+  // Read once for the whole call: the answer decides how many attempts there
+  // are, and a value that moved halfway through would have one request behave
+  // two ways
+  const queueWaits = legacyQueueWaits();
   for (let attempt = 1; ; attempt++) {
     const upstream = await send();
     const frames = readLegacyFrames(upstream.body!)[Symbol.asyncIterator]();
     try {
       const first = await frames.next();
 
-      if (!first.done && first.value.error && attempt <= LEGACY_QUEUE_WAITS && isRetryableLegacy(first.value.error)) {
+      if (!first.done && first.value.error && attempt <= queueWaits && isRetryableLegacy(first.value.error)) {
         const waitMs = legacyWaitMs(first.value.error, retryMs);
         // 等多久只有这一行留得住：下一次尝试成功的话，别的日志里一点痕迹都没有。
         console.warn(`[UPSTREAM] Qoder 老协议排队，等 ${waitMs}ms 后再试一次`);
@@ -369,8 +427,8 @@ export async function* legacyWithRetry(
       }
       if (!first.done) {
         if (first.value.error) {
-          // 等过一次还是排队：这不是「这个账号坏了」，是模型没排上。
-          if (isRetryableLegacy(first.value.error)) throw queueExhausted(first.value.error, attempt);
+          // 等过一次（或跳过那一次）还是排队：这不是「这个账号坏了」，是模型没排上。
+          if (isRetryableLegacy(first.value.error)) throw queueExhausted(first.value.error, attempt, queueWaits);
           throw legacyError(first.value.error);
         }
         if (first.value.chunk) yield first.value.chunk;

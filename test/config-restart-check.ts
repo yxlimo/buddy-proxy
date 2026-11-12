@@ -233,22 +233,36 @@ check("Qoder 全球区现在是关着的", before.upstreams?.find((u: any) => u.
 
 const configBefore = await admin("ListConfig");
 const keys = (configBefore.items ?? []).map((i: any) => i.key);
-// 上游的开关搬到了上游那一页，配置页不再重复一份。
-check("配置项只有网关自己的那几个", (configBefore.items ?? []).length === 3, JSON.stringify(keys));
+// 面板上这十一个：网关自己的三个、三个超时旋钮、定时任务与快照、签到、Qoder 的
+// 排队重试。这些键的个数是面板的契约：多一个或少一个，说明 USER_FACING 那边动了。
+check("面板上是这十一个设置", (configBefore.items ?? []).length === 11, JSON.stringify(keys));
 check(
   "公布的是网关自己能改的那几个",
   ["REQUIRE_API_KEY", "ADMIN_CORS_ORIGINS"].every((k) => keys.includes(k)),
   JSON.stringify(keys),
 );
+// 三个超时旋钮以前只能改部署的环境变量，现在在面板上（改完不用重启：它们是热的）。
+for (const key of [
+  "ROUTER_FIRST_FRAME_MS",
+  "ROUTER_STREAM_IDLE_MS",
+  "ROUTER_RETRY_BUDGET_MS",
+  "PERIODIC_ENABLED",
+  "HEALTH_CACHE_MS",
+  "BENEFITS_DISABLED",
+  "BENEFITS_INTERVAL_MS",
+  "QODER_LEGACY_RETRY_MS",
+]) {
+  check(`面板上有 ${key}`, keys.includes(key), JSON.stringify(keys));
+}
 check(
   "上游的开关不在配置页里",
-  !keys.some((k) => ["MINIMAX_CODE", "QODER_GLOBAL", "QODER_CN", "WORKBUDDY_CN", "TOKENRHYTHM"].includes(k)),
+  !keys.some((k: string) => ["MINIMAX_CODE", "QODER_GLOBAL", "QODER_CN", "WORKBUDDY_CN", "TOKENRHYTHM"].includes(k)),
   JSON.stringify(keys),
 );
 check(
   "服务内部的设置看不见",
-  !keys.some((k) =>
-    ["QODER_GLOBAL_LEGACY_BASE", "QODER_POLL_INTERVAL_MS", "HEALTH_CACHE_MS", "ROUTER_PORT", "MINIMAX_API_BASE"].includes(
+  !keys.some((k: string) =>
+    ["QODER_GLOBAL_LEGACY_BASE", "QODER_POLL_INTERVAL_MS", "ROUTER_PORT", "MINIMAX_API_BASE", "MINIMAX_WATCH_MS"].includes(
       k,
     ),
   ),
@@ -439,6 +453,24 @@ check(
   String(corsOther.headers.get("access-control-allow-origin")),
 );
 
+// 超时旋钮是热的：面板改完就是新的值，面板也不该再说「要重启」。
+const idle = await admin("SetConfig", { key: "ROUTER_STREAM_IDLE_MS", value: "1234" });
+check("面板能改 ROUTER_STREAM_IDLE_MS", idle.ok === true, JSON.stringify(idle));
+check("改完没有待重启的东西（它是热的）", idle.pendingRestart === false, JSON.stringify(idle));
+const idleRead = (await admin("ListConfig")).items?.find((i: any) => i.key === "ROUTER_STREAM_IDLE_MS");
+check("读回来是新值", idleRead?.value === "1234", JSON.stringify(idleRead));
+
+// 快照的过期时间读一次就定住了：改得动，但要重启才生效，面板要把这件事说出来。
+const cache = await admin("SetConfig", { key: "HEALTH_CACHE_MS", value: "60000" });
+check("面板能改 HEALTH_CACHE_MS", cache.ok === true, JSON.stringify(cache));
+check("改完有待重启的东西（它读一次就定住）", cache.pendingRestart === true, JSON.stringify(cache));
+
+// 收尾：两个覆盖都清掉，后面那几次重启才看得到干净的默认值。
+const clearedCache = await admin("SetConfig", { key: "HEALTH_CACHE_MS", clear: true });
+check("清掉快照间隔之后又没有待重启的东西", clearedCache.pendingRestart === false, JSON.stringify(clearedCache));
+const clearedIdle = await admin("SetConfig", { key: "ROUTER_STREAM_IDLE_MS", clear: true });
+check("清掉超时旋钮之后回到默认值", clearedIdle.ok === true, JSON.stringify(clearedIdle));
+
 // 重启之后还是那个值。
 gw.stop();
 await processGone(base);
@@ -472,14 +504,7 @@ check(
   JSON.stringify(configRows()),
 );
 
-for (const key of [
-  "QODER_GLOBAL_LEGACY_BASE",
-  "QODER_POLL_INTERVAL_MS",
-  "HEALTH_CACHE_MS",
-  "ROUTER_PORT",
-  "MINIMAX_API_BASE",
-  "QODER_POLL_TIMEOUT_MS",
-]) {
+for (const key of ["QODER_GLOBAL_LEGACY_BASE", "QODER_POLL_INTERVAL_MS", "ROUTER_PORT", "MINIMAX_API_BASE", "QODER_POLL_TIMEOUT_MS"]) {
   const refused = await admin("SetConfig", { key, value: "12345" });
   check(`服务内部的设置改不了：${key}`, refused.ok === false, JSON.stringify(refused));
   check(

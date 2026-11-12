@@ -15,7 +15,7 @@ import { anthropicToOpenAIResponse, openaiToAnthropicResponse } from "../dialect
 import { parseLooseJson, readOpenAIChunks, readOrAbort, readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
 import { businessCodeOfPayload, isBusinessErrorEnvelope, withBusinessCode } from "../upstream-status.ts";
 import { scrubForClient, scrubForLog } from "../log-scrub.ts";
-import { readEnvNumber } from "../env.ts";
+import { configNumber, markHotSetting } from "../config.ts";
 
 export type Dialect = "anthropic" | "openai";
 
@@ -471,6 +471,8 @@ async function drainText(reader: ReadableStreamDefaultReader<Uint8Array>, head: 
  * 被砍掉；而流开了一半停住三分钟，确实是停住了。
  *
  * 导出给测试用：默认值调错（比如忘了改回来）比没有还糟。
+ *
+ * 这是设置 ROUTER_FIRST_FRAME_MS 的默认值，读在 idleGates 里。
  */
 export const STREAM_FIRST_FRAME_DEFAULT_MS = 300_000;
 
@@ -480,22 +482,18 @@ export const STREAM_FIRST_FRAME_DEFAULT_MS = 300_000;
  * 靠 undici 那个 5 分钟的 bodyTimeout 兜底太久了：客户端在这 5 分钟里一个字
  * 都等不到，最后等到的还是 Node 自己那句 `terminated`。推理模型的流里，两帧
  * 之间安静几十秒是正常的，超过这个数就是在挂着，不是在想。
+ *
+ * 这是设置 ROUTER_STREAM_IDLE_MS 的默认值，读在 idleGates 里。
  */
 export const STREAM_IDLE_DEFAULT_MS = 180_000;
 
-/**
- * 等第一帧的上限（毫秒）。
- *
- * 环境变量能改（ROUTER_FIRST_FRAME_MS）：自测不能真等五分钟。
- */
-const STREAM_FIRST_FRAME_MS = readEnvNumber("ROUTER_FIRST_FRAME_MS", STREAM_FIRST_FRAME_DEFAULT_MS);
-
-/**
- * 流中途两帧之间安静多久算「它不会再说话了」（毫秒）。
- *
- * 环境变量能改短（ROUTER_STREAM_IDLE_MS）：自测不能真等三分钟。
- */
-const STREAM_IDLE_MS = readEnvNumber("ROUTER_STREAM_IDLE_MS", STREAM_IDLE_DEFAULT_MS);
+// Hot: both limits are read again at the start of every answer (see
+// idleGates), so a change made in the panel applies to the next request with
+// no restart. They are knobs an operator has to turn down and up again — a
+// self-test cannot wait five minutes, and a slower reasoning model needs more
+// than the default
+markHotSetting("ROUTER_FIRST_FRAME_MS");
+markHotSetting("ROUTER_STREAM_IDLE_MS");
 
 /** 「安静了多久」，写进句子给人看：一秒以内说毫秒，不然说秒。 */
 function idleSpan(idleMs: number): string {
@@ -503,7 +501,7 @@ function idleSpan(idleMs: number): string {
 }
 
 /**
- * 两道闸的取值：调用方给的优先，没给就用环境变量那一份。
+ * 两道闸的取值：调用方给的优先，没给就按设置里的那一份（环境变量或面板）。
  *
  * 关闸（0 或负数）要打一行 warn：生产旋钮能悄无声息把闸关掉，上游于是可以
  * 永远不说话，而这条请求一直挂着。关闸本身是允许的（自测要用），但不能是
@@ -513,8 +511,13 @@ function idleSpan(idleMs: number): string {
  * 只有一个来源。
  */
 function idleGates(limits: { firstFrameMs?: number; idleMs?: number }): { firstFrameMs: number; idleMs: number } {
-  const firstFrameMs = limits.firstFrameMs ?? STREAM_FIRST_FRAME_MS;
-  const idleMs = limits.idleMs ?? STREAM_IDLE_MS;
+  // Read once here, at the start of an answer, and never again while it runs:
+  // these two numbers are the deadlines this answer is measured against, and a
+  // panel change landing mid-stream must not move a deadline that is already
+  // being counted. Reading here is also what makes them hot — the next request
+  // picks the new value up
+  const firstFrameMs = limits.firstFrameMs ?? configNumber("ROUTER_FIRST_FRAME_MS", STREAM_FIRST_FRAME_DEFAULT_MS);
+  const idleMs = limits.idleMs ?? configNumber("ROUTER_STREAM_IDLE_MS", STREAM_IDLE_DEFAULT_MS);
   if (!(firstFrameMs > 0)) console.warn(`[DELIVER] 首帧上限被设成 ${firstFrameMs}，等第一帧不再有超时`);
   if (!(idleMs > 0)) console.warn(`[DELIVER] 空闲上限被设成 ${idleMs}，流中途不再有超时`);
   return { firstFrameMs, idleMs };

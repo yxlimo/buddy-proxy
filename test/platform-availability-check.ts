@@ -7,7 +7,8 @@
 // 分两部分：
 //
 //   一、判定本身（在本进程里算）：账号、开关、凭据、额度、冷却各是一种状态。
-//      状态对不对、「最早能试的时刻」是不是未来的时刻。
+//      状态对不对、「最早能试的时刻」是不是未来的时刻。另外还有一档不在账号上：
+//      最近每次请求都被上游排进队列的平台不能说成就绪（一之六）。
 //   二、路由与健康检查（真网关 + 假上游）：没有凭据的平台不公布模型、请求被
 //      拒并说清是「没凭据」；把凭据填回去它就回来了（反证：不填就回不去）。
 //
@@ -470,6 +471,71 @@ check(
   String(catalogueAnswer.hint).includes("目录"),
   String(catalogueAnswer.hint),
 );
+
+/* ------------------------------------------------------------------ *
+ * 一之六、排队：最近每次请求都排不上去时，绿的就绪是假的
+ * ------------------------------------------------------------------ */
+
+section("排队：最近每次请求都排不上去时，绿的就绪是假的");
+
+// 排队不冷却账号（lib/router/account-cooldown.ts），凭据、额度、开关也都好着 ——
+// 判定看得见的四样里一样都不动，所以这一档只能靠「最近几次请求的结果」来判：
+// 记账住在 lib/upstream-failures.ts（纯内存，最多 20 条），窗口由判定给（十分钟）。
+const { noteUpstreamFailure, recentUpstreamFailures } = await import("../lib/upstream-failures.ts");
+const { listCooldowns } = await import("../lib/cooldown.ts");
+const { upstreamStateOf } = await import("../lib/admin/upstreams.ts");
+const { UpstreamState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts");
+
+// 库里那一次就是这四条：把「排队中」与冷却分开，它必须本来就是一个就绪的平台。
+const queueAt = Date.now();
+const before = platformAvailability("qoder", queueAt);
+check("串场：这个平台本来是就绪的", before.state === "ready", before.state);
+
+// 一、只有成功记录 → 就绪。
+noteUpstreamFailure("qoder", "ok", queueAt);
+const justOk = platformAvailability("qoder", queueAt);
+check("只有成功记录 → ready", justOk.state === "ready", justOk.state);
+
+// 二、一条排队 + 一条成功 → 不是 queued：偶发一次排队是正常的，拿它报警等于
+// 每个平台都常驻一个「排队中」。
+noteUpstreamFailure("qoder", "queued", queueAt + 1);
+const mixed = platformAvailability("qoder", queueAt + 1000);
+check("一条排队 + 一条成功 → 不是 queued", mixed.state !== "queued", mixed.state);
+check("一条排队 + 一条成功 → 还是 ready", mixed.state === "ready", mixed.state);
+
+// 三、窗口里只剩排队（前面那条成功早已出了窗口）→ queued，而且没有恢复时刻。
+// 用 20 分钟之后的时间戳写：十分钟窗口的判据就是「窗内每一条都是排队」。
+const queueLater = queueAt + 20 * 60_000;
+noteUpstreamFailure("qoder", "queued", queueLater);
+noteUpstreamFailure("qoder", "queued", queueLater);
+const inWindow = recentUpstreamFailures("qoder", 10 * 60_000, queueLater);
+check(
+  "串场：窗口里只剩那两次排队",
+  inWindow.length === 2 && inWindow.every((one) => one.kind === "queued"),
+  JSON.stringify(inWindow),
+);
+const queued = platformAvailability("qoder", queueLater);
+check("两条以上、全是排队 → queued", queued.state === "queued", queued.state);
+check("排队没有恢复时刻（untilMs 是 null，不编）", queued.untilMs === null, String(queued.untilMs));
+check("理由里说了是排队", queued.reason.includes("排队"), queued.reason);
+check("面板上给了一句话（不是空的）", queued.advice.length > 0, queued.advice);
+check(
+  "契约里也是 QUEUED（不是就绪）",
+  upstreamStateOf(queued) === UpstreamState.QUEUED,
+  String(upstreamStateOf(queued)),
+);
+
+// 状态只影响展示：不冷却账号、不改选号、不摘模型。
+const queueAccountIds = queued.rows.map((row) => row.id);
+const coolingRows = listCooldowns(queueLater).filter((one) => queueAccountIds.includes(one.providerId));
+check("排队不产生冷却行", coolingRows.length === 0, JSON.stringify(coolingRows));
+check("排队不改选号：账号仍在 serving 里", queued.serving.length > 0, String(queued.serving.length));
+check("排队不摘模型：目录仍是全量", queued.ids.length > 0, JSON.stringify(queued.ids));
+
+// 五、窗口里的排队记录都过期之后：回到 ready。排队是会过去的，拿半小时前的
+// 排队说事就是一个摘不掉的黄灯。
+const queuePassed = platformAvailability("qoder", queueLater + 11 * 60_000);
+check("窗口外的排队记录 → 回到 ready", queuePassed.state === "ready", queuePassed.state);
 
 /* ------------------------------------------------------------------ *
  * 二、路由与健康检查

@@ -22,6 +22,7 @@
 //      嵌套深过三层就不输出正文，打「(正文未解析)」；
 //   5. 等过一次仍是排队：抛的是 QueuedError（排队，不是账号坏了）；分类是 queued
 //      —— 可降级、不记冷却；而且策略那一层不会在同一个账号上再跑一轮，只等一次；
+//      打开 QODER_SKIP_QUEUE_WAIT 则一次都不等，客户端拿到的仍是同一个答复；
 //   6. 正常帧照旧通过，重试对客户端不可见（一个字都不多发）。
 
 import fs from "node:fs";
@@ -31,6 +32,9 @@ import { fileURLToPath } from "node:url";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-legacy-"));
 process.env.BUDDY_DATA_DIR = tmp;
+// 「默认」那几条断言测的是没设置时的行为：部署里钉了这个键的话，它们测的就不是
+// 默认值了
+delete process.env.QODER_SKIP_QUEUE_WAIT;
 
 /** 录下来的那些上游答复就在这儿（test/fixture-name.ts 的常量同源）。 */
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -40,6 +44,7 @@ const { legacyWithRetry, isRetryableLegacy, legacyWaitMs, legacyError } = await 
 );
 const { runWithRetries } = await import("../lib/router/upstreams/policy.ts");
 const { classifyUpstreamError } = await import("../lib/router/provider-selection.ts");
+const { configOverride, configClear } = await import("../lib/config.ts");
 
 let pass = 0;
 let fail = 0;
@@ -412,7 +417,7 @@ section("5. 等过一次仍是排队：是排队，不是账号坏了");
   check("message 说等了之后仍是排队", /still queued after 2 attempts/.test(String(thrown?.message)), String(thrown?.message));
   check("hint 说上游把模型排进了队列", String(thrown?.hint ?? "").includes("排队"), String(thrown?.hint));
   check(
-    "hint 说等到它给的时间仍没排上（不是只说一句排队）",
+    "hint 说上游给的那段时间等过也未必能排上（不是只说一句排队）",
     String(thrown?.hint ?? "").includes("等到它给的时间"),
     String(thrown?.hint),
   );
@@ -491,6 +496,106 @@ section("5c. 不是排队的错误一次都不重试");
   check("一次都没等", waits.length === 0, JSON.stringify(waits));
   check("客户端看到 503", thrown?.status === 503, String(thrown?.status));
 }
+
+/* ------------------------------------------------------------------ *
+ * 5d. QODER_SKIP_QUEUE_WAIT：跳过那一次等待
+ * ------------------------------------------------------------------ */
+
+section("5d. 开关关着（默认）等一次；打开就一次都不等，客户端拿到的仍是同一个答复");
+
+/**
+ * 一次「每次都排队」的调用：上游被叫了几次、睡了几次、抛了什么。
+ *
+ * 两个模式各跑一次同一个函数，差别就只剩那个开关。
+ */
+async function queueOnlyRun(): Promise<{
+  calls: number;
+  waits: number[];
+  thrown: any;
+  hint: string;
+  retryAfterSec: unknown;
+}> {
+  const { waits, sleep } = waiter();
+  let calls = 0;
+  let thrown: any;
+  try {
+    await drain(
+      legacyWithRetry(
+        async () => {
+          calls++;
+          return responseOf(errorFrame(queueMessage(60)));
+        },
+        10_000,
+        sleep,
+      ),
+    );
+  } catch (e) {
+    thrown = e;
+  }
+  return { calls, waits, thrown, hint: String(thrown?.hint ?? ""), retryAfterSec: thrown?.retryAfterSec };
+}
+
+// 默认：没设置，就是现在线上的行为 —— 等一次、再打一次、仍排队就交出去。
+configClear("QODER_SKIP_QUEUE_WAIT");
+const defaultRun = await queueOnlyRun();
+check("默认：上游被叫了两次（首次 + 等过一次后那一次）", defaultRun.calls === 2, String(defaultRun.calls));
+check("默认：睡了一次", defaultRun.waits.length === 1, JSON.stringify(defaultRun.waits));
+check("默认：睡的是上游说的 60 秒", defaultRun.waits[0] === 60_000, JSON.stringify(defaultRun.waits));
+check("默认：抛的是排队那个错", defaultRun.thrown?.name === "QueuedError", String(defaultRun.thrown?.name));
+
+// 打开开关：第一帧排队就是最后一次尝试，一秒都不等。
+configOverride("QODER_SKIP_QUEUE_WAIT", "true");
+const skipRun = await queueOnlyRun();
+check("打开开关：上游只被叫了一次", skipRun.calls === 1, String(skipRun.calls));
+check("打开开关：一次都没睡（那 60 秒没花出去）", skipRun.waits.length === 0, JSON.stringify(skipRun.waits));
+check("打开开关：抛的还是排队那个错", skipRun.thrown?.name === "QueuedError", String(skipRun.thrown?.name));
+check(
+  "两种模式下 hint 一模一样（客户端不因这个开关换说法）",
+  skipRun.hint === defaultRun.hint && skipRun.hint.length > 0,
+  `skip=${skipRun.hint} default=${defaultRun.hint}`,
+);
+check(
+  "两种模式下 retryAfterSec 一样（都是上游说的 60 秒）",
+  skipRun.retryAfterSec === 60 && defaultRun.retryAfterSec === 60,
+  `skip=${String(skipRun.retryAfterSec)} default=${String(defaultRun.retryAfterSec)}`,
+);
+check(
+  "跳过模式下仍然可降级（分类是 queued）",
+  classifyUpstreamError(skipRun.thrown)?.kind === "queued",
+  String(classifyUpstreamError(skipRun.thrown)?.kind),
+);
+
+// 控制组：开关只管排队，别的错一次都不重试（开着开关也一样）。
+{
+  const { waits, sleep } = waiter();
+  let calls = 0;
+  let thrown: any;
+  try {
+    await drain(
+      legacyWithRetry(
+        async () => {
+          calls++;
+          return responseOf(errorFrame("forbidden", "403", 403));
+        },
+        10_000,
+        sleep,
+      ),
+    );
+  } catch (e) {
+    thrown = e;
+  }
+  check("控制组（开关开着）：纯粹的 403 只打一次上游", calls === 1, String(calls));
+  check("控制组（开关开着）：一次都没等", waits.length === 0, JSON.stringify(waits));
+  check("控制组（开关开着）：仍是 503 那个错", thrown?.status === 503, String(thrown?.status));
+}
+
+// 交回去：后面的那几节测的是默认行为。
+configClear("QODER_SKIP_QUEUE_WAIT");
+check(
+  "交回默认：上游又被叫两次了",
+  (await queueOnlyRun()).calls === 2,
+  "清除覆盖值之后没有回到「等一次」",
+);
 
 /* ------------------------------------------------------------------ *
  * 6. 正常帧照旧

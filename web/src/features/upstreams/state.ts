@@ -19,6 +19,7 @@ export const UPSTREAM_STATE_LABELS: Record<UpstreamState, string> = {
   [UpstreamState.OUT_OF_CREDITS]: '额度用完',
   [UpstreamState.LOGGING_IN]: '正在登录',
   [UpstreamState.COOLING]: '冷却中',
+  [UpstreamState.QUEUED]: '排队中',
 }
 
 /**
@@ -36,6 +37,7 @@ export const UPSTREAM_STATE_HINTS: Record<UpstreamState, string> = {
   [UpstreamState.OUT_OF_CREDITS]: '额度用完了',
   [UpstreamState.LOGGING_IN]: '正在登录',
   [UpstreamState.COOLING]: '正在冷却',
+  [UpstreamState.QUEUED]: '上游把模型排进队列了，等它放行',
 }
 
 /** 凭据状态的人话。 */
@@ -74,6 +76,10 @@ export function upstreamStateVariant(
       return 'default'
     case UpstreamState.COOLING:
       return 'outline'
+    // 排队也是「等一会儿就好」那一档：淡色，不是红色。单写一个 case（不跟
+    // COOLING 合并）—— 将来两档要分开时就改这一处。
+    case UpstreamState.QUEUED:
+      return 'outline'
     case UpstreamState.DISABLED:
     case UpstreamState.LOGGING_IN:
     case UpstreamState.UNSPECIFIED:
@@ -97,6 +103,10 @@ export function upstreamStateVariant(
 export function upstreamStateClass(state: UpstreamState): string {
   switch (state) {
     case UpstreamState.COOLING:
+      return 'border-amber-500/60 text-amber-700 dark:text-amber-300'
+    // 同一个淡黄，但不是同一个常量：两档的含义不同（冷却是自己绕开、排队是上游
+    // 不放进），将来要分开时只需改这一行。
+    case UpstreamState.QUEUED:
       return 'border-amber-500/60 text-amber-700 dark:text-amber-300'
     default:
       return ''

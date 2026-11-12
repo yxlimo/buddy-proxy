@@ -1036,6 +1036,9 @@ export function upstreamStateOf(availability: PlatformAvailability): UpstreamSta
       return UpstreamState.OUT_OF_CREDITS;
     case "cooling":
       return UpstreamState.COOLING;
+    case "queued":
+      // 契约里有这一档了（排队不是冷却）：面板拿它把绿色换成「排队中」。
+      return UpstreamState.QUEUED;
     case "ready":
       return UpstreamState.READY;
   }

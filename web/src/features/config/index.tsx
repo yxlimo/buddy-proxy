@@ -51,12 +51,14 @@ const SOURCE_LABELS: Record<string, string> = {
  * 这个表只是「键 → 中文名」的对照，不是对服务端有哪些组的假设：认不出来
  * 的组就原样显示，不猜。
  *
- * 表里只有网关自己那两个组：上游的开关在「上游」页，不在配置页里，
- * 所以上游那些组不会再出现。
+ * 目前会出现的有四组：网关自己的、签到、Qoder。上游的开关在「上游」页，但
+ * 上游的那个设置（排队重试的间隔）在配置页，所以 qoder 组会出现。
  */
 const GROUP_LABELS: Record<string, string> = {
   general: '常规',
   gateway: '网关',
+  benefits: '签到',
+  qoder: 'Qoder',
 }
 
 /**

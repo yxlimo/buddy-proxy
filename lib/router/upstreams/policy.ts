@@ -25,7 +25,7 @@ import {
 import { clearCooldown, setCooldown } from "../../cooldown.ts";
 import { scrubForClient, scrubForLog } from "../../log-scrub.ts";
 import { cooldownForFailure, cooldownStamp, errorTextOf, rateWaitedOf, withRateWaited, type RateWaited } from "../account-cooldown.ts";
-import { readEnvNumber } from "../../env.ts";
+import { configNumber, markHotSetting } from "../../config.ts";
 import { type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { credentialFaultError, platformWithoutAccount } from "../routes.ts";
@@ -175,9 +175,21 @@ const MAX_RATE_WAIT_MS = 60_000;
  *
  * 等的（限流窗口、重试间隔）与上游自己算的时间都算在里面。
  *
- * 环境变量能改小（ROUTER_RETRY_BUDGET_MS）：自测不能真等三分钟。
+ * 这是设置 ROUTER_RETRY_BUDGET_MS 的默认值：自测不能真等三分钟，生产上也可能
+ * 要调短（见 attemptBudgetMs）。
  */
-const ATTEMPT_BUDGET_MS = readEnvNumber("ROUTER_RETRY_BUDGET_MS", 180_000);
+export const ATTEMPT_BUDGET_DEFAULT_MS = 180_000;
+
+// Hot: read again at the start of every upstream call (see runWithRetries), so
+// a change made in the panel applies to the next request with no restart. The
+// budget is the only brake on the unlimited-retry path, which makes it the one
+// number an operator may have to turn down for a self-test
+markHotSetting("ROUTER_RETRY_BUDGET_MS");
+
+/** 这一轮的总时限（毫秒）。 */
+function attemptBudgetMs(): number {
+  return configNumber("ROUTER_RETRY_BUDGET_MS", ATTEMPT_BUDGET_DEFAULT_MS);
+}
 
 /**
  * 有人可换的时候，一个账号最多打几次上游。
@@ -185,7 +197,7 @@ const ATTEMPT_BUDGET_MS = readEnvNumber("ROUTER_RETRY_BUDGET_MS", 180_000);
  * 三次（首次 + 两次重试，间隔 300ms、900ms）：够躲开上游那一下抖动，又不至于
  * 把降级拖成一分半钟 —— 以前就是这个数。打完就交给策略换下一个账号。
  *
- * 没有人可换的时候不用这个上限：一直试到总时限（见 ATTEMPT_BUDGET_MS）。
+ * 没有人可换的时候不用这个上限：一直试到总时限（见 attemptBudgetMs）。
  */
 const BOUNDED_ATTEMPTS = 3;
 
@@ -277,7 +289,7 @@ function retryDelayMs(retries: number): number {
  * 退避阶梯：给测试核对间隔。
  *
  * 只报间隔，不报次数上限 —— 无限重试那条路没有次数上限（刹车是总时限
- * ATTEMPT_BUDGET_MS），有人可换时的次数上限是 BOUNDED_ATTEMPTS。
+ * ROUTER_RETRY_BUDGET_MS），有人可换时的次数上限是 BOUNDED_ATTEMPTS。
  */
 export function transientRetryPlan(): { delaysMs: readonly number[]; repeatLastMs: number } {
   const delaysMs = TRANSIENT_RETRY_DELAYS_MS;
@@ -416,7 +428,9 @@ export async function runWithRetries<A extends { id: string }, T>(
   run: (account: A) => Promise<T>,
   opts: RetryBudget = {},
 ): Promise<T> {
-  const budgetMs = opts.budgetMs ?? ATTEMPT_BUDGET_MS;
+  // Read once per call, before the loop: the deadline belongs to this request,
+  // and a panel change landing mid-call must not extend or cut it short
+  const budgetMs = opts.budgetMs ?? attemptBudgetMs();
   // 没有别人可换的时候才无限重试：有人可换时试三次就换人（见 BOUNDED_ATTEMPTS）。
   const unbounded = opts.unbounded === true;
   const clock = opts.now ?? Date.now;

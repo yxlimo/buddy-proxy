@@ -303,6 +303,7 @@ const STATE_TEXT: Record<PlatformState, string> = {
   credential_unknown: "凭据读不出来",
   out_of_credits: "额度用尽",
   cooling: "账号都在冷却里",
+  queued: "上游一直在排队",
   ready: "就绪",
 };
 
@@ -323,6 +324,10 @@ function remedyOf(state: PlatformState): string {
       return "等额度恢复";
     case "cooling":
       return "等冷却结束";
+    // 排队不冷却账号、不改选号：这里没有什么可改的，只能等上游放行。写别的
+    // （去重登、去换账号）会把人引到无关的地方。
+    case "queued":
+      return "改不了什么，等上游自己放行";
     case "ready":
       return "";
   }

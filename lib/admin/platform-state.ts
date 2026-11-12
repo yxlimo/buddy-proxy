@@ -15,6 +15,7 @@
 //   credential_unknown 有开着的账号，但凭据一个都读不出来
 //   out_of_credits     凭据有了，额度用尽了
 //   cooling            凭据有了，没有能接的账号（有账号在冷却里）
+//   queued             账号与凭据都好，但最近每次请求都被上游排进队列
 //   ready              至少有一个账号现在就能接
 //
 // 「有账号且都关着」与「有账号开着但都没凭据」是两件事：前者是开关的问题，
@@ -31,6 +32,16 @@
 // 请求」，不是「这个平台没有这个模型」—— 后者会让客户端去改模型名，而真正
 // 该做的是等一会儿再试。
 //
+// 排队（queued）也是这个意思，只是它比前两档更「只关于展示」：
+//
+//   · 它不冷却账号。上游排队不是账号的错，而且冷却会把那个账号的**别的**模型
+//     一起带走 —— 那些模型从来没排过队。
+//   · 它不改选号。判据来自最近几次请求的结果（lib/upstream-failures.ts），那是
+//     事后的事实；拿它去挑账号等于用上一次的排队去赌这一次。
+//
+// 所以这一档只回答面板上那一格：这个平台上一次、上几次都排不上去，绿的那个
+// 「就绪」是在骗人。
+//
 // 它住在 admin 层：路由那边（lib/router/availability.ts）只做转发。admin 层
 // 不引路由层，所以这里也不引 —— 套餐窗口那一问住在 lib/plan-window.ts，两边
 // 问的是同一件事，答案也必须是同一个。
@@ -38,6 +49,7 @@
 import { listAggregateModels } from "../aggregate.ts";
 import type { CatalogModel } from "../catalog-models.ts";
 import { listCooldowns } from "../cooldown.ts";
+import { recentUpstreamFailures } from "../upstream-failures.ts";
 import { authLog } from "../credential.ts";
 import { peekHealthSnapshot } from "../health-cache.ts";
 import { exhaustedPlanWindowEndsAt } from "../plan-window.ts";
@@ -59,6 +71,7 @@ export type PlatformState =
   | "credential_unknown"
   | "out_of_credits"
   | "cooling"
+  | "queued"
   | "ready";
 
 /** 一个平台的可用性。 */
@@ -127,6 +140,9 @@ export interface PlatformAvailability {
    *
    * 没有凭据时也是 null：等一会儿不会让凭据长出来。凭据过期与凭据读不出来
    * 也是 null：前者等的是刷新或重新登录（人做的），后者是网关自己的故障。
+   *
+   * 排队也是 null：上游不告诉我们什么时候放行（它说的那个秒数实测等完再打还是
+   * 排队），拿一个固定时长兜底就是编时刻。
    */
   untilMs: number | null;
   /** 一句给日志用的话。 */
@@ -326,6 +342,8 @@ function reasonOf(
         return `平台 ${platformId} 的额度用尽`;
       case "cooling":
         return `平台 ${platformId} 当前没有可用的账号（有账号处于冷却）`;
+      case "queued":
+        return `平台 ${platformId} 最近每次请求都被上游排进队列（排队不冷却账号）`;
       case "ready":
         return `平台 ${platformId} 有 ${usable} 个账号能接请求`;
     }
@@ -362,9 +380,39 @@ function adviceOf(state: PlatformState, refused: boolean): string {
       return "额度用尽：等待额度恢复，或更换账号";
     case "cooling":
       return "账号均处于冷却中：请稍后重试";
+    case "queued":
+      return "上游把模型排进队列，暂时发不出去：这里改不了什么，等它自己放行";
     case "ready":
       return "";
   }
+}
+
+/** 「最近都在排队」看多久：十分钟。够短到上游一放行就能变回就绪，够长到两天里
+ * 那 116 次都落得进来。 */
+const QUEUE_WINDOW_MS = 10 * 60_000;
+
+/**
+ * 至少几次排队才算「每次」。
+ *
+ * 一次不算：偶发一次排队是正常的，上游一放行就过去了，拿它报警等于让每个平台
+ * 都常驻一个「排队中」。两次以上、而且中间一次成功也没有，才是「这个平台现在
+ * 根本发不出去」。
+ */
+const QUEUE_MIN_ATTEMPTS = 2;
+
+/**
+ * 这个平台最近是不是每次都被上游排进队列。
+ *
+ * 判据是「最近的每一个记录都是排队」—— 记录里有一条成功就不是：这个平台发得
+ * 出去，只是时不时要等。
+ *
+ * 只看最近那几次（lib/upstream-failures.ts，最多 20 条）与窗口内的：排队是会
+ * 过去的，拿两小时前的排队说事就是一个永远摘不掉的黄灯。
+ */
+function queuedEveryTime(platform: string, now: number): boolean {
+  const recent = recentUpstreamFailures(platform, QUEUE_WINDOW_MS, now);
+  if (recent.length < QUEUE_MIN_ATTEMPTS) return false;
+  return recent.every((one) => one.kind === "queued");
 }
 
 /** 判一个平台：账号、凭据、额度、冷却，一次说完。 */
@@ -437,6 +485,9 @@ function judge(
     state = "credential_unknown";
   } else if (allSpent) state = "out_of_credits";
   else if (blockedByCooling) state = "cooling";
+  // 账号与凭据都好，但最近每次请求都被排进队列：绿的那个「就绪」是假的（见
+  // 本文件开头）。它只改这一格 —— 不冷却账号、不改选号、不摘模型。
+  else if (queuedEveryTime(platform.id, now)) state = "queued";
   else state = "ready";
 
   const catalog = platformCatalog(platform, accounts, declared);

@@ -46,13 +46,3 @@ export function readEnvValue(key: string): string | null {
 export function readEnvFlag(key: string, fallback: boolean): boolean {
   return parseBool(process.env[key]) ?? parseBool(readEnvValue(key)) ?? fallback;
 }
-
-export function readEnvNumber(key: string, fallback: number): number {
-  const raw = readEnvValue(key);
-  const n = raw === null ? NaN : Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-export function readEnvString(key: string, fallback: string): string {
-  return readEnvValue(key) ?? fallback;
-}

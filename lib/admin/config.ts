@@ -4,8 +4,10 @@
 // 面板看到的是这三个来源合成之后的样子，并且要标出每个值是从哪来的 ——
 // 不然改了 env 也不知道到底谁说了算。
 //
-// 面板能改的那几个是热的：写进数据库之后重新读一遍，下一个请求就是新的值。
-// 服务自己内部的设置（config-cli.ts 改的那些）在某个常量里，改了要重启。
+// 面板能改的设置有两种生效方式：热的那几个（写进数据库之后重新读一遍，下一个请求
+// 就是新的值），以及读一次就定在常量里的那些（面板改得动，但要重启）。面板会自己
+// 说清是哪种（configPendingRestart）。
+// 服务自己内部的设置（config-cli.ts 改的那些）只有重启这一条路。
 
 import {
   configClear,
@@ -40,6 +42,36 @@ configNumber("USAGE_RETENTION_DAYS", 30);
 configFlag("REQUIRE_API_KEY", false);
 configString("ADMIN_CORS_ORIGINS", "");
 
+// 三个超时旋钮。它们是热的：deliver.ts 与 policy.ts 在每条请求开始时各读一次，
+// 所以面板改完不用重启。这里显式问一次，是为了让一个还没发过任何请求的进程
+// （面板、config-cli）也知道这三个设置存在 —— 没问过的设置不在快照里。
+//
+// 默认值必须与路由里那份一致：lib/router/deliver.ts 的 STREAM_FIRST_FRAME_DEFAULT_MS
+// 与 STREAM_IDLE_DEFAULT_MS、lib/router/upstreams/policy.ts 的
+// ATTEMPT_BUDGET_DEFAULT_MS。第一个问的人定的默认值就是生效的那个，所以两边
+// 一旦飘了，改的是默认值本身；test/admin-config-check.ts 盯着这一致性。
+configNumber("ROUTER_FIRST_FRAME_MS", 300_000);
+configNumber("ROUTER_STREAM_IDLE_MS", 180_000);
+configNumber("ROUTER_RETRY_BUDGET_MS", 180_000);
+
+// 剩下这几个是「读一次就定在常量里」的（lib/periodic.ts 的定时器、
+// lib/admin/upstreams.ts 的快照过期时间、lib/admin/benefits.ts 的间隔、
+// lib/router/handle.ts 的排队重试）：面板改得动，但要重启才生效。同样在这里显式
+// 问一次，理由与上面那三条一样。
+configFlag("PERIODIC_ENABLED", true);
+configNumber("HEALTH_CACHE_MS", 300_000);
+configFlag("BENEFITS_DISABLED", false);
+configNumber("BENEFITS_INTERVAL_MS", 3_600_000);
+configNumber("QODER_LEGACY_RETRY_MS", 10_000);
+// 排队时跳过那一次等待：默认关（维持线上现在的行为）。热设置 ——
+// lib/router/upstreams/qoder.ts 每次调用都读一次。
+configFlag("QODER_SKIP_QUEUE_WAIT", false);
+
+// 签到开关是这一组里唯一一个热的：它是在 benefitUpstreams() 里按调用读的，而那个
+// 函数每一次跑腿（lib/router/benefits.ts 的 runOnce）与每一次 /health 都会问一次，
+// 所以面板改完不用重启。它的标记只能写在这里：读它的那个模块不是设置的登记处。
+markHotSetting("BENEFITS_DISABLED");
+
 /** 一个配置项在面板里的样子。 */
 export interface ConfigItemView {
   key: string;
@@ -73,6 +105,15 @@ const DESCRIPTIONS: Record<string, string> = {
   ADMIN_CORS_ORIGINS: "允许跨域访问管理接口的来源，逗号分隔。空表示不允许（面板和网关同源）",
   REQUIRE_API_KEY: "开启后，调用网关的 agent 必须带 API KEY；关闭则任何请求都放行",
   USAGE_RETENTION_DAYS: "用量记录保留多少天",
+  ROUTER_FIRST_FRAME_MS: "等上游第一个字最多多久（毫秒）。调小会砍掉正常的慢答复",
+  ROUTER_STREAM_IDLE_MS: "流开始后停顿多久算断（毫秒）。调小会砍掉正在思考的答复",
+  ROUTER_RETRY_BUDGET_MS: "一次请求的重试总时限（毫秒）。调小会让上游抽一下就直接报错",
+  PERIODIC_ENABLED: "后台定时任务总开关。关闭后不换令牌、不签到、不扫余额",
+  HEALTH_CACHE_MS: "额度与状态快照多久刷新一次（毫秒）",
+  BENEFITS_DISABLED: "关闭每日签到与领奖。关闭后积分不会自动到账",
+  BENEFITS_INTERVAL_MS: "签到任务多久跑一次（毫秒）。调大后奖励到账变慢",
+  QODER_LEGACY_RETRY_MS: "Qoder 旧协议排队后隔多久重试（毫秒）",
+  QODER_SKIP_QUEUE_WAIT: "开着时排队不等待，直接交给下一个目标。关着时先等一次再放弃",
 };
 
 /**
@@ -85,6 +126,15 @@ const LABELS: Record<string, string> = {
   ADMIN_CORS_ORIGINS: "允许的跨域来源",
   REQUIRE_API_KEY: "是否开启 API KEY 验证",
   USAGE_RETENTION_DAYS: "用量保留天数",
+  ROUTER_FIRST_FRAME_MS: "等首帧时限",
+  ROUTER_STREAM_IDLE_MS: "流空闲上限",
+  ROUTER_RETRY_BUDGET_MS: "重试总时限",
+  PERIODIC_ENABLED: "后台定时任务",
+  HEALTH_CACHE_MS: "快照刷新间隔",
+  BENEFITS_DISABLED: "关闭签到与领奖",
+  BENEFITS_INTERVAL_MS: "签到间隔",
+  QODER_LEGACY_RETRY_MS: "排队重试间隔",
+  QODER_SKIP_QUEUE_WAIT: "排队时不等待",
 };
 
 /** 值的结尾像密钥的，就不给人看。 */
@@ -100,7 +150,8 @@ const NOT_SECRET = new Set(["REQUIRE_API_KEY"]);
  * 请求标识。这些改了也没用（env 覆盖了照样按代码走），而且露出来只会让人
  * 改出坏状态 —— 所以不公布。
  *
- * 面板只看到这 handful 个：网关自己的两三个。
+ * 面板只看到这十一个：网关自己的、用量保留、三个超时旋钮、定时任务与额度快照、
+ * 签到、Qoder 的排队重试。
  *
  * 上游的开关**不在这里**：上游那一页有开关，在这儿再放一份是重复的，而且
  * 两份会打架。
@@ -111,6 +162,18 @@ const USER_FACING = new Set([
   "ADMIN_CORS_ORIGINS",
   // 用量记录留多久
   "USAGE_RETENTION_DAYS",
+  // 三个超时旋钮：等首帧、流中途的停顿、重试的总时限
+  "ROUTER_FIRST_FRAME_MS",
+  "ROUTER_STREAM_IDLE_MS",
+  "ROUTER_RETRY_BUDGET_MS",
+  // 后台的定时任务与它刷的那份快照
+  "PERIODIC_ENABLED",
+  "HEALTH_CACHE_MS",
+  // 签到
+  "BENEFITS_DISABLED",
+  "BENEFITS_INTERVAL_MS",
+  // Qoder 旧协议排队时的重试间隔
+  "QODER_LEGACY_RETRY_MS",
 ]);
 
 /** 这个设置是不是敏感值。 */
@@ -198,10 +261,10 @@ export function knownConfigKeys(): Set<string> {
 /**
  * 改一个设置。
  *
- * 清掉就是回到环境变量或代码里的默认值。改完不热生效，要重启。
+ * 清掉就是回到环境变量或代码里的默认值。热的那几个改完下一个请求就是新的值；
+ * 其余的要重启，面板照 configPendingRestart 说。
  *
- * 面板能改的那几个是热的（下一个请求就是新的值）✓ —— 用量保留天数就是其中
- * 一个：改完立刻按新的天数清一遍。
+ * 用量保留天数是热的，所以改完立刻按新的天数清一遍。
  */
 export function setConfigValue(key: string, value: string, clear = false): { ok: boolean; message: string } {
   if (!knownConfigKeys().has(key)) {
