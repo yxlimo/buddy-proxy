@@ -5,6 +5,7 @@
 // 各客户端发的头不一样：
 //
 //   opencode  x-opencode-session-id
+//             x-opencode-session           上游（Zen）按这个名字读会话
 //             x-opencode-parent-session-id   子代理才有
 //             x-session-affinity / X-Session-Id
 //   pi        x-session-id                  要开 compat.sendSessionAffinityHeaders
@@ -23,7 +24,7 @@ import path from "node:path";
 // write must not be there when the next run starts.
 process.env.BUDDY_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "session-check-"));
 
-import { detectSession, clientSessionHeaders } from "../lib/agent.ts";
+import { detectSession, clientForwardHeaders } from "../lib/agent.ts";
 
 let pass = 0;
 let fail = 0;
@@ -70,8 +71,8 @@ check("父会话认 x-parent-session-id", detectSession(piSub).parentSessionId =
 check("agent 名认 x-agent-name", detectSession(piSub).agentName === "be-match", detectSession(piSub).agentName);
 check(
   "x-pi-session-id 会跟着转发",
-  clientSessionHeaders(piSub)["x-pi-session-id"] === "ses_child",
-  JSON.stringify(clientSessionHeaders(piSub)),
+  clientForwardHeaders(piSub)["x-pi-session-id"] === "ses_child",
+  JSON.stringify(clientForwardHeaders(piSub)),
 );
 
 console.log("");
@@ -116,8 +117,8 @@ check("没有会话头就没有父会话", detectSession(none).parentSessionId =
 console.log("");
 console.log("转给开放平台的头");
 
-const forwarded = clientSessionHeaders(oc);
-const withAgent = clientSessionHeaders(sub);
+const forwarded = clientForwardHeaders(oc);
+const withAgent = clientForwardHeaders(sub);
 check(
   "agent 名跟着走",
   withAgent["x-agent-name"] === "be-match",
@@ -129,12 +130,59 @@ check(
     forwarded["x-opencode-parent-session-id"] === "ses_parent",
   JSON.stringify(forwarded),
 );
-const noAuth = clientSessionHeaders(
-  lower({ authorization: "Bearer secret", "x-session-id": "s1", host: "example.com" }),
+// 开放平台原样转发：客户端发什么就跟什么，只摘网关自己的那几个。正向列举
+// 会话头的老口径已经不在了 —— 上游读的名字与我们枚举的那几个无关。
+const kept = clientForwardHeaders(
+  lower({
+    authorization: "Bearer secret",
+    "x-api-key": "gateway-key",
+    host: "proxy.local",
+    "content-length": "42",
+    connection: "keep-alive",
+    "accept-encoding": "gzip",
+    cookie: "buddy=1",
+    "user-agent": "opencode/latest/2.1.3/cli",
+    "x-opencode-session": "ses_zen",
+    "x-foo-bar": "kept",
+    "x-session-affinity": "aff-1",
+  }),
 );
-check("不带走 authorization", !("authorization" in noAuth), JSON.stringify(noAuth));
-check("不带走 host", !("host" in noAuth), JSON.stringify(noAuth));
-check("带走了会话头", noAuth["x-session-id"] === "s1", JSON.stringify(noAuth));
+check(
+  "留下的正好是客户端自己的那几个头",
+  JSON.stringify(Object.keys(kept).sort()) ===
+    JSON.stringify(["user-agent", "x-foo-bar", "x-opencode-session", "x-session-affinity"]),
+  JSON.stringify(kept),
+);
+check("上游读的那个会话名跟着走", kept["x-opencode-session"] === "ses_zen", JSON.stringify(kept));
+check("没见过的名字也原样过去", kept["x-foo-bar"] === "kept", JSON.stringify(kept));
+check(
+  "摘掉 authorization 与 x-api-key（网关的凭据）",
+  !("authorization" in kept) && !("x-api-key" in kept),
+  JSON.stringify(kept),
+);
+check(
+  "摘掉 host 与 content-length（得对上网关发出去的那条）",
+  !("host" in kept) && !("content-length" in kept),
+  JSON.stringify(kept),
+);
+check(
+  "摘掉逐跳头、cookie、accept-encoding",
+  !("connection" in kept) && !("cookie" in kept) && !("accept-encoding" in kept),
+  JSON.stringify(kept),
+);
+// 上游按名字读头：键的大小写不归一，它会以为客户端没带
+const upperName = clientForwardHeaders({ "X-Opencode-Session": "ses_1" });
+check("键名统一成小写", upperName["x-opencode-session"] === "ses_1", JSON.stringify(upperName));
+check(
+  "重复的头拼成一行",
+  clientForwardHeaders({ "x-multi": ["a", "b"] })["x-multi"] === "a, b",
+  JSON.stringify(clientForwardHeaders({ "x-multi": ["a", "b"] })),
+);
+check(
+  "头值截到 200 字符",
+  clientForwardHeaders({ "x-long": "x".repeat(500) })["x-long"].length === 200,
+  String(clientForwardHeaders({ "x-long": "x".repeat(500) })["x-long"].length),
+);
 
 console.log("");
 console.log("写会话：登录要能覆盖，刷新里的旧代次不能覆盖");

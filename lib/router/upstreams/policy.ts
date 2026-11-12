@@ -47,14 +47,15 @@ export interface UpstreamContext {
   /** Whether a request is written to the log. */
   logRoute: boolean;
   /**
-   * The client's session headers, for the open API platforms.
+   * The headers the client sent, for the open API platforms.
    *
    * The simulated clients (Qoder, WorkBuddy, MiniMax Code, ZCode) rebuild the
    * request the way the desktop client builds it — only the fields they need,
    * everything else in the client's headers is ignored. The open platforms get
-   * the request as it is, so the session headers go along.
+   * the request as it is, so the client's headers go along, minus the ones the
+   * gateway owns (see clientForwardHeaders in lib/agent.ts).
    */
-  clientHeaders: Record<string, string>;
+  forwardedHeaders: Record<string, string>;
   /**
    * The client's session id, as the client spelled it.
    *

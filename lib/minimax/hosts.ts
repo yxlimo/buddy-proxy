@@ -54,9 +54,9 @@ export interface HostChoice {
    */
   defaults: Readonly<Record<"cn" | "en", string>>;
   /**
-   * The region as the caller has it — the setting or the account record says
-   * `en` / `global` / "", not a key of `defaults`. Normalised here, so no
-   * caller has to know the tables' vocabulary (see regionKey).
+   * The region as the caller has it — usually `MINIMAX_REGION`, so `en` / `cn` /
+   * "", and not necessarily a key of `defaults`. Normalised here, so no caller
+   * has to know which spelling reaches the other region (see regionKey).
    */
   region: string;
   /**
@@ -92,27 +92,26 @@ function bare(host: string): string {
 /**
  * The region key every host table is written in: `cn` or `en`.
  *
- * The platform has two regions, but the string naming one of them arrives
- * spelled several ways: `MINIMAX_REGION` says `cn` / `en`, an account record
- * says `global`, and conversation says "international". Two vocabularies for
- * the same two regions is how a scan reaches the wrong platform — with the
- * tables keyed separately, `en` meant international in one module while
- * `global` meant international in another, and each of them normalised the
- * string on its own before looking the host up.
+ * `en` is narrow on purpose. Only a literal `en` reaches the international
+ * column; `global`, `international`, empty and every unknown spelling take
+ * `cn`. There is one region this gateway really runs in, and the second column
+ * is there for a deployment that states `MINIMAX_REGION=en` out loud.
  *
- * So there is one normalisation, here, and every table is keyed `cn` / `en`:
- * two of the three already were, and `en` and `global` name the same region,
- * so `global` becomes `en` instead of a third key growing back.
+ * Reading the other region out of a spelling is what was taken back out: `global`
+ * used to count as international here, which made the region a property of
+ * whichever word a caller happened to write rather than of the deployment. An
+ * international build of the platform is another platform's business — its own
+ * hosts, its own entitlements, its own kind in `lib/kinds.ts` — and it does not
+ * get decided at run time by a string. So a deployment that means those hosts
+ * says `en`, and a spelling nobody meant lands on the home region's hosts, which
+ * do answer, instead of on a platform the account has no standing on.
  *
- * Anything else — empty, unknown, `EU` — takes `cn`, the home region. The
- * deployments this gateway runs in reach the home region's hosts, and an
- * account that really sits in the other region says `en` / `global`; the
- * fallback is not something anyone relies on, it is only what keeps an unknown
- * spelling from reaching no host at all.
+ * One normalisation, here, and every table is keyed `cn` / `en`: the modules
+ * that walk to a host only pass the string along and none of them re-decides
+ * what it means.
  */
 export function regionKey(region: string): "cn" | "en" {
-  const key = region.trim().toLowerCase();
-  return key === "en" || key === "global" || key === "international" ? "en" : "cn";
+  return region.trim().toLowerCase() === "en" ? "en" : "cn";
 }
 
 /**

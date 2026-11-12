@@ -253,8 +253,8 @@ const platformRefreshedAt = new Map<string, number>();
  * 这里不做第二套归一：区域在这条路上只用来选主机和挑语言，而选主机
  * （resolveHost）、挑语言（checkin.ts 的 regionLanguage）都过 regionKey，所以
  * 传键就够。契约里 `global` 那个说法是「平台属于哪个区域」的措辞（见
- * upstreamRegion），不是这一层的词汇 —— 这里自己翻译一次，`MINIMAX_REGION=global`
- * 就会被判成 cn，与推理网关读同一个设置却走到另一个区。
+ * upstreamRegion），不是这一层的词汇；regionKey 只认显式的 `en`，所以
+ * `MINIMAX_REGION=global` 在这里与推理网关落到同一个区 —— 两边读的是同一个设置。
  */
 const MINIMAX_REGION = regionKey(configString("MINIMAX_REGION", "cn"));
 

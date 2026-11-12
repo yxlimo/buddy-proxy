@@ -23,7 +23,7 @@ import type { AggregateEntry } from "./catalog.ts";
 import { select, SelectionStop, byWeight } from "./selection.ts";
 import { classifyUpstreamError, describeUpstreamError } from "./provider-selection.ts";
 import { recordUsage, maxTotals, usageTotals } from "../usage.ts";
-import { clientSessionHeaders, detectAgent, detectSession, type SessionInfo } from "../agent.ts";
+import { clientForwardHeaders, detectAgent, detectSession, type SessionInfo } from "../agent.ts";
 import { workbuddyCatalog } from "../admin/upstreams.ts";
 import {
   toMinimax,
@@ -71,9 +71,9 @@ function upstreamContext(
     legacyRetryMs: LEGACY_RETRY_MS,
     tokenRhythmMaxAttempts: TOKENRHYTHM_MAX_ATTEMPTS,
     logRoute: LOG_ROUTE,
-    // 开放 API 平台直接转发，所以会话相关的头跟着走；模拟客户端的那些
-    // 自己重建请求，这些头不会出网关。
-    clientHeaders: {},
+    // 开放 API 平台原样转发，所以客户端发来的头跟着走（网关自己的几个摘掉）；
+    // 模拟客户端的那些自己重建请求，这些头不会出网关。
+    forwardedHeaders: {},
     // 目录是区域的，所以查表要先知道这条路由落在哪个平台。
     workbuddyMaxOutput: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model)?.maxOutput ?? 64000,
     workbuddyModel: (model: string) => workbuddyCatalog(platform).find((m) => m.id === model) ?? null,
@@ -524,10 +524,11 @@ async function callUpstream(
   const template = platformOfAny(route.platform);
   const kind = template ? kindOf(template.kind) : null;
   // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
-  // 是直接转发的，客户端的会话头跟着过去。模拟客户端的那些（Qoder、
-  // WorkBuddy、MiniMax Code、ZCode）按客户端的样子重建请求，多余的头无视。
+  // 是原样转发的，客户端发来的头跟着过去（网关自己的那几个摘掉，见
+  // clientForwardHeaders）。模拟客户端的那些（Qoder、WorkBuddy、MiniMax
+  // Code、ZCode）按客户端的样子重建请求，不用这些头。
   if (kind?.openPlatform) {
-    uctx.clientHeaders = clientSessionHeaders(ctx.request.headers);
+    uctx.forwardedHeaders = clientForwardHeaders(ctx.request.headers);
   }
   try {
     switch (kind?.kind) {

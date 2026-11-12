@@ -28,7 +28,7 @@ export const REQUEST_ID_HEADER = "x-request-id";
 export const ACCOUNT_ID_HEADER = "x-account-id";
 
 /**
- * 一次上游尝试带的头：客户端的会话头，加上归因的那两个。
+ * 一次上游尝试带的头：客户端发来的头（网关自己的已摘掉），加上归因的那两个。
  *
  * 归因头放在后面：客户端就算发了同名的头也顶不掉它们 —— 顶掉了，日志就认不出
  * 这条请求是网关发的还是客户端自己编的。
@@ -37,11 +37,11 @@ export const ACCOUNT_ID_HEADER = "x-account-id";
  * 件事，不能那边写一份。
  */
 export function attributionHeaders(
-  clientHeaders: Record<string, string>,
+  forwardedHeaders: Record<string, string>,
   requestId: string,
   accountId: string,
 ): Record<string, string> {  return {
-    ...clientHeaders,
+    ...forwardedHeaders,
     [REQUEST_ID_HEADER]: requestId,
     [ACCOUNT_ID_HEADER]: accountId,
   };
@@ -112,7 +112,7 @@ export async function toOpenAiPlatform(
         try {
           res = await opts.chat(
             openaiBody,
-            attributionHeaders(ctx.clientHeaders, requestId, account.id),
+            attributionHeaders(ctx.forwardedHeaders, requestId, account.id),
             account.id,
             guard.signal,
           );
@@ -351,7 +351,7 @@ export async function toAnthropicPlatform(
         try {
           res = await opts.chat(
             anthropicBody,
-            attributionHeaders(ctx.clientHeaders, requestId, account.id),
+            attributionHeaders(ctx.forwardedHeaders, requestId, account.id),
             account.id,
             guard.signal,
           );

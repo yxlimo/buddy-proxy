@@ -102,7 +102,7 @@ export async function toTokenRhythm(
           accountId,
           openaiBody,
           ctx.tokenRhythmMaxAttempts,
-          ctx.clientHeaders,
+          ctx.forwardedHeaders,
           ctx.logRoute,
         );
         response = call.response;
@@ -250,7 +250,7 @@ async function tokenRhythmChatWithRetry(
   accountId: string,
   body: Record<string, unknown>,
   maxAttempts: number,
-  clientHeaders: Record<string, string>,
+  forwardedHeaders: Record<string, string>,
   logRoute: boolean,
 ): Promise<{ response: Response; key: string }> {
   for (let attempt = 1; ; attempt++) {
@@ -266,7 +266,7 @@ async function tokenRhythmChatWithRetry(
       return await tokenRhythmChat(
         accountId,
         body,
-        attributionHeaders(clientHeaders, requestId, accountId),
+        attributionHeaders(forwardedHeaders, requestId, accountId),
       );
     } catch (e) {
       if (e instanceof TokenRhythmBusyError && attempt < maxAttempts) {

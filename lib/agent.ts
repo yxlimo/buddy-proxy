@@ -130,30 +130,55 @@ export function detectSession(headers: HeaderBag): SessionInfo {
 }
 
 /**
- * 开放 API 平台能看到的客户端头。
+ * 开放 API 平台能看到的客户端头：原样转发，只摘掉网关自己的那几个。
  *
- * 模拟客户端的那几条上游（Qoder、WorkBuddy、MiniMax Code、ZCode）是按客户端
- * 的样子重建请求的 —— 只取必要的字段，多余的头直接无视，不转发。
+ * 模拟客户端的那几条上游（Qoder、WorkBuddy、MiniMax Code、ZCode）不走这里
+ * —— 它们按客户端的样子重建请求，头是挑出来逐个写死的。开放 API 平台（MiniMax
+ * 开放平台、TokenRhythm、SenseNova、书生·端砚）是原样转发的，所以这里用反向
+ * 名单：正向列举每多出一个上游认的拼法就得回来补一次，漏一次的表现是上游回
+ * 「你没带这个头」，而客户端明明带了 —— opencode 的 Zen 缺 `x-opencode-session`
+ * 就回 400 MissingSessionID，网关当时枚举了五种拼法，就是不认识这一个。
  *
- * 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）是
- * 直接转发的，所以会话相关的头可以跟着走：平台自己可能拿它做会话亲和或者
- * 记账。
+ * 摘掉的都是网关自己的：
  *
- * 只带会话这一族：authorization、host、content-length 这些必须是网关自己的。
+ *   authorization、x-api-key   网关要换成账号自己的 key；x-api-key 是 Anthropic
+ *                              方言的客户端用来带网关 key 的，转发出去就等于把
+ *                              网关的凭据送给上游
+ *   host、content-length       请求是网关重发的，这两个得对得上网关发出去的那条
+ *   cookie                     客户端给网关的，不是给上游的
+ *   accept-encoding            压缩方式由传输层自己定
+ *   connection、keep-alive、proxy-authorization、proxy-authenticate、te、
+ *   trailer、transfer-encoding、upgrade
+ *                              逐跳头，只管一条连接，不能跟着跨这一跳
  */
-export function clientSessionHeaders(headers: HeaderBag): Record<string, string> {
+const GATEWAY_OWN_HEADERS = new Set([
+  "authorization",
+  "x-api-key",
+  "host",
+  "content-length",
+  "cookie",
+  "accept-encoding",
+  "connection",
+  "keep-alive",
+  "proxy-authorization",
+  "proxy-authenticate",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/** 头值的上限：够放 user-agent 与各种 trace id，又不给日志和上游送大块数据。 */
+const MAX_HEADER_VALUE = 200;
+
+export function clientForwardHeaders(headers: HeaderBag): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const name of [
-    "x-session-id",
-    "x-session-affinity",
-    "x-opencode-session-id",
-    "x-opencode-parent-session-id",
-    "x-pi-session-id",
-    "x-parent-session-id",
-    "x-agent-name",
-  ]) {
-    const value = header(headers, name);
-    if (value) out[name] = value.slice(0, 200);
+  for (const [name, value] of Object.entries(headers)) {
+    const key = name.toLowerCase();
+    if (GATEWAY_OWN_HEADERS.has(key)) continue;
+    const text = Array.isArray(value) ? value.join(", ") : value;
+    if (!text) continue;
+    out[key] = text.slice(0, MAX_HEADER_VALUE);
   }
   return out;
 }
