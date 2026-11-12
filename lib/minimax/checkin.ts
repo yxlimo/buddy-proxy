@@ -16,7 +16,12 @@ import { configString } from "../config.ts";
 import { readCredential } from "./auth.ts";
 import type { BenefitOutcome } from "../benefits.ts";
 
-/** The public gateway, per region. The LLM gateway is a different host. */
+/**
+ * The public gateway per region — the defaults, not the whole story.
+ *
+ * `MINIMAX_PUBLIC_GATEWAY` (see publicGatewayOrigin) overrides both regions.
+ * The LLM gateway is a different host.
+ */
 const PUBLIC_GATEWAYS: Record<string, string> = {
   cn: "https://agent.minimaxi.com",
   en: "https://agent.minimax.io",
@@ -63,7 +68,24 @@ const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 const APP_VERSION = configString("MINIMAX_APP_VERSION", "5.2.0");
 const REGION = configString("MINIMAX_REGION", "cn");
 
+/**
+ * Where the public gateway is.
+ *
+ * A setting, like the other upstream addresses (`MINIMAX_API_BASE` in
+ * credits.ts, `SENSENOVA_BASE`, `QODER_CN_INFER_BASE`): environment first,
+ * then the database, then the default table above. The panel's sign-in button
+ * is the one path this gateway walks on its own, so a self-test and an internal
+ * mirror have to be able to aim it at their own host instead of the public one.
+ *
+ * Empty keeps the region's default; set, the one value serves both regions —
+ * whoever points it somewhere points both there.
+ *
+ * Read on every call, not held in a constant: every sign-in reads it, and a
+ * change has to be in force for the next one.
+ */
 export function publicGatewayOrigin(region = REGION): string {
+  const explicit = configString("MINIMAX_PUBLIC_GATEWAY", "");
+  if (explicit) return explicit.replace(/\/+$/, "");
   return PUBLIC_GATEWAYS[region] ?? PUBLIC_GATEWAYS.cn;
 }
 
