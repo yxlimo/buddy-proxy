@@ -172,8 +172,9 @@ const USER_FACING = new Set([
   // 签到
   "BENEFITS_DISABLED",
   "BENEFITS_INTERVAL_MS",
-  // Qoder 旧协议排队时的重试间隔
+  // Qoder 旧协议排队时的重试间隔，以及排队要不要等
   "QODER_LEGACY_RETRY_MS",
+  "QODER_SKIP_QUEUE_WAIT",
 ]);
 
 /** 这个设置是不是敏感值。 */
