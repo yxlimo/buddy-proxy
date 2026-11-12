@@ -1,4 +1,4 @@
-// lib/upstream-failures.ts — how the last few attempts against a platform ended.
+// lib/upstream-failures.ts — how the last few requests against a platform ended.
 //
 // A platform can be green on every criterion the judgment knows — accounts on,
 // credentials fine, quota fine, no cooldown — and still serve nothing: the upstream
@@ -9,10 +9,12 @@
 // panel said ready the whole time.
 //
 // What this file keeps is the one fact the judgment could not see: what the last few
-// attempts actually ended as. The router writes one entry per attempt, the judgment
+// requests actually ended as. The router writes one entry per finished request (not one
+// per upstream attempt inside it: a request that tried qoder three times is still one
+// request the caller never got an answer from), and the judgment
 // reads the recent ones.
 //
-// Successes are recorded too (kind "ok", not skipped). "Every attempt was queued" only
+// Successes are recorded too (kind "ok", not skipped). "Every request was queued" only
 // means something against the mix: a ring holding nothing but failures cannot tell
 // "queued twice in a row" from "queued twice, and three good answers in between" —
 // and one queued answer is an accident, not a state.
@@ -25,7 +27,7 @@
 // In memory only, like the quota snapshot (lib/health-cache.ts): it is a trace of what
 // just happened, not state of our own. A restart must not resurrect yesterday's queue.
 
-/** One finished attempt: how it ended, and when. */
+/** One finished request: how it ended, and when. */
 export interface UpstreamAttempt {
   /** The kind the classification gave the failure (lib/router/provider-selection.ts), or "ok". */
   kind: string;
@@ -34,19 +36,19 @@ export interface UpstreamAttempt {
 }
 
 /**
- * How many attempts per platform are kept.
+ * How many requests per platform are kept.
  *
- * A ring, not a history: the judgment only ever asks "was every attempt in the last
+ * A ring, not a history: the judgment only ever asks "was every request in the last
  * few minutes queued", and a long list would keep saying "queued" long after the
  * queue cleared.
  */
 const MAX_ATTEMPTS = 20;
 
-/** Per platform, the most recent attempts, oldest first. */
+/** Per platform, the most recent requests, oldest first. */
 const attempts = new Map<string, UpstreamAttempt[]>();
 
 /**
- * Note how one attempt against this platform ended.
+ * Note how one request against this platform ended.
  *
  * Called with "ok" when the upstream answered: the ring has to hold both outcomes or
  * the recency question has no answer.
@@ -66,7 +68,7 @@ export function noteUpstreamFailure(platform: string, kind: string, at = Date.no
 }
 
 /**
- * The attempts this platform saw inside the window, oldest first.
+ * The requests this platform saw inside the window, oldest first.
  *
  * The window belongs to the reader: "recent" is a different number of minutes for the
  * panel than for whoever asks next, and a window fixed in here would have to be
