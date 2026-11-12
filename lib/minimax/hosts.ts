@@ -26,6 +26,11 @@
 // Empty means "not set", and only that: an empty setting falls through to the
 // next layer instead of being aimed at "". The answer loses its trailing
 // slashes, so every caller can join a path on with `${host}${path}`.
+//
+// The layers hold two different kinds of value, and the difference matters
+// where a table entry is a whole base rather than a host: see `sharedPath` on
+// HostChoice for which host that is and why the shared layer cannot carry the
+// path itself.
 
 import { configString } from "../config.ts";
 
@@ -54,6 +59,23 @@ export interface HostChoice {
    * caller has to know the tables' vocabulary (see regionKey).
    */
   region: string;
+  /**
+   * The path a table entry carries, put back on the shared setting when it wins.
+   *
+   * The tables are not uniform, and the asymmetry is the reason this field
+   * exists: four of the five hosts are reached at their origin, so their
+   * entries are hosts and each module appends its own path (`/account/...`,
+   * `/backend/...`), while the LLM gateway's instructions live under
+   * `/llm/v1`, so its entries are whole bases. `MINIMAX_API_BASE` is a host —
+   * one address for a mirror or a fake upstream, with the callers appending
+   * their paths to it — so on a table whose entry is a base, that entry's path
+   * is lost the moment the shared layer wins.
+   *
+   * So it is appended on the shared layer and nowhere else: the host's own
+   * setting and the table entry are already the whole base, and adding the path
+   * twice would 404 just as quietly as dropping it once did.
+   */
+  sharedPath?: string;
 }
 
 /** One setting, or "" when it is not set. Read on every call, like the other hot ones. */
@@ -118,6 +140,6 @@ export function resolveHost(choice: HostChoice): string {
   const own = layer(choice.setting);
   if (own) return bare(own);
   const shared = layer(choice.shared);
-  if (shared) return bare(shared);
+  if (shared) return `${bare(shared)}${choice.sharedPath ?? ""}`;
   return bare(defaultHost(choice.defaults, regionKey(choice.region)));
 }

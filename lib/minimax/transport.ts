@@ -28,12 +28,20 @@ const YY_SUFFIX = "ooui";
 const SIGNATURE_SALT = "I*7Cf%WZ#S&%1RlZJ&C2";
 
 /**
- * The LLM gateway per region. The instructions live under `/llm/v1`, so an
- * entry carries the whole path rather than just the origin.
+ * The gateway's path, the same on both regions. One spelling, because the table
+ * and the shared layer's repair have to agree: see INFER_HOSTS and sharedPath.
+ */
+const INFER_PATH = "/mavis/api/v1/llm/v1";
+
+/**
+ * The LLM gateway per region. A whole base rather than a host: four of the five
+ * MiniMax hosts are reached at their origin, but the gateway's instructions
+ * live under `/llm/v1`, so the path belongs to the table entry — and to the
+ * shared layer's repair when that layer wins (sharedPath below).
  */
 const INFER_HOSTS = {
-  cn: "https://agent.minimax.cn/mavis/api/v1/llm/v1",
-  en: "https://agent.minimax.io/mavis/api/v1/llm/v1",
+  cn: `https://agent.minimax.cn${INFER_PATH}`,
+  en: `https://agent.minimax.io${INFER_PATH}`,
 } as const;
 
 /**
@@ -51,10 +59,16 @@ const INFER_HOSTS = {
  * data plane: a self-test or an internal mirror that points the balance and the
  * points at a fake upstream must not leave the calls that spend the account's
  * tokens walking to the real platform.
+ *
+ * But that setting is a host, and this table's entries are bases — it covers the
+ * origin only, so the path has to come back on top of it, which is what
+ * `sharedPath` is for. Without it, every LLM call went to `/messages` at the
+ * mirror's root: a silent 404 with nothing in the log saying why.
  */
 export const BASE_URL = resolveHost({
   setting: "MINIMAX_BASE_URL",
   shared: "MINIMAX_API_BASE",
+  sharedPath: INFER_PATH,
   defaults: INFER_HOSTS,
   region: REGION,
 });

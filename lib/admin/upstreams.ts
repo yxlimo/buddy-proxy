@@ -10,6 +10,7 @@
 import { configNumber, configString } from "../config.ts";
 import { zcodeQuota } from "../zcode/credits.ts";
 import { readCredential } from "../minimax/auth.ts";
+import { regionKey } from "../minimax/hosts.ts";
 import { fetchMiniMaxBalance, fetchMiniMaxTokenPlanWithSession } from "../minimax/credits.ts";
 import {
   fetchMiniMaxCreditFallback,
@@ -246,8 +247,16 @@ const platformRefreshes = new Map<string, Promise<HealthSnapshot>>();
 /** 每个平台上次刷完的时刻。 */
 const platformRefreshedAt = new Map<string, number>();
 
-/** MiniMax 的区域。 */
-const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
+/**
+ * MiniMax 的区域，读进来就归一成 hosts.ts 的那两个键。
+ *
+ * 这里不做第二套归一：区域在这条路上只用来选主机和挑语言，而选主机
+ * （resolveHost）、挑语言（checkin.ts 的 regionLanguage）都过 regionKey，所以
+ * 传键就够。契约里 `global` 那个说法是「平台属于哪个区域」的措辞（见
+ * upstreamRegion），不是这一层的词汇 —— 这里自己翻译一次，`MINIMAX_REGION=global`
+ * 就会被判成 cn，与推理网关读同一个设置却走到另一个区。
+ */
+const MINIMAX_REGION = regionKey(configString("MINIMAX_REGION", "cn"));
 
 /**
  * MiniMax 账号上的余额。
@@ -257,7 +266,7 @@ const MINIMAX_REGION = configString("MINIMAX_REGION", "cn");
 export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
   try {
     const cred = await readCredential(providerId);
-    return await fetchMiniMaxBalance(cred.accessToken, MINIMAX_REGION === "en" ? "global" : "cn");
+    return await fetchMiniMaxBalance(cred.accessToken, MINIMAX_REGION);
   } catch {
     return null;
   }
@@ -273,7 +282,7 @@ export async function miniMaxBalance(providerId = "minimax"): Promise<unknown> {
 export async function miniMaxCreditLedger(
   providerId = "minimax",
 ): Promise<{ lots: CreditLot[] | null; points: number | null }> {
-  const region = MINIMAX_REGION === "en" ? "global" : "cn";
+  const region = MINIMAX_REGION;
   try {
     const cred = await readCredential(providerId);
     return await fetchMiniMaxCreditsAndPoints(cred.accessToken, region);
@@ -290,7 +299,7 @@ export async function miniMaxCreditLedger(
  * 第二条路，套餐 key 那套已经删了。
  */
 export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unknown> {
-  const region = MINIMAX_REGION === "en" ? "global" : "cn";
+  const region = MINIMAX_REGION;
   try {
     const cred = await readCredential(providerId);
     const withSession = await fetchMiniMaxTokenPlanWithSession(cred.accessToken, region);
@@ -304,7 +313,7 @@ export async function miniMaxCodeTokenPlan(providerId = "minimax"): Promise<unkn
 export async function miniMaxCreditFallback(
   providerId = "minimax",
 ): Promise<{ enabled: boolean | null; at: number }> {
-  const region = MINIMAX_REGION === "en" ? "global" : "cn";
+  const region = MINIMAX_REGION;
   try {
     const cred = await readCredential(providerId);
     return { enabled: await fetchMiniMaxCreditFallback(cred.accessToken, region), at: Date.now() };
