@@ -253,14 +253,14 @@ export function platformWithoutAccount(platformId: string, state: PlatformState)
   if (state === "no_credential") {
     return new AuthError(
       `platform ${platformId} has no usable credential`,
-      `这个平台的账号都还没有可用凭据。在面板的「上游」页填 API Key 或者登录。`,
+      `这个平台的账号都还没有可用凭据。在面板的「平台」页填 API Key 或者登录。`,
       400,
     );
   }
   if (state === "no_account") {
     return new AuthError(
       `platform ${platformId} has no account`,
-      `这个平台还没有账号。在面板的「上游」页给它加一个账号并登录。`,
+      `这个平台还没有账号。在面板的「平台」页给它加一个账号并登录。`,
       400,
     );
   }
@@ -275,7 +275,7 @@ export function platformWithoutAccount(platformId: string, state: PlatformState)
   // 账号都关着。别的状态到不了这里：它们说明账号与凭据都在。
   return new AuthError(
     `platform ${platformId} has no account turned on`,
-    `这个平台的账号都关着。在面板的「上游」页打开一个账号。`,
+    `这个平台的账号都关着。在面板的「平台」页打开一个账号。`,
     400,
   );
 }
@@ -311,11 +311,11 @@ const STATE_TEXT: Record<PlatformState, string> = {
 function remedyOf(state: PlatformState): string {
   switch (state) {
     case "no_account":
-      return "在面板的「上游」页新增一个账号并登录";
+      return "在面板的「平台」页新增一个账号并登录";
     case "accounts_off":
-      return "在面板的「上游」页启用一个账号";
+      return "在面板的「平台」页启用一个账号";
     case "no_credential":
-      return "在面板的「上游」页填写 API Key 或登录";
+      return "在面板的「平台」页填写 API Key 或登录";
     case "credential_expired":
       return "等待自动刷新，或重新登录";
     case "credential_unknown":

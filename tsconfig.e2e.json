@@ -1,0 +1,9 @@
+{
+  // 面板 e2e 套件（`e2e.config.ts` 与 `tests/`）的类型检查。
+  //
+  // 单独一份，不并进根目录的 include：`e2e` 还是 pre-1.0，它的类型随 minor 变，
+  // 不该让 `mise run check` 因为框架升了一版就红。跑法见 `mise run
+  // test:panel:e2e:typecheck`。
+  "extends": "./tsconfig.json",
+  "include": ["e2e.config.ts", "tests/**/*.ts"]
+}

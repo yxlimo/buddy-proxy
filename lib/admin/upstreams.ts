@@ -735,7 +735,7 @@ export function upstreamCredentialOf(availability: PlatformAvailability): Creden
     return {
       ...pick.view,
       status: CredentialState.MISSING,
-      detail: "没有可用凭据：在「上游」页填 API Key 或登录",
+      detail: "没有可用凭据：在「平台」页填 API Key 或登录",
     };
   }
   return pick.view;

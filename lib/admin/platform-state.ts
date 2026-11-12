@@ -367,11 +367,11 @@ function reasonOf(
 function adviceOf(state: PlatformState, refused: boolean): string {
   switch (state) {
     case "no_account":
-      return "这个平台还没有账号：在「上游」页新增一个账号并登录";
+      return "这个平台还没有账号：在「平台」页新增一个账号并登录";
     case "accounts_off":
-      return "这个平台的账号均已关闭：在「上游」页启用一个";
+      return "这个平台的账号均已关闭：在「平台」页启用一个";
     case "no_credential":
-      return "没有可用凭据：在「上游」页填写 API Key 或登录";
+      return "没有可用凭据：在「平台」页填写 API Key 或登录";
     case "credential_expired":
       return refused ? "凭据被拒绝：重新登录" : "凭据已过期：等待自动刷新，或重新登录";
     case "credential_unknown":

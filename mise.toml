@@ -527,6 +527,19 @@ run = "cd web && pnpm typecheck"
 description = "Run the panel's tests"
 run = "cd web && pnpm test"
 
+[tasks."test:panel:e2e"]
+description = "面板的 e2e 套件（真浏览器 + 本地网关，不发真请求）"
+# 面板产物先建出来（网关从 web/dist 托管面板）。
+depends = ["web:build"]
+# 遥测关掉：这是本机的私有库，别往外发使用数据。
+# 不进 check 的 depends：框架还是 pre-1.0，而且每次运行都要起一个实例。
+run = "E2E_TELEMETRY_DISABLED=1 pnpm exec e2e run --reporter list,junit"
+
+[tasks."test:panel:e2e:typecheck"]
+description = "Type-check the panel e2e suite (e2e.config.ts and tests/)"
+# 单独一份 tsconfig：e2e 是 pre-1.0，它的类型不进 `check` 那道门。
+run = "pnpm exec tsc -p tsconfig.e2e.json"
+
 # ── 构建 ──────────────────────────────────────────────────────────────────
 
 [tasks.build]

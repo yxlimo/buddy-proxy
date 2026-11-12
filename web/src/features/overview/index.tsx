@@ -67,7 +67,7 @@ export function OverviewPage() {
       </div>
 
       {/* 额度不在这里求和：余额（钱）、积分（点数）、套餐额度（百分比）
-          单位不同，加起来没有意义。各上游的额度去「上游」页看。 */}
+          单位不同，加起来没有意义。各上游的额度去「平台」页看。 */}
       <div className='grid gap-4 lg:grid-cols-3'>
         <Card>
           <CardHeader>

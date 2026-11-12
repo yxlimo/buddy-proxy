@@ -46,3 +46,13 @@ __pycache__/
 # 冒烟测试的日志目录（smoke.sh 建的）
 test/.smoke-logs/
 test/.tmp/
+
+# 面板的 e2e 套件（`mise run test:panel:e2e`）跑出来的东西：报告、trace、截图、
+# 本地网关实例的日志，以及这一次运行的数据目录路径。截图与 trace 里可能有账号
+# 标识，一律不入库。
+.e2e/
+# `e2e init` 会写的东西：skill（九个文件）与给 Claude Code 的软链。面板的用例
+# 是我们自己写在 `tests/` 下的，这两样不进仓库（`.agents/skills/` 下别的 skill
+# 是仓库里的东西，只挡 e2e 这一个）。
+.claude/
+.agents/skills/e2e/

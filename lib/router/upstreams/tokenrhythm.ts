@@ -142,7 +142,7 @@ export async function toTokenRhythm(
     if (!configured.length) {
       throw new AuthError(
         "no tokenrhythm account is set up",
-        "TokenRhythm 的账号还没有配好：在面板的「上游」页给它填上账号密码（查余额用）和 API key（发请求用）。",
+        "TokenRhythm 的账号还没有配好：在面板的「平台」页给它填上账号密码（查余额用）和 API key（发请求用）。",
         503,
       );
     }
