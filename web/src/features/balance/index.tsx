@@ -153,7 +153,7 @@ export function BalancePage() {
   return (
     <PageShell
       title='额度'
-      description='一个平台一行，点开看各账号的额度。余额、积分与套餐额度分别列示。'
+      description='余额、积分与套餐额度分别列示。'
       actions={
         <Button
           variant='outline'

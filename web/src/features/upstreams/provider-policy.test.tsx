@@ -447,7 +447,7 @@ describe('平台的生效策略', () => {
     // 不是「未设置」：服务端有值，面板就说有值。
     expect(trigger()).toHaveTextContent('降级')
     expect(
-      screen.getByText('当前：降级（这个平台没有这个选项）')
+      screen.getByText('当前：降级，这个平台没有这个选项')
     ).toBeInTheDocument()
 
     // 这个值在选项里补上了，标成「当前」且不可选。

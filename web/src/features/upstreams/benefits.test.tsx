@@ -271,7 +271,7 @@ describe('平台上的每日签到', () => {
     ).toBeInTheDocument()
   })
 
-  it('签到没成功（ok=false）：lines 照样显示出来，并说清有账号没成功', async () => {
+  it('签到没成功（ok=false）：lines 照样显示出来，并说清有账号未成功', async () => {
     const user = userEvent.setup({ delay: null })
     const { client } = setup({
       benefits: [
@@ -293,7 +293,7 @@ describe('平台上的每日签到', () => {
       await screen.findByText('[minimax] 凭据被上游拒了')
     ).toBeInTheDocument()
     expect(
-      screen.getByText('本次签到（有账号没成功）')
+      screen.getByText('本次签到，有账号未成功')
     ).toBeInTheDocument()
     // 账号那一行也标成没成功。
     expect(screen.getByText('未成功')).toBeInTheDocument()

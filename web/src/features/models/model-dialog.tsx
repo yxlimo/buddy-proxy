@@ -170,7 +170,7 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
 /** 继承时把现在实际的值显示出来。 */
 function inheritedHint(value: number | undefined): string {
   if (value === undefined) return '继承平台'
-  return `继承平台（现在 ${value.toLocaleString()}）`
+  return `继承平台，当前 ${value.toLocaleString()}`
 }
 
 function toTriState(value: boolean | undefined): TriState {
@@ -392,8 +392,8 @@ export function ModelDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value='single'>single（单一目标）</SelectItem>
-                  <SelectItem value='fallback'>fallback（依次回退）</SelectItem>
+                  <SelectItem value='single'>单一目标</SelectItem>
+                  <SelectItem value='fallback'>依次回退</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -412,7 +412,7 @@ export function ModelDialog({
                   placeholder={
                     draft.contextWindowInherit
                       ? inheritedHint(draft.effectiveContextWindow)
-                      : '留空 = 继承平台'
+                      : '留空则继承平台'
                   }
                   value={draft.contextWindow}
                   onChange={(event) =>
@@ -452,7 +452,7 @@ export function ModelDialog({
                   placeholder={
                     draft.maxOutputTokensInherit
                       ? inheritedHint(draft.effectiveMaxOutputTokens)
-                      : '留空 = 继承平台'
+                      : '留空则继承平台'
                   }
                   value={draft.maxOutputTokens}
                   onChange={(event) =>

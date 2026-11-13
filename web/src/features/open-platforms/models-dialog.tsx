@@ -664,7 +664,7 @@ function ModelFields({
       {billingText === null ? null : (
         <p className='text-sm text-muted-foreground'>
           <span className='me-1 text-xs'>
-            {billing?.overridden ? '人工填写' : '上游报价'}
+            {billing?.overridden ? '人工填写' : '平台报价'}
           </span>
           {billingText}
         </p>

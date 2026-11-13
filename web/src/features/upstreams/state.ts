@@ -37,7 +37,7 @@ export const UPSTREAM_STATE_HINTS: Record<UpstreamState, string> = {
   [UpstreamState.OUT_OF_CREDITS]: '额度用完了',
   [UpstreamState.LOGGING_IN]: '正在登录',
   [UpstreamState.COOLING]: '正在冷却',
-  [UpstreamState.QUEUED]: '上游把模型排进队列了，等它放行',
+  [UpstreamState.QUEUED]: '平台把模型排进了队列，等它放行',
 }
 
 /** 凭据状态的人话。 */

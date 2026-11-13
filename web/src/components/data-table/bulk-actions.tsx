@@ -38,7 +38,7 @@ export function DataTableBulkActions<TData>({
 
   useEffect(() => {
     if (selectedCount > 0) {
-      const message = `已选中 ${selectedCount} 个${entityName}，批量操作条可用。`
+      const message = `已选中 ${selectedCount} 个${entityName}`
 
       queueMicrotask(() => {
         setAnnouncement(message)

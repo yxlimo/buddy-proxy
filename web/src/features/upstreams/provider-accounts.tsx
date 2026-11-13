@@ -144,10 +144,7 @@ export function ProviderAccounts({
   if (accounts.length === 0) {
     return (
       <div>
-        <EmptyState
-          title='这个平台还没有账号'
-          description='点这一行的「新增账号」新增一个，然后在账号那一行登录'
-        />
+        <EmptyState title='这个平台还没有账号' />
       </div>
     )
   }
@@ -330,8 +327,8 @@ export function ProviderAccounts({
         <p className='text-sm font-medium'>凭据</p>
         <p className='text-xs text-muted-foreground'>
           {active
-            ? `${active.alias || active.id} 名下的凭据（只显示掩码和指纹）`
-            : '选一个账号，这里列出它名下的凭据'}
+            ? `${active.alias || active.id} 名下的凭据`
+            : '未选择账号'}
         </p>
       </div>
 

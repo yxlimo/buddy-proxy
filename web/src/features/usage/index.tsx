@@ -81,7 +81,7 @@ export function UsagePage() {
   return (
     <PageShell
       title='用量'
-      description='走过的请求：token、耗时与明细。只统计真正发到平台的请求。'
+      description='token、耗时与明细，只统计真正发到平台的请求。'
       actions={
         <Select
           value={windowFilter}
@@ -164,8 +164,9 @@ export function UsagePage() {
           <div className='grid gap-4 lg:grid-cols-2'>
             {/* 会话太多，只列用得最多的那几个。 */}
             <BreakdownCard
-              title='按会话（用得最多的 10 个）'
+              title='按会话'
               buckets={(summary.data?.bySession ?? []).slice(0, 10)}
+              total={(summary.data?.bySession ?? []).length}
             />
             {/* 主会话：子代理的请求并进主代理那一档。 */}
             <BreakdownCard
@@ -259,7 +260,7 @@ export function BreakdownCard({
       <CardContent className='grid gap-2'>
         {buckets.length === 0 ? (
           <p className='py-6 text-center text-sm text-muted-foreground'>
-            暂无数据。
+            暂无数据
           </p>
         ) : (
           buckets.map((bucket) => (
@@ -300,7 +301,7 @@ function DaySeries({
       <CardContent>
         {buckets.length === 0 ? (
           <p className='py-6 text-center text-sm text-muted-foreground'>
-            暂无数据。
+            暂无数据
           </p>
         ) : (
           <div className='flex items-end gap-1 overflow-x-auto pb-2'>

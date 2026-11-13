@@ -48,7 +48,7 @@ function policyHint(policy: ProviderPolicy): string {
     case ProviderPolicy.SINGLE:
       return '只用一个账号，不换'
     case ProviderPolicy.FALLBACK:
-      return '名下的账号挨个试，一个接不了就换下一个'
+      return '依次尝试名下的账号，一个接不了就换下一个'
     case ProviderPolicy.EXPIRY_FIRST:
       return '先用最先到期的余额'
     default:
@@ -125,7 +125,7 @@ export function ProviderPolicySelect({
     stateText ||
     (current === ProviderPolicy.UNSPECIFIED || offered.includes(current)
       ? policyHint(current)
-      : `当前：${currentLabel}（这个平台没有这个选项）`)
+      : `当前：${currentLabel}，这个平台没有这个选项`)
 
   return (
     <div className='grid gap-0.5'>

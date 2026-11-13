@@ -59,7 +59,7 @@ export function describeError(error: unknown): string {
     const detail = error.rawMessage || error.message
     switch (error.code) {
       case Code.Unauthenticated:
-        return `鉴权未通过：${detail}（访问令牌填写错误或尚未填写）`
+        return `鉴权未通过：${detail}。访问令牌填写错误或尚未填写`
       case Code.PermissionDenied:
         return `权限不足：${detail}`
       case Code.NotFound:

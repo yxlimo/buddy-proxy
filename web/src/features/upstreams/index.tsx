@@ -227,7 +227,7 @@ export function UpstreamsPage() {
   return (
     <PageShell
       title='平台'
-      description='平台分两种：内置的模板平台，和自己在面板上加的开放平台。每个平台下可以有多个账号。'
+      description='内置的模板平台与自建的开放平台，每个平台下可以有多个账号。'
       actions={
         <div className='flex items-center gap-2'>
           <Button
@@ -248,10 +248,7 @@ export function UpstreamsPage() {
       <Card>
         <CardContent className='px-0'>
           {list.length === 0 ? (
-            <EmptyState
-              title='网关没有返回任何平台'
-              description='正常情况下会有九个内置平台'
-            />
+            <EmptyState title='网关没有返回任何平台' />
           ) : sorting ? (
             <PlatformSortList
               platforms={list}

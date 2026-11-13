@@ -183,7 +183,7 @@ export function providerKeyAccess(input: {
   if (input.kinds.status === 'error') {
     return {
       status: 'failed',
-      message: `账号类型取不到，凭据格子还说不准：${input.kinds.message}`,
+      message: `账号类型取不到，凭据格子数不确定：${input.kinds.message}`,
     }
   }
   const declared = input.kinds.of(input.kind)
@@ -222,7 +222,7 @@ function openPlatformAccess(
   if (input.registry.status === 'error') {
     return {
       status: 'failed',
-      message: `插件列表取不到，凭据格子数还说不准：${input.registry.message}`,
+      message: `插件列表取不到，凭据格子数不确定：${input.registry.message}`,
     }
   }
   const plugin = input.registry.plugins.find(

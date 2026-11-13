@@ -16,6 +16,6 @@ export function intFieldProblem(text: string): string | null {
   const value = Number(trimmed)
   if (!Number.isFinite(value) || !Number.isInteger(value)) return '要填整数'
   if (value < 0) return '不能是负数'
-  if (value > MAX_INT32) return `别超过 ${MAX_INT32}`
+  if (value > MAX_INT32) return `不能超过 ${MAX_INT32}`
   return null
 }

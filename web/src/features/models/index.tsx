@@ -151,10 +151,10 @@ export function PublishedModelsPage() {
     >
       <Card>
         <CardHeader>
-          <CardTitle className='text-base'>主路由模型</CardTitle>
+          <CardTitle className='text-base'>模型列表</CardTitle>
           <CardDescription>
             <span>
-              根路由当前公布 {publishedCount} 个（共 {list.length} 个）。
+              主路由当前公布 {publishedCount} 个（共 {list.length} 个）。
             </span>
           </CardDescription>
         </CardHeader>
@@ -212,7 +212,7 @@ export function PublishedModelsPage() {
                     <TableCell>{model.displayName || '—'}</TableCell>
                     <TableCell>
                       <Badge variant='outline'>
-                        {model.strategy === 'fallback' ? 'fallback' : 'single'}
+                        {model.strategy === 'fallback' ? '依次回退' : '单一目标'}
                       </Badge>
                     </TableCell>
                     <TableCell>

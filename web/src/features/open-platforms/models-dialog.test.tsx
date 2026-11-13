@@ -1146,7 +1146,7 @@ describe('自定义模型弹窗', () => {
     await user.clear(context)
     await user.type(context, '2147483648')
     expect(
-      await screen.findByText('glm-4.6 · 上下文：别超过 2147483647')
+      await screen.findByText('glm-4.6 · 上下文：不能超过 2147483647')
     ).toBeInTheDocument()
 
     await user.clear(context)
@@ -1457,7 +1457,7 @@ describe('自定义模型弹窗：上游报的计费', () => {
     // 全 0 也是「不知道」：摆成 ¥0 等于把不知道说成免费。
     expect(dialogText()).not.toContain('¥')
     expect(dialogText()).not.toContain('每百万 token')
-    expect(dialogText()).not.toContain('上游报价')
+    expect(dialogText()).not.toContain('平台报价')
     expect(dialogText()).not.toContain('输入')
   })
 
@@ -1471,7 +1471,7 @@ describe('自定义模型弹窗：上游报的计费', () => {
 
     expect(dialogText()).not.toContain('¥')
     expect(dialogText()).not.toContain('每百万 token')
-    expect(dialogText()).not.toContain('上游报价')
+    expect(dialogText()).not.toContain('平台报价')
   })
 
   it('倍率计费的摆 ×，分时段倍率补在后面', async () => {
@@ -1567,12 +1567,12 @@ describe('自定义模型弹窗：人工覆盖计费', () => {
     await chooseOption(user, '计费方式', option)
   }
 
-  it('默认「不设置」：只读行说的是上游报价，三个单价框不摆', async () => {
+  it('默认「不设置」：只读行说的是平台报价，三个单价框不摆', async () => {
     openDialog(client({ models: priced() }))
 
     await ready()
     expect(selectOf('计费方式')).toHaveTextContent('不设置')
-    expect(dialogText()).toContain('上游报价')
+    expect(dialogText()).toContain('平台报价')
     expect(dialogText()).toContain(
       '输入 ¥8 / 输出 ¥28 / 缓存读 ¥2 每百万 token'
     )
@@ -1588,7 +1588,7 @@ describe('自定义模型弹窗：人工覆盖计费', () => {
 
     await ready()
     // 一行只读的都没有（上游没说），但计费方式那一格在。
-    expect(dialogText()).not.toContain('上游报价')
+    expect(dialogText()).not.toContain('平台报价')
     expect(selectOf('计费方式')).toBeVisible()
 
     await chooseBillingMode(user, '按 token')
@@ -1730,7 +1730,7 @@ describe('自定义模型弹窗：人工覆盖计费', () => {
     })
   })
 
-  it('人工写了就摆「人工填写」，不是「上游报价」', async () => {
+  it('人工写了就摆「人工填写」，不是「平台报价」', async () => {
     openDialog(
       client({
         models: [
@@ -1751,7 +1751,7 @@ describe('自定义模型弹窗：人工覆盖计费', () => {
 
     await ready()
     expect(dialogText()).toContain('人工填写')
-    expect(dialogText()).not.toContain('上游报价')
+    expect(dialogText()).not.toContain('平台报价')
     expect(dialogText()).toContain('输入 ¥8 / 输出 ¥28 每百万 token')
   })
 

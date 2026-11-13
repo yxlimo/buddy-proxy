@@ -87,7 +87,7 @@ export function BenefitsPanel({
               runResult.ok ? '' : 'text-destructive'
             }`}
           >
-            {runResult.ok ? '本次签到' : '本次签到（有账号没成功）'}
+            {runResult.ok ? '本次签到' : '本次签到，有账号未成功'}
           </p>
           {runResult.lines.map((line, index) => (
             <p key={index} className='text-xs text-muted-foreground'>

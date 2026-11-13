@@ -282,7 +282,7 @@ export function ConfigPage() {
                             item.overrideValue !== item.value ? (
                               // 面板写了、但环境变量在用：这份在库里等着。
                               <div className='text-xs text-muted-foreground'>
-                                面板里的值 {item.overrideValue}（环境变量在用）
+                                面板里的值 {item.overrideValue}，环境变量在用
                               </div>
                             ) : null}
                           </TableCell>

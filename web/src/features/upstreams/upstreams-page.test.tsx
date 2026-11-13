@@ -281,7 +281,7 @@ describe('上游页的平台列表', () => {
     expect(screen.getAllByText('minimax')).toHaveLength(2)
   })
 
-  it('平台下没有账号：展开时说明去哪儿加', async () => {
+  it('平台下没有账号：展开时说明没有账号', async () => {
     const user = userEvent.setup({ delay: null })
     const client = clientWith([
       platform({ accountCount: 0, accounts: [], hasEnabledAccount: false }),
@@ -296,9 +296,6 @@ describe('上游页的平台列表', () => {
     )
 
     expect(await screen.findByText('这个平台还没有账号')).toBeInTheDocument()
-    expect(
-      screen.getByText(/点这一行的「新增账号」新增一个/)
-    ).toBeInTheDocument()
   })
 
   it('「新增账号」带平台与别名，加完关掉弹窗', async () => {
@@ -323,7 +320,7 @@ describe('上游页的平台列表', () => {
     expect(within(dialog).getByText(/MiniMax Code/)).toBeInTheDocument()
     expect(within(dialog).getByText(/客户端地址不变/)).toBeInTheDocument()
 
-    await user.type(within(dialog).getByLabelText('别名（可以不填）'), 'M plan')
+    await user.type(within(dialog).getByLabelText('别名'), 'M plan')
     await user.click(within(dialog).getByRole('button', { name: '加上' }))
 
     await waitFor(() => {

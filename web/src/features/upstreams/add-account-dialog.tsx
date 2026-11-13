@@ -60,7 +60,7 @@ export function AddAccountDialog({
           </DialogDescription>
         </DialogHeader>
         <div className='grid gap-2'>
-          <Label htmlFor='account-alias'>别名（可以不填）</Label>
+          <Label htmlFor='account-alias'>别名</Label>
           <Input
             id='account-alias'
             value={alias}

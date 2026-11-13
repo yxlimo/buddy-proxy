@@ -48,8 +48,7 @@ export function NavUser() {
           >
             <DropdownMenuLabel className='p-0 font-normal'>
               <div className='px-1 py-1.5 text-start text-sm'>
-                访问令牌保存在浏览器的 localStorage 中。清除后，下次打开面板需
-                重新填写。
+                访问令牌保存在这台机器的浏览器里，清除后下次打开面板需要重新填写。
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />

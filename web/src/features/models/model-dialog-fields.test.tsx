@@ -185,10 +185,10 @@ describe('模型编辑弹窗', () => {
       )
     ).toHaveLength(0)
 
-    // 换成 fallback 也不长出来。
+    // 换成依次回退也不长出来。
     await user.click(screen.getByRole('tab', { name: /^基本/ }))
     await user.click(screen.getByRole('combobox', { name: '策略' }))
-    await user.click(await screen.findByRole('option', { name: /fallback/ }))
+    await user.click(await screen.findByRole('option', { name: '依次回退' }))
     await user.click(screen.getByRole('tab', { name: /平台目标/ }))
 
     expect(screen.queryByLabelText('权重')).not.toBeInTheDocument()

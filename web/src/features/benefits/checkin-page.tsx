@@ -55,7 +55,7 @@ export function CheckinPage() {
   return (
     <PageShell
       title='签到'
-      description='一个平台一行，点开看签到明细。'
+      description='按平台列出签到状态与明细。'
       actions={
         <Button size='sm' onClick={() => run.mutate()} disabled={run.isPending}>
           {run.isPending ? '签到中…' : '立即签到'}
