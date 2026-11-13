@@ -27,6 +27,12 @@ type ModelPickerProps = {
   onChange: (value: string) => void
   id?: string
   placeholder?: string
+  /**
+   * 这个平台里已经有别的行在用的模型 id：列出来但点不动。
+   *
+   * 判重是组合（平台 + 上游模型）：同一个平台挂两行同一个模型，后端存不下。
+   */
+  takenModelIds?: string[]
 }
 
 /**
@@ -40,6 +46,7 @@ export function ModelPicker({
   onChange,
   id,
   placeholder = '选一个平台模型',
+  takenModelIds = [],
 }: ModelPickerProps) {
   const upstreams = useUpstreams()
   // 目录跟上游的开关有关（关着就不给模型），所以缓存键里带上状态。
@@ -132,29 +139,40 @@ export function ModelPicker({
             <CommandList>
               <CommandEmpty>目录中没有匹配的模型。</CommandEmpty>
               <CommandGroup>
-                {models.map((model) => (
-                  <CommandItem
-                    key={model.id}
-                    value={model.id}
-                    onSelect={() => {
-                      onChange(model.id)
-                      setOpen(false)
-                    }}
-                  >
-                    <Check
-                      className={cn(
-                        'size-4',
-                        value === model.id ? 'opacity-100' : 'opacity-0'
-                      )}
-                    />
-                    <span className='flex-1 truncate'>{model.id}</span>
-                    {model.displayName && model.displayName !== model.id ? (
-                      <span className='text-xs text-muted-foreground'>
-                        {model.displayName}
-                      </span>
-                    ) : null}
-                  </CommandItem>
-                ))}
+                {models.map((model) => {
+                  // 别的行已经用掉这个组合了：还列出来，但选不了，并说清为什么。
+                  const taken = takenModelIds.includes(model.id)
+                  return (
+                    <CommandItem
+                      key={model.id}
+                      value={model.id}
+                      disabled={taken}
+                      onSelect={() => {
+                        if (taken) return
+                        onChange(model.id)
+                        setOpen(false)
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          'size-4',
+                          value === model.id ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      <span className='flex-1 truncate'>{model.id}</span>
+                      {taken ? (
+                        <span className='text-xs text-muted-foreground'>
+                          已经有一行
+                        </span>
+                      ) : model.displayName &&
+                        model.displayName !== model.id ? (
+                        <span className='text-xs text-muted-foreground'>
+                          {model.displayName}
+                        </span>
+                      ) : null}
+                    </CommandItem>
+                  )
+                })}
               </CommandGroup>
             </CommandList>
           </Command>

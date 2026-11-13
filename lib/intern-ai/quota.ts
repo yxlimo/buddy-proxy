@@ -1,4 +1,4 @@
-// lib/intern-ai/quota.ts — 两个子站的额度。
+// lib/intern-ai/quota.ts — 额度。
 //
 // Discovery（TokenPlan）的额度单位是「墨点」，不是一个数，是两套东西：
 //
@@ -21,11 +21,8 @@
 //            + 输出 token ÷ 1e6 × 输出价
 //
 // 价是「墨点 / 百万 token」。墨点跟 token 不是 1:1。
-//
-// Chat（浦语）没有墨点。它的额度是「agent 模式每天还能问多少次」，是一个
-// 次数，不是点数。
 
-import { INTERN_AI_CHAT_BASE, INTERN_AI_DISCOVERY_BASE } from "./config.ts";
+import { INTERN_AI_DISCOVERY_BASE } from "./config.ts";
 import { consoleApi } from "./platform.ts";
 import type { InternAiSession } from "./auth.ts";
 
@@ -152,14 +149,6 @@ export interface InternAiUsageSummary {
     requestCount: number;
     consumedCredits: number;
   }>;
-}
-
-/** Chat 的 agent 额度。 */
-export interface InternAiAgentQuota {
-  /** 问的是哪个模型。 */
-  modelId: string;
-  /** 今天还能问多少次。 */
-  remaining: number;
 }
 
 /**
@@ -356,18 +345,6 @@ export async function usageSummary(
     { query: { ...query, model: query.model ?? "all" } },
   );
   return parseUsageSummary(data);
-}
-
-/** 查 Chat 的 agent 每日额度。 */
-export async function agentQuota(
-  session: InternAiSession,
-  token: string,
-  modelId: string,
-): Promise<InternAiAgentQuota> {
-  const data = await consoleApi<any>(INTERN_AI_CHAT_BASE, "/puyu/agent/quota", session, token, {
-    query: { model_id: modelId },
-  });
-  return { modelId, remaining: num(data?.remaining) };
 }
 
 /**

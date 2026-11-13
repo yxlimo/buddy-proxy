@@ -1,9 +1,8 @@
 // lib/intern-ai/platform.ts — 控制台接口的调用方式。
 //
-// 两个子站的控制台是同一个形状，只是地址和路径前缀不同：
+// 控制台的接口都在一个前缀下：
 //
 //   Discovery  {discovery}/api/tokenplan/v1/…   key、墨点、用量
-//   Chat       {chat}/puyu/…                    API Token
 //
 // 鉴权要**两样都带**（实测）：
 //
@@ -73,7 +72,7 @@ export function consoleAuthHeaders(token: string, session?: InternAiSession): Re
 /**
  * 调用控制台接口。
  *
- * base 是子站地址，path 从 "/api/…" 或 "/puyu/…" 开始。
+ * base 是控制台地址，path 从 "/api/…" 开始。
  */
 export async function consoleApi<T>(
   base: string,

@@ -332,21 +332,20 @@ export function credentialsOf(accountId: string): CredentialRow[] {
       return out;
     }
     case "intern-ai": {
-      // 会话里是每个子站一份 token。
+      // 会话里是一把控制台 token。
       const sessionId = `session:provider:${account.id}`;
       const sessionRowData = secretOf(sessionId);
       const session = sessionRowData.data;
-      const sites = Array.isArray(session?.sites) ? session.sites : [];
-      const token = String(sites[0]?.token ?? "");
+      const token = String(session?.token ?? "");
       out.push({
         ...plainRow(
           sessionId,
           account,
           "session",
-          sites.length ? `子站 token（${sites.map((s: any) => s.name).join(" / ")}）` : "登录会话",
+          "登录 token",
           token,
-          // 子站 token 不能推理（推理要的是 Discovery 那把 key），但它仍然有用：
-          // 拿它去补 key、问额度。
+          // 登录 token 不能推理（推理要的是那把 key），但它仍然有用：拿它去补
+          // key、问额度。
           canInfer(account.kind, "session"),
           sessionRowData.updatedAt,
         ),
@@ -734,8 +733,8 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
           : { ok: false, message: "未配置登录账号" };
       }
       if (target.form === "session") {
-        const session = getSecret<{ sites?: unknown[] }>(`session:provider:${p.id}`);
-        return session?.sites?.length
+        const session = getSecret<{ token?: string }>(`session:provider:${p.id}`);
+        return session?.token
           ? { ok: true, message: "登录会话仍然有效" }
           : { ok: false, message: "没有登录会话" };
       }

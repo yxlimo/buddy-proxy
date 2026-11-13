@@ -53,11 +53,10 @@ describe('响应头上有机器码时按码给文案', () => {
     expect(text).not.toContain('资源已存在')
   })
 
-  it('认不得的码：说面板没跟上，并告一声', () => {
+  it('认不得的码：原样给机器码，并告一声', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const text = describeError(withCode('SOMETHING_NEW'))
-    expect(text).toContain('面板还没有这条的说明')
-    expect(text).toContain('SOMETHING_NEW')
+    expect(text).toBe('SOMETHING_NEW')
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
@@ -69,8 +68,7 @@ describe('响应头上有机器码时按码给文案', () => {
   it('原型键不吃文案：constructor 走「不认得」那一支', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const text = describeError(withCode('constructor'))
-    expect(typeof text).toBe('string')
-    expect(text).toContain('面板还没有这条的说明')
+    expect(text).toBe('constructor')
     expect(warn).toHaveBeenCalledTimes(1)
   })
 })

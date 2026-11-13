@@ -115,14 +115,8 @@ const LAYOUTS: Record<string, ProviderKeyLayout> = {
     fields: [
       {
         id: 'intern-ai-discovery-key',
-        label: 'Discovery 子站 key',
-        hint: '推理走的就是它；留空表示清掉它',
-        placeholder: 'sk-…',
-      },
-      {
-        id: 'intern-ai-chat-key',
-        label: 'Chat 子站 key（可空）',
-        hint: '给 Chat 子站用的，推理不用它；留空表示清掉它',
+        label: '推理 API Key',
+        hint: '推理走的就是这把 key；留空表示清掉它',
         placeholder: 'sk-…',
       },
     ],

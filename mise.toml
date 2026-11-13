@@ -55,7 +55,7 @@ run = "node --experimental-strip-types test/privacy-check.ts"
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:minimax:cycle", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:account-id", "test:open-platform:admin", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:open-platform:kind", "test:anthropic-platform", "test:open-platform:account", "test:credential:fault", "test:admin:parity", "test:platform:availability", "test:admin", "test:open-platforms", "test:platform:migration", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:workbuddy:catalog:tool", "test:refresh-flow", "test:zcode:headers", "test:zcode:system", "test:zcode:session", "test:zcode:quota", "test:zcode:rewrite", "test:zcode:rewrite:e2e", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:cooldown:single", "test:unreachable", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:deliver:backpressure", "test:peek:stream", "test:stream:idle", "test:empty-answer", "test:dialect:stream", "test:dialect:cache", "test:effort", "test:client:gone", "test:log:scrub", "test:scrub:client", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:qoder:legacy", "test:qoder:models", "test:helper", "test:config", "test:admin:config", "test:privacy"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:minimax:checkin", "test:minimax:cycle", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:account-id", "test:open-platform:admin", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:open-platform:kind", "test:anthropic-platform", "test:open-platform:account", "test:admin:state", "test:credential:fault", "test:admin:parity", "test:platform:availability", "test:admin", "test:open-platforms", "test:platform:migration", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:workbuddy:catalog:tool", "test:refresh-flow", "test:zcode", "test:zcode:headers", "test:zcode:system", "test:zcode:session", "test:zcode:quota", "test:zcode:rewrite", "test:zcode:rewrite:e2e", "test:session", "test:agent", "test:session-map", "test:tokenrhythm", "test:tokenrhythm:fallback", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:cooldown:single", "test:unreachable", "test:route", "test:snapshot", "test:health:cooldown", "test:aggregate", "test:aggregate:error", "test:aggregate:usage", "test:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:billing", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:model-traits:tool", "test:model:duplicate", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:deliver:backpressure", "test:peek:stream", "test:stream:idle", "test:empty-answer", "test:dialect:stream", "test:dialect:cache", "test:effort", "test:client:gone", "test:log:scrub", "test:scrub:client", "test:admin:policy", "test:sensenova:intern", "test:intern-ai", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:qoder:benefits", "test:qoder:legacy", "test:qoder:models", "test:helper", "test:config", "test:admin:config", "test:privacy"]
 
 
 [tasks."helper:sync"]
@@ -106,6 +106,9 @@ run = "node --experimental-strip-types test/minimax-fallback-check.ts"
 description = "Check the MiniMax availability: the plan windows, or the points plus the auto-spend switch"
 run = "node --experimental-strip-types test/minimax-credits-check.ts"
 
+# Not in the gate: the same file as test:policy:e2e, but with REQUIRE_BROWSER=1 — it
+# needs a real browser and a built panel, so a skip counts as a failure. Run it by
+# hand after `cd web && pnpm build`.
 [tasks."test:policy:browser"]
 description = "Check the policy in the real panel (needs the panel: cd web && pnpm build)"
 run = "REQUIRE_BROWSER=1 node --experimental-strip-types test/provider-policy-e2e-check.ts"
@@ -359,6 +362,9 @@ run = "node --experimental-strip-types test/xinghuo-check.ts"
 description = "Check the root route end to end (a fake upstream, no tokens spent)"
 run = "node --experimental-strip-types test/route-e2e-check.ts"
 
+# Not in the gate: offline, but 13 seconds, and 22 of its checks fail today (A4
+# models.auto, C11/D18 zcode as a platform, F21 the hand-written catalogue, H29
+# qiniu, I31/J32 modelsFromUpstream). Fix those, then add it.
 [tasks."test:e2e:matrix"]
 description = "Run the end-to-end matrix (platforms, logins, catalogue, weights, restart) against a fake upstream — slow, so not part of `test`"
 run = "node --experimental-strip-types test/matrix-e2e-check.ts"
@@ -389,6 +395,10 @@ run = "node --experimental-strip-types test/workbuddy-catalog-check.ts"
 description = "Check the tool that writes the WorkBuddy cn table: the values, the filter, and a stable file"
 run = "node --experimental-strip-types test/workbuddy-catalog-tool-check.ts"
 
+[tasks."test:catalog:billing"]
+description = "Check the billing read out of the four upstream catalogue shapes (the prices, the units, the \"0 is not free\" rule)"
+run = "node --experimental-strip-types test/catalog-billing-check.ts"
+
 [tasks."test:catalog:persist"]
 description = "Check the model catalogue that lives in the database: it survives a restart, and a stale one still counts"
 run = "node --experimental-strip-types test/catalog-persist-check.ts"
@@ -400,6 +410,10 @@ run = "node --experimental-strip-types test/model-catalog-check.ts"
 [tasks."test:model-overrides"]
 description = "Check the model metadata a person writes: the merge order, the replacement, the validation, and that nothing changes without one"
 run = "node --experimental-strip-types test/model-overrides-check.ts"
+
+[tasks."test:model:duplicate"]
+description = "Check the main route's model targets: no duplicate (platform, upstream model) pair gets saved, a normal fallback still saves, and an unexpected 500 leaves a trace in the log"
+run = "node --experimental-strip-types test/model-target-duplicate-check.ts"
 
 [tasks."test:model-traits"]
 description = "Check the common table: the data's shape, the id normalisation, and the two-level lookup (exact, then unambiguous prefix/suffix)"
@@ -537,7 +551,9 @@ run = "E2E_TELEMETRY_DISABLED=1 pnpm exec e2e run --reporter list,junit"
 
 [tasks."test:panel:e2e:typecheck"]
 description = "Type-check the panel e2e suite (e2e.config.ts and tests/)"
-# 单独一份 tsconfig：e2e 是 pre-1.0，它的类型不进 `check` 那道门。
+# Its own tsconfig (no jsdom, the e2e globals), so `web:typecheck` does not reach it.
+# It is in `check`'s depends: the suite itself needs a browser, but its types are
+# offline and cheap — that is where drift went unnoticed.
 run = "pnpm exec tsc -p tsconfig.e2e.json"
 
 # ── 构建 ──────────────────────────────────────────────────────────────────
@@ -554,4 +570,4 @@ run = "podman build --format docker -t localhost/buddy-proxy:latest ."
 
 [tasks.check]
 description = "Type-check and run every test: router and panel"
-depends = ["typecheck", "web:typecheck", "test", "web:test"]
+depends = ["typecheck", "web:typecheck", "test:panel:e2e:typecheck", "test", "web:test"]

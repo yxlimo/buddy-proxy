@@ -107,8 +107,8 @@ echo ""
 echo "a model from the database"
 
 saved=$(admin SavePublishedModel '{"model":{"id":"smart","displayName":"Smart","strategy":"fallback","enabled":true,"targets":[{"groupName":"minimax","upstreamModel":"MiniMax-M3.1-Flash","weight":1,"position":0,"enabled":true},{"groupName":"workbuddy-cn","upstreamModel":"glm-5.3-flash","weight":1,"position":1,"enabled":true}]}}' \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
-[ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id"))')
+[ "$saved" = "smart" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
 
 count=$(curl -fsS "$BASE/v1/models" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
 [ "$count" = "1" ] && check "the database is the catalog" 1 || check "the database is the catalog" 0
@@ -155,8 +155,8 @@ before=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completio
 [ "$before" = "404" ] && check "an unsaved model is not served" 1 || check "an unsaved model is not served" 0
 
 saved=$(admin SavePublishedModel '{"model":{"id":"from-panel","displayName":"From the panel","strategy":"single","enabled":true,"targets":[{"groupName":"qoder","upstreamModel":"glm-5.3","weight":1,"position":0,"enabled":true}]}}' \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ok"))')
-[ "$saved" = "True" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id"))')
+[ "$saved" = "from-panel" ] && check "the panel can save a model" 1 || check "the panel can save a model" 0
 
 after=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/chat/completions" \
   -H 'content-type: application/json' \

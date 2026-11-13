@@ -79,10 +79,8 @@ describe('机器码 → 面板文案', () => {
     )
   })
 
-  it('认不得的码有一句明说面板没跟上的话', () => {
-    const text = unknownAdminErrorText('SOMETHING_NEW')
-    expect(text).toContain('服务端说SOMETHING_NEW')
-    expect(text).toContain('面板还没有这条的说明')
+  it('认不得的码原样返回机器码', () => {
+    expect(unknownAdminErrorText('SOMETHING_NEW')).toBe('SOMETHING_NEW')
   })
 
   it('响应头名字是小写的 buddy-error', () => {

@@ -277,17 +277,12 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
 }
 
 {
-  const result = setProviderKeys(internAiId, ["sk-disc-1", "sk-chat-1"]);
+  const result = setProviderKeys(internAiId, ["sk-disc-1"]);
   check("书生·端砚：写成功了", result.ok === true, result.message);
-  check("书生·端砚：写进去两把", result.count === 2, String(result.count));
+  check("书生·端砚：写进去一把", result.count === 1, String(result.count));
   check(
     "书生·端砚：位置 0 是 Discovery 的",
     storedInternAi(internAiId)?.discoveryKey === "sk-disc-1",
-    JSON.stringify(storedInternAi(internAiId)),
-  );
-  check(
-    "书生·端砚：位置 1 是 Chat 的",
-    storedInternAi(internAiId)?.chatKey === "sk-chat-1",
     JSON.stringify(storedInternAi(internAiId)),
   );
   check(
@@ -301,17 +296,12 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
     JSON.stringify(storedInternAi(internAiId)),
   );
 
-  // Chat 的那把可以留空：空串表示清掉它，不算错。
-  const one = setProviderKeys(internAiId, ["sk-disc-2", ""]);
-  check("书生·端砚：只写一把也算写进去了", one.count === 1, String(one.count));
+  // 空串表示清掉它，不算错。
+  const cleared = setProviderKeys(internAiId, [""]);
+  check("书生·端砚：清掉了", cleared.count === 0, String(cleared.count));
   check(
-    "书生·端砚：Discovery 换了",
-    storedInternAi(internAiId)?.discoveryKey === "sk-disc-2",
-    JSON.stringify(storedInternAi(internAiId)),
-  );
-  check(
-    "书生·端砚：Chat 的那把清掉了",
-    !storedInternAi(internAiId)?.chatKey,
+    "书生·端砚：key 没了",
+    !storedInternAi(internAiId)?.discoveryKey,
     JSON.stringify(storedInternAi(internAiId)),
   );
   check(

@@ -347,10 +347,7 @@ function senseSession(accountId: string = senseRow.id): void {
 function internSession(accountId: string = internRow.id): void {
   saveInternAiSession(
     {
-      sites: [
-        { name: "discovery", token: "discovery-token-for-test", clientId: "cid-discovery" },
-        { name: "chat", token: "chat-token-for-test", clientId: "cid-chat" },
-      ],
+      token: "discovery-token-for-test",
       ssoUid: "1",
       obtainedAtMs: Date.now(),
       username: "tester",

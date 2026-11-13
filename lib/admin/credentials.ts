@@ -75,9 +75,9 @@ function kindNameOf(upstreamId: string): string {
  * 开放平台：一把推理用的 API key（位置就是第一个），后面几把按平台所选额度
  * 插件的 fields 顺序，一段一段写进插件要的那个位置。
  *
- * SenseNova：一把推理用的 key。书生·端砚：两把（Discovery 与 Chat）。TokenRhythm：
- * 一把推理用的 key。它们的位置都是顺序：第一把是推理用的 key，空的那把表示
- * 清掉它（与七牛云、讯飞星火一个意思）。
+ * SenseNova：一把推理用的 key。书生·端砚：一把推理用的 key（Discovery）。
+ * TokenRhythm：一把推理用的 key。它们的位置都是顺序：第一把是推理用的 key，
+ * 空的那把表示清掉它（与七牛云、讯飞星火一个意思）。
  *
  * 只改 key 那一格：账号、密码、会话原样留着（把它们清掉等于把登录态清了）。
  *
@@ -182,18 +182,15 @@ export function setProviderKeys(
     };
   }
   if (kind === "intern-ai") {
-    // 书生·端砚两把：位置 0 是 Discovery 的，位置 1 是 Chat 的。空的那把表示
-    // 清掉它 —— Chat 的那把留着空不算错（网关推理走的是 Discovery）。
+    // 书生·端砚只有一把推理用的 key（Discovery 的）：位置就是第一个。空的那把
+    // 表示清掉它。
     const discoveryKey = String(keys[0] ?? "").trim();
-    const chatKey = String(keys[1] ?? "").trim();
-    const count = writeInternAiKeys(upstreamId, { discoveryKey, chatKey });
-    const parts: string[] = [];
-    if (discoveryKey) parts.push("Discovery key");
-    if (chatKey) parts.push("Chat key");
-    const message = parts.length
-      ? `已保存书生·端砚的 ${parts.join(" 与 ")}`
-      : "已清除书生·端砚的推理 key";
-    return { ok: true, message, count };
+    const count = writeInternAiKeys(upstreamId, { discoveryKey });
+    return {
+      ok: true,
+      message: count ? "已保存书生·端砚的推理 key" : "已清除书生·端砚的推理 key",
+      count,
+    };
   }
   if (kind === "tokenrhythm") {
     // TokenRhythm 只有一把推理用的 key：位置就是第一个。空的那把表示清掉它。

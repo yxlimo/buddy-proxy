@@ -3,14 +3,11 @@
 // 这个平台是两套东西拼起来的：
 //
 //   openxlab.org.cn  账号体系。登录、OAuth 授权码都在那边（sso.openxlab.org.cn）。
-//   intern-ai.org.cn 业务面。两个子站各占一块，共享同一个账号：
+//   intern-ai.org.cn 业务面。控制台在 discovery.intern-ai.org.cn，
+//                    推理在 discovery-api.intern-ai.org.cn，额度单位是「墨点」。
 //
-//     Discovery（端砚）  控制台在 discovery.intern-ai.org.cn，
-//                        推理在 discovery-api.intern-ai.org.cn，
-//                        额度单位是「墨点」。
-//     Chat（浦语）       控制台和推理都在 chat.intern-ai.org.cn，
-//                        API Token 的控制台页面在 internlm.intern-ai.org.cn/api/tokens，
-//                        额度不是墨点，是「每天还能问多少次」。
+// 曾经还有一个 Chat（浦语）子站（chat.intern-ai.org.cn）：它的推理端点现在回
+// 401，账号也换不出它的 token，所以整套地址随之删掉了 —— 不要再加回来。
 //
 // 地址是「设置」，走 lib/config.ts 的读取层：环境 → 数据库 → 代码里的默认。
 // 默认值是公开端点地址，不是凭据。
@@ -53,50 +50,17 @@ export const INTERN_AI_DISCOVERY_USERCENTER_BASE = configString(
   "https://discovery-usercenter.intern-ai.org.cn",
 ).replace(/\/+$/, "");
 
-/** Chat 子站（浦语）——控制台和推理都在这里。 */
-export const INTERN_AI_CHAT_BASE = configString("INTERN_AI_CHAT_BASE", "https://chat.intern-ai.org.cn").replace(
-  /\/+$/,
-  "",
-);
-
-/** Chat 子站的推理端点（OpenAI 方言）。 */
-export const INTERN_AI_CHAT_API_BASE = configString(
-  "INTERN_AI_CHAT_API_BASE",
-  "https://chat.intern-ai.org.cn/api/v1",
-).replace(/\/+$/, "");
-
-/**
- * Chat 子站的 Anthropic 方言端点。
- *
- * 跟 OpenAI 那边不是一个前缀：Anthropic 的路径是 `/v1/messages`，不带
- * `/api`。所以这里单独一个地址。
- */
-export const INTERN_AI_CHAT_ANTHROPIC_BASE = configString(
-  "INTERN_AI_CHAT_ANTHROPIC_BASE",
-  "https://chat.intern-ai.org.cn",
-).replace(/\/+$/, "");
-
-/** Chat 子站的 API Token 控制台（就是「API Tokens」那一页）。 */
-export const INTERN_AI_CHAT_CONSOLE_BASE = configString(
-  "INTERN_AI_CHAT_CONSOLE_BASE",
-  "https://internlm.intern-ai.org.cn",
-).replace(/\/+$/, "");
-
 /**
  * Discovery 子站的 OAuth 客户端 id。
  *
- * 客户端 id 决定「授权码能换到哪个应用」。两个子站各有一个，不是同一把：
- * 拿 Discovery 的 id 去换 Chat 的 token，平台会拒。
+ * 客户端 id 决定「授权码能换到哪个应用」：拿别的应用的 id 去换，平台会拒。
  */
 export const INTERN_AI_DISCOVERY_CLIENT_ID = configString(
   "INTERN_AI_DISCOVERY_CLIENT_ID",
   "dagw07mkg1bazlxzoy31",
 );
 
-/** Chat 子站的 OAuth 客户端 id。 */
-export const INTERN_AI_CHAT_CLIENT_ID = configString("INTERN_AI_CHAT_CLIENT_ID", "ebmrvod6yo0nlzaek1yp");
-
-/** SSO 发的会话 cookie 名。两个子站都读它。 */
+/** SSO 发的会话 cookie 名。控制台接口读它。 */
 export const INTERN_AI_TOKEN_COOKIE = "uaa-token";
 
 /**
@@ -114,7 +78,7 @@ export function internAiCredentials(
 }
 
 /**
- * token 与两把推理 key。
+ * 登录会话的 token 与推理用的那把 key。
  *
  * 只有账号自己那一处：环境变量不是凭据来源（删掉的账号转眼又会有一把）。
  */
@@ -123,9 +87,5 @@ export function internAiToken(fallback?: string | null): string {
 }
 
 export function internAiDiscoveryKey(fallback?: string | null): string {
-  return fallback || "";
-}
-
-export function internAiChatKey(fallback?: string | null): string {
   return fallback || "";
 }

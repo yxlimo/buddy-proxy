@@ -11,16 +11,81 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type Koa from "koa";
-import { createConnectRouter } from "@connectrpc/connect";
+import { createConnectRouter, type Interceptor } from "@connectrpc/connect";
 import { universalRequestFromNodeRequest, universalResponseToNodeResponse } from "@connectrpc/connect-node";
 import { AdminService } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { adminService } from "./service.ts";
+import { ADMIN_ERROR_HEADER } from "./error-codes.ts";
 import { checkAdminToken } from "./token.ts";
+import { scrubForLog } from "../log-scrub.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /** Connect 的路径前缀：POST /buddy.admin.v1.AdminService/<方法>。 */
 export const CONNECT_PREFIX = "/buddy.admin.v1.AdminService";
+
+/**
+ * 这次调用是哪一个方法（写进日志用）。
+ *
+ * 面板那边只看见一句 "internal error"，光看它不知道是哪个方法炸的 ——
+ * 方法路径与栈一起留着，才查得下去。
+ *
+ * 只要路径，不要主机：Connect 的拦截器拿到的 url 是绝对的（authority 来自
+ * 请求的 Host 头），整条打出去会把内网主机名写进容器日志，而日志会被复制、
+ * 归档、发到别处。query 也一样不留 —— 那里面只有 connect 的协议参数。
+ * 取不出路径（不是 URL 形状）就原样退回，这一层不该因为打日志而抛。
+ */
+function methodPath(req: {
+  url?: string;
+  method?: { parent?: { typeName?: string }; name?: string };
+}): string {
+  const url = typeof req.url === "string" ? req.url : "";
+  if (url) {
+    try {
+      // base 只是为了让相对路径也能拆开（`/a/b?x=1` 这种也取得到 pathname）。
+      const { pathname } = new URL(url, "http://placeholder");
+      if (pathname) return pathname;
+    } catch {
+      /* 不是 URL 形状：退回原值 */
+    }
+    return url;
+  }
+  const service = req.method?.parent?.typeName ?? "unknown";
+  const method = req.method?.name ?? "unknown";
+  return `${service}/${method}`;
+}
+
+/**
+ * 实现里抛出来的意外在拦截器这一层留痕（实现与 Connect 之间）。
+ *
+ * Connect 的 handler-factory 把整段实现调用（含拦截器）包在自己的 try/catch
+ * 里，非 ConnectError 一律换成一句 "internal error" 的 500 —— 栈没有了，排查
+ * 的时候什么都看不见（面板保存主路由模型撞重复目标的那次 500 就是这么查不动
+ * 的：既没有日志，也没有线索）。所以在这一层把方法路径与栈打出来，再原样抛
+ * 回去：答复还是那个 500，只是日志里留得下痕迹。
+ *
+ * 判据与抹都在这里，因为只有这一份：
+ *
+ *   · 判据 —— 面板自己问出来的失败带着机器码（buddy-error 头），服务方法那边
+ *     已经写过日志了，再打一遍栈只是噪音，还会把每个 400 刷成一条栈。没带机
+ *     器码的才是意外 —— 写库撞约束、上游炸了这种，它们会变成 500，必须留痕。
+ *   · 抹 —— 栈里带着 error message，而上游正文片段会被原样塞进 message（见
+ *     sensenova/models.ts、intern-ai/models.ts）；从 checkout 跑时栈里还有
+ *     本机路径。进日志之前一律抹一遍。
+ */
+export const traceUnexpected: Interceptor = (next) => async (req) => {
+  try {
+    return await next(req);
+  } catch (err) {
+    const metadata = (err as { metadata?: { get(name: string): string | null } })?.metadata;
+    const asked = Boolean(metadata && typeof metadata.get === "function" && metadata.get(ADMIN_ERROR_HEADER));
+    if (!asked) {
+      const stack = scrubForLog(err instanceof Error ? err.stack ?? err.message : String(err), 500);
+      console.error(`[ADMIN] ${methodPath(req)} 出了意外：${stack}`);
+    }
+    throw err;
+  }
+};
 
 /**
  * Connect 的路由。
@@ -35,6 +100,7 @@ const connectRouter = createConnectRouter({
   grpc: false,
   grpcWeb: false,
   jsonOptions: { alwaysEmitImplicit: true },
+  interceptors: [traceUnexpected],
 });
 connectRouter.service(AdminService, adminService);
 
@@ -58,6 +124,10 @@ async function handleConnect(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
   const uReq = universalRequestFromNodeRequest(req, res, undefined, undefined);
+  // 这里不要兜底。handler 是 handler-factory 造出来的，它把实现调用（连同
+  // 拦截器）整段包在自己的 try/catch 里，实现抛的异常从不外逃到这里 —— 只会
+  // 被换成 500。真正留痕的是拦截器 traceUnexpected，再在这儿写个 catch 只会
+  // 让人以为它在起作用（它一次也不会进）。
   const uRes = await handler(uReq);
   await universalResponseToNodeResponse(uRes, res);
 }

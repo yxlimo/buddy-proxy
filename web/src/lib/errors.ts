@@ -37,7 +37,7 @@ export function assertOk(
  * 至少要让人知道是自己没填令牌，还是网关自己出问题了。
  *
  * 三档：响应头上有机器码且面板认得 → 码表那句话（那句话已经是给人照着改的，
- * 不再拼前缀，也不带服务端的事实句）；有码但认不得 → 说明面板没跟上；
+ * 不再拼前缀，也不带服务端的事实句）；有码但认不得 → 原样给机器码；
  * 没有码 → 按 Connect 的 Code 兜底。
  */
 export function describeError(error: unknown): string {
@@ -52,7 +52,8 @@ export function describeError(error: unknown): string {
       const text = adminErrorText(machineCode)
       if (text) return text
       // 后端加了码、面板还没跟：开发期要能看见，不能静默退回「内部错误」。
-      console.warn(`[errors] 面板还没有 ${machineCode} 这条的说明`)
+      // 只打码：看码就知道是什么，不需要一句解释面板缺了什么。
+      console.warn('[errors]', machineCode)
       return unknownAdminErrorText(machineCode)
     }
     const detail = error.rawMessage || error.message

@@ -32,7 +32,7 @@ export interface InternAiLogin {
 /** 面板上那句话。人机校验要人点，所以这里说的是「你去点，再把 token 给我」。 */
 const MESSAGE =
   `在浏览器里打开上面的链接登录，然后从开发者工具的 Cookie 里复制 uaa-token，贴回面板。` +
-  `两个子站共用这个 token，不用分别登。这一步要人自己点，服务器替不了。`;
+  `这一步要人自己点，服务器替不了。`;
 
 /** 人机校验的三个值（浏览器里过一次验证码才有）。少一个就当没给。 */
 function captchaOf(input: SubmitInput): InternAiCaptcha | undefined {
@@ -58,12 +58,11 @@ registerLoginFlow<InternAiLogin>("intern-ai", {
   }),
 
   submit: async (ctx, input): Promise<InternAiLogin> => {
-    // 契约里没有「登哪个子站」这一项，所以两个子站都登。
     const session = await login(
       { user: input.username, password: input.password, captcha: captchaOf(input) },
       ctx.accountId,
     );
-    // 推理端点认的是 Discovery 子站那把 key：key 由用户自己在面板上填，登录
+    // 推理端点认的是 Discovery 那把 key：key 由用户自己在面板上填，登录
     // 不碰它，只说清账号上有没有。
     const hasKey = Boolean(internAiDiscoveryKey(storedAccount(ctx.accountId)?.discoveryKey));
     return { session, hasKey };

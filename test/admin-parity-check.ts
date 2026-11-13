@@ -331,7 +331,7 @@ function seedCredentials(kind: string, accountId: string): void {
     return;
   }
   if (kind === "intern-ai") {
-    setSecret(session, "session", { sites: [{ name: "子站", token: "site-token" }], obtainedAtMs: Date.now() });
+    setSecret(session, "session", { token: "site-token", obtainedAtMs: Date.now() });
     setSecret(account, "account", { discoveryKey: "dk-test" });
     return;
   }

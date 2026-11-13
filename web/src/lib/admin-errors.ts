@@ -55,6 +55,7 @@ export const ADMIN_ERROR_TEXT: Readonly<Record<string, string>> = {
   MODEL_ID_DUPLICATE: '有两个模型 id 只差大小写',
   MODEL_HAS_NO_TARGET: '这个模型没有上游目标',
   MODEL_MISSING_UPSTREAM: '上游模型 id 没有填',
+  MODEL_DUPLICATE_TARGET: '同一平台上同一个上游模型有两行',
   MODEL_NUMBER_INVALID: '上下文长度或输出上限不是整数',
   MODEL_NUMBER_OUT_OF_RANGE: '上下文长度或输出上限超出范围',
   MODEL_CREDITS_INVALID: '倍率是负数',
@@ -66,9 +67,14 @@ export const ADMIN_ERROR_TEXT: Readonly<Record<string, string>> = {
   MODEL_OVERRIDE_NOT_FOUND: '这条自定义模型不存在',
 }
 
-/** 没有这条码的文案（后端加了码、面板还没跟上）。 */
+/**
+ * 没有这条码的文案（后端加了码、面板还没跟上）。
+ *
+ * 直接给机器码：这时候任何中文包装都只会把码埋进一句话里，反而更难搜、
+ * 更难贴去查。缺哪条码由 `describeError` 的 console.warn 报给开发。
+ */
 export function unknownAdminErrorText(code: string): string {
-  return `服务端说${code}（面板还没有这条的说明）`
+  return code
 }
 
 /**

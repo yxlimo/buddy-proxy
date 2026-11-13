@@ -78,6 +78,37 @@ function targetFilled(target: ModelDraft['targets'][number]): boolean {
   return target.groupName.trim() !== '' && target.upstreamModel.trim() !== ''
 }
 
+/**
+ * 判重按组合（平台, 上游模型），不按单个字段：
+ * 同一个平台上挂两个不同的模型、或者同一个模型挂在两个平台上，都是正常的。
+ */
+function targetKey(groupName: string, upstreamModel: string): string {
+  return `${groupName.trim()}\u0000${upstreamModel.trim()}`
+}
+
+/**
+ * 组合重复的行：行号 → 这个组合第一次出现在第几行（从 1 数，给用户看）。
+ *
+ * 只标后面那几行：用户看到的错是「这一行和上面某一行撞了」。
+ * 后端建表时 (model_id, group_name, upstream_model) 是主键，撞了存不下，
+ * 所以这种草稿根本没出门的必要。
+ */
+function duplicateTargets(targets: ModelDraft['targets']): Map<number, number> {
+  const seen = new Map<string, number>()
+  const duplicated = new Map<number, number>()
+  targets.forEach((target, index) => {
+    if (!targetFilled(target)) return
+    const key = targetKey(target.groupName, target.upstreamModel)
+    const first = seen.get(key)
+    if (first === undefined) {
+      seen.set(key, index)
+      return
+    }
+    duplicated.set(index, first)
+  })
+  return duplicated
+}
+
 export function toDraft(model: PublishedModel | undefined): ModelDraft {
   if (!model) {
     return {
@@ -225,9 +256,33 @@ export function ModelDialog({
   // 放行一个「发出去是空 targets」的请求。
   const filledTargets = draft.targets.filter(targetFilled)
 
+  // 组合撞了的行：后端存不下这种草稿（主键 (model_id, group_name,
+  // upstream_model)），所以在这里就拦住，不发请求。
+  const duplicated = duplicateTargets(draft.targets)
+
+  /**
+   * 这一行能选的上游模型里，哪些已经被别的行占着了。
+   * 只有同一个平台才有意义：判重是组合，不是单个模型 id。
+   */
+  const takenModelIds = (index: number): string[] => {
+    const group = draft.targets[index]?.groupName.trim() ?? ''
+    if (group === '') return []
+    return draft.targets
+      .filter((target, i) => {
+        if (i === index) return false
+        return (
+          target.groupName.trim() === group &&
+          target.upstreamModel.trim() !== ''
+        )
+      })
+      .map((target) => target.upstreamModel.trim())
+  }
+
   // 哪个分组里有没填的必填项：分组标题上标红，切过去给行内提示。
   const basicMissing = draft.id.trim().length === 0
   const targetsMissing = filledTargets.length === 0
+  // 组合撞了也是「平台目标」那一页的问题：保存灰着的时候，用户得知道去哪看。
+  const targetsProblem = targetsMissing || duplicated.size > 0
   // 两个整数格：继承时不判（那两格灰着，值不属于这一单），填了才判。
   const contextProblem = draft.contextWindowInherit
     ? null
@@ -240,7 +295,8 @@ export function ModelDialog({
     !basicMissing &&
     !targetsMissing &&
     contextProblem === null &&
-    outputProblem === null
+    outputProblem === null &&
+    duplicated.size === 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -262,7 +318,7 @@ export function ModelDialog({
             </TabsTrigger>
             <TabsTrigger value='targets'>
               平台目标
-              {targetsMissing ? <RequiredDot /> : null}
+              {targetsProblem ? <RequiredDot /> : null}
             </TabsTrigger>
           </TabsList>
 
@@ -485,11 +541,17 @@ export function ModelDialog({
                     id={`target-model-${index}`}
                     groupName={target.groupName}
                     value={target.upstreamModel}
+                    takenModelIds={takenModelIds(index)}
                     onChange={(value) =>
                       patchTarget(index, { upstreamModel: value })
                     }
                   />
                 </div>
+                {duplicated.has(index) ? (
+                  <p className='text-xs text-destructive sm:col-span-2'>
+                    {`${target.groupName.trim()} / ${target.upstreamModel.trim()} 已经有一行了（第 ${(duplicated.get(index) ?? 0) + 1} 个目标）`}
+                  </p>
+                ) : null}
                 {/* 权重只有 fallback 用得上：single 只走一个目标，权重没意义，
                     整块藏掉（不是禁用）。 */}
                 {draft.strategy === 'fallback' ? (

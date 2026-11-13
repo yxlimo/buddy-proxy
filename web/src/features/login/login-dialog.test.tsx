@@ -246,7 +246,7 @@ describe('登录对话框', () => {
     ).toBeInTheDocument()
     // token 从哪拿：开发者工具的 Cookie。
     expect(screen.getByText(/开发者工具/)).toBeInTheDocument()
-    // intern-ai 的两个子站共用一个 token：不问子站了。
+    // 一次登录就是一把控制台 token：不再问「登哪个子站」。
     expect(screen.queryByText('子站')).not.toBeInTheDocument()
     expect(screen.queryByText(/discovery/)).not.toBeInTheDocument()
     expect(screen.queryByText(/chat（对话）/)).not.toBeInTheDocument()
@@ -275,7 +275,7 @@ describe('登录对话框', () => {
     })
 
     expect(await screen.findByLabelText('授权码')).toBeInTheDocument()
-    // intern-ai 的两个子站共用一个 token：不问子站了。
+    // 一次登录就是一把控制台 token：不再问「登哪个子站」。
     expect(screen.queryByText('子站')).not.toBeInTheDocument()
     expect(screen.queryByText(/discovery/)).not.toBeInTheDocument()
   })

@@ -20,7 +20,7 @@ import { INTERN_AI_DISCOVERY_BASE } from "./config.ts";
 // register 互相引用，id 若在本模块里，register 在求值期读它就会撞上「还在初始化」。
 import { INTERN_AI_CREDITS_PLUGIN_ID } from "./quota-plugin-id.ts";
 export { INTERN_AI_CREDITS_PLUGIN_ID };
-import { InternAiError, loadSession, tokenFor } from "./auth.ts";
+import { InternAiError, loadSession } from "./auth.ts";
 import {
   balance as internAiBalance,
   creditPacks as internAiCreditPacks,
@@ -177,9 +177,8 @@ export const internAiCreditsPlugin = registerQuotaPlugin({
   probe: async (account) => {
     const session = loadSession(account.id);
     if (!session) return quotaProbe("missing", "账号上没有端砚的会话，无法查询墨点");
-    const token = tokenFor(session, "discovery");
-    // 两个子站各有各的 token，墨点在 Discovery 那边：Chat 的 token 读不到它。
-    if (!token) return quotaProbe("missing", "账号上没有 Discovery 子站的 token，无法查询墨点");
+    // 墨点在 Discovery 的控制台上，只认登录换来的 token：推理用的那把 key 读不到它。
+    const token = session.token;
 
     let balance: InternAiBalance;
     // 墨点在 Discovery 那一台上；平台行把地址指到别处时问那一台。

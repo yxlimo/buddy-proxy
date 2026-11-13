@@ -1,8 +1,7 @@
-// lib/intern-ai/keys.ts — 两个子站各自的 API key。
+// lib/intern-ai/keys.ts — Discovery（端砚）的 API key。
 //
-// 两边的 key 各管各的，接口长得像但不一样：
+// 控制台上的那一套接口：
 //
-//   Discovery（TokenPlan）
 //     GET    {discovery}/api/tokenplan/v1/keys
 //     POST   {discovery}/api/tokenplan/v1/keys            body {name}，头 Idempotency-Key
 //     PUT    {discovery}/api/tokenplan/v1/keys/{id}       body {name}
@@ -10,25 +9,16 @@
 //     POST   {discovery}/api/tokenplan/v1/keys/{id}/enable
 //     DELETE {discovery}/api/tokenplan/v1/keys/{id}
 //
-//   Chat（浦语）
-//     GET    {chat}/puyu/user/tokens
-//     POST   {chat}/puyu/user/tokens                      body {token_name}
-//     DELETE {chat}/puyu/user/tokens/{id}
+// 两条要紧的规矩：
 //
-// 两条都要紧的规矩：
+//   完整的 key 只在创建的那一次回答里出现（`data.key`），列表里永远是掩码。
+//   所以账号要用的那把 key 由用户自己在面板上填（见 writeInternAiKeys），
+//   网关不替人建。
 //
-//   完整的 key 只在创建的那一次回答里出现。Discovery 是在 data.key，Chat 是
-//   在 data.token.token（多套了一层）。列表里永远是掩码。所以账号要用的那把
-//   key 由用户自己在面板上填（见 writeInternAiKeys），网关不替人建。
-//
-//   建 key 要带幂等键。Discovery 的接口要求 `Idempotency-Key` 头；同一个键重
-//   发一次不会建出两把 key（-15109）。
+//   建 key 要带幂等键：同一个键重发一次不会建出两把 key（-15109）。
 
 import crypto from "node:crypto";
-import {
-  INTERN_AI_CHAT_BASE,
-  INTERN_AI_DISCOVERY_BASE,
-} from "./config.ts";
+import { INTERN_AI_DISCOVERY_BASE } from "./config.ts";
 import { consoleApi } from "./platform.ts";
 import { accountId, storedAccount, type InternAiSession } from "./auth.ts";
 import { setSecret } from "../store.ts";
@@ -54,31 +44,10 @@ export interface DiscoveryApiKey {
   plainKey?: string;
 }
 
-/** Chat（浦语）的一把 API Token。 */
-export interface ChatApiToken {
-  id: string;
-  /** 人起的名字。 */
-  name: string;
-  /** 掩码后的 token。 */
-  maskedToken: string;
-  /** 权限（平台给的是数字，1 = 可用）。 */
-  authStatus: number | string;
-  createdAt: string | null;
-  /** 有效期至。平台用 "-" 表示没有到期日。 */
-  expiredAt: string | null;
-  /** 完整的 token：只有创建的那一次回答里有。 */
-  plainToken?: string;
-}
-
 /** 数字：平台给的可能是字符串，坏的当 0。 */
 function num(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-/** 把 token 掩起来。短 token 不掩——掩了就没法认了。 */
-export function maskToken(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 6)}••••${value.slice(-4)}` : value;
 }
 
 /** 把接口返回的一行读成 Discovery 的 key。 */
@@ -94,25 +63,6 @@ export function parseDiscoveryKey(row: any): DiscoveryApiKey {
     decisionRpmLimit: num(row?.decision_rpm_limit),
     tpmLimit: num(row?.tpm_limit),
     plainKey: row?.key ? String(row.key) : undefined,
-  };
-}
-
-/**
- * 把接口返回的一行读成 Chat 的 token。
- *
- * plain 说清楚这一行的 token 是不是完整的：创建的那一次是完整的，列表里是
- * 平台掩过的。
- */
-export function parseChatToken(row: any, plain = false): ChatApiToken {
-  const raw = String(row?.token ?? "");
-  return {
-    id: String(row?.id ?? ""),
-    name: String(row?.token_name ?? ""),
-    maskedToken: maskToken(raw),
-    authStatus: row?.auth_status ?? "",
-    createdAt: row?.created_at ?? null,
-    expiredAt: row?.expired_at ?? null,
-    plainToken: plain && raw ? raw : undefined,
   };
 }
 
@@ -195,82 +145,30 @@ export async function deleteDiscoveryKey(session: InternAiSession, token: string
 }
 
 /**
- * Chat 的 API Token 列表。
+ * 写这个账号的推理 key。
  *
- * Chat（浦语）子站还没接进网关，这一族接口是前瞻代码。
- */
-export async function listChatTokens(
-  session: InternAiSession,
-  token: string,
-): Promise<{ tokens: ChatApiToken[]; maxTokenNum: number; total: number }> {
-  const data = await consoleApi<any>(INTERN_AI_CHAT_BASE, "/puyu/user/tokens", session, token);
-  const rows = Array.isArray(data?.list) ? data.list : Array.isArray(data) ? data : [];
-  return {
-    tokens: rows.map((row: any) => parseChatToken(row)),
-    maxTokenNum: num(data?.max_token_num),
-    total: num(data?.total ?? rows.length),
-  };
-}
-
-/**
- * 建一把 Chat 的 API Token。
- *
- * 回答是套了一层的：{token: {id, token, auth_status, token_name, …}, max_token_num}。
- * 完整的 token 在 data.token.token。
- */
-export async function createChatToken(
-  session: InternAiSession,
-  token: string,
-  name: string,
-): Promise<ChatApiToken> {
-  const data = await consoleApi<any>(INTERN_AI_CHAT_BASE, "/puyu/user/tokens", session, token, {
-    method: "POST",
-    body: { token_name: name },
-  });
-  const row = data?.token ?? data ?? {};
-  return parseChatToken({ name, ...row }, true);
-}
-
-/** 注销 Chat 的 API Token。 */
-export async function deleteChatToken(session: InternAiSession, token: string, id: string): Promise<void> {
-  await consoleApi<any>(INTERN_AI_CHAT_BASE, `/puyu/user/tokens/${encodeURIComponent(id)}`, session, token, {
-    method: "DELETE",
-  });
-}
-
-/**
- * 写这个账号的两把推理 key。
- *
- * 位置 0 是 Discovery 的，位置 1 是 Chat 的。空的那把表示清掉它（与七牛云、
+ * 位置 0 是 Discovery 的（推理就用它）。空串表示清掉它（与七牛云、
  * 讯飞星火一个意思）。
  *
- * 只改 key 那两格：账号密码原样留着（把它们清掉等于把登录态清了）。
+ * 只改 key 那一格：账号密码原样留着（把它们清掉等于把登录态清了）。
  *
- * 返回写进去的段数（0/1/2）：面板要按段报回写了什么。
+ * 返回写进去的段数（0 或 1）：面板要按段报回写了什么。
  */
-export function writeInternAiKeys(
-  providerId: string,
-  parts: { discoveryKey?: string; chatKey?: string },
-): number {
+export function writeInternAiKeys(providerId: string, parts: { discoveryKey?: string }): number {
   const discoveryKey = String(parts.discoveryKey ?? "").trim();
-  const chatKey = String(parts.chatKey ?? "").trim();
   const stored = storedAccount(providerId);
-  if (!discoveryKey && !chatKey) {
+  // 旧记录里可能还留着一把已经不用了的 Chat token：这里只重写这一次，
+  // 顺手把那个字段从账号记录里去掉——凭据删了就得真删干净。
+  const kept = { ...(stored ?? {}) };
+  delete (kept as Record<string, unknown>).chatKey;
+  if (!discoveryKey) {
     // 没有记录就没什么可清的：别凭空造一条只有空 key 的凭据。
     if (!stored) return 0;
-    setSecret(accountId(providerId), "account", {
-      ...stored,
-      discoveryKey: null,
-      chatKey: null,
-    });
+    setSecret(accountId(providerId), "account", { ...kept, discoveryKey: null });
     return 0;
   }
-  setSecret(accountId(providerId), "account", {
-    ...(stored ?? {}),
-    discoveryKey: discoveryKey || null,
-    chatKey: chatKey || null,
-  });
-  return (discoveryKey ? 1 : 0) + (chatKey ? 1 : 0);
+  setSecret(accountId(providerId), "account", { ...kept, discoveryKey });
+  return 1;
 }
 
 /** 一把 key，换成三家平台共同的形状。 */

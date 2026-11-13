@@ -39,7 +39,6 @@ import "../intern-ai/login-flow.ts";
 import type { InternAiLogin } from "../intern-ai/login-flow.ts";
 import {
   importToken as importInternAiToken,
-  internAiSite,
   storedAccount as storedInternAiAccount,
 } from "../intern-ai/auth.ts";
 import { internAiDiscoveryKey } from "../intern-ai/config.ts";
@@ -628,8 +627,8 @@ export async function loginWithPassword(input: {
         };
       }
       case "intern-ai": {
-        // 授权阶段在 lib/intern-ai/login-flow.ts 里登记：两个子站都登，顺手把
-        // 推理用的 key 建出来。这里只把账号行与表单交过去。
+        // 授权阶段在 lib/intern-ai/login-flow.ts 里登记。这里只把账号行与表单
+        // 交过去。
         const { credentialId, result } = await submitLoginResult<InternAiLogin>(
           "intern-ai",
           { accountId: row.id, platform: row.kind, region: row.region },
@@ -702,7 +701,7 @@ function internAiHasKey(accountId: string): boolean {
 /**
  * 用浏览器里拿到的授权码换凭据。
  *
- * 只有 intern-ai 有这条路（而且不建议：chat 的页面换完就把地址栏里的 code
+ * 只有 intern-ai 有这条路（而且不建议：那个页面换完就把地址栏里的 code
  * 抹掉了）。
  */
 export async function exchangeLoginCode(input: {
@@ -716,14 +715,14 @@ export async function exchangeLoginCode(input: {
   if (!input.code.trim()) {
     return { ok: false, message: "缺少授权码。", credentialId: "", accountId: "" };
   }
-  // 换 token 用 discovery 那个子站（端砚），换出来的 token 两个子站都能用。
-  const token = await exchangeInternAiCode(input.code.trim(), internAiSite("discovery"));
+  // 换 token 走 Discovery（端砚）那个应用。
+  const token = await exchangeInternAiCode(input.code.trim());
   importInternAiToken(token);
   return {
     ok: true,
     message: internAiHasKey(input.accountId)
-      ? "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。"
-      : "凭据已更新，两个子站共用该凭据。账号上没有推理用的 API key，请在面板上填一把。",
+      ? "凭据已更新，推理用的 key 已就绪。"
+      : "凭据已更新。账号上没有推理用的 API key，请在面板上填一把。",
     credentialId: providerSecretId(input.accountId),
     accountId: input.accountId,
   };
@@ -750,8 +749,8 @@ export async function importLoginToken(input: {
   return {
     ok: true,
     message: internAiHasKey(input.accountId)
-      ? "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。"
-      : "凭据已导入，两个子站共用该凭据。账号上没有推理用的 API key，请在面板上填一把。",
+      ? "凭据已导入，推理用的 key 已就绪。"
+      : "凭据已导入。账号上没有推理用的 API key，请在面板上填一把。",
     credentialId: providerSecretId(input.accountId),
     accountId: input.accountId,
   };

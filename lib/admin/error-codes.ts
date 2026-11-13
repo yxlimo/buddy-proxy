@@ -79,6 +79,8 @@ export const MODEL_ID_DUPLICATE = "MODEL_ID_DUPLICATE";
 export const MODEL_HAS_NO_TARGET = "MODEL_HAS_NO_TARGET";
 /** 目标里没填上游模型 id。 */
 export const MODEL_MISSING_UPSTREAM = "MODEL_MISSING_UPSTREAM";
+/** 同一个（平台，上游模型）在一次保存里出现了两次。 */
+export const MODEL_DUPLICATE_TARGET = "MODEL_DUPLICATE_TARGET";
 /** 上下文长度 / 输出上限不是整数。 */
 export const MODEL_NUMBER_INVALID = "MODEL_NUMBER_INVALID";
 /** 上下文长度 / 输出上限是负数或超过 int32。 */
@@ -137,6 +139,7 @@ export const ADMIN_ERRORS = {
   [MODEL_ID_DUPLICATE]: Code.InvalidArgument,
   [MODEL_HAS_NO_TARGET]: Code.InvalidArgument,
   [MODEL_MISSING_UPSTREAM]: Code.InvalidArgument,
+  [MODEL_DUPLICATE_TARGET]: Code.InvalidArgument,
   [MODEL_NUMBER_INVALID]: Code.InvalidArgument,
   [MODEL_NUMBER_OUT_OF_RANGE]: Code.InvalidArgument,
   [MODEL_CREDITS_INVALID]: Code.InvalidArgument,

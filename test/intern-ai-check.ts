@@ -4,8 +4,7 @@
 //
 // 覆盖的是最容易写错、又最难在真机上发现的几处：人机校验那一类错误的归类、
 // 密码加密的形状、墨点余额和批次的解析、墨点怎么算（平台的公式，例子是官方
-// 给的）、两个子站的 key 长得不一样、两个子站的模型清单结构不一样、两个子站
-// 的推理端点前缀不一样。
+// 给的）、key 在创建与列表里的两种形状、模型清单的形状。
 //
 // 用的数据是按平台真实回答的形状编出来的，值不是账号里的真数。
 
@@ -14,15 +13,13 @@ import {
   classify,
   cookieHeader,
   encryptSecret,
-  internAiSite,
   loginBody,
   pemFromRawPublicKey,
   ssoUidFromToken,
   tokenExpiryMs,
   type InternAiError,
 } from "../lib/intern-ai/auth.ts";
-import { dialectFor } from "../lib/intern-ai/endpoints.ts";
-import { maskToken, parseChatToken, parseDiscoveryKey } from "../lib/intern-ai/keys.ts";
+import { parseDiscoveryKey } from "../lib/intern-ai/keys.ts";
 import {
   estimateInkPoints,
   packExpired,
@@ -128,30 +125,10 @@ const jar = ["uaa-token=abc; Path=/; HttpOnly; Secure", "acw_tc=def; Path=/; Htt
 check("cookie 头是分号隔开的", cookieHeader(jar) === "uaa-token=abc; acw_tc=def", cookieHeader(jar));
 check("属性不混进值里", !cookieHeader(jar).includes("HttpOnly"));
 
-const authHeaders = consoleAuthHeaders("tok", { sites: [], ssoUid: "100000001" } as any);
+const authHeaders = consoleAuthHeaders("tok", { token: "tok", ssoUid: "100000001", obtainedAtMs: 0, username: "" });
 check("控制台要带 Bearer", authHeaders.Authorization === "Bearer tok");
 check("控制台还要带 cookie", authHeaders.Cookie === "uaa-token=tok; ssouid=100000001", authHeaders.Cookie);
 check("没有会话就只带 Bearer", Object.keys(consoleAuthHeaders("tok")).length === 1);
-
-console.log("");
-console.log("两个子站");
-
-check("两个子站的名字不一样", internAiSite("discovery").name !== internAiSite("chat").name);
-check("两个子站的客户端 id 不一样", internAiSite("discovery").clientId !== internAiSite("chat").clientId);
-check("两个子站换 token 的路径不一样", internAiSite("discovery").authPath !== internAiSite("chat").authPath);
-check("同一个子站每次一样", internAiSite("chat").clientId === internAiSite("chat").clientId);
-
-console.log("");
-console.log("推理端点");
-
-const dd = dialectFor("discovery");
-const cd = dialectFor("chat");
-check("两个子站的 OpenAI 基地址不一样", dd.openaiBase !== cd.openaiBase);
-check("Chat 的 Anthropic 不带 /api", !cd.anthropicBase.endsWith("/api"), cd.anthropicBase);
-check("Discovery 的 Anthropic 跟 OpenAI 同一个前缀", dd.anthropicBase === dd.openaiBase);
-check("Chat 的 Anthropic 路径是 /v1/messages", cd.messagesPath === "/v1/messages");
-check("Discovery 的 Anthropic 路径是 /messages", dd.messagesPath === "/messages");
-check("两个子站的对话路径一样", dd.chatPath === cd.chatPath);
 
 console.log("");
 console.log("墨点余额");
@@ -310,7 +287,7 @@ check(
 check("空用量不扣墨点", estimateInkPoints(INTERN_AI_MODEL_PRICES["minimax-m3"]!, { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0 }) === 0);
 
 console.log("");
-console.log("两个子站的 key");
+console.log("key");
 
 const dKey = parseDiscoveryKey({
   id: "ak_TESTONLY000000000000000000",
@@ -335,30 +312,6 @@ const createdKey = parseDiscoveryKey({
 });
 check("创建的回答里带着完整的 key", createdKey.plainKey === "sk-fullvalue");
 check("创建的回答里 id 也在", createdKey.id === "ak_TESTONLY111111111111111111");
-
-// Chat：列表里的 token 是掩过的，创建的那次是完整的
-const cToken = parseChatToken({
-  id: "dGVzdC1vbmx5LWNoYXQtdG9rZW4taWQwMDAwMDA=",
-  token: "sk...aaaa",
-  auth_status: 1,
-  token_name: "test-token",
-  created_at: "2026-01-01T00:00:02.000Z",
-  expired_at: "-",
-});
-check("Chat token 的 id 读到了", cToken.id.startsWith("dGVzdC1vbmx5"));
-check("Chat token 的名字读到了", cToken.name === "test-token");
-check("Chat token 的掩码是平台给的", cToken.maskedToken === "sk...aaaa");
-check("Chat token 的权限是数字", cToken.authStatus === 1);
-check("Chat token 的有效期是「-」", cToken.expiredAt === "-");
-check("Chat token 列表里没有完整的 token", cToken.plainToken === undefined);
-const cCreated = parseChatToken(
-  { id: "t2", token: "sk-TESTONLYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token_name: "test-token" }, // privacy:allow — 编造的样例 (fabricated sample)
-  true,
-);
-check("Chat 创建的完整 token 读到了", cCreated.plainToken === "sk-TESTONLYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // privacy:allow — 编造的样例 (fabricated sample)
-check("Chat 创建的 token 也掩了一份", cCreated.maskedToken.includes("••••"));
-check("字段名跟 Discovery 不一样", !("masked_key" in cToken));
-check("短的 token 不掩", maskToken("sk-123") === "sk-123");
 
 console.log("");
 console.log("模型清单");

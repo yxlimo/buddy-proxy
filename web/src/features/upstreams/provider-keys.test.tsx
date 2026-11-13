@@ -686,7 +686,7 @@ describe('凭据弹窗按平台渲染格子', () => {
     })
   })
 
-  it('书生·端砚：两格，Discovery 在前、Chat 在后', async () => {
+  it('书生·端砚：一格「推理 API Key」，发出去一把', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -701,22 +701,18 @@ describe('凭据弹窗按平台渲染格子', () => {
     await openDialog(user, 'intern-ai')
 
     expect(
-      await screen.findByLabelText('Discovery 子站 key')
-    ).toBeInTheDocument()
-    expect(
-      await screen.findByLabelText('Chat 子站 key（可空）')
+      await screen.findByLabelText('推理 API Key')
     ).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('Discovery 子站 key'), 'sk-disc')
-    await user.type(screen.getByLabelText('Chat 子站 key（可空）'), 'sk-chat')
+    await user.type(screen.getByLabelText('推理 API Key'), 'sk-disc')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
-      expect(sent).toEqual([['sk-disc', 'sk-chat']])
+      expect(sent).toEqual([['sk-disc']])
     })
   })
 
-  it('书生·端砚：Chat 留空：空的那一格也占着位置', async () => {
+  it('书生·端砚：全空提交：一把空串发上去（清掉那把 key）', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -730,11 +726,10 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'intern-ai')
 
-    await user.type(screen.getByLabelText('Discovery 子站 key'), 'sk-disc')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
-      expect(sent).toEqual([['sk-disc', '']])
+      expect(sent).toEqual([['']])
     })
   })
 

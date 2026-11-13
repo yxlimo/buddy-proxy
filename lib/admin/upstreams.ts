@@ -1034,8 +1034,11 @@ export function upstreamStateOf(availability: PlatformAvailability): UpstreamSta
     case "no_credential":
       return credentialTrouble(availability.rows) ?? UpstreamState.NO_CREDENTIAL;
     case "credential_expired":
-      // 契约里有「登录过期了」这一档：会话型平台的会话过期就是它。
-      return UpstreamState.CREDENTIAL_EXPIRED;
+      // 契约里有「登录过期了」这一档：会话型平台的会话过期就是它。但过期不等于
+      // 用户现在该去重登：手上还有一次刚被拒的登录，面板要说的是「被拒了」（照着
+      // 改密码），还在窗口里等的那次更该说「正在登录」。这两件事都比「过期」更近、
+      // 更该让人看见，所以先问它们，问不出才落到过期。
+      return credentialTrouble(availability.rows) ?? UpstreamState.CREDENTIAL_EXPIRED;
     case "credential_unknown":
       // 契约里没有「凭据读不出来」这一档（这一档说的是网关自己读不出凭据，
       // 不是「没登录」）。状态这一档只能说「没有可用凭据」，面板看得到的是

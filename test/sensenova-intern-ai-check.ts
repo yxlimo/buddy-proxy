@@ -734,10 +734,7 @@ writeSecret(`key:provider:${SENSE_ID}:account`, "account", {
   apiKey: "sk-sensenova-test",
 });
 writeSecret(`session:provider:${INTERN_ID}`, "session", {
-  sites: [
-    { name: "discovery", token: "intern-token", clientId: "dagw" },
-    { name: "chat", token: "intern-token", clientId: "ebmr" },
-  ],
+  token: "intern-token",
   ssoUid: "sso-uid",
   obtainedAtMs: now,
   username: "someone",
@@ -746,7 +743,6 @@ writeSecret(`key:provider:${INTERN_ID}:account`, "account", {
   user: "someone",
   password: "",
   discoveryKey: "sk-intern-test",
-  chatKey: null,
 });
 
 check("有 key 之后 SenseNova → UPSTREAM_STATE_READY", (await upstreamStateOf("sensenova")) === "UPSTREAM_STATE_READY", await upstreamStateOf("sensenova"));

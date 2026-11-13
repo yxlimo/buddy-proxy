@@ -1,8 +1,7 @@
-// lib/intern-ai/transport.ts — 推理端点与模型目录（Discovery 子站）。
+// lib/intern-ai/transport.ts — 推理端点与模型目录。
 //
-// 两个子站里只有 Discovery（端砚）接进来了：它的推理端点讲 OpenAI 方言，
-// 地址是 https://discovery-api.intern-ai.org.cn/v1，鉴权是一把 API key。
-// Chat（浦语）是另一套方言，不在这条路上。
+// 推理端点讲 OpenAI 方言，地址是 https://discovery-api.intern-ai.org.cn/v1，
+// 鉴权是一把 API key。
 //
 // 网关这一层做两件事：
 //
@@ -14,7 +13,7 @@
 // 额度不在这里：墨点是控制台的接口，见 lib/intern-ai/quota.ts。
 
 import { INTERN_AI_DISCOVERY_API_BASE, internAiDiscoveryKey } from "./config.ts";
-import { loadSession, storedAccount, tokenFor } from "./auth.ts";
+import { loadSession, storedAccount } from "./auth.ts";
 import {
   listDiscoveryConsoleModels,
   listDiscoveryModels,
@@ -84,7 +83,7 @@ export async function refreshInternAiCatalog(force = false, providerId = "intern
       try {
         const session = loadSession(providerId);
         if (session) {
-          consoleModels = await listDiscoveryConsoleModels(session, tokenFor(session, "discovery"));
+          consoleModels = await listDiscoveryConsoleModels(session, session.token);
         }
       } catch {
         // 控制台那一份拿不到就算了：推理端的清单是准的。

@@ -1,8 +1,8 @@
 // lib/intern-ai/auth.ts — 登录、换授权码、存会话。
 //
 // intern-ai 自己不收账号密码：账号在 openxlab（sso.openxlab.org.cn），登录成
-// 功以后，SSO 发一个 `uaa-token` 的会话 cookie；两个子站再拿这个 cookie 去
-// 换自己的 token（就是控制台接口要的那个 Bearer token）。
+// 功以后，SSO 发一个 `uaa-token` 的会话 cookie；Discovery 子站再拿这个 cookie
+// 去换自己的 token（就是控制台接口要的那个 Bearer token）。
 //
 // 所以登录是三段，不是一段：
 //
@@ -10,7 +10,7 @@
 //   ② POST {sso}/gw/uaa-be/api/v1/login/byAccount      → 账号密码换 SSO 会话
 //      （密码要先用公钥加密；而且这一步要过一次人机校验，见下）
 //   ③ POST {sso}/gw/uaa-be/api/v1/internal/auth        → 换应用授权码
-//      POST {子站}/…/users/auth                         → 授权码换子站 token
+//      POST {discovery}/api/user-center/v1/users/auth   → 授权码换子站 token
 //
 // 关于人机校验，这是本次调研最要紧的一条结论：
 //
@@ -35,8 +35,6 @@
 
 import crypto from "node:crypto";
 import {
-  INTERN_AI_CHAT_BASE,
-  INTERN_AI_CHAT_CLIENT_ID,
   INTERN_AI_DISCOVERY_BASE,
   INTERN_AI_DISCOVERY_CLIENT_ID,
   INTERN_AI_SSO_API_BASE,
@@ -78,9 +76,8 @@ export const ACCOUNT_ID = accountId();
 export interface StoredAccount {
   user?: string;
   password?: string;
-  /** 两个子站各自的推理 key（新建时存下来，完整的值只出现一次）。 */
+  /** 推理用的 key（用户自己填的）。 */
   discoveryKey?: string | null;
-  chatKey?: string | null;
 }
 
 /**
@@ -92,20 +89,10 @@ export function storedAccount(providerId = "intern-ai"): StoredAccount | null {
   return getSecret<StoredAccount>(accountId(providerId));
 }
 
-/** 一个子站的登录结果。 */
-export interface InternAiSite {
-  /** 子站的名字，两个子站各一个。 */
-  name: "discovery" | "chat";
-  /** 控制台接口认的 Bearer token。 */
-  token: string;
-  /** 这个子站的 OAuth 客户端 id。 */
-  clientId: string;
-}
-
 /** 存下来的会话。 */
 export interface InternAiSession {
-  /** 两个子站各自的 token。token 是子站发的，Discovery 的不等于 Chat 的。 */
-  sites: InternAiSite[];
+  /** 控制台接口认的 Bearer token（Discovery 子站发的）。 */
+  token: string;
   /**
    * openxlab 账号的内部 id。
    *
@@ -355,27 +342,29 @@ export async function ssoAuthorizationCode(cookie: string, clientId: string): Pr
 }
 
 /**
- * 授权码换子站 token。
+ * 换 token 的路径。
  *
- * 两个子站的换法路径不一样，形状一样（body 只有 code）：
+ * 它挂在 discovery 这台机器上（不是个人中心那台：那台的 /api/v1/users/auth
+ * 是错的路，回 -10007）。
+ */
+const DISCOVERY_AUTH_PATH = "/api/user-center/v1/users/auth";
+
+/**
+ * 授权码换 Discovery 子站的 token。
  *
- *   Discovery  POST {discovery}/api/user-center/v1/users/auth
- *   Chat       POST {chat}/puyu/users/auth
+ *   POST {discovery}/api/user-center/v1/users/auth   body {code}
  *
  * 换出来的 token 就是控制台接口要的那个 Bearer token。
  */
-export async function exchangeCode(
-  code: string,
-  site: { name: "discovery" | "chat"; appBase: string; authPath: string },
-): Promise<string> {
-  const r = await fetch(`${site.appBase}${site.authPath}`, {
+export async function exchangeCode(code: string): Promise<string> {
+  const r = await fetch(`${INTERN_AI_DISCOVERY_BASE}${DISCOVERY_AUTH_PATH}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       Accept: "application/json",
       "User-Agent": USER_AGENT,
-      Origin: site.appBase,
-      Referer: `${site.appBase}/`,
+      Origin: INTERN_AI_DISCOVERY_BASE,
+      Referer: `${INTERN_AI_DISCOVERY_BASE}/`,
     },
     body: JSON.stringify({ code }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -383,49 +372,9 @@ export async function exchangeCode(
   const body = await readJson(r);
   const token = body?.data?.token;
   if (!r.ok || !token) {
-    throw classify(r.status, body, `${site.name} 子站换 token 失败`);
+    throw classify(r.status, body, "Discovery 子站换 token 失败");
   }
   return String(token);
-}
-
-/** 两个子站各自的登录参数。 */
-function siteTargets(): Array<{
-  name: "discovery" | "chat";
-  clientId: string;
-  appBase: string;
-  authPath: string;
-}> {
-  return [
-    {
-      // Discovery：换 token 的接口挂在 discovery 这台机器上，路径是
-      // /api/user-center/v1/users/auth。个人中心那台机器上的 /api/v1/users/auth
-      // 是错的路（回 -10007）。
-      name: "discovery",
-      clientId: INTERN_AI_DISCOVERY_CLIENT_ID,
-      appBase: INTERN_AI_DISCOVERY_BASE,
-      authPath: "/api/user-center/v1/users/auth",
-    },
-    {
-      name: "chat",
-      clientId: INTERN_AI_CHAT_CLIENT_ID,
-      appBase: INTERN_AI_CHAT_BASE,
-      authPath: "/puyu/users/auth",
-    },
-  ];
-}
-
-/**
- * 一个子站的登录参数。
- *
- * 两个子站各是一套：客户端 id、控制台地址、换 token 的路径都不一样。拿错
- * 的话，平台会回「oauth error」——不是「没登录」，重试没有用。
- */
-export function internAiSite(
-  name: "discovery" | "chat",
-): { name: "discovery" | "chat"; clientId: string; appBase: string; authPath: string } {
-  const target = siteTargets().find((t) => t.name === name);
-  if (!target) throw new InternAiError("config", `没有这个子站：${name}`, 500);
-  return target;
 }
 
 /** 登录的选项。 */
@@ -438,14 +387,12 @@ export interface InternAiLoginOptions {
    * 没给的话，登录会停在 SSO 那一步，错误里说清楚要什么。
    */
   captcha?: InternAiCaptcha;
-  /** 只登一个子站。两个都要就都登（默认）。 */
-  only?: "discovery" | "chat";
 }
 
 /**
  * 登录并存会话。
  *
- * 走完三段，把两个子站的 token 存进数据库。
+ * 走完三段，把子站的 token 存进数据库。
  */
 export async function login(opts: InternAiLoginOptions = {}, providerId = "intern-ai"): Promise<InternAiSession> {
   const creds = internAiCredentials({ user: opts.user, password: opts.password }, storedAccount(providerId));
@@ -454,56 +401,35 @@ export async function login(opts: InternAiLoginOptions = {}, providerId = "inter
   }
 
   const cookie = await ssoLogin(creds.user, creds.password, opts.captcha);
-  const sites: InternAiSite[] = [];
-  for (const target of siteTargets()) {
-    if (opts.only && opts.only !== target.name) continue;
-    const code = await ssoAuthorizationCode(cookie, target.clientId);
-    const token = await exchangeCode(code, target);
-    sites.push({ name: target.name, token, clientId: target.clientId });
-  }
-  if (!sites.length) {
-    throw new InternAiError("config", "没有指定要登哪个子站", 500);
-  }
+  const code = await ssoAuthorizationCode(cookie, INTERN_AI_DISCOVERY_CLIENT_ID);
+  const token = await exchangeCode(code);
 
   const session: InternAiSession = {
-    sites,
-    ssoUid: ssoUidFromToken(sites[0]!.token),
+    token,
+    ssoUid: ssoUidFromToken(token),
     obtainedAtMs: Date.now(),
     username: creds.user,
   };
   saveSession(session, providerId);
   // 账号密码也存一份：.env 不在了还能登录。
-  const stored = storedAccount(providerId);
   setSecret(accountId(providerId), "account", {
     user: creds.user,
     password: creds.password,
-    discoveryKey: stored?.discoveryKey ?? null,
-    chatKey: stored?.chatKey ?? null,
+    discoveryKey: storedAccount(providerId)?.discoveryKey ?? null,
   });
   return session;
 }
 
 /**
- * 把一个已经在浏览器里拿到的 token 存进来。
+ * 把已经在浏览器里拿到的 token 存进来。
  *
  * 人机校验要人点，那就让人在浏览器里点完，把 `uaa-token` 拿过来存上。
  * 这条路跟 login() 换来的会话没有区别。
  */
-/**
- * 把 uaa-token 记下来。
- *
- * 两个子站共用同一个 token —— 登录的是同一个账号，token 也是同一个。所以
- * 这里一次登记两个子站，登录的时候不必问「登哪个子站」。
- */
 export function importToken(token: string, providerId = "intern-ai"): InternAiSession {
   const stored = loadSession(providerId);
-  const sites = siteTargets().map((target) => ({
-    name: target.name,
-    token,
-    clientId: target.clientId,
-  }));
   const session: InternAiSession = {
-    sites,
+    token,
     ssoUid: stored?.ssoUid ?? ssoUidFromToken(token),
     obtainedAtMs: stored?.obtainedAtMs ?? Date.now(),
     username: stored?.username ?? "",
@@ -552,7 +478,9 @@ export function tokenExpiryMs(token: string): number {
 /** 会话还在不在。 */
 /** 数据库里的会话。 */
 export function loadSession(providerId = "intern-ai"): InternAiSession | null {
-  const valid = (raw: any) => !!raw?.sites?.length && raw.sites.every((s: any) => !!s?.token);
+  // 旧记录里那个按子站分的数组不再读：里面还存着已经不用的 Chat token，
+  // 也不会被任何接口用到。读不出来就当没登录，重新贴一次 token 就行。
+  const valid = (raw: any) => !!raw?.token;
   const session = readSession<InternAiSession>(sessionId(providerId), valid);
   return session;
 }
@@ -584,13 +512,8 @@ export function internAiStatus(providerId = "intern-ai"): Record<string, unknown
   const stored = storedAccount(providerId);
   const key = internAiDiscoveryKey(stored?.discoveryKey);
   const session = loadSession(providerId);
-  // The tokens are JWTs; the earliest expiry is the one that matters.
-  const expiresAtMs = session
-    ? (session.sites
-        .map((s) => tokenExpiryMs(s.token))
-        .filter((t) => t > 0)
-        .sort((a, b) => a - b)[0] ?? 0)
-    : 0;
+  // 会话里的 token 是 JWT，载荷里的 exp 是它到期的时刻。
+  const expiresAtMs = session ? tokenExpiryMs(session.token) : 0;
   const remainingMs = expiresAtMs ? expiresAtMs - Date.now() : 0;
   return {
     source: sessionId(providerId),
@@ -599,17 +522,11 @@ export function internAiStatus(providerId = "intern-ai"): Record<string, unknown
     detail: key ? "Discovery 的推理 key" : "账号上没有 Discovery 推理 key，请在面板上填一把",
     sessionStatus: !session ? "anonymous" : remainingMs > 0 ? "authenticated" : "expired",
     username: session?.username ?? stored?.user ?? "",
-    sites: session?.sites.map((s) => s.name).join(", ") ?? "",
     expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : "",
     remainingSec: Math.round(remainingMs / 1000),
     warning: remainingMs > 0 && remainingMs < WARN_MS,
     obtainedAt: session ? new Date(session.obtainedAtMs).toISOString() : "",
   };
-}
-
-/** 一个子站的 token。 */
-export function tokenFor(session: InternAiSession, site: "discovery" | "chat"): string {
-  return session.sites.find((s) => s.name === site)?.token ?? "";
 }
 
 /** 把 Set-Cookie 列表变成一个 Cookie 头。 */

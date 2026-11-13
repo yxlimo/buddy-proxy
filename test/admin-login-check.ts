@@ -384,7 +384,7 @@ check("TokenRhythm 是密码流", tokenrhythm.body?.session?.method === "passwor
 const sensenova = await call("BeginLogin", { upstreamId: "sensenova" });
 check("SenseNova 是密码流", sensenova.body?.session?.method === "password", JSON.stringify(sensenova.body?.session));
 
-const internAi = await call("BeginLogin", { upstreamId: "intern-ai", site: "chat" });
+const internAi = await call("BeginLogin", { upstreamId: "intern-ai" });
 check("intern-ai 是回填流", internAi.body?.session?.method === "token", JSON.stringify(internAi.body?.session));
 check(
   "intern-ai 给了 SSO 的登录页",
@@ -606,7 +606,7 @@ check("拒绝时说的是人话", String(wrongUpstream.body?.message ?? "").leng
 const noAccount = await call("LoginWithPassword", { upstreamId: "tokenrhythm", accountId: "no-such-account", username: "x", password: "y" });
 check("没有那个账号就不登", noAccount.body?.ok !== true, JSON.stringify(noAccount.body));
 
-const noToken = await call("ImportLoginToken", { upstreamId: "intern-ai", token: "", site: "chat" });
+const noToken = await call("ImportLoginToken", { upstreamId: "intern-ai", token: "" });
 check("空 token 不导入", noToken.body?.ok !== true, JSON.stringify(noToken.body));
 
 const wrongImport = await call("ImportLoginToken", { upstreamId: "qoder", token: "x" });

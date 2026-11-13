@@ -416,6 +416,26 @@ export function savePublishedModel(input: PublishedModelInput): AdminResult & { 
       message: `model ${id} target ${empty + 1} (${targets[empty].group}) has no upstream model`,
     };
   }
+  // 同一个（平台，上游模型）出现两次：数据库的主键就是这一对，重复的那一行
+  // 插不进去，SQLite 抛约束错误，冒到面板那里是 500 加一句 internal error ——
+  // 面板看不出是自己这份数据有重复。这里挡住，给一句说清哪一对重了的话。
+  //
+  // 权重不算：同一对给两个权重仍然是同一对，插进去照样撞主键。
+  const occurrences = new Map<string, number>();
+  for (const target of targets) {
+    const key = targetKey(target);
+    occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+  }
+  for (const target of targets) {
+    const count = occurrences.get(targetKey(target)) ?? 0;
+    if (count < 2) continue;
+    return {
+      ok: false,
+      id,
+      code: "MODEL_DUPLICATE_TARGET",
+      message: `duplicate target ${target.group}/${target.upstreamModel} (appears ${count} times)`,
+    };
+  }
   // 目录里没有这个名字，不拦。
   //
   // 上游的 /v3/config 不是「它实际能服务什么」的完整清单：实测 workbuddy.cn
