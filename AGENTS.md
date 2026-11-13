@@ -36,8 +36,12 @@ provider 表的每一行是**一个账号**，不是一个平台。平台是代�
 ## 生成物与检查
 
 - 碰了 `proto/**` 的人自己跑 `mise run proto`（生成两份：`lib/gen` 与面板的 `web/.gen`），跑不通不许交付。
-- 交付前跑 `mise run check`（两边 typecheck + 两套测试），不要手敲单条命令。
+- 开发中只跑覆盖你改动的那一组：`check:admin` / `check:routing` / `check:deliver` / `check:kinds` /
+  `check:misc` / `check:web` / `check:panel`。
+- **提交前先 `mise run privacy`（0 命中），再跑全量 `mise run check`**：隐私扫描先过，因为它便宜、
+  而且撞上就说明有真东西进来了，没必要为一个要重写的改动等六分钟门禁。不要手敲单条测试命令。
 
+<!-- main-agent-only:start -->
 ## 派单纪律
 
 - 每个实现单跑完，必须再派一次 review（后端 `be-review`、前端 `fe-review`），照它们的「改动清点」逐条给结论。
@@ -67,6 +71,8 @@ api_key: "sk-TESTONLY0000000000", // privacy:allow — 编造的样例
 标记只作用于那一行，且只在**样例本身必须存在**时用（测试要验证的就是这个形状）。拿它盖真值、
 盖整份文件，都是绕过规矩。`mise run privacy --all` 应当始终是 0 条；不是 0 就说明有真东西进来了，
 或者有样例忘了标。
+
+<!-- main-agent-only:end -->
 
 ## 本地实验
 

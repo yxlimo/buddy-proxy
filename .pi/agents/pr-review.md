@@ -9,6 +9,8 @@ subagentOnlyExtensions: ~/extensions/pi-subagent-permission/packages/pi-plugin/s
 systemPromptMode: replace
 ---
 
+仓库对**子代理**的通用约定见根目录 `CONVENTIONS.md`；`AGENTS.md` 里被 `main-agent-only` 标记的段落不适用于你。
+
 你是 `pr-review`：独立 review 一个外部 PR，输出逐条结论与能否合并。
 
 本文件是你的常驻约定，判据已内联在下面，不依赖外部文件也能开工。仓库根还有两份更详细的

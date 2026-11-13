@@ -320,12 +320,18 @@ if (accA.id) {
 
 const refreshed = await rpc("RefreshPlatformModels", { platformId: "e2e-openai" });
 check("A4 刷新模型有答复", refreshed.ok !== false && !refreshed.raw, JSON.stringify(refreshed).slice(0, 200));
-// 平台行的形状是 OpenPlatformRow：models 是 { items, auto, fetchedAt, source }，
-// 没有一个叫 modelsAuto 的顶层字段（那是 proto 里 UpdatePlatform 的入参名）。
+// 平台行的形状是 OpenPlatformRow：models 是 { items, traits, fetchedAt }。
+//
+// 「人把目录锁住」那一格（models.auto）已经不存在了：40214f23 把「要不要自动拉」
+// 的开关与写入口一起去掉，方言族的目录一律从上游拉、拉不到就保留原样。所以这里
+// 只说「行里是上游刚报的那份」—— 谁也没法把它锁住。
 const rowA = listOpenPlatforms().find((p) => p.id === "e2e-openai");
-const rowAModels: string[] = (rowA?.models.items ?? []).map((m) => m.id);
-check("A4 平台行的 models 有内容", rowAModels.length > 0, `${rowAModels.join(",")} / 答复：${refreshed.message}`);
-check("A4 models.auto=true（人没锁）", rowA?.models.auto === true, String(rowA?.models.auto));
+const rowAModels: string[] = rowA?.models.items ?? [];
+check(
+  "A4 平台行的 models 就是上游报的那两个",
+  JSON.stringify(rowAModels) === JSON.stringify(["fake-model-a", "fake-model-b"]),
+  `${JSON.stringify(rowAModels)} / 答复：${refreshed.message}`,
+);
 check("A4 答复说拉到 2 个", /2/.test(String(refreshed.message ?? "")), String(refreshed.message));
 check(
   "A4 刷新确实打了上游 /v1/models",
@@ -456,8 +462,18 @@ check("C10 删掉播种的 minimax", !errorCodeOf(delSeeded), JSON.stringify(del
 const madeMinimax = await rpc("AddPlatform", { id: "minimax", label: "MiniMax Code", baseUrl: "", kind: "minimax" });
 check("C10 删完同 id 能建回", madeMinimax.platform?.id === "minimax" && !errorCodeOf(madeMinimax), JSON.stringify(madeMinimax).slice(0, 200));
 
-const zcode = await rpc("AddPlatform", { id: "zcode", label: "ZCode", baseUrl: "", kind: "zcode" });
-check("C11 建 zcode 被拒", errorCodeOf(zcode) === "PLATFORM_KIND_NOT_CREATABLE", JSON.stringify(zcode).slice(0, 200));
+// C11：zcode 已经是预置平台了（d4a7659b 把 platform-catalog.ts 里那条的 hidden
+// 改成 false）：它跟 minimax 走同一条路 —— 启动时播进行里，面板上直接就能建账号，
+// 同 id 再建被「已经存在」挡回。
+check(
+  "C11 zcode 已经由播种建好",
+  listOpenPlatforms().some((p) => p.id === "zcode" && p.kind === "zcode"),
+  listOpenPlatforms().map((p) => `${p.id}:${p.kind}`).join(","),
+);
+const zcodeDup = await rpc("AddPlatform", { id: "zcode", label: "ZCode", baseUrl: "", kind: "zcode" });
+check("C11 同 id 再建被拒（预置平台，与 minimax 同一条路）", errorCodeOf(zcodeDup) === "PLATFORM_ALREADY_EXISTS", JSON.stringify(zcodeDup).slice(0, 200));
+const accZcode = addAccount({ platform: "zcode", alias: "e2e-zcode" });
+check("C11 zcode 能直接建账号", accZcode.ok && !!accZcode.id, accZcode.message);
 
 /** 走面板的登录，等到终态。 */
 async function loginViaPanel(platformId: string, accountId: string): Promise<any> {
@@ -683,11 +699,17 @@ check("D17 列表少一行", listOpenPlatforms().length === beforeDeleteMinimax 
 // D17 的真重启在收尾那一节（同一份 BUDDY_DATA_DIR 再起一次网关）。
 
 const kinds = await rpc("ListPlatformKinds", {});
-const kindText = JSON.stringify(kinds);
-check("D18 ListPlatformKinds 里没有 zcode", !kindText.includes("zcode"), kindText.slice(0, 200));
+// D18：zcode 是预置的模拟客户端（hidden 改成 false 之后），所以两处都该看得见它 ——
+// 下拉里是「模拟客户端」那一族的一条，列表里是播进去的那一行。
+const zcodeKind = (kinds.kinds ?? []).find((k: any) => k.presetId === "zcode");
 check(
-  "D18 平台列表里没有 zcode",
-  !listOpenPlatforms().some((p) => p.id === "zcode"),
+  "D18 ListPlatformKinds 里 zcode 是预置的那一条",
+  zcodeKind?.kind === "zcode" && zcodeKind?.category === "simulated" && zcodeKind?.label === "ZCode",
+  JSON.stringify(zcodeKind ?? kinds).slice(0, 200),
+);
+check(
+  "D18 平台列表里有 zcode",
+  listOpenPlatforms().some((p) => p.id === "zcode"),
   listOpenPlatforms().map((p) => p.id).join(","),
 );
 
@@ -697,24 +719,33 @@ check(
 
 section("F 模型目录");
 
-// 人工目录（modelsAuto=false）不被上游覆盖。
-await rpc("UpdatePlatform", {
+// 人把目录写死那一格已经不存在了：40214f23 把「要不要自动拉」的开关与写入口一起
+// 拿掉，方言族的目录一律从上游拉、拉不到就保留原样。F21 验的就是这条新语义 ——
+// 面板改不了目录（送来的 models 进不去行里），刷新一定去问上游并把行换成上游那份。
+const wroteModels = await rpc("UpdatePlatform", {
   id: "e2e-anthropic",
   label: "E2E Anthropic",
   baseUrl: `${upBase}/v1`,
   modelsAuto: false,
   models: ["hand-written-1"],
 });
+check("F21 送 models 不报错（这一格已不认）", !errorCodeOf(wroteModels), JSON.stringify(wroteModels).slice(0, 200));
+const rowAnthropicWritten = listOpenPlatforms().find((p) => p.id === "e2e-anthropic");
+check(
+  "F21 送来的清单没进平台行",
+  !JSON.stringify(rowAnthropicWritten?.models?.items ?? null).includes("hand-written-1"),
+  JSON.stringify(rowAnthropicWritten?.models ?? null),
+);
 const beforeF = seen.filter((s) => s.path.endsWith("/models")).length;
 await rpc("RefreshPlatformModels", { platformId: "e2e-anthropic" });
+const fRefreshHits = seen.filter((s) => s.path.endsWith("/models")).length - beforeF;
+check("F21 刷新去问了上游（一次）", fRefreshHits === 1, `${fRefreshHits} 次`);
 const rowAnthropic = listOpenPlatforms().find((p) => p.id === "e2e-anthropic");
 check(
-  "F21 人工目录不被上游覆盖",
-  JSON.stringify(rowAnthropic?.models ?? "").includes("hand-written-1") &&
-    !JSON.stringify(rowAnthropic?.models ?? "").includes("fake-model-b"),
-  JSON.stringify(rowAnthropic?.models ?? ""),
+  "F21 行里的目录是上游那份（人写的顶不上）",
+  JSON.stringify(rowAnthropic?.models?.items ?? null) === JSON.stringify(["fake-model-a", "fake-model-b"]),
+  JSON.stringify(rowAnthropic?.models ?? null),
 );
-check("F21 刷新也没去问上游", seen.filter((s) => s.path.endsWith("/models")).length - beforeF === 0, "0 次");
 
 // F22 的目录是按账号算的：平台没有可用账号时目录就是空（既定语义：线上没有就没有）。
 // D 那一节把 minimax 删了一次，所以这里先把它和它的账号补回来。
@@ -921,16 +952,24 @@ const deleteMissing = await rpc("DeleteModelOverride", { platformId: WB, modelId
 check("H28 删不存在的回 MODEL_OVERRIDE_NOT_FOUND", errorCodeOf(deleteMissing) === "MODEL_OVERRIDE_NOT_FOUND", JSON.stringify(deleteMissing).slice(0, 160));
 check("H28 它是一次 404", deleteMissing.httpStatus === 404, String(deleteMissing.httpStatus));
 
-// H29：改一条目录里原有的模型（只改显示名）—— 落库在 override 表，不动代码表与平台行。
-// 用七牛：它平台行的 models 是非空的一份代码常量，
-//「行里的清单没变」这一条才看得见（模拟客户端与 workbuddy 那几行本来就是空的）。
+// H29：改一条目录里原有的模型（只改显示名）—— 落库在 override 表，不动平台行。
+//
+// 用七牛：它的目录是方言族那份，从上游拉回来落在行里，所以「行里的清单没变」
+// 这一条才看得见（模拟客户端与 workbuddy 那几行本来就是空的）。目录不再有代码
+// 里那一份（40214f23）：要让它非空，得先把行指到假上游、给它一把 key，再刷一次。
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
-insertVendorPlatform("qiniu");
+insertVendorPlatform("qiniu", "qiniu", { baseUrl: `${upBase}/v1` });
 
 const qiniuAcc = addAccount({ platform: "qiniu", alias: "e2e-qiniu" });
 check("H29 前提：加一个七牛账号", qiniuAcc.ok && !!qiniuAcc.id, qiniuAcc.message);
+if (qiniuAcc.id) {
+  const qiniuKey = setProviderKeys(qiniuAcc.id, ["sk-E2E-QINIU-0006"]); // privacy:allow — 编造的样例
+  check("H29 前提：存七牛的推理 key", qiniuKey.ok, JSON.stringify(qiniuKey).slice(0, 200));
+}
+const qiniuPulled = await rpc("RefreshPlatformModels", { platformId: "qiniu" });
+check("H29 前提：七牛的目录从上游拉到", qiniuPulled.ok === true, JSON.stringify(qiniuPulled).slice(0, 200));
 const qiniuBase: any[] = (await rpc("ListModels", { upstreamId: "qiniu" })).models ?? [];
 check("H29 前提：七牛的目录不空", qiniuBase.length > 0, `${qiniuBase.length} 条`);
 const qiniuRowBefore = await upstreamOf("qiniu");
@@ -960,10 +999,10 @@ check(
 await rpc("DeleteModelOverride", { platformId: "qiniu", modelId: qiniuTarget });
 
 /* ------------------------------------------------------------------ *
- * I 模型目录归不归上游：逐平台看 modelsFromUpstream
+ * I 模型目录归谁：逐平台看它属于哪一族
  * ------------------------------------------------------------------ */
 
-section("I 模型目录归不归上游：逐平台看 modelsFromUpstream");
+section("I 模型目录归谁：逐平台看它属于哪一族");
 
 // opencode-go 不在代码模板里：它是用户自己建的 openai 方言平台。会被新建，
 // 正是面板上「刷新模型目录」该露出来的那一类。
@@ -977,23 +1016,37 @@ insertVendorPlatform("intern-ai");
 insertVendorPlatform("xinghuo");
 insertVendorPlatform("tokenrhythm");
 
-const upstreamDistribution: [string, boolean][] = [
-  ["opencode-go", true],
-  ["sensenova", true],
-  ["intern-ai", true],
-  ["qiniu", false],
-  ["xinghuo", true],
-  ["tokenrhythm", false],
-  ["minimax", false],
-  ["qoder", false],
-  ["qoder-cn", false],
-  ["workbuddy-cn", false],
-  ["workbuddy-global", false],
+// 「目录归不归上游」不再由平台行上的一格说（modelsFromUpstream 已从契约里 reserve 掉），
+// 判据只剩平台的族（lib/platform-catalog.ts 的 platformCategoryOfKind），
+// ListPlatformKinds 把那一格报成 category：dialect 从上游拉，simulated 用代码里那份。
+//
+// 期望值按新的划分写：所有方言族（包括七牛云与 TokenRhythm —— 40214f23 之后它们
+// 也一律从上游拉，行里的目录是拉回来的那一份）都归上游，只有预置的模拟客户端
+// 那六条（minimax / qoder / qoder-cn / workbuddy ×2 / zcode）归代码。
+const catalogOwnerOfKind = new Map<string, string>((kinds.kinds ?? []).map((k: any) => [k.kind, k.category]));
+const upstreamDistribution: [string, "dialect" | "simulated"][] = [
+  ["opencode-go", "dialect"],
+  ["sensenova", "dialect"],
+  ["intern-ai", "dialect"],
+  ["qiniu", "dialect"],
+  ["xinghuo", "dialect"],
+  ["tokenrhythm", "dialect"],
+  ["minimax", "simulated"],
+  ["qoder", "simulated"],
+  ["qoder-cn", "simulated"],
+  ["workbuddy-cn", "simulated"],
+  ["workbuddy-global", "simulated"],
+  ["zcode", "simulated"],
 ];
 const upstreamRows = await listUpstreams();
 for (const [id, expected] of upstreamDistribution) {
   const row = upstreamRows.find((one) => one.id === id);
-  check(`I31 ${id}：modelsFromUpstream=${expected}`, row?.modelsFromUpstream === expected, row ? String(row.modelsFromUpstream) : "平台不在 ListUpstreams 里");
+  const category = row ? catalogOwnerOfKind.get(String(row.kind)) : undefined;
+  check(
+    `I31 ${id}（kind=${row?.kind ?? "?"}）：目录归 ${expected}`,
+    category === expected,
+    row ? `category=${String(category)}` : "平台不在 ListUpstreams 里",
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -1012,10 +1065,19 @@ const updateSimulated = await rpc("UpdatePlatform", {
 check("J32 改模拟客户端不报错（那两格被静默忽略）", !errorCodeOf(updateSimulated), JSON.stringify(updateSimulated).slice(0, 200));
 const minAfter = await upstreamOf("minimax");
 check("J32 同单的 label 照常生效", minAfter?.label === "e2e-改名", `${minBefore?.label} → ${minAfter?.label}`);
-check("J32 平台行说 modelsAuto 仍是 false", minAfter?.modelsAuto === false, String(minAfter?.modelsAuto));
 check("J32 平台行说清单仍是空", JSON.stringify(minAfter?.models ?? null) === "[]", JSON.stringify(minAfter?.models));
-const minDbRow = store().prepare("SELECT models, models_auto FROM platform WHERE id = ?").get("minimax") as any;
-check("J32 库里 models_auto 仍是 0", Number(minDbRow?.models_auto) === 0, String(minDbRow?.models_auto));
+// 送来的 models 没地方去：模拟客户端那一族的目录就是代码里那份。所以这次验的是
+// 「目录还是代码的」—— ListModels 报的是代码目录，不是单子里那个 "x"。
+const minCatalog: any[] = (await rpc("ListModels", { upstreamId: "minimax" })).models ?? [];
+check(
+  "J32 minimax 的目录还是代码那份（不是单子里送来的）",
+  minCatalog.length > 0 && !minCatalog.some((m) => m.id === "x"),
+  `${minCatalog.length} 条：${minCatalog.slice(0, 3).map((m) => m.id).join(",")}`,
+);
+// 库里那一列（models_auto）不再验：它留着不删只为生产库升级时不动表，已经没有
+// 人读也没有人写（lib/store.ts 的注释）。它的值就是建行时的默认值，跟目录归谁
+// 没有关系 —— 拿它当判据就是拿一个陈旧副本去看一个已经搬走的语义。
+const minDbRow = store().prepare("SELECT models FROM platform WHERE id = ?").get("minimax") as any;
 check(
   "J32 库里清单仍是空",
   (() => {
