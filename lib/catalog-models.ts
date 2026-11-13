@@ -6,6 +6,9 @@
 
 import { QODER_EFFORTS, qoderCredits, qoderLabel, type QoderModel } from "./qoder/models.ts";
 import { workbuddyLabel, type WorkBuddyModel } from "./workbuddy/models.ts";
+// 计费的形状只在那一处定义（见 lib/catalog-billing.ts）：这一层只带着它走，
+// 不重新拆一遍币种与单位。
+import type { ModelBilling } from "./catalog-billing.ts";
 import type { MiniMaxModel } from "./minimax/models.ts";
 import type { ZcodeModel } from "./zcode/models.ts";
 import type { SenseNovaModel } from "./sensenova/models.ts";
@@ -40,6 +43,16 @@ export interface CatalogModel {
   backend?: string;
   /** What the account is charged at: 0 is free. Absent when nobody says. */
   credits?: number;
+  /**
+   * What the upstream's own /models says this model costs.
+   *
+   * A different thing from `credits` above: that one is the multiplier a person
+   * wrote down, this one is what the platform reported. Neither overrides the
+   * other; the panel decides which to show. Absent when the upstream reported no
+   * billing at all — `unknown: true` inside is the other answer, "it reported
+   * something that is not a price" (see lib/catalog-billing.ts).
+   */
+  billing?: ModelBilling;
 }
 
 export function qoderCatalogModels(models: QoderModel[]): CatalogModel[] {
@@ -113,6 +126,7 @@ export function senseNovaCatalogModels(models: SenseNovaModel[]): CatalogModel[]
     toolCall: m.features.includes("tools"),
     ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
     ...(m.maxOutputLength > 0 ? { maxOutputTokens: m.maxOutputLength } : {}),
+    ...(m.billing ? { billing: m.billing } : {}),
   }));
 }
 
@@ -129,6 +143,7 @@ export function internAiCatalogModels(models: InternAiCatalogModel[]): CatalogMo
     reasoning: m.reasoning,
     toolCall: m.toolCall,
     ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
+    ...(m.billing ? { billing: m.billing } : {}),
   }));
 }
 
@@ -164,6 +179,7 @@ function withTraits(model: CatalogModel, traits: ModelTraits | undefined): Catal
   if (traits.reasoning !== undefined) out.reasoning = traits.reasoning;
   if (traits.toolCall !== undefined) out.toolCall = traits.toolCall;
   if (traits.credits !== undefined) out.credits = traits.credits;
+  if (traits.billing !== undefined) out.billing = traits.billing;
   // 空档位照收：上游明确说「不能选档」，丢掉它下一层（代码表）的档位就会回来 ——
   // 客户端又被告诉这个模型有档可选。
   if (traits.efforts !== undefined) out.effortOptions = [...traits.efforts];
@@ -188,6 +204,7 @@ function withUnknownTraits(model: CatalogModel, traits: ModelTraits | undefined)
   if (out.reasoning === undefined && traits.reasoning !== undefined) out.reasoning = traits.reasoning;
   if (out.toolCall === undefined && traits.toolCall !== undefined) out.toolCall = traits.toolCall;
   if (out.credits === undefined && traits.credits !== undefined) out.credits = traits.credits;
+  if (out.billing === undefined && traits.billing !== undefined) out.billing = traits.billing;
   if (out.effortOptions === undefined && traits.efforts !== undefined) {
     out.effortOptions = [...traits.efforts];
   }

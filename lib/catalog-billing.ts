@@ -253,11 +253,54 @@ function perMillion(value: number, unit: BillingUnit): number {
 }
 
 /**
- * Read one model's billing.
+ * The two names a platform row carries, for looking its descriptor up.
  *
- * `platform` is the platform's name (`tokenrhythm`, `sensenova`, ...); an unknown
- * one, or a model with no billing fields, is `mode: "none"` — a model without a
- * price is normal, not an error.
+ * A row has an id and a kind. The kind is the template it was created from, the id
+ * is the name the user gave it — `PLATFORM_KIND_OPTIONS` leaves `presetId` empty for
+ * these platforms, so the id is nobody's fixed string. Some platforms need no help:
+ * tokenrhythm, sensenova and intern-ai are kinds of their own, and those match by
+ * kind whatever the row is called. `opencode-go` is the case that forces the id:
+ * it is a row with kind `openai` (the OpenAI dialect) and its own base_url, and the
+ * kind says nothing about whose models are behind it — only the id names the vendor.
+ * So the id is tried first and the kind is the fallback, in one place, rather than
+ * each caller guessing.
+ */
+export interface BillingSubject {
+  /** The platform row's id. Absent when a parser inside a platform module only knows its kind. */
+  id?: string;
+  /** The kind (template) the row was created from. */
+  kind: string;
+}
+
+/** The descriptor a platform row points at, or undefined when it has no billing to read. */
+export function descriptorFor(subject: BillingSubject): BillingDescriptor | undefined {
+  if (subject.id) {
+    const byId = BILLING_DESCRIPTORS[subject.id];
+    if (byId) return byId;
+  }
+  return BILLING_DESCRIPTORS[subject.kind];
+}
+
+/**
+ * Read one model's billing for a platform row.
+ *
+ * The entry point callers use: it resolves the row's two names (see
+ * `BillingSubject`) and hands the reading to the same reader below. A platform with
+ * no descriptor is `mode: "none"` — most models have no price to report, which is
+ * normal rather than an error.
+ */
+export function billingFor(subject: BillingSubject, model: unknown): ModelBilling {
+  const descriptor = descriptorFor(subject);
+  return descriptor ? readBilling(descriptor, model) : { mode: "none" };
+}
+
+/**
+ * Read one model's billing by the platform's name.
+ *
+ * `platform` is a name the descriptor table knows (`tokenrhythm`, `sensenova`, ...);
+ * an unknown one, or a model with no billing fields, is `mode: "none"` — a model
+ * without a price is normal, not an error. Platform rows go through `billingFor`
+ * instead: they carry two names, not one (see `BillingSubject`).
  *
  * The rule that matters: **0 is not free unless the platform says so.** A platform
  * that reports no currency and no unit and has every role at 0 has not priced the
@@ -270,8 +313,11 @@ function perMillion(value: number, unit: BillingUnit): number {
  */
 export function readModelBilling(platform: string, model: unknown): ModelBilling {
   const descriptor = BILLING_DESCRIPTORS[platform];
-  if (!descriptor) return { mode: "none" };
+  return descriptor ? readBilling(descriptor, model) : { mode: "none" };
+}
 
+/** The reader itself: one descriptor, one model. */
+function readBilling(descriptor: BillingDescriptor, model: unknown): ModelBilling {
   const extra = descriptor.read ? descriptor.read(model) : {};
   const unit = extra.unit ?? descriptor.unit;
   const currency = extra.currency ?? currencyOf(descriptor.currency, model);

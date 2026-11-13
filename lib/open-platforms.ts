@@ -27,6 +27,9 @@ import { allQuotaPlugins, quotaPluginOf } from "./quota-plugins.ts";
 import { kindOf } from "./provider-kinds.ts";
 // 失败的机器码与排查用的事实。文案在面板那一侧，这里只说「哪一格不对」。
 import type { AdminFailure, AdminResult } from "./admin/error-codes.ts";
+// 计费的形状：与 contextWindow 一样是上游报的，只是它多一层结构（币种、单位、
+// 分时段倍率），所以形状在 lib/catalog-billing.ts 一处定，这里只引用。
+import type { ModelBilling } from "./catalog-billing.ts";
 
 /**
  * 开放平台的 kind 名字。
@@ -83,6 +86,18 @@ export interface ModelTraits {
   toolCall?: boolean;
   /** 按什么倍率计费：0 是免费。单位不明的那一份不取（见路径表）。 */
   credits?: number;
+  /**
+   * 这个模型的计费，上游在 /models 里报的那一份。
+   *
+   * 跟 contextWindow 一个性质：从上游解析出来的派生数据，刷新时重新求。落库只是
+   * 让面板不必为了显示价格再打一次上游 —— 上游的原始条目解析完就丢了，不留这一格
+   * 的话价格只在拉目录那一个进程里有。
+   *
+   * 没有这一格 = 上游没报计费（lib/catalog-billing.ts 的 mode: "none"）；
+   * 有这一格而 unknown 为真 = 报了但给的不是价格（全 0 又没说币种与单位），
+   * 那是个结论，不该当空丢掉。
+   */
+  billing?: ModelBilling;
 }
 
 /** 表里的一行。 */
@@ -645,6 +660,40 @@ export function traitNumber(value: unknown): number | undefined {
 }
 
 /** 一个模型的参数：只留认得的键，类型不对的当没写。 */
+/**
+ * 计费：只收形状对的那一份。
+ *
+ * 与其它参数同一个口径：认不出的值当没给（不是 0）。两处不一样：
+ *
+ *   mode 只有 token / multiplier 两种：none 就是「没有这一格」，不存。
+ *   unknown 是结论，照收 —— 上游报了但报的不是价格（全 0 又没说币种与单位）
+ *    与「上游什么都没报」不是一回事，丢了就把一句话误成了空白。
+ */
+function normalizeBilling(raw: unknown): ModelBilling | undefined {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  if (src.mode !== "token" && src.mode !== "multiplier") return undefined;
+  const billing: ModelBilling = { mode: src.mode };
+  if (src.currency === "CNY" || src.currency === "USD") billing.currency = src.currency;
+  const input = traitNumber(src.inputPerMillion);
+  if (input !== undefined) billing.inputPerMillion = input;
+  const output = traitNumber(src.outputPerMillion);
+  if (output !== undefined) billing.outputPerMillion = output;
+  const cacheRead = traitNumber(src.cacheReadPerMillion);
+  if (cacheRead !== undefined) billing.cacheReadPerMillion = cacheRead;
+  const credits = traitNumber(src.credits);
+  if (credits !== undefined) billing.credits = credits;
+  if (Array.isArray(src.multipliers)) {
+    const multipliers: { factor: number }[] = [];
+    for (const row of src.multipliers) {
+      const factor = traitNumber((row as { factor?: unknown } | null)?.factor);
+      if (factor !== undefined) multipliers.push({ factor });
+    }
+    if (multipliers.length) billing.multipliers = multipliers;
+  }
+  if (src.unknown === true) billing.unknown = true;
+  return billing;
+}
+
 function normalizeTraits(raw: unknown): ModelTraits {
   const src = (raw ?? {}) as Record<string, unknown>;
   const out: ModelTraits = {};
@@ -669,6 +718,8 @@ function normalizeTraits(raw: unknown): ModelTraits {
     }
     out.efforts = efforts;
   }
+  const billing = normalizeBilling(src.billing);
+  if (billing) out.billing = billing;
   return out;
 }
 

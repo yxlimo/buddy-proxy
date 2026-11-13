@@ -10,7 +10,7 @@
 // The case worth guarding is the last one: "0" is a price when the platform says
 // which currency and unit, and "no answer" when it says neither.
 
-import { BILLING_DESCRIPTORS, readModelBilling } from "../lib/catalog-billing.ts";
+import { BILLING_DESCRIPTORS, billingFor, readModelBilling } from "../lib/catalog-billing.ts";
 
 let pass = 0;
 let fail = 0;
@@ -190,6 +190,42 @@ const bare = readModelBilling("tokenrhythm", { id: "glm-5.1" });
 check("tokenrhythm 的模型少了 pricing 也是 none", bare.mode === "none", bare.mode);
 check("不认识的平台是 none", readModelBilling("no-such-platform", tokenrhythmModel).mode === "none");
 check("空对象不炸", readModelBilling("intern-ai", {}).mode === "none");
+
+console.log("");
+console.log("按平台行查描述符（id 优先，kind 兜底）");
+
+// A vendor kind is the platform: however the user named the row, the models behind
+// it are tokenrhythm's.
+const byVendorKind = billingFor({ id: "tr-main", kind: "tokenrhythm" }, tokenrhythmModel);
+check(
+  "行名随便起，kind 命中",
+  byVendorKind.mode === "token" && byVendorKind.inputPerMillion === 8 && byVendorKind.currency === "CNY",
+  JSON.stringify(byVendorKind),
+);
+
+// opencode-go is a row of kind openai with its own base_url: the kind says "the
+// OpenAI dialect" and nothing about whose models those are, so only the id can name
+// the vendor. This is the case the id-first lookup exists for.
+const byOwnId = billingFor({ id: "opencode-go", kind: "openai" }, opencodeGoModel);
+check(
+  "id 优先：kind 是 openai 也命中",
+  byOwnId.mode === "token" && byOwnId.inputPerMillion === 0.15,
+  JSON.stringify(byOwnId),
+);
+check(
+  "opencode-go 那一条照样读得出分时段倍率",
+  byOwnId.multipliers?.[0]?.factor === 2,
+  JSON.stringify(byOwnId),
+);
+
+// A row the user made up: nothing to read, and nothing thrown. A model whose price
+// nobody models is normal.
+const madeUp = billingFor({ id: "my-relay", kind: "openai" }, tokenrhythmModel);
+check(
+  "自建的平台按 none 交回，不抛",
+  madeUp.mode === "none" && madeUp.unknown === undefined && madeUp.currency === undefined,
+  JSON.stringify(madeUp),
+);
 
 console.log("");
 console.log("坏值当没给");

@@ -79,7 +79,8 @@ export function qiniuQuotas(account: ProviderRow, payload: unknown): QuotaView[]
 export const qiniuQuotaPlugin = registerQuotaPlugin({
   id: QINIU_QUOTA_PLUGIN_ID,
   label: "七牛云资源包",
-  fields: [{ name: QINIU_ACCOUNT_FIELD, label: "门户 cookie", secret: true }],
+  // 这一格在面板上叫什么，只有这一处说了算：凭据行与填凭据的弹窗读的都是它。
+  fields: [{ name: QINIU_ACCOUNT_FIELD, label: "额度 Cookie", secret: true }],
   probe: async (account) => {
     // 没填门户 cookie：用户还没填，不是门户拒绝了什么。
     const cookie = qiniuPortalCookie(account.id);

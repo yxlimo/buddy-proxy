@@ -64,6 +64,10 @@ export const FIXTURE = {
   workbuddyLogin: 'workbuddy-login-start',
   zcodeLogin: 'zcode-login-start',
   catalog: 'catalog-models',
+  /** 带档位的那份目录：**不是实录**，见下面 `/efforts/v1/models` 那一段。 */
+  effortsCatalog: 'catalog-models-efforts',
+  /** 带计费的那份目录：**不是实录**，见下面 `/billing/v1/models` 那一段。 */
+  billingCatalog: 'catalog-models-billing',
 } as const;
 
 const FIXTURE_DIR = new URL('../test/fixtures/panel-e2e/', import.meta.url);
@@ -246,6 +250,35 @@ async function handle(
   // ── 开放平台：模型目录 ───────────────────────────────────────────────
   if (method === 'GET' && path === '/v1/models') {
     answerFixture(FIXTURE.catalog);
+    return;
+  }
+
+  // 开放平台：**带档位**的模型目录。
+  //
+  // 这一份不是实录，是编出来的形状：真录到的那份 `catalog-models` 里一个模型都
+  // 没报档位，而「档位来自模型目录」这条路（自定义模型弹窗里那几档勾选框）必须
+  // 由上游报出来才验得到 —— 拿面板自己编的值去验，等于验面板自己。
+  //
+  // 键名用的是 `lib/open-platform-catalog.ts` 的 TRAIT_PATHS.efforts 认的那条
+  // （`supported_efforts`）。要它落到这条路上：平台的地址填
+  // `${UPSTREAM_BASE}/efforts/v1`，于是这里收的就是 `/efforts/v1/models`。
+  if (method === 'GET' && path === '/efforts/v1/models') {
+    answerFixture(FIXTURE.effortsCatalog);
+    return;
+  }
+
+  // 开放平台：**带计费**的模型目录。
+  //
+  // 这一份也不是实录，是编出来的形状：四条模型各报一种计费 —— CNY 带缓存读、
+  // USD 不带缓存读、全 0 又没币种（上游说「不知道」的那种答复）、完全没有
+  // pricing。面板那行「上游报价 …」必须由上游报出来才验得到。
+  //
+  // 形状按 `lib/catalog-billing.ts` 的 tokenrhythm 描述符（pricing.prompt /
+  // completion / cache_read，币种在 pricing.currency）：平台行建为 kind
+  // `tokenrhythm` 就落到它。要它落到这条路上：平台的地址填
+  // `${UPSTREAM_BASE}/billing/v1`，于是这里收的就是 `/billing/v1/models`。
+  if (method === 'GET' && path === '/billing/v1/models') {
+    answerFixture(FIXTURE.billingCatalog);
     return;
   }
 

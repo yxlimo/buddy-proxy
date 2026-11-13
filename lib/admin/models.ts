@@ -18,6 +18,8 @@ import {
 } from "../aggregate.ts";
 import { catalogGroups, healthSnapshot, type UpstreamId } from "./upstreams.ts";
 import { platformCooling } from "./upstream-state.ts";
+// 计费的形状在 lib/catalog-billing.ts 一处定：面板这一层只把它传给契约。
+import type { ModelBilling } from "../catalog-billing.ts";
 import { platformAvailabilities, type PlatformAvailability } from "./platform-state.ts";
 import { aggregateCatalog, type AggregateEntry } from "../router/catalog.ts";
 import type { HealthSnapshot } from "../provider-kinds.ts";
@@ -509,6 +511,14 @@ export interface CatalogModelView {
    * CatalogModel.credits）。以前这里写 `?? 0`，把「不知道」当成了免费。
    */
   credits?: number;
+  /**
+   * 上游在 /models 里报的计费。
+   *
+   * 与上面那个 credits 不是一回事：那是人写的倍率（覆盖值），这是上游报的。两
+   * 个都道上去，面板自己决定显示哪个。没有这一格 = 上游没报计费（不是免费）；
+   * 有而 unknown 为真 = 报了但报的不是价格。
+   */
+  billing?: ModelBilling;
 }
 
 /**
@@ -537,6 +547,7 @@ export function catalogModels(upstreamId = ""): CatalogModelView[] {
         // 只有真的报了价才写：契约那一头的 credits 是 optional，缺键是「不
         // 知道」，0 是「免费」。这里要是写 `?? 0`，两个意思就糊成一个了。
         ...(m.credits === undefined ? {} : { credits: m.credits }),
+        ...(m.billing === undefined ? {} : { billing: m.billing }),
       });
     }
   }

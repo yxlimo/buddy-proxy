@@ -15,6 +15,9 @@
 import { INTERN_AI_DISCOVERY_API_BASE, INTERN_AI_DISCOVERY_BASE } from "./config.ts";
 import { consoleApi } from "./platform.ts";
 import type { InternAiSession } from "./auth.ts";
+// 计费的形状与读法只在 lib/catalog-billing.ts（描述符表 + 读取器）：这个平台把
+// 每 token 的美元价格塞在按模态分的数组里，拆法归那张表。
+import { billingFor, type ModelBilling } from "../catalog-billing.ts";
 
 /** 推理端点上的一个模型。 */
 export interface InternAiModel {
@@ -32,6 +35,13 @@ export interface InternAiModel {
   capabilitiesEn: string[];
   /** 支持的协议，比如 ["OpenAI ChatCompletions"]。 */
   supportedProtocols: string[];
+  /**
+   * 上游在 /models 里报的计费。
+   *
+   * 没有这一格 = 上游没报计费；有而 unknown 为真 = 报了但报的不是价格。原始条目
+   * 解析完就丢，不在这里带上就只能为了显示价格再问一次上游。
+   */
+  billing?: ModelBilling;
 }
 
 /** 决策模型（只支持 SystemOne 接口）。 */
@@ -57,6 +67,8 @@ function num(value: unknown): number {
 
 /** 把推理端点的一行读成模型。 */
 export function parseModelRow(row: any): InternAiModel {
+  // 这个模块就是书生·端砚，所以只拿 kind 查描述符：平台行叫什么名字与价格无关。
+  const billing = billingFor({ kind: "intern-ai" }, row);
   return {
     id: String(row?.id ?? ""),
     name: String(row?.name ?? row?.id ?? ""),
@@ -65,6 +77,8 @@ export function parseModelRow(row: any): InternAiModel {
     capabilities: Array.isArray(row?.capabilities) ? row.capabilities.map(String) : [],
     capabilitiesEn: Array.isArray(row?.capabilities_en) ? row.capabilities_en.map(String) : [],
     supportedProtocols: Array.isArray(row?.supported_protocols) ? row.supported_protocols.map(String) : [],
+    // mode: none 是不取；unknown 是个结论，要留着。
+    ...(billing.mode === "none" ? {} : { billing }),
   };
 }
 
@@ -145,6 +159,8 @@ export interface InternAiCatalogModel {
   reasoning: boolean;
   /** 能不能调工具。 */
   toolCall: boolean;
+  /** 上游在 /models 里报的计费。没有这一格 = 上游没报计费。 */
+  billing?: ModelBilling;
 }
 
 /**
@@ -184,6 +200,8 @@ export function mergeCatalogModels(
       contextLength: Number(model.contextLength || listed?.contextLength || 0),
       reasoning: capabilities.length ? hasCapability(capabilities, "reasoning") : false,
       toolCall: capabilities.length ? hasCapability(capabilities, "tool") : true,
+      // 计费只从推理端那一份取：价格是那个端点的答复里报的，控制台那份没有。
+      ...(model.billing ? { billing: model.billing } : {}),
     };
   });
 }

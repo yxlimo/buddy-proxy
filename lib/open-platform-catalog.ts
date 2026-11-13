@@ -26,6 +26,9 @@ import { REQUEST_ID_HEADER } from "./router/upstreams/open-platform.ts";
 // 平台属于哪一族：方言族（目录从上游拉）与模拟客户端（目录由代码给出）。
 // 判据只在一个地方定义（lib/platform-catalog.ts）。
 import { platformCategoryOfKind } from "./platform-catalog.ts";
+// 计费是一次解析的结论（见 lib/catalog-billing.ts）：上游把价格塞在同一份答复里，
+// 丢掉就得为了显示价格再问一次。
+import { billingFor, type BillingSubject } from "./catalog-billing.ts";
 import { kindOf } from "./provider-kinds.ts";
 import { accountsOfPlatform } from "./providers.ts";
 // 引用即登记：问目录要拿各家的推理 key，而登记发生在各平台模块的求值期。环上
@@ -163,6 +166,10 @@ export interface ParsedModel {
  * 倍率（credits）**不在这张表里**：上游把三种不同单位的东西都叫「价格」—
  * 倍率（`pricing: "8.00000000"`）、每百万 token 的钱、积分 — 差三个数量级，
  * 塞进同一格就是猜。宁可没有。
+ *
+ * 计费（billing）也不在这张表里，但它不是「不取」：它的形状多一层（币种、单位、
+ * 分时段倍率），一张路径表说不清，所以走 lib/catalog-billing.ts 的描述符表，
+ * 由 parseModelList 按平台名解析后写进同一份 traits。
  */
 export const TRAIT_PATHS = {
   contextWindow: [
@@ -300,9 +307,13 @@ export function traitsFromEntry(entry: unknown, paths: TraitPathTable = TRAIT_PA
  * 名字以外的东西也一起取（见 TRAIT_PATHS）：参数就在同一份答复里，丢掉它就得
  * 再问一次上游，而很多家根本没有第二个问得清参数的端点。
  *
+ * `subject` 是这份清单属于哪个平台（行的 id 与 kind）：计费跟参数一样是同一份
+ * 答复里的，解析时一并读出来，否则原始条目一丢，面板就永远看不到价格。不传就是
+ * 只取参数（没平台名的调用方拿不到计费，那就是「不知道」）。
+ *
  * 都不认就是 null：宁可没有目录，也不要一份猜的。
  */
-export function parseModelList(payload: unknown): ParsedModel[] | null {
+export function parseModelList(payload: unknown, subject?: BillingSubject): ParsedModel[] | null {
   const body = payload as { data?: unknown; models?: unknown } | null;
   const list = Array.isArray(body?.data)
     ? body.data
@@ -316,7 +327,14 @@ export function parseModelList(payload: unknown): ParsedModel[] | null {
     const raw = typeof entry === "string" ? entry : String(item?.id ?? item?.name ?? "");
     const id = raw.trim();
     if (!id || out.some((model) => model.id === id)) continue;
-    out.push({ id, traits: traitsFromEntry(entry) });
+    const traits = traitsFromEntry(entry);
+    if (subject) {
+      // `mode: "none"` 是不取：没有这一格与「上游报了但报的不是价格」不是一回事，
+      // 后者（unknown）要留着——它是个结论。
+      const billing = billingFor(subject, entry);
+      if (billing.mode !== "none") traits.billing = billing;
+    }
+    out.push({ id, traits });
   }
   return out;
 }
@@ -360,7 +378,12 @@ export async function fetchOpenPlatformModels(
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
-      console.warn(`[OPEN-PLATFORM] ${row.id} 的模型目录拉不到：HTTP ${res.status} (request=${requestId})`);
+      // 上游的正文一起记：面板上那句「细节看日志」指的就是这里。只记状态码
+      // 答不出为什么（key 不对、没有 /models、风控拦了，状态码常常一样）。
+      const body = await res.text().catch(() => "");
+      console.warn(
+        `[OPEN-PLATFORM] ${row.id} 的模型目录拉不到：HTTP ${res.status} (request=${requestId})：${body.slice(0, 200)}`,
+      );
       return null;
     }
     payload = await res.json();
@@ -370,7 +393,7 @@ export async function fetchOpenPlatformModels(
     );
     return null;
   }
-  const models = parseModelList(payload);
+  const models = parseModelList(payload, { id: row.id, kind: row.kind });
   if (!models) {
     console.warn(`[OPEN-PLATFORM] ${row.id} 的模型目录认不出来：上游答的不是模型清单`);
     return null;

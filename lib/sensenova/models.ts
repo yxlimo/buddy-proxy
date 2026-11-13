@@ -13,6 +13,9 @@
 // 池子决定它先扣哪一个池的积分（见 lib/sensenova/quota.ts）。
 
 import { SENSENOVA_INFER_BASE } from "./config.ts";
+// 计费的形状与读法只在 lib/catalog-billing.ts（描述符表 + 读取器）：这里把上游回
+// 的那一条交给它，不自己拆币种与单位。
+import { billingFor, type ModelBilling } from "../catalog-billing.ts";
 
 /** 推理端点上的一个模型。 */
 export interface SenseNovaModel {
@@ -29,10 +32,21 @@ export interface SenseNovaModel {
   outputModalities: string[];
   /** 支持的能力，比如 tools / json_mode / reasoning。 */
   features: string[];
+  /**
+   * 上游在 /models 里报的计费。
+   *
+   * 没有这一格 = 上游没报计费；有而 unknown 为真 = 报了但报的不是价格（这个平台
+   * 对每个模型都回全 0，又不说币种与单位）—— 那是个结论，面板据此不显示价格。
+   * 原始条目解析完就丢，不在这里带上就只能为了显示价格再问一次上游。
+   */
+  billing?: ModelBilling;
 }
 
 /** 把接口返回的一行读成模型。 */
 export function parseModelRow(row: any): SenseNovaModel {
+  // 这个模块就是 SenseNova，所以只拿 kind 查描述符：平台行叫什么名字与价格无关
+  // （用户自己起的 id 不影响这一条怎么读）。
+  const billing = billingFor({ kind: "sensenova" }, row);
   return {
     id: String(row?.id ?? ""),
     name: String(row?.name ?? row?.id ?? ""),
@@ -41,6 +55,8 @@ export function parseModelRow(row: any): SenseNovaModel {
     inputModalities: Array.isArray(row?.input_modalities) ? row.input_modalities.map(String) : [],
     outputModalities: Array.isArray(row?.output_modalities) ? row.output_modalities.map(String) : [],
     features: Array.isArray(row?.supported_features) ? row.supported_features.map(String) : [],
+    // mode: none 是不取；unknown 是个结论，要留着。
+    ...(billing.mode === "none" ? {} : { billing }),
   };
 }
 
