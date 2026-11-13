@@ -21,6 +21,7 @@ import {
 import { useUsageSummary } from '@/features/overview/api'
 import { useUpstreams } from '@/features/upstreams/api'
 import { useUsageEvents } from '@/features/usage/api'
+import { USAGE_TOP_LIMIT, topBuckets } from '@/features/usage/top-buckets'
 import { UsageTable } from '@/features/usage/usage-table'
 import { type NavigateFn } from '@/hooks/use-table-url-state'
 import { formatCompact, formatCount } from '@/lib/format'
@@ -73,6 +74,9 @@ export function UsagePage() {
     label: item.key,
     value: item.key,
   }))
+
+  const parentSession = topBuckets(summary.data?.byParentSession ?? [])
+  const subagent = topBuckets(summary.data?.bySubagent ?? [])
 
   return (
     <PageShell
@@ -164,12 +168,20 @@ export function UsagePage() {
               buckets={(summary.data?.bySession ?? []).slice(0, 10)}
             />
             {/* 主会话：子代理的请求并进主代理那一档。 */}
-            <BreakdownCard title='按主会话' buckets={summary.data?.byParentSession ?? []} />
+            <BreakdownCard
+              title='按主会话'
+              buckets={parentSession.shown}
+              total={parentSession.total}
+            />
           </div>
 
           <div className='grid gap-4 lg:grid-cols-2'>
             <BreakdownCard title='按 agent 名' buckets={summary.data?.byAgentName ?? []} />
-            <BreakdownCard title='按子代理' buckets={summary.data?.bySubagent ?? []} />
+            <BreakdownCard
+              title='按子代理'
+              buckets={subagent.shown}
+              total={subagent.total}
+            />
           </div>
         </>
       )}
@@ -218,11 +230,13 @@ function StatCard({
   )
 }
 
-function BreakdownCard({
+export function BreakdownCard({
   title,
   buckets,
+  total,
 }: {
   title: string
+  total?: number
   buckets: {
     key: string
     summary?: {
@@ -236,6 +250,11 @@ function BreakdownCard({
     <Card>
       <CardHeader>
         <CardTitle className='text-base'>{title}</CardTitle>
+        {total !== undefined && total > buckets.length ? (
+          <CardDescription>
+            共 {total} 条，显示前 {USAGE_TOP_LIMIT}
+          </CardDescription>
+        ) : null}
       </CardHeader>
       <CardContent className='grid gap-2'>
         {buckets.length === 0 ? (

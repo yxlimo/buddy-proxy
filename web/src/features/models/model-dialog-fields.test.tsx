@@ -162,7 +162,7 @@ describe('模型编辑弹窗', () => {
     expect(screen.getByLabelText('平台模型 id')).toBeInTheDocument()
   })
 
-  it('single 策略下没有权重输入框，fallback 才有', async () => {
+  it('目标上没有权重输入框，也没有启用开关', async () => {
     const user = userEvent.setup({ delay: null })
     renderWithClient({
       client: catalogClient(),
@@ -171,22 +171,32 @@ describe('模型编辑弹窗', () => {
       ),
     })
 
-    // 默认是 single：权重没意义，整块不画。
     await user.click(screen.getByRole('tab', { name: /平台目标/ }))
+
+    // 权重不给人填：位置就是权重。
     expect(screen.queryByLabelText('权重')).not.toBeInTheDocument()
     expect(
       screen.queryByText('权重大的先试，失败了才试小的。')
     ).not.toBeInTheDocument()
+    // 目标上没有开关了：不去这个目标就删掉它。
+    expect(
+      within(screen.getByRole('list', { name: '目标顺序' })).queryAllByRole(
+        'switch'
+      )
+    ).toHaveLength(0)
 
-    // 策略在「基本」那一页：切成 fallback。
+    // 换成 fallback 也不长出来。
     await user.click(screen.getByRole('tab', { name: /^基本/ }))
     await user.click(screen.getByRole('combobox', { name: '策略' }))
     await user.click(await screen.findByRole('option', { name: /fallback/ }))
-
-    // 再回到「上游目标」，权重就出来了。
     await user.click(screen.getByRole('tab', { name: /平台目标/ }))
-    expect(screen.getByLabelText('权重')).toBeInTheDocument()
-    expect(screen.getByText('权重大的先试，失败了才试小的。')).toBeInTheDocument()
+
+    expect(screen.queryByLabelText('权重')).not.toBeInTheDocument()
+    expect(
+      within(screen.getByRole('list', { name: '目标顺序' })).queryAllByRole(
+        'switch'
+      )
+    ).toHaveLength(0)
   })
 
   it('上下文填 1.5：那一格行内说清，保存灰着', async () => {

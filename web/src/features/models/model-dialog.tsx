@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { GripVertical, Plus, Trash2 } from 'lucide-react'
 import { create } from '@bufbuild/protobuf'
 import {
   PublishedModelSchema,
@@ -56,11 +56,13 @@ type ModelDraft = {
   reasoning: TriState
   toolCall: TriState
   effortOptions: string
+  /**
+   * 目标的先后。列表里的位置就是权重，草稿里不存权重数字：
+   * 拖动一改位置，权重跟着重新算。
+   */
   targets: {
     groupName: string
     upstreamModel: string
-    weight: string
-    enabled: boolean
   }[]
 }
 
@@ -68,9 +70,18 @@ function emptyTarget() {
   return {
     groupName: '',
     upstreamModel: '',
-    weight: '1',
-    enabled: true,
   }
+}
+
+/**
+ * 位次即权重：第 index 个目标（共 total 个）的权重。
+ *
+ * 后端按权重从大到小试目标 —— 读表时 `ORDER BY ... weight DESC`，保存时也按
+ * 权重从大到小排序，proto 里写的是「权重：大的先试」。所以排在最上面的那个
+ * 拿最大的权重，往下依次小一个：顺序就是先后，不再手填数字。
+ */
+export function targetWeight(index: number, total: number): number {
+  return total - index
 }
 
 /** 一行的目标填全了没有。 */
@@ -147,11 +158,11 @@ export function toDraft(model: PublishedModel | undefined): ModelDraft {
     reasoning: toTriState(model.reasoning),
     toolCall: toTriState(model.toolCall),
     effortOptions: model.effortOptions.join(', '),
+    // 服务端回的目标已经按权重从大到小排好，读进来就是界面上要显示的先后。
+    // 目标上的 enabled 不读了：面板没有这个开关，保存时一律写开。
     targets: model.targets.map((target) => ({
       groupName: target.groupName,
       upstreamModel: target.upstreamModel,
-      weight: String(target.weight || 1),
-      enabled: target.enabled,
     })),
   }
 }
@@ -188,25 +199,22 @@ export function fromDraft(draft: ModelDraft): PublishedModel {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
+    // 位次即权重：按草稿里的先后填，第一个最大。single 也一样填 —— 只有一个
+    // 目标时顺序没有意义，权重仍然是它自己那一个。
     targets: draft.targets
       .filter(targetFilled)
-      .map(
-        (target): PublishedTarget => ({
-          ...create(PublishedTargetSchema),
-          groupName: target.groupName.trim(),
-          upstreamModel: target.upstreamModel.trim(),
-          // single 策略不看权重：只走权重最大的那一个（权重一样就按顺序）。
-          // 草稿里残留的权重不带进请求，统一发 1。
-          weight:
-            draft.strategy === 'fallback'
-              ? Number(target.weight) || 1
-              : 1,
-          enabled: target.enabled,
-          // requests / failed 是网关的计数，只读：保存时会被覆盖。
-          requests: 0n,
-          failed: 0n,
-        })
-      ),
+      .map((target, index, all): PublishedTarget => ({
+        ...create(PublishedTargetSchema),
+        groupName: target.groupName.trim(),
+        upstreamModel: target.upstreamModel.trim(),
+        weight: targetWeight(index, all.length),
+        // 目标上没有开关了：想不去这个目标就把它删掉。后端还按这一列判
+        // 「这个目标参不参与选路」，所以一律写开。
+        enabled: true,
+        // requests / failed 是网关的计数，只读：保存时会被覆盖。
+        requests: 0n,
+        failed: 0n,
+      })),
     updatedAt: 0n,
   }
 }
@@ -233,6 +241,8 @@ export function ModelDialog({
 }: ModelDialogProps) {
   const [draft, setDraft] = useState<ModelDraft>(() => toDraft(model))
   const [tab, setTab] = useState('basic')
+  /** 正在拖的那一行（草稿里的行号）。 */
+  const [dragging, setDragging] = useState<number | null>(null)
 
   useEffect(() => {
     if (open) setDraft(toDraft(model))
@@ -252,9 +262,31 @@ export function ModelDialog({
       ),
     }))
 
+  /** 把第 from 行挪到第 to 位。越界或原地不动时不动。 */
+  const moveTarget = (from: number, to: number) =>
+    setDraft((prev) => {
+      if (from === to) return prev
+      if (from < 0 || to < 0 || from >= prev.targets.length) return prev
+      if (to >= prev.targets.length) return prev
+      const targets = [...prev.targets]
+      const [moved] = targets.splice(from, 1)
+      targets.splice(to, 0, moved)
+      return { ...prev, targets }
+    })
+
   // 按填全了的目标数算，不是按行数：没填全的行会被过滤掉，拿行数算会
   // 放行一个「发出去是空 targets」的请求。
   const filledTargets = draft.targets.filter(targetFilled)
+
+  // 每一行将要发的权重：只给填全了的行算，没填全的行本来也发不出去。
+  const weights = new Map<number, number>()
+  draft.targets.forEach((target, index) => {
+    if (!targetFilled(target)) return
+    weights.set(
+      index,
+      targetWeight(filledTargets.indexOf(target), filledTargets.length)
+    )
+  })
 
   // 组合撞了的行：后端存不下这种草稿（主键 (model_id, group_name,
   // upstream_model)），所以在这里就拦住，不发请求。
@@ -516,92 +548,161 @@ export function ModelDialog({
                 至少要有一个填全的目标：平台组和平台模型 id 都要填。
               </p>
             ) : null}
-            {draft.targets.map((target, index) => (
-              <div
-                key={index}
-                className='grid gap-2 rounded-lg border p-3 sm:grid-cols-2'
-              >
-                <div className='grid gap-2'>
-                  <Label htmlFor={`target-group-${index}`}>平台组</Label>
-                  <GroupPicker
-                    id={`target-group-${index}`}
-                    value={target.groupName}
-                    onChange={(value) =>
-                      patchTarget(index, {
-                        groupName: value,
-                        // 换了组，上一个组的模型 id 就不再作数。
-                        upstreamModel: '',
-                      })
-                    }
-                  />
-                </div>
-                <div className='grid gap-2'>
-                  <Label htmlFor={`target-model-${index}`}>平台模型 id</Label>
-                  <ModelPicker
-                    id={`target-model-${index}`}
-                    groupName={target.groupName}
-                    value={target.upstreamModel}
-                    takenModelIds={takenModelIds(index)}
-                    onChange={(value) =>
-                      patchTarget(index, { upstreamModel: value })
-                    }
-                  />
-                </div>
-                {duplicated.has(index) ? (
-                  <p className='text-xs text-destructive sm:col-span-2'>
-                    {`${target.groupName.trim()} / ${target.upstreamModel.trim()} 已经有一行了（第 ${(duplicated.get(index) ?? 0) + 1} 个目标）`}
-                  </p>
-                ) : null}
-                {/* 权重只有 fallback 用得上：single 只走一个目标，权重没意义，
-                    整块藏掉（不是禁用）。 */}
-                {draft.strategy === 'fallback' ? (
-                  <div className='grid gap-2'>
-                    <Label htmlFor={`target-weight-${index}`}>权重</Label>
-                    <Input
-                      id={`target-weight-${index}`}
-                      inputMode='numeric'
-                      value={target.weight}
-                      onChange={(event) =>
-                        patchTarget(index, { weight: event.target.value })
+            <p className='text-xs text-muted-foreground'>
+              拖动行调整顺序，排在前面的先接
+            </p>
+            <ul aria-label='目标顺序' className='grid gap-2'>
+              {draft.targets.map((target, index) => {
+                const last = index === draft.targets.length - 1
+                const weight = weights.get(index)
+                return (
+                  <li
+                    key={index}
+                    data-target-row={index}
+                    aria-label={`目标 ${index + 1}`}
+                    tabIndex={0}
+                    // 键盘上的另一条路：焦点在行上时 Alt + 上/下箭头。
+                    onKeyDown={(event) => {
+                      if (!event.altKey) return
+                      if (event.key === 'ArrowUp' && index > 0) {
+                        event.preventDefault()
+                        moveTarget(index, index - 1)
                       }
-                    />
-                    <p className='text-xs text-muted-foreground'>
-                      权重大的先试，失败了才试小的。
-                    </p>
-                  </div>
-                ) : null}
-                {!targetFilled(target) ? (
-                  <p className='text-xs text-destructive sm:col-span-2'>
-                    这一行还没填全：平台组和平台模型 id 都要填。
-                  </p>
-                ) : null}
-                <div className='flex items-center justify-between gap-2 sm:col-span-2'>
-                  <label className='flex items-center gap-2 text-sm'>
-                    <Switch
-                      checked={target.enabled}
-                      onCheckedChange={(checked) =>
-                        patchTarget(index, { enabled: checked })
+                      if (event.key === 'ArrowDown' && !last) {
+                        event.preventDefault()
+                        moveTarget(index, index + 1)
                       }
-                    />
-                    启用这个目标
-                  </label>
-                  <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={() =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        targets: prev.targets.filter((_, i) => i !== index),
-                      }))
-                    }
-                    disabled={draft.targets.length === 1}
+                    }}
+                    // 落在别的一行上才算一次换位：不 preventDefault 收不到 drop。
+                    onDragOver={(event) => {
+                      if (dragging !== null && dragging !== index) {
+                        event.preventDefault()
+                      }
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      const from = dragging
+                      setDragging(null)
+                      if (from === null || from === index) return
+                      moveTarget(from, index)
+                    }}
+                    className={cn(
+                      'grid gap-2 rounded-lg border p-3',
+                      dragging === index && 'opacity-50'
+                    )}
                   >
-                    <Trash2 />
-                    删除
-                  </Button>
-                </div>
-              </div>
-            ))}
+                    <div className='flex flex-wrap items-center gap-2'>
+                      {/* 拖拽把手单独一个元素可拖：整张卡片可拖会抢掉输入框里
+                          选字的拖动手势。 */}
+                      <span
+                        data-drag-handle=''
+                        draggable
+                        aria-hidden='true'
+                        onDragStart={(event) => {
+                          setDragging(index)
+                          event.dataTransfer?.setData(
+                            'text/plain',
+                            String(index)
+                          )
+                          if (event.dataTransfer) {
+                            event.dataTransfer.effectAllowed = 'move'
+                          }
+                        }}
+                        onDragEnd={() => setDragging(null)}
+                        className='cursor-grab text-muted-foreground'
+                      >
+                        <GripVertical className='size-4' />
+                      </span>
+                      <span className='text-sm font-medium'>
+                        目标 {index + 1}
+                      </span>
+                      {weight === undefined ? null : (
+                        <span className='text-xs text-muted-foreground'>
+                          权重 {weight}
+                        </span>
+                      )}
+                      <span className='ms-auto flex items-center gap-1'>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          aria-label={`上移目标 ${index + 1}`}
+                          disabled={index === 0}
+                          onClick={() => moveTarget(index, index - 1)}
+                        >
+                          上移
+                        </Button>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          aria-label={`下移目标 ${index + 1}`}
+                          disabled={last}
+                          onClick={() => moveTarget(index, index + 1)}
+                        >
+                          下移
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          aria-label={`删除目标 ${index + 1}`}
+                          disabled={draft.targets.length === 1}
+                          onClick={() =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              targets: prev.targets.filter(
+                                (_, i) => i !== index
+                              ),
+                            }))
+                          }
+                        >
+                          <Trash2 />
+                          删除
+                        </Button>
+                      </span>
+                    </div>
+                    <div className='grid gap-2 sm:grid-cols-2'>
+                      <div className='grid gap-2'>
+                        <Label htmlFor={`target-group-${index}`}>平台组</Label>
+                        <GroupPicker
+                          id={`target-group-${index}`}
+                          value={target.groupName}
+                          onChange={(value) =>
+                            patchTarget(index, {
+                              groupName: value,
+                              // 换了组，上一个组的模型 id 就不再作数。
+                              upstreamModel: '',
+                            })
+                          }
+                        />
+                      </div>
+                      <div className='grid gap-2'>
+                        <Label htmlFor={`target-model-${index}`}>
+                          平台模型 id
+                        </Label>
+                        <ModelPicker
+                          id={`target-model-${index}`}
+                          groupName={target.groupName}
+                          value={target.upstreamModel}
+                          takenModelIds={takenModelIds(index)}
+                          onChange={(value) =>
+                            patchTarget(index, { upstreamModel: value })
+                          }
+                        />
+                      </div>
+                    </div>
+                    {duplicated.has(index) ? (
+                      <p className='text-xs text-destructive'>
+                        {`${target.groupName.trim()} / ${target.upstreamModel.trim()} 已经有一行了（第 ${(duplicated.get(index) ?? 0) + 1} 个目标）`}
+                      </p>
+                    ) : null}
+                    {!targetFilled(target) ? (
+                      <p className='text-xs text-destructive'>
+                        这一行还没填全：平台组和平台模型 id 都要填。
+                      </p>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
             <Button
               variant='outline'
               size='sm'
