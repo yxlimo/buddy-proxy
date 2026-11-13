@@ -221,29 +221,39 @@ try {
 }
 
 /* ------------------------------------------------------------------ *
- * 5) 发布层：推理关掉就只有 `off` 这一档
+ * 5) 发布层：关掉推理没有档位，能思考的模型都带 `off`
  *
- * `off` 是一个档位，不是布尔开关，它在阶梯的最浅处。一个关掉推理的主路由
- * 模型本来就只有这一档，可库里那列 `effort_options` 是推理还开着的时候写的，
- * 不会跟着开关变 —— 照它发布 `low/high/max`，客户端会以为能调，选出来的是这个
- * 模型没有的档位。发布层因此把这两件事对齐：`reasoning:false` 就只发 `["off"]`。
+ * `reasoning:false` 只有一个含义：这个模型不会思考，或者不接档位 —— 它没有
+ * 档位可给，所以一个档位都不发。发 `["off"]` 是在说反话：那等于告诉客户端
+ * 「它有一个可以关掉思考的开关」。库里那列 `effort_options` 是开关还开着的时候
+ * 写的，不会跟着关掉，所以不能拿它当真相。
  *
- * 库里的列一个字不动（重新打开推理时那些档位还要用），`reasoning` 为 NULL
- * （没写）的模型也不是「关」，照旧发库里那列。
+ * `off` 是阶梯最浅的一档，不是布尔开关。客户端能选哪些档位是照我们公布的列表
+ * 来的（pi 的 `THINKING_LEVEL_OPTIONS`、opencode 的变体名），不发 `off` 就等于
+ * 把「别想了」这个选项从它们手上拿走。所以只要 `reasoning` 不是 false，`off`
+ * 一定在列表最前面，且只出现一次；其余档位保持原来的来源与顺序（库里那列优先，
+ * 没有就继承目标的公共档位）。
+ *
+ * 库里的列一个字不动（重新打开推理时那些档位还要用）。`reasoning` 为 NULL
+ * （没写）不是「关」：「不知道它能不能思考」不等于「它不能思考」，按能思考处理。
  * ------------------------------------------------------------------ */
 
-section("发布层：推理关掉就只有 off 一档");
+section("发布层：关掉推理没有档位，能思考的都带 off");
 
 const { aggregateCatalog, aggregateAnthropicCatalog } = await import("../lib/router/catalog.ts");
 
 const TIERS = ["low", "high", "max"];
 
 /** 一个目标，上游目录里带 TIERS 那几档。 */
-function publishOne(model: { reasoning: boolean | null; effortOptions: string[] | null }, targetReasoning = true): any {
+function publishOne(
+  model: { reasoning: boolean | null; effortOptions: string[] | null },
+  targetReasoning = true,
+  targetTiers: string[] = TIERS,
+): any {
   const groups = [
     {
       group: "minimax",
-      models: [{ id: "m", displayName: "M", reasoning: targetReasoning, toolCall: true, effortOptions: TIERS }],
+      models: [{ id: "m", displayName: "M", reasoning: targetReasoning, toolCall: true, effortOptions: targetTiers }],
     },
   ];
   const entries = aggregateCatalog(groups as any, [
@@ -265,22 +275,60 @@ function publishOne(model: { reasoning: boolean | null; effortOptions: string[] 
   return aggregateAnthropicCatalog(entries).data[0];
 }
 
+// 第 1 条：关掉推理，库里那列写着三档也不发。
 const offPublished = publishOne({ reasoning: false, effortOptions: TIERS });
-check("关掉推理：档位只剩 off", JSON.stringify(offPublished.effort_options) === '["off"]', JSON.stringify(offPublished.effort_options));
+check(
+  "关掉推理：一个档位都不发",
+  !("effort_options" in offPublished),
+  JSON.stringify(offPublished.effort_options),
+);
 check("关掉推理：仍然说 reasoning:false", offPublished.reasoning === false, JSON.stringify(offPublished.reasoning));
 
-const onPublished = publishOne({ reasoning: true, effortOptions: TIERS });
-check("开着推理：库里那列原样", JSON.stringify(onPublished.effort_options) === JSON.stringify(TIERS), JSON.stringify(onPublished.effort_options));
-
-const noneSaid = publishOne({ reasoning: null, effortOptions: ["low", "high"] });
+const offNoColumn = publishOne({ reasoning: false, effortOptions: null });
 check(
-  "没写 reasoning（NULL）不算关：照旧发库里那列",
-  JSON.stringify(noneSaid.effort_options) === '["low","high"]',
+  "关掉推理且库里没有档位列：也不发",
+  !("effort_options" in offNoColumn),
+  JSON.stringify(offNoColumn.effort_options),
+);
+
+// 第 2 条：开着推理，off 在库里那列前面。
+const onPublished = publishOne({ reasoning: true, effortOptions: TIERS });
+check(
+  "开着推理：off 排在最前，其余顺序不变",
+  JSON.stringify(onPublished.effort_options) === '["off","low","high","max"]',
+  JSON.stringify(onPublished.effort_options),
+);
+
+// 第 3 条：库里没写，继承目标那几档，同样带上 off。
+const inherited = publishOne({ reasoning: true, effortOptions: null });
+check(
+  "开着推理、库里没写：继承目标档位，off 在前",
+  JSON.stringify(inherited.effort_options) === '["off","low","high","max"]',
+  JSON.stringify(inherited.effort_options),
+);
+
+// 目标也没有档位：仍然给 off —— 能思考的模型可以被告知别想了。
+const noTiersAnywhere = publishOne({ reasoning: true, effortOptions: null }, true, []);
+check(
+  "开着推理、哪儿都没有档位：只剩 off",
+  JSON.stringify(noTiersAnywhere.effort_options) === '["off"]',
+  JSON.stringify(noTiersAnywhere.effort_options),
+);
+
+// 第 4 条：没写 reasoning 不等于关，也不是「不发」，off 不重复。
+const noneSaid = publishOne({ reasoning: null, effortOptions: ["off", "low"] });
+check(
+  "没写 reasoning（NULL）不算关：照发，且 off 不重复",
+  JSON.stringify(noneSaid.effort_options) === '["off","low"]',
   JSON.stringify(noneSaid.effort_options),
 );
 
-const noColumn = publishOne({ reasoning: false, effortOptions: null });
-check("关掉推理且库里没有档位列：也是 off，不是不发", JSON.stringify(noColumn.effort_options) === '["off"]', JSON.stringify(noColumn.effort_options));
+const offInTheMiddle = publishOne({ reasoning: true, effortOptions: ["low", "off", "high"] });
+check(
+  "库里那列把 off 写在中间：挪到最前，只出现一次",
+  JSON.stringify(offInTheMiddle.effort_options) === '["off","low","high"]',
+  JSON.stringify(offInTheMiddle.effort_options),
+);
 
 /* ------------------------------------------------------------------ *
  * 结果

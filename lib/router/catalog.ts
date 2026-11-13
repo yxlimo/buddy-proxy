@@ -152,20 +152,33 @@ function findModel(groups: CatalogGroup[], group: UpstreamGroup, id: string): Ca
 /**
  * The thinking tiers a published model advertises.
  *
- * Turning reasoning off leaves exactly one tier, `off`, so that is the only
- * thing worth publishing. The `effort_options` column is history at that point —
- * the tiers were written while reasoning was on, and the column does not follow
- * the switch — and publishing them next to `reasoning: false` would tell the
- * client it may choose a tier this model does not have. Only the published value
- * is overridden: the column keeps its tiers, so switching reasoning back on
- * brings them back with it.
+ * `reasoning: false` means the model does not think, or has no tier to pick: it
+ * has no tiers at all, so publishing none is the honest answer. Publishing
+ * `["off"]` there would claim the opposite of what the switch says — that it has
+ * a thinking knob one can turn off.
  *
- * `reasoning` NULL stays out of this: NULL is "nobody said", not "off", and that
- * model keeps the column (or its targets' common tiers) untouched.
+ * Every model that can think gets `off` for free, in front. `off` is the
+ * shallowest tier, not a boolean, and the clients read the selectable levels out
+ * of this list: pi keeps `off` in its own `THINKING_LEVEL_OPTIONS`, opencode
+ * names its variants after what we publish. A list without `off` therefore takes
+ * "think less" away from the caller — magic-context's local configuration can
+ * only choose a level that was published. The column is user-written tiers and
+ * the targets' common tiers are inherited ones; `off` is neither, it comes with
+ * being able to think.
+ *
+ * Only the published value is overridden: the column keeps its tiers, so the
+ * list is still there if reasoning is switched off and back on.
+ *
+ * `reasoning` NULL is not "off": NULL is "nobody said", and "not known to be
+ * incapable" is not "incapable", so it is treated like `true`.
  */
 function publishedEfforts(model: AggregateModel, commonEfforts: string[] | undefined): string[] | undefined {
-  if (model.reasoning === false) return ["off"];
-  return model.effortOptions ?? (commonEfforts?.length ? commonEfforts : undefined);
+  if (model.reasoning === false) return undefined;
+  const tiers = model.effortOptions ?? (commonEfforts?.length ? commonEfforts : undefined) ?? [];
+  // `off` first, and only once: the column may already carry it in the middle
+  // of the list, where a client reading the levels in order would not see it as
+  // the default.
+  return ["off", ...tiers.filter((tier) => tier !== "off")];
 }
 
 /**
