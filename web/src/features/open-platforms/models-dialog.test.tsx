@@ -1529,3 +1529,266 @@ describe('自定义模型弹窗：上游报的计费', () => {
     expect(dialogText()).not.toContain('每百万 token')
   })
 })
+
+describe('自定义模型弹窗：人工覆盖计费', () => {
+  function dialogText(): string {
+    return document.body.textContent ?? ''
+  }
+
+  /** 目录：上游报了 CNY 8 / 28 / 2 的一条模型（按 token，带缓存读）。 */
+  function priced(): CatalogModel[] {
+    return [
+      create(CatalogModelSchema, {
+        id: 'glm-4.6',
+        displayName: 'GLM-4.6',
+        billing: create(ModelBillingSchema, {
+          mode: 'token',
+          currency: 'CNY',
+          inputPerMillion: 8,
+          outputPerMillion: 28,
+          cacheReadPerMillion: 2,
+        }),
+      }),
+    ]
+  }
+
+  /** 目录：上游关于计费一个字都没报。 */
+  function unpriced(): CatalogModel[] {
+    return [
+      create(CatalogModelSchema, { id: 'glm-4.6', displayName: 'GLM-4.6' }),
+    ]
+  }
+
+  /** 选一档计费方式。 */
+  async function chooseBillingMode(
+    user: ReturnType<typeof userEvent.setup>,
+    option: string
+  ) {
+    await chooseOption(user, '计费方式', option)
+  }
+
+  it('默认「不设置」：只读行说的是上游报价，三个单价框不摆', async () => {
+    openDialog(client({ models: priced() }))
+
+    await ready()
+    expect(selectOf('计费方式')).toHaveTextContent('不设置')
+    expect(dialogText()).toContain('上游报价')
+    expect(dialogText()).toContain(
+      '输入 ¥8 / 输出 ¥28 / 缓存读 ¥2 每百万 token'
+    )
+    expect(
+      screen.queryByLabelText('输入 每百万 token')
+    ).not.toBeInTheDocument()
+  })
+
+  it('上游没报计费：那一块照样在，能选按 token 并自己填价', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: unpriced(), sent }))
+
+    await ready()
+    // 一行只读的都没有（上游没说），但计费方式那一格在。
+    expect(dialogText()).not.toContain('上游报价')
+    expect(selectOf('计费方式')).toBeVisible()
+
+    await chooseBillingMode(user, '按 token')
+    expect(field('输入 每百万 token')).toHaveValue('')
+    expect(field('输出 每百万 token')).toHaveValue('')
+    expect(field('缓存读 每百万 token')).toHaveValue('')
+
+    await user.type(field('输入 每百万 token'), '16')
+    await user.type(field('输出 每百万 token'), '64')
+    await user.type(field('缓存读 每百万 token'), '3.2')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentOverride(sent[0])).toEqual({
+      id: 'glm-4.6',
+      billingMode: 'token',
+      billingCurrency: 'CNY',
+      billingInputPerMillion: 16,
+      billingOutputPerMillion: 64,
+      billingCacheReadPerMillion: 3.2,
+    })
+  })
+
+  it('按 token：币种能换，发上去是换过的那一个', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: priced(), sent }))
+
+    await ready()
+    await chooseBillingMode(user, '按 token')
+    await chooseOption(user, '币种', 'USD')
+    await user.type(field('输入 每百万 token'), '0.15')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentOverride(sent[0]).billingCurrency).toBe('USD')
+    expect(sentOverride(sent[0]).billingInputPerMillion).toBe(0.15)
+  })
+
+  it('按倍率：只摆一个倍率格，发上去是 multiplier', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: unpriced(), sent }))
+
+    await ready()
+    await chooseBillingMode(user, '按倍率')
+    expect(
+      screen.queryByLabelText('输入 每百万 token')
+    ).not.toBeInTheDocument()
+
+    await user.type(field('计费倍率'), '0.15')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentOverride(sent[0])).toEqual({
+      id: 'glm-4.6',
+      billingMode: 'multiplier',
+      billingMultiplier: 0.15,
+    })
+  })
+
+  it('不收费：发的是 mode=none，不带任何价（与「不设置」不是一件事）', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: priced(), sent }))
+
+    await ready()
+    await chooseBillingMode(user, '不收费')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentOverride(sent[0])).toEqual({ id: 'glm-4.6', billingMode: 'none' })
+  })
+
+  it('填了价又切回「不设置」：那一组格子一个都不发', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: unpriced(), sent }))
+
+    await ready()
+    await chooseBillingMode(user, '按 token')
+    await user.type(field('输入 每百万 token'), '16')
+    await chooseBillingMode(user, '不设置')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    // 「不设置」= 这一格回到没有，也就是跟着上游走。
+    expect(sentOverride(sent[0])).not.toHaveProperty('billingMode')
+    expect(sentOverride(sent[0])).not.toHaveProperty('billingInputPerMillion')
+  })
+
+  it('库里已有的人工计费：改别的格时原样带上去', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(
+      client({
+        models: unpriced(),
+        sent,
+        overrides: [
+          create(ModelOverrideSchema, {
+            id: 'glm-4.6',
+            billingMode: 'token',
+            billingCurrency: 'USD',
+            billingInputPerMillion: 8,
+            billingOutputPerMillion: 28,
+          }),
+        ],
+      })
+    )
+
+    await ready()
+    expect(selectOf('计费方式')).toHaveTextContent('按 token')
+    expect(field('币种')).toHaveTextContent('USD')
+    expect(field('输入 每百万 token')).toHaveValue('8')
+
+    await user.type(field('显示名'), '!')
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentOverride(sent[0])).toEqual({
+      id: 'glm-4.6',
+      displayName: 'GLM-4.6!',
+      billingMode: 'token',
+      billingCurrency: 'USD',
+      billingInputPerMillion: 8,
+      billingOutputPerMillion: 28,
+    })
+  })
+
+  it('人工写了就摆「人工填写」，不是「上游报价」', async () => {
+    openDialog(
+      client({
+        models: [
+          create(CatalogModelSchema, {
+            id: 'glm-4.6',
+            displayName: 'GLM-4.6',
+            billing: create(ModelBillingSchema, {
+              mode: 'token',
+              currency: 'CNY',
+              inputPerMillion: 8,
+              outputPerMillion: 28,
+              overridden: true,
+            }),
+          }),
+        ],
+      })
+    )
+
+    await ready()
+    expect(dialogText()).toContain('人工填写')
+    expect(dialogText()).not.toContain('上游报价')
+    expect(dialogText()).toContain('输入 ¥8 / 输出 ¥28 每百万 token')
+  })
+
+  it('人工写了「不收费」：只读行写「不收费」，不是一片空白', async () => {
+    openDialog(
+      client({
+        models: [
+          create(CatalogModelSchema, {
+            id: 'glm-4.6',
+            displayName: 'GLM-4.6',
+            billing: create(ModelBillingSchema, {
+              mode: 'none',
+              overridden: true,
+            }),
+          }),
+        ],
+      })
+    )
+
+    await ready()
+    expect(dialogText()).toContain('人工填写')
+    expect(dialogText()).toContain('不收费')
+  })
+
+  it('校验：负的单价拦下保存，并指到那一格', async () => {
+    const user = setup()
+    openDialog(client({ models: unpriced() }))
+
+    await ready()
+    await chooseBillingMode(user, '按 token')
+    const input = field('输入 每百万 token')
+    await user.type(input, '-1')
+
+    expect(
+      await screen.findByText('glm-4.6 · 输入单价：不能是负数')
+    ).toBeInTheDocument()
+    expect(saveButton()).toBeDisabled()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+  })
+})

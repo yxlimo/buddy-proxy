@@ -30,17 +30,20 @@ import {
   useSetModelOverrides,
 } from './api'
 import {
+  BILLING_CURRENCIES,
   changedFields,
   dropOverride,
   idChanged,
   listProblems,
   modelRows,
   newRow,
+  overrideFieldOf,
   overridesFromRows,
   splitLevels,
   orderedLevels,
   touchField,
   withId,
+  type BillingModeChoice,
   type EditableText,
   type ModelRow,
   type ProblemField,
@@ -263,7 +266,8 @@ export function PlatformModelsDialog({
     patch((target) => ({
       ...target,
       text: { ...target.text, [field]: value },
-      touched: touchField(target.touched, field),
+      // 计费那几格归到「计费」那一格：它们是一个说法，写下去是一组。
+      touched: touchField(target.touched, overrideFieldOf(field)),
     }))
 
   const patchToolCall = (value: TriState) =>
@@ -304,6 +308,27 @@ export function PlatformModelsDialog({
       ...target,
       text: { ...target.text, effortOptions: levels.join(', ') },
       touched: touchField(target.touched, 'thinking'),
+    }))
+
+  /**
+   * 改计费方式。
+   *
+   * 「不设置」只是不发那几格（回到跟着上游），所以不把输入框里剩下的字清掉：
+   * 改主意再选回来，刚填的价还在。写不写由 `overridesFromRows` 按当前这一档算。
+   */
+  const patchBillingMode = (value: BillingModeChoice) =>
+    patch((target) => ({
+      ...target,
+      billingMode: value,
+      touched: touchField(target.touched, 'billing'),
+    }))
+
+  /** 改币种（只有 CNY / USD 两种，同一个价换币种就是另一个数）。 */
+  const patchBillingCurrency = (value: string) =>
+    patch((target) => ({
+      ...target,
+      billingCurrency: value,
+      touched: touchField(target.touched, 'billing'),
     }))
 
   /**
@@ -498,6 +523,8 @@ export function PlatformModelsDialog({
                 onChangeToolCall={patchToolCall}
                 onChangeThinking={patchThinking}
                 onChangeEfforts={patchEfforts}
+                onChangeBillingMode={patchBillingMode}
+                onChangeBillingCurrency={patchBillingCurrency}
               />
             ) : (
               <p className='py-6 text-center text-sm text-muted-foreground'>
@@ -550,11 +577,13 @@ function ModelFields({
   onChangeToolCall,
   onChangeThinking,
   onChangeEfforts,
+  onChangeBillingMode,
+  onChangeBillingCurrency,
 }: {
   row: ModelRow
   /** 目录里这条模型报的档位。空 = 目录没报，这一格只列手工加的。 */
   catalogLevels: string[]
-  /** 目录里这条模型报的计费。写不成一句话就什么都不摆（见 billingLine）。 */
+  /** 生效的计费（人写了就是人的）。写不成一句话就什么都不摆（见 billingLine）。 */
   billing: ModelBilling | undefined
   /** 这一格的错误在界面上的位置：传给 aria-describedby。 */
   problemId: (field: ProblemField) => string | undefined
@@ -562,13 +591,15 @@ function ModelFields({
   onChangeToolCall: (value: TriState) => void
   onChangeThinking: (value: ThinkingMode) => void
   onChangeEfforts: (levels: string[]) => void
+  onChangeBillingMode: (value: BillingModeChoice) => void
+  onChangeBillingCurrency: (value: string) => void
 }) {
   // 哪几格现在有毛病：标红并指到下面那句话。
   const contextProblem = problemId('contextWindow')
   const outputProblem = problemId('maxOutputTokens')
   const creditsProblem = problemId('credits')
   const effortProblem = problemId('effortOptions')
-  /** 上游报的计费，一行；写不出来时是 `null`。 */
+  /** 生效那份计费，一行；写不出来时是 `null`。 */
   const billingText = billingLine(billing)
 
   /** 现在选着的档位（原文就是逗号分隔的那一串）。 */
@@ -625,13 +656,27 @@ function ModelFields({
         </div>
       </div>
 
-      {/* 上游报的那份只读摆出来，跟上面人工填的「倍率」分开：两者不合并、不互算。 */}
+      {/*
+        生效的那份只读摆出来，跟上面人工填的「倍率」分开：两者不合并、不互算。
+        标签说的是来源：人写了就是人的，没写就是上游报的。上游没报时这一行不摆，
+        但下面那块计费方式照旧摆 —— 那正是最需要人填的时候。
+      */}
       {billingText === null ? null : (
         <p className='text-sm text-muted-foreground'>
-          <span className='me-1 text-xs'>上游报价</span>
+          <span className='me-1 text-xs'>
+            {billing?.overridden ? '人工填写' : '上游报价'}
+          </span>
           {billingText}
         </p>
       )}
+
+      <BillingFields
+        row={row}
+        problemId={problemId}
+        onChangeText={onChangeText}
+        onChangeMode={onChangeBillingMode}
+        onChangeCurrency={onChangeBillingCurrency}
+      />
 
       <div className='grid gap-2 sm:grid-cols-2'>
         <div className='grid gap-1'>
@@ -686,6 +731,108 @@ function ModelFields({
           problemId={effortProblem}
           onChange={onChangeEfforts}
         />
+      ) : null}
+    </div>
+  )
+}
+
+/** 按 token 计费那三个格。基数写进标签：这三个数是每百万 token 的价。 */
+const PRICE_FIELDS: { field: EditableText; label: string }[] = [
+  { field: 'billingInput', label: '输入 每百万 token' },
+  { field: 'billingOutput', label: '输出 每百万 token' },
+  { field: 'billingCacheRead', label: '缓存读 每百万 token' },
+]
+
+/**
+ * 计费那一块：上面四档选一个，下面只摆这一档要填的格。
+ *
+ * 四档里的「不设置」与「不收费」不是一回事：「不设置」是这一格不写（目录里仍是
+ * 上游报的那份），「不收费」是人明确说不收费。上游没报的时候这一块照样摆 ——
+ * 那正是最需要人填的时候。
+ */
+function BillingFields({
+  row,
+  problemId,
+  onChangeText,
+  onChangeMode,
+  onChangeCurrency,
+}: {
+  row: ModelRow
+  problemId: (field: ProblemField) => string | undefined
+  onChangeText: (field: EditableText, value: string) => void
+  onChangeMode: (value: BillingModeChoice) => void
+  onChangeCurrency: (value: string) => void
+}) {
+  return (
+    <div className='grid gap-2'>
+      <div className='grid gap-1 sm:w-56'>
+        <Label htmlFor='model-billing-mode'>计费方式</Label>
+        <Select
+          value={row.billingMode}
+          onValueChange={(value) => onChangeMode(value as BillingModeChoice)}
+        >
+          <SelectTrigger id='model-billing-mode' aria-label='计费方式'>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='unset'>不设置</SelectItem>
+            <SelectItem value='none'>不收费</SelectItem>
+            <SelectItem value='multiplier'>按倍率</SelectItem>
+            <SelectItem value='token'>按 token</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {row.billingMode === 'multiplier' ? (
+        <div className='grid gap-1 sm:w-56'>
+          <Label htmlFor='model-billing-multiplier'>计费倍率</Label>
+          <Input
+            id='model-billing-multiplier'
+            inputMode='decimal'
+            aria-invalid={problemId('billingMultiplier') ? true : undefined}
+            aria-describedby={problemId('billingMultiplier')}
+            value={row.text.billingMultiplier}
+            onChange={(event) =>
+              onChangeText('billingMultiplier', event.target.value)
+            }
+          />
+        </div>
+      ) : null}
+
+      {row.billingMode === 'token' ? (
+        <div className='grid gap-2 sm:grid-cols-4'>
+          <div className='grid gap-1'>
+            <Label htmlFor='model-billing-currency'>币种</Label>
+            <Select
+              value={row.billingCurrency}
+              onValueChange={onChangeCurrency}
+            >
+              <SelectTrigger id='model-billing-currency' aria-label='币种'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BILLING_CURRENCIES.map((currency) => (
+                  <SelectItem key={currency} value={currency}>
+                    {currency}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {PRICE_FIELDS.map(({ field, label }) => (
+            <div key={field} className='grid gap-1'>
+              <Label htmlFor={`model-${field}`}>{label}</Label>
+              <Input
+                id={`model-${field}`}
+                inputMode='decimal'
+                aria-invalid={problemId(field) ? true : undefined}
+                aria-describedby={problemId(field)}
+                value={row.text[field]}
+                onChange={(event) => onChangeText(field, event.target.value)}
+              />
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   )

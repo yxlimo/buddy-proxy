@@ -31,6 +31,8 @@ export type OverrideField =
   | 'thinking'
   | 'toolCall'
   | 'credits'
+  /** 计费那一块：方式、币种、三个单价、倍率是同一件事，一起写。 */
+  | 'billing'
 
 /** 上面那几格，全部。 */
 const ALL_FIELDS: OverrideField[] = [
@@ -40,6 +42,7 @@ const ALL_FIELDS: OverrideField[] = [
   'thinking',
   'toolCall',
   'credits',
+  'billing',
 ]
 
 /** 要发上去的一条人工条目：除了 id，只带写着值的那几格。 */
@@ -53,6 +56,54 @@ export type OverrideInput = {
   /** 没给这一格 = 没写；`levels` 空 = 这个模型明确不能选档。 */
   effortOptions?: { levels: string[] }
   credits?: number
+  /** 计费方式。没给 = 没写（沿用上游报的那份）；`none` = 明确不收费。 */
+  billingMode?: string
+  billingCurrency?: string
+  billingInputPerMillion?: number
+  billingOutputPerMillion?: number
+  billingCacheReadPerMillion?: number
+  billingMultiplier?: number
+}
+
+/**
+ * 计费方式那一格的四档。
+ *
+ * `unset` 不是 `none` 的另一种写法：`unset` 是「没写」，目录里仍是上游报的那份；
+ * `none` 是人说的「不收费」，上游那份就被盖掉了 —— 两者不能合成一个「不显示」。
+ */
+export type BillingModeChoice = 'unset' | 'none' | 'token' | 'multiplier'
+
+/** 能选的币种。与契约里那一格的取值范围一致。 */
+export const BILLING_CURRENCIES = ['CNY', 'USD'] as const
+
+/** 计费那几个数字格。它们是同一块的一部分，写与比都按这一份。 */
+const BILLING_PRICE_TEXTS: EditableText[] = [
+  'billingInput',
+  'billingOutput',
+  'billingCacheRead',
+  'billingMultiplier',
+]
+
+/**
+ * 一个文字格写到人工条目里的哪一格。
+ *
+ * 计费那几格（每百万 token 的三个单价与倍率）归到 `billing` 一格：它们是一个
+ * 说法，只改一个也要把整块写下去。用一张穷尽的表而不是包含判断：多一个文字格
+ * 时编译器会提醒这里也要想一下。
+ */
+const FIELD_OF_TEXT: Record<EditableText, OverrideField> = {
+  displayName: 'displayName',
+  contextWindow: 'contextWindow',
+  maxOutputTokens: 'maxOutputTokens',
+  credits: 'credits',
+  billingInput: 'billing',
+  billingOutput: 'billing',
+  billingCacheRead: 'billing',
+  billingMultiplier: 'billing',
+}
+
+export function overrideFieldOf(field: EditableText): OverrideField {
+  return FIELD_OF_TEXT[field]
 }
 
 /**
@@ -78,6 +129,10 @@ export type TextField =
   | 'maxOutputTokens'
   | 'effortOptions'
   | 'credits'
+  | 'billingInput'
+  | 'billingOutput'
+  | 'billingCacheRead'
+  | 'billingMultiplier'
 
 /**
  * 能自由填的那几格。档位那一格除外：它是「勾选已有的档位 + 自己加一档」，
@@ -112,6 +167,10 @@ export interface ModelRow {
   /** 是否支持 thinking、能不能选档（见 `ThinkingMode`）。 */
   thinking: ThinkingMode
   toolCall: TriState
+  /** 人写的计费方式（见 `BillingModeChoice`）。 */
+  billingMode: BillingModeChoice
+  /** 按 token 计时的币种：只有 CNY / USD。 */
+  billingCurrency: string
   /** 这一轮改过哪几格。没改的格不写进人工条目。 */
   touched: OverrideField[]
   /**
@@ -130,6 +189,10 @@ function emptyText(): Record<TextField, string> {
     maxOutputTokens: '',
     effortOptions: '',
     credits: '',
+    billingInput: '',
+    billingOutput: '',
+    billingCacheRead: '',
+    billingMultiplier: '',
   }
 }
 
@@ -156,6 +219,22 @@ export function toOverrideInput(item: ModelOverride): OverrideInput {
     input.effortOptions = { levels: [...item.effortOptions.levels] }
   }
   if (item.credits !== undefined) input.credits = item.credits
+  if (item.billingMode !== undefined) input.billingMode = item.billingMode
+  if (item.billingCurrency !== undefined) {
+    input.billingCurrency = item.billingCurrency
+  }
+  if (item.billingInputPerMillion !== undefined) {
+    input.billingInputPerMillion = item.billingInputPerMillion
+  }
+  if (item.billingOutputPerMillion !== undefined) {
+    input.billingOutputPerMillion = item.billingOutputPerMillion
+  }
+  if (item.billingCacheReadPerMillion !== undefined) {
+    input.billingCacheReadPerMillion = item.billingCacheReadPerMillion
+  }
+  if (item.billingMultiplier !== undefined) {
+    input.billingMultiplier = item.billingMultiplier
+  }
   return input
 }
 
@@ -206,6 +285,7 @@ export function changedFields(
     out.push('credits')
   }
   if (row.toolCall !== pristine.toolCall) out.push('toolCall')
+  if (billingChanged(row, pristine)) out.push('billing')
   // 档位那一格也归在 `thinking` 下：勾了哪几档、和不支持 thinking 是同一件事的
   // 两个说法。比的是分好的那几档：多打的逗号、空白不算改动。
   if (
@@ -216,6 +296,21 @@ export function changedFields(
     out.push('thinking')
   }
   return out
+}
+
+/**
+ * 计费那一块（方式、币种、四个数字）跟刚进来时是不是不一样。
+ *
+ * 整块算一格：它们是一个说法，只改了币种也是改了计费。
+ */
+function billingChanged(row: ModelRow, pristine: ModelRow): boolean {
+  if (row.billingMode !== pristine.billingMode) return true
+  if (row.billingMode === 'token' && row.billingCurrency !== pristine.billingCurrency) {
+    return true
+  }
+  return BILLING_PRICE_TEXTS.some(
+    (field) => row.text[field].trim() !== pristine.text[field].trim()
+  )
 }
 
 /** 模型 id 改过没有。改成一个新 id 是「照这条再建一条」，见 `withId`。 */
@@ -270,6 +365,8 @@ export function newRow(): ModelRow {
     text: emptyText(),
     thinking: 'unset',
     toolCall: 'inherit',
+    billingMode: 'unset',
+    billingCurrency: BILLING_CURRENCIES[0],
     touched: [],
   }
 }
@@ -331,12 +428,32 @@ function rowOf(
       maxOutputTokens: numberText(saved?.maxOutputTokens, model?.maxOutputTokens),
       effortOptions: tiers.join(', '),
       credits: creditsText(saved?.credits, model?.credits),
+      // 计费那几格只从人工那份来：目录里的是上游报的，摆成可改的值会让人以为那
+      // 就是自己的设置；上游那份就在下面的只读行里，看得见。
+      billingInput: priceText(saved?.billingInputPerMillion),
+      billingOutput: priceText(saved?.billingOutputPerMillion),
+      billingCacheRead: priceText(saved?.billingCacheReadPerMillion),
+      billingMultiplier: priceText(saved?.billingMultiplier),
     },
     thinking,
     toolCall: triState(saved?.toolCall, model?.toolCall),
+    billingMode: billingModeOf(saved?.billingMode),
+    billingCurrency: saved?.billingCurrency ?? BILLING_CURRENCIES[0],
     touched: [],
     saved,
   }
+}
+
+/** 库里那一格 → 四档里的一档。认不得的值当「没写」。 */
+function billingModeOf(mode: string | undefined): BillingModeChoice {
+  return mode === 'none' || mode === 'token' || mode === 'multiplier'
+    ? mode
+    : 'unset'
+}
+
+/** 单价那一格的原文：没写就空着，0 要写成 0（0 是免费，不能当没写）。 */
+function priceText(saved?: number): string {
+  return saved === undefined ? '' : String(saved)
 }
 
 /**
@@ -422,6 +539,9 @@ export function overridesFromRows(rows: ModelRow[]): OverrideInput[] {
       if (!row.touched.includes('credits') && base.credits !== undefined) {
         entry.credits = base.credits
       }
+      // 计费那一块没碰：库里写的那份原样带上去（换掉的是那一整行，不带就等于
+      // 没写）。
+      if (!row.touched.includes('billing')) copyBilling(base, entry)
     }
     if (row.touched.includes('displayName')) {
       const text = row.text.displayName.trim()
@@ -453,9 +573,59 @@ export function overridesFromRows(rows: ModelRow[]): OverrideInput[] {
       const value = numberValue(row.text.credits)
       if (value !== undefined) entry.credits = value
     }
+    if (row.touched.includes('billing')) writeBilling(row, entry)
     entries.push(entry)
   }
   return entries
+}
+
+/** 库里那一份计费 → 发上去的那一条（没碰计费时用）。 */
+function copyBilling(base: OverrideInput, entry: OverrideInput): void {
+  if (base.billingMode === undefined) return
+  entry.billingMode = base.billingMode
+  if (base.billingCurrency !== undefined) entry.billingCurrency = base.billingCurrency
+  if (base.billingInputPerMillion !== undefined) {
+    entry.billingInputPerMillion = base.billingInputPerMillion
+  }
+  if (base.billingOutputPerMillion !== undefined) {
+    entry.billingOutputPerMillion = base.billingOutputPerMillion
+  }
+  if (base.billingCacheReadPerMillion !== undefined) {
+    entry.billingCacheReadPerMillion = base.billingCacheReadPerMillion
+  }
+  if (base.billingMultiplier !== undefined) {
+    entry.billingMultiplier = base.billingMultiplier
+  }
+}
+
+/**
+ * 界面上的计费那一块 → 发上去的那几格。
+ *
+ * 「不设置」就一个字都不写：那一格在库里回到没有，也就是跟着上游报的那份走。
+ * 其余三档只写该档用得到的格 —— 把另一档的数字一起发上去，库里就多出几个与
+ * 方式对不上的价，下次读出来又是另一个意思。
+ */
+function writeBilling(row: ModelRow, entry: OverrideInput): void {
+  if (row.billingMode === 'unset') return
+  entry.billingMode = row.billingMode
+  if (row.billingMode === 'token') {
+    const currency = row.billingCurrency.trim()
+    if (currency) entry.billingCurrency = currency
+    const prices = [
+      ['billingInputPerMillion', 'billingInput'],
+      ['billingOutputPerMillion', 'billingOutput'],
+      ['billingCacheReadPerMillion', 'billingCacheRead'],
+    ] as const
+    for (const [field, text] of prices) {
+      const value = numberValue(row.text[text])
+      if (value !== undefined) entry[field] = value
+    }
+    return
+  }
+  if (row.billingMode === 'multiplier') {
+    const value = numberValue(row.text.billingMultiplier)
+    if (value !== undefined) entry.billingMultiplier = value
+  }
 }
 
 /** 逗号分隔的档位原文 → 那几档。多打的逗号、空白都不算一档。 */
@@ -503,6 +673,16 @@ function creditsMessage(text: string): string | null {
   const value = Number(trimmed)
   if (!Number.isFinite(value)) return '倍率：要填数字'
   if (value < 0) return '倍率：不能是负数'
+  return null
+}
+
+/** 计费那几格里的一个单价：是个非负数就行；空着表示「不写这一格」。 */
+function priceMessage(text: string, label: string): string | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const value = Number(trimmed)
+  if (!Number.isFinite(value)) return `${label}：要填数字`
+  if (value < 0) return `${label}：不能是负数`
   return null
 }
 
@@ -571,6 +751,23 @@ export function listProblems(rows: readonly ModelRow[]): RowProblem[] {
     if (output) add(index, 'maxOutputTokens', output)
     const credits = creditsMessage(row.text.credits)
     if (credits) add(index, 'credits', credits)
+    // 计费那几格只在会发出去的时候校：选「不设置」时输框里剩下的字不发（那一格
+    // 回到跟着上游），为不发的东西拦保存只会让人蒒不着头脑。
+    if (row.billingMode === 'token') {
+      const prices = [
+        ['billingInput', '输入单价'],
+        ['billingOutput', '输出单价'],
+        ['billingCacheRead', '缓存读单价'],
+      ] as const
+      for (const [field, label] of prices) {
+        const problem = priceMessage(row.text[field], label)
+        if (problem) add(index, field, problem)
+      }
+    }
+    if (row.billingMode === 'multiplier') {
+      const problem = priceMessage(row.text.billingMultiplier, '计费倍率')
+      if (problem) add(index, 'billingMultiplier', problem)
+    }
     if (
       row.thinking === 'levels' &&
       splitLevels(row.text.effortOptions).length === 0

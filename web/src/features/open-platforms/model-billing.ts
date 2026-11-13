@@ -11,6 +11,9 @@ import type { ModelBilling } from '@/gen/buddy/admin/v1/admin_pb'
  */
 export function billingLine(billing: ModelBilling | undefined): string | null {
   if (!billing || billing.unknown) return null
+  // `none` 有两种：上游说不上来（不摆），与人写的「不收费」（要摆 —— 那是结论，
+  // 不是空白）。`overridden` 就是这两者的分界。
+  if (billing.mode.trim() === 'none') return billing.overridden ? '不收费' : null
   const price = priceText(billing)
   if (price === null) return null
   const windows = multipliersText(billing.multipliers)

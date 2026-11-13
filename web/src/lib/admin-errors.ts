@@ -59,6 +59,7 @@ export const ADMIN_ERROR_TEXT: Readonly<Record<string, string>> = {
   MODEL_NUMBER_INVALID: '上下文长度或输出上限不是整数',
   MODEL_NUMBER_OUT_OF_RANGE: '上下文长度或输出上限超出范围',
   MODEL_CREDITS_INVALID: '倍率是负数',
+  MODEL_BILLING_INVALID: '计费方式、币种或单价不对',
 
   // 人工模型元数据
   MODEL_OVERRIDE_LIST_INVALID: '自定义模型不是列表',
