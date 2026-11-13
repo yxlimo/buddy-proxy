@@ -1,16 +1,20 @@
 import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import {
   BalanceSummarySchema,
   CreditLotSchema,
   CreditSummarySchema,
   GetBalanceResponseSchema,
+  ListUpstreamsResponseSchema,
   TokenPlanSchema,
   TokenPlanWindowSchema,
   UpstreamQuotaSchema,
+  UpstreamSchema,
 } from '@/gen/buddy/admin/v1/admin_pb'
-import { BalancePage, mergeQuotas } from '@/features/balance/index'
+import { BalancePage } from '@/features/balance/index'
+import { mergeQuotas } from '@/features/balance/platform-quotas'
 import { CreditLotsTable } from '@/features/balance/credit-lots'
 import { TokenPlanPanel } from '@/features/balance/token-plan'
 import { mockAdminClient } from '@/test/mock-transport'
@@ -93,6 +97,11 @@ describe('额度归并', () => {
 
   it('面板上同一账号只有一张卡', async () => {
     const client = mockAdminClient({
+      // 行集合来自平台清单：这一家一定有行。
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [create(UpstreamSchema, { id: 'minimax' })],
+        }),
       GetBalance: () =>
         create(GetBalanceResponseSchema, {
           quotas: [
@@ -120,8 +129,11 @@ describe('额度归并', () => {
 
     renderWithClient({ client, children: <BalancePage /> })
 
+    await userEvent
+      .setup({ delay: null })
+      .click(await screen.findByRole('button', { name: /^minimax/ }))
     await screen.findByText('acc-1')
-    // 一张卡：账号名只出现一次。
+    // 一条：账号名只出现一次。
     expect(screen.getAllByText('acc-1')).toHaveLength(1)
   })
 })

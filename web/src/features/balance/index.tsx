@@ -1,120 +1,117 @@
 import { RefreshCw } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { PageShell } from '@/components/layout/page-shell'
 import { ErrorState } from '@/components/async-state'
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import {
   balanceKeys,
-  useBalance,
   useBalances,
   useRefreshBalance,
 } from '@/features/balance/api'
-import { QuotaDetail } from '@/features/balance/quota'
-import { describeError } from '@/lib/errors'
+import {
+  groupQuotasByPlatform,
+  type PlatformQuotas,
+} from '@/features/balance/platform-quotas'
+import {
+  PlatformQuotaError,
+  PlatformQuotaRow,
+  PlatformQuotaSkeleton,
+} from '@/features/balance/platform-row'
+import { useUpstreams } from '@/features/upstreams/api'
 import type { UpstreamQuota } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
- * 这块额度里有没有数。
+ * 收起时最多摆几个平台。
  *
- * 余额 0、积分 0 都算没数：平台有时会先给一条空壳记录（额度已经用完），
- * 归并时要跳过空壳记录，去找真正带数的那条。
- *
- * 只看还剩多少（余额的 availableCny、积分的 remaining）：已用多少、什么时候
- * 到期都不算「有值」 —— 那两个字段不说明还剩多少。额度用尽的账号不该被
- * 当成可用。
+ * 平台多的机器一屏放不下：收起时只摆前几个（次序照平台自己的排序），
+ * 其余的收在「展开全部」后面。
  */
-function hasCredits(credits: UpstreamQuota['credits']): boolean {
-  if (!credits) return false
-  return credits.remaining > 0
+const ROW_LIMIT = 5
+
+/** 额度页上的一行：平台清单里的一家，加它这一趟的额度查询。 */
+type PlatformRow = {
+  /** 平台 id。行容器的 aria-label 用它：名字改得了，id 改不了。 */
+  upstreamId: string
+  /** 行标题：平台的显示名。 */
+  title: string
+  query: ReturnType<typeof useBalances>[number]
 }
 
-function hasBalance(balance: UpstreamQuota['balance']): boolean {
-  if (!balance) return false
-  return balance.availableCny > 0
-}
-
-/** 换掉额度记录里的三块内容，账号身份信息保持不变。 */
-function replaceParts(
-  quota: UpstreamQuota,
-  parts: Pick<UpstreamQuota, 'tokenPlan' | 'credits' | 'balance'>,
-): UpstreamQuota {
-  const copy = Object.assign(
-    Object.create(Object.getPrototypeOf(quota)) as UpstreamQuota,
-    quota,
+/** 这一行属于哪个平台：按平台 id 从这一趟的答复里挑出它的账号。 */
+function platformOf(
+  upstreamId: string,
+  quotas: UpstreamQuota[],
+): PlatformQuotas {
+  return (
+    groupQuotasByPlatform(quotas).find(
+      (platform) => platform.upstreamId === upstreamId,
+    ) ?? { upstreamId, accounts: [] }
   )
-  return Object.assign(copy, parts)
+}
+
+/** 一行平台额度：还没回来摆骨架，崩了报错，到手了给摘要行。 */
+function PlatformRowEntry({ row, refreshing }: { row: PlatformRow; refreshing: boolean }) {
+  const { upstreamId, title, query } = row
+  if (query.isPending) {
+    return <PlatformQuotaSkeleton upstreamId={upstreamId} title={title} />
+  }
+  if (query.isError) {
+    return (
+      <PlatformQuotaError
+        upstreamId={upstreamId}
+        title={title}
+        error={query.error as Error}
+        onRetry={() => {
+          void query.refetch()
+        }}
+      />
+    )
+  }
+  return (
+    <PlatformQuotaRow
+      platform={platformOf(upstreamId, query.data?.quotas ?? [])}
+      title={title}
+      refreshing={refreshing}
+    />
+  )
 }
 
 /**
- * 同一账号的多条额度记录归并成一条。
+ * 额度页：一个平台一行，收起时只给摘要，点开看各账号的明细。
  *
- * 按 upstreamId + accountId 归组，保留首次出现的顺序。
- * 额度单位不同（套餐额度是百分点，积分是点数，余额是钱），所以不求和：
- * 套餐额度取第一个有窗口的，积分与余额取第一个带数的，都没有就留第一条的。
+ * 行集合来自平台清单（`ListUpstreams`），额度（`GetBalance`）按平台并进去。
+ * 左连接：平台一条额度都没回、或者根本没有账号，它照样有一行 —— 额度页不该
+ * 因为「那一趟答复里没有它」就把一个平台漏掉。
+ *
+ * 余额、积分与套餐额度分别列示：单位不同，任何地方都不相加。
  */
-export function mergeQuotas(quotas: UpstreamQuota[]): UpstreamQuota[] {
-  const groups = new Map<string, UpstreamQuota[]>()
-  for (const quota of quotas) {
-    const key = `${quota.upstreamId}|${quota.accountId}`
-    const bucket = groups.get(key)
-    if (bucket) {
-      bucket.push(quota)
-    } else {
-      groups.set(key, [quota])
-    }
-  }
-
-  const merged: UpstreamQuota[] = []
-  for (const bucket of groups.values()) {
-    const first = bucket[0]
-    const tokenPlan =
-      bucket.find((quota) => (quota.tokenPlan?.windows?.length ?? 0) > 0)?.tokenPlan ??
-      first.tokenPlan
-    const credits =
-      bucket.find((quota) => hasCredits(quota.credits))?.credits ?? first.credits
-    const balance =
-      bucket.find((quota) => hasBalance(quota.balance))?.balance ?? first.balance
-    merged.push(replaceParts(first, { tokenPlan, credits, balance }))
-  }
-  return merged
-}
-
-/** 一条上游的额度查询。 */
-type BalanceQuery = ReturnType<typeof useBalances>[number]
-
 export function BalancePage() {
-  // 全量这一趟只拿来认上游：谁家有哪些账号由它定。
-  const list = useBalance('')
+  // 平台清单：行集合由它定，次序也是它的。
+  const platforms = useUpstreams()
   const refresh = useRefreshBalance('')
   const queryClient = useQueryClient()
+  /** 平台多的时候，收起只摆前几个；这一位是「其余的都摆出来」。 */
+  const [showAll, setShowAll] = useState(false)
 
-  // 上游清单：全量数据里出现过的上游，按头一次出现的次序。
-  const upstreamIds = useMemo(() => {
-    const ids: string[] = []
-    for (const quota of list.data?.quotas ?? []) {
-      if (quota.upstreamId && !ids.includes(quota.upstreamId)) {
-        ids.push(quota.upstreamId)
-      }
-    }
-    return ids
-  }, [list.data])
+  // 该问哪几家额度：平台清单说一家问一趟。
+  const platformIds = useMemo(
+    () => (platforms.data?.upstreams ?? []).map((upstream) => upstream.id),
+    [platforms.data],
+  )
 
-  // 每家上游各问一趟：谁先回来谁先渲染，慢的不拖累快的。
-  const queries = useBalances(upstreamIds)
+  // 每家平台各问一趟：谁先回来谁先渲染，慢的不拖累快的。
+  const queries = useBalances(platformIds)
 
   const onRefresh = () => {
     refresh.mutate(undefined, {
       onSuccess: () => {
-        // 全量刷完，各上游那条也重新问一遍，卡片里的数换成刚问回来的。
-        for (const upstreamId of upstreamIds) {
+        // 全量刷完，各家那条也重新问一遍，行里的数换成刚问回来的。
+        for (const upstreamId of platformIds) {
           queryClient.invalidateQueries({
             queryKey: balanceKeys.all(upstreamId),
           })
@@ -123,16 +120,8 @@ export function BalancePage() {
     })
   }
 
-  const cardCount = queries.reduce(
-    (sum, query) =>
-      sum + (query.isSuccess ? mergeQuotas(query.data?.quotas ?? []).length : 0),
-    0
-  )
-  const pending = queries.some((query) => query.isPending)
-  const failed = queries.some((query) => query.isError)
-
-  // 全家都没问出来：给一个统一入口，不用一张卡一张卡点重试。
-  // 只有部分失败不算 —— 那时逐卡报错更清楚是哪几家出的问题。
+  // 全家都没问出来：给一个统一入口，不用一行一行点重试。
+  // 只有部分失败不算 —— 那时逐行报错更清楚是哪几家出的问题。
   const allFailed = queries.length > 0 && queries.every((query) => query.isError)
 
   const onRetryAll = () => {
@@ -143,10 +132,22 @@ export function BalancePage() {
     }
   }
 
+  // 一行一个平台：平台清单是左表，额度按 id 并进去。
+  const rows: PlatformRow[] = (platforms.data?.upstreams ?? []).map(
+    (upstream, index) => ({
+      upstreamId: upstream.id,
+      // 面板别处都是「有名字写名字，没名字写 id」。
+      title: upstream.label?.trim() || upstream.id,
+      query: queries[index],
+    }),
+  )
+  const visible = showAll ? rows : rows.slice(0, ROW_LIMIT)
+  const hiddenCount = rows.length - visible.length
+
   return (
     <PageShell
       title='额度'
-      description='各账号的额度。余额、积分与套餐额度分别列示。'
+      description='一个平台一行，点开看各账号的额度。余额、积分与套餐额度分别列示。'
       actions={
         <Button
           variant='outline'
@@ -161,31 +162,54 @@ export function BalancePage() {
         </Button>
       }
     >
-      {list.isPending ? (
+      {platforms.isPending ? (
         <QuotaSkeletonList />
-      ) : list.isError ? (
-        <ErrorState error={list.error} onRetry={() => list.refetch()} />
-      ) : upstreamIds.length === 0 ? (
+      ) : platforms.isError ? (
+        <ErrorState
+          error={platforms.error}
+          onRetry={() => platforms.refetch()}
+        />
+      ) : rows.length === 0 ? (
         <EmptyQuotaCard />
       ) : (
         <>
           {allFailed ? (
             <AllUpstreamsFailedNotice onRetry={onRetryAll} />
           ) : null}
-          {upstreamIds.map((upstreamId, index) => {
-            const query = queries[index]
-            if (!query) return null
-            return (
-              <UpstreamQuotaCards
-                key={upstreamId}
-                upstreamId={upstreamId}
-                query={query}
-                refreshing={refresh.isPending || query.isFetching}
-              />
-            )
-          })}
-          {!pending && !failed && cardCount === 0 ? (
-            <EmptyQuotaCard />
+          <ul aria-label='平台额度' className='grid gap-3'>
+            {visible.map((row) =>
+              row.query ? (
+                <PlatformRowEntry
+                  key={row.upstreamId}
+                  row={row}
+                  refreshing={refresh.isPending || row.query.isFetching}
+                />
+              ) : (
+                <PlatformQuotaSkeleton
+                  key={row.upstreamId}
+                  upstreamId={row.upstreamId}
+                  title={row.title}
+                />
+              ),
+            )}
+          </ul>
+          {hiddenCount > 0 ? (
+            <div className='mt-4'>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => setShowAll(true)}
+              >
+                展开全部 {rows.length} 个平台
+              </Button>
+            </div>
+          ) : null}
+          {rows.length > ROW_LIMIT && showAll ? (
+            <div className='mt-4'>
+              <Button variant='outline' size='sm' onClick={() => setShowAll(false)}>
+                收起
+              </Button>
+            </div>
           ) : null}
         </>
       )}
@@ -194,51 +218,9 @@ export function BalancePage() {
 }
 
 /**
- * 一家上游的额度卡。
+ * 所有平台都没问出来：一行提示加一个统一重试。
  *
- * 这一家还没问回来：先摆骨架。问失败了：只这一张卡报错，别的卡照常。
- */
-function UpstreamQuotaCards({
-  upstreamId,
-  query,
-  refreshing,
-}: {
-  upstreamId: string
-  query: BalanceQuery
-  refreshing: boolean
-}) {
-  if (query.isPending) {
-    return <QuotaSkeletonCard title={upstreamId} />
-  }
-  if (query.isError) {
-    return (
-      <QuotaErrorCard
-        upstreamId={upstreamId}
-        error={query.error as Error}
-        onRetry={() => {
-          void query.refetch()
-        }}
-      />
-    )
-  }
-  const quotas = mergeQuotas(query.data?.quotas ?? [])
-  return (
-    <>
-      {quotas.map((quota) => (
-        <QuotaCard
-          key={`${quota.upstreamId}|${quota.accountId}`}
-          quota={quota}
-          refreshing={refreshing}
-        />
-      ))}
-    </>
-  )
-}
-
-/**
- * 所有上游都没问出来：一行提示加一个统一重试。
- *
- * 逐卡点重试在「全军覆没」时最烦人 —— 每张卡底下都有一个重试按钮，
+ * 逐行点重试在「全军覆没」时最烦人 —— 每一行底下都有一个重试按钮，
  * 用户得挨个点。这里一次全部重问。
  */
 function AllUpstreamsFailedNotice({ onRetry }: { onRetry: () => void }) {
@@ -253,134 +235,32 @@ function AllUpstreamsFailedNotice({ onRetry }: { onRetry: () => void }) {
 }
 
 /**
- * 一个账号的额度卡。
+ * 骨架：平台清单还没回来，先把位置占住。
  *
- * 主行是账号的名字；账号没设名字就退回账号 id，再没有就写上游。
- * 副行只补上主行没说的那一层：主行已经写过的 id 不再重复一遍。
- */
-function QuotaCard({
-  quota,
-  refreshing,
-}: {
-  quota: UpstreamQuota
-  refreshing?: boolean
-}) {
-  const name = quota.accountName?.trim() ?? ''
-  const title = name || quota.accountId || quota.upstreamId || '未知账号'
-  // 副行只说主行没说过的：同一段信息不写两遍（预置平台的账号 id 与平台 id
-  // 本来就相同，两段都写就成了 `qoder-cn · 账号 qoder-cn`）。
-  const parts: string[] = []
-  if (quota.upstreamId && quota.upstreamId !== title) parts.push(quota.upstreamId)
-  if (quota.accountId && quota.accountId !== quota.upstreamId && quota.accountId !== title) {
-    parts.push(`账号 ${quota.accountId}`)
-  }
-  const subtitle = parts.join(' · ')
-  return (
-    <div>
-      <Card className='mb-4'>
-        <CardHeader>
-          <div className='flex items-center gap-2'>
-            <CardTitle className='text-base'>{title}</CardTitle>
-            {refreshing ? (
-              <RefreshCw
-                className='size-3 animate-spin text-muted-foreground'
-                aria-label='刷新中'
-              />
-            ) : null}
-          </div>
-          {subtitle ? (
-            <p className='text-xs text-muted-foreground'>{subtitle}</p>
-          ) : null}
-        </CardHeader>
-        <CardContent className='px-0'>
-          <QuotaDetail quota={quota} />
-        </CardContent>
-      </Card>
-      <Separator className='mb-4' />
-    </div>
-  )
-}
-
-/** 一家上游的额度没问出来：只这张卡自己报错。 */
-function QuotaErrorCard({
-  upstreamId,
-  error,
-  onRetry,
-}: {
-  upstreamId: string
-  error: Error
-  onRetry: () => void
-}) {
-  return (
-    <div>
-      <Card className='mb-4'>
-        <CardHeader>
-          <CardTitle className='text-base'>{upstreamId}</CardTitle>
-          <p className='text-xs text-muted-foreground'>
-            这一家的额度没问出来
-          </p>
-        </CardHeader>
-        <CardContent className='px-0'>
-          <div className='grid gap-3 px-6 pb-4'>
-            <p className='text-sm text-destructive'>{describeError(error)}</p>
-            <div>
-              <Button variant='outline' size='sm' onClick={onRetry}>
-                重试
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Separator className='mb-4' />
-    </div>
-  )
-}
-
-/**
- * 额度卡片的骨架：数还没回来，先把位置占住。
- *
- * 首屏清单还没到的时候不知道有几家上游，就先摆几张空卡。
+ * 清单到了之后每一行的骨架由 `PlatformQuotaSkeleton` 摆（那时已经知道有几家）。
  */
 function QuotaSkeletonList() {
   return (
     <div>
       <p className='mb-4 text-sm text-muted-foreground'>正在读取额度…</p>
-      {[0, 1, 2].map((index) => (
-        <QuotaSkeletonCard key={index} />
-      ))}
+      <ul aria-label='平台额度' className='grid gap-3'>
+        {[0, 1, 2].map((index) => (
+          <li key={index} className='rounded-lg border px-4 py-3'>
+            <div className='h-4 w-24 animate-pulse rounded bg-muted' />
+            <div className='mt-2 h-3 w-16 animate-pulse rounded bg-muted' />
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
 
-function QuotaSkeletonCard({ title }: { title?: string }) {
-  return (
-    <div>
-      <Card className='mb-4'>
-        <CardHeader>
-          <CardTitle className='text-base'>
-            {title ?? (
-              <span className='block h-4 w-24 animate-pulse rounded bg-muted' />
-            )}
-          </CardTitle>
-          <div className='mt-1 h-3 w-16 animate-pulse rounded bg-muted' />
-        </CardHeader>
-        <CardContent className='px-0'>
-          <div className='grid gap-3 px-6 pb-4'>
-            <div className='h-4 w-32 animate-pulse rounded bg-muted' />
-            <div className='h-3 w-48 animate-pulse rounded bg-muted' />
-          </div>
-        </CardContent>
-      </Card>
-      <Separator className='mb-4' />
-    </div>
-  )
-}
-
+/** 一个平台都没有：平台清单本身是空的。 */
 function EmptyQuotaCard() {
   return (
     <Card>
       <CardContent className='py-12 text-center text-sm text-muted-foreground'>
-        平台没有报额度。
+        网关没有返回任何平台
       </CardContent>
     </Card>
   )

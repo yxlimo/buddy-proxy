@@ -165,9 +165,9 @@ export function QuotaSummary({
     )
   }
   return (
-    <div className='grid max-w-full gap-0.5'>
+    <span className='grid max-w-full gap-0.5'>
       {lines.map((line) => (
-        <div
+        <span
           key={line.label}
           className={cn(
             'flex flex-wrap items-baseline gap-x-1 text-xs',
@@ -179,9 +179,26 @@ export function QuotaSummary({
           <span className='font-mono break-words' title={line.value}>
             {line.value}
           </span>
-        </div>
+        </span>
       ))}
-    </div>
+    </span>
+  )
+}
+
+/**
+ * 「没有额度」这一行。
+ *
+ * 空额度不隐掉：它占着位置，说清是「没有额度」，不写成 0、也不留白。
+ */
+export function NoQuotaNotice() {
+  return (
+    <p
+      role='note'
+      aria-label='没有额度'
+      className='text-xs text-muted-foreground'
+    >
+      没有额度
+    </p>
   )
 }
 
@@ -199,9 +216,12 @@ export function QuotaDetail({ quota }: { quota: UpstreamQuota }) {
   const balance = quota.balance
   // 没有数字的那一份（用尽 / 不能用 / 问不到）在这里也说得清，不留一个空面板。
   const state = quotaStateText(quota)
+  // 连一句话都没有：说「没有额度」，不留白。
+  const blank = !hasQuota(quota) && !state && !quota.message
 
   return (
     <div className='grid gap-6 px-6 pb-4'>
+      {blank ? <NoQuotaNotice /> : null}
       {state ? <p className='text-sm font-medium'>{state}</p> : null}
       {quota.message ? (
         <p className='text-xs text-muted-foreground'>{quota.message}</p>

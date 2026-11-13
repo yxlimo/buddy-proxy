@@ -1,7 +1,10 @@
 // tests/seed-session.ts — 给面板 e2e 的那个账号写一份会话（离线测试数据）。
 //
 //   BUDDY_DATA_DIR=<这次运行的数据目录> node --experimental-strip-types \
-//     tests/seed-session.ts <platform> <accountId>
+//     tests/seed-session.ts <platform> <accountId> [accessToken]
+//
+// 第三段是可选的会话令牌：额度页的用例要按 token 分清是哪个账号（假上游照
+// Authorization 报不同的数），不给就还是那份默认的。
 //
 // 为什么需要它：面板上「排队中」这一档要一个**能接请求**的账号才算得出来
 // （lib/admin/platform-state.ts 的判定顺序里，凭据那一关在排队前面）。而 Qoder
@@ -17,7 +20,7 @@
 
 import { saveSession as saveQoderSession } from '../lib/qoder/auth.ts';
 
-const [platform, accountId] = process.argv.slice(2);
+const [platform, accountId, accessToken] = process.argv.slice(2);
 
 if (!process.env.BUDDY_DATA_DIR) {
   throw new Error('需要 BUDDY_DATA_DIR（这次运行的数据目录）');
@@ -28,6 +31,8 @@ if (!platform || !accountId) {
 
 const now = Date.now();
 const year = now + 365 * 24 * 3600 * 1000;
+/** 会话令牌：给第三段就用它，否则还是那份默认的样例。 */
+const TOKEN = accessToken || 'dt-E2E-TESTONLY-access'; // privacy:allow — 编造的样例
 
 /** Qoder 的会话：字段与 test/fake-sessions.ts 那份一致，值是编造的样例。 */
 function qoder(region: 'global' | 'cn') {
@@ -35,7 +40,7 @@ function qoder(region: 'global' | 'cn') {
     schemaVersion: 1,
     region,
     clientId: 'e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb',
-    accessToken: 'dt-E2E-TESTONLY-access', // privacy:allow — 编造的样例
+    accessToken: TOKEN, // privacy:allow — 编造的样例
     refreshToken: 'drt-E2E-TESTONLY-refresh', // privacy:allow — 编造的样例
     userId: '00000000-0000-0000-0000-000000000000',
     expiresAtMs: year,

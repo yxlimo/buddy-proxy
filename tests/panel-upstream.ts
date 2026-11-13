@@ -116,6 +116,50 @@ export interface FakeUpstream {
   close(): Promise<void>;
 }
 
+/**
+ * Qoder 额度那两条查询（`/api/v3/user/status` 与 `/api/v2/quota/usage`）的开关。
+ *
+ * 默认关着，这两个路径照旧 404 —— 其余用例（排队、登录那些）都是照着
+ * 「没问到额度」的世界写的，不能让默认行为悄悄变掉。要验额度页的用例自己
+ * 打开它、摆好每个账号剩多少（按 Authorization 的 token 认账号），收尾 reset。
+ */
+export const qoderQuotaControl = {
+  /** 开了才有这两个路径的答复；没开就落到下面的 404。 */
+  enabled: false,
+  /** ok：照常给数；error：500（额度服务挂了）。 */
+  mode: 'ok' as 'ok' | 'error',
+  /** 答复前拖多少毫秒：拖着，面板那一条查询就停在「正在读取」。 */
+  delayMs: 0,
+  /** 哪把 token 剩多少点（plan 池）；没登记的账号按 100 算。 */
+  remaining: new Map<string, number>(),
+  /** 回到「没开」：模式、延迟与每个账号的数都忘掉。 */
+  reset(): void {
+    this.enabled = false;
+    this.mode = 'ok';
+    this.delayMs = 0;
+    this.remaining.clear();
+  },
+};
+
+/**
+ * 七牛门户资源包那一条查询（`QINIU_RESPACK_PATH`）的开关。形状同上：默认
+ * 关着照旧 404；开了之后按门户 cookie（`Cookie` 头）报各账号剩多少。
+ */
+export const qiniuQuotaControl = {
+  enabled: false,
+  /** ok：给资源包；error：500（门户挂了）。 */
+  mode: 'ok' as 'ok' | 'error',
+  delayMs: 0,
+  /** 哪份门户 cookie 剩多少 k tokens；没登记的账号按 0 算。 */
+  remaining: new Map<string, number>(),
+  reset(): void {
+    this.enabled = false;
+    this.mode = 'ok';
+    this.delayMs = 0;
+    this.remaining.clear();
+  },
+};
+
 /** 起过的那个（一个端口上只该有一个）。 */
 let running: Promise<FakeUpstream> | null = null;
 
@@ -247,6 +291,72 @@ async function handle(
     return;
   }
 
+  // ── Qoder：账号状态与额度（额度页的用例打开；默认关着，见上） ──────────
+  // ── Qoder：账号状态与额度（额度页的用例打开；默认关着，见上） ──────────
+  // 七牛的门户资源包（额度插件的探测）：qiniuQuotaControl 开了才认。平台行的
+  // baseUrl 指到本机时，openai 类没有默认门户，额度就照行上那台问 —— 假上游
+  // 按账号的门户 cookie 认人，报各自的数。
+  if (qiniuQuotaControl.enabled && method === 'GET' && path === '/api/proxy/finance/janus/api/proxy/respack/v1/respack/month-overview') {
+    const answer = (): void => {
+      if (qiniuQuotaControl.mode === 'error') {
+        answerJson(500, { code: 500, message: 'portal down' });
+        return;
+      }
+      // lib/qiniu/quota.ts 认的形状：信封 code=200，data.records 是资源包。
+      const cookie = String(req.headers.cookie ?? '');
+      const remaining = qiniuQuotaControl.remaining.get(cookie) ?? 0;
+      answerJson(200, {
+        code: 200,
+        data: {
+          records: [
+            {
+              item_code: 'e2e-pack',
+              item_name: 'E2E 资源包',
+              zone_name: 'e2e-zone',
+              total_surplus: remaining,
+              month_used: 0,
+              month_remain: remaining,
+              respack_unit: 'k/tokens',
+              update_time: Math.floor(Date.now() / 1000),
+            },
+          ],
+        },
+      });
+    };
+    if (qiniuQuotaControl.delayMs > 0) setTimeout(answer, qiniuQuotaControl.delayMs);
+    else answer();
+    return;
+  }
+
+  if (qoderQuotaControl.enabled) {
+    if (method === 'GET' && path === '/api/v3/user/status') {
+      // checkAccountHealth 只认 id 与 whitelistStatus：PASS 就是账号能用。
+      answerJson(200, { id: 'e2e-e2e-e2e', whitelistStatus: 'PASS', userType: 'e2e' });
+      return;
+    }
+    if (method === 'GET' && path === '/api/v2/quota/usage') {
+      const answer = (): void => {
+        if (qoderQuotaControl.mode === 'error') {
+          answerJson(500, { errorCode: 'E2E_QUOTA_DOWN', message: 'quota service down' });
+          return;
+        }
+        // lib/qoder/credits.ts 认的形状：两个池各报 total/used/remaining，
+        // isQuotaExceeded 是平台自己的「用光了」。
+        const remaining = qoderQuotaControl.remaining.get(hit.authorization.replace(/^Bearer\s+/i, '')) ?? 100;
+        answerJson(200, {
+          userQuota: { total: remaining, used: 0, remaining },
+          addOnQuota: { total: 0, used: 0, remaining: 0 },
+          isQuotaExceeded: remaining <= 0,
+          expiresAt: Date.now() + 3600_000,
+        });
+      };
+      // 拖着再答：答复没回来之前，面板那一条查询一直停在「正在读取」。
+      if (qoderQuotaControl.delayMs > 0) setTimeout(answer, qoderQuotaControl.delayMs);
+      else answer();
+      return;
+    }
+  }
+
   // ── 开放平台：模型目录 ───────────────────────────────────────────────
   if (method === 'GET' && path === '/v1/models') {
     answerFixture(FIXTURE.catalog);
@@ -269,14 +379,15 @@ async function handle(
 
   // 开放平台：**带计费**的模型目录。
   //
-  // 这一份也不是实录，是编出来的形状：四条模型各报一种计费 —— CNY 带缓存读、
-  // USD 不带缓存读、全 0 又没币种（上游说「不知道」的那种答复）、完全没有
-  // pricing。面板那行「上游报价 …」必须由上游报出来才验得到。
+  // 这一份也不是实录，是编出来的形状：三条模型各报一种计费 —— 三个价都报（带
+  // 缓存读）、只报输入与输出、完全没有报价。面板那行「上游报价 …」必须由上游
+  // 报出来才验得到。
   //
-  // 形状按 `lib/catalog-billing.ts` 的 tokenrhythm 描述符（pricing.prompt /
-  // completion / cache_read，币种在 pricing.currency）：平台行建为 kind
-  // `tokenrhythm` 就落到它。要它落到这条路上：平台的地址填
-  // `${UPSTREAM_BASE}/billing/v1`，于是这里收的就是 `/billing/v1/models`。
+  // 形状按 `lib/catalog-billing.ts` 的 opencode-go 描述符（cost.text.input.price /
+  // output.price / input.cache.read.price，币种由描述符定死成美元）：计费描述符
+  // 按**平台行的 id** 认，所以平台的 id 填 `opencode-go` 就落到它。要它落到这条
+  // 路上：平台的地址填 `${UPSTREAM_BASE}/billing/v1`，于是这里收的就是
+  // `/billing/v1/models`。
   if (method === 'GET' && path === '/billing/v1/models') {
     answerFixture(FIXTURE.billingCatalog);
     return;
