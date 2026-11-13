@@ -149,7 +149,11 @@ export function store(): DatabaseSync {
   // 留着不动最稳。
   //
   // `traits_from_common` 是「上游与代码都没说清时从共性表补参数」那个开关。
-  // 默认关：共性表是人工整理的近似，只有用户明确要才用。
+  //
+  // 默认开：共性表只补前几层都没说的字段（lib/catalog-models.ts 的顺序），它不会
+  // 盖掉上游明确说的任何一句。关着的时候屏幕上是「窗口/档位不知道」的模型，客户端
+  // 只好用自己那份默认形状 —— 那比一条近似值更容易出错。要关的那个平台仍然能关
+  // （面板上，或者 updatePlatform）。
   db.exec(
     `CREATE TABLE IF NOT EXISTS platform (
       id           TEXT PRIMARY KEY,
@@ -157,7 +161,7 @@ export function store(): DatabaseSync {
       base_url     TEXT NOT NULL,
       models       TEXT NOT NULL DEFAULT '[]',
       models_auto  INTEGER NOT NULL DEFAULT 1,
-      traits_from_common INTEGER NOT NULL DEFAULT 0,
+      traits_from_common INTEGER NOT NULL DEFAULT 1,
       quota_plugin TEXT NOT NULL DEFAULT '',
       kind         TEXT NOT NULL DEFAULT 'openai',
       region       TEXT NOT NULL DEFAULT '',
@@ -330,10 +334,34 @@ function migratePlatformColumns(db: DatabaseSync): void {
   const has = (name: string) => columns.some((c) => c.name === name);
   if (!has("kind")) db.exec("ALTER TABLE platform ADD COLUMN kind TEXT NOT NULL DEFAULT 'openai'");
   if (!has("region")) db.exec("ALTER TABLE platform ADD COLUMN region TEXT NOT NULL DEFAULT ''");
-  // 共性表那个开关也是后来加的：老库没有这一列，补成关（与新建的库一样）。
+  // 共性表那个开关也是后来加的：老库没有这一列，补成开（与新建的库一样）。
   if (!has("traits_from_common")) {
-    db.exec("ALTER TABLE platform ADD COLUMN traits_from_common INTEGER NOT NULL DEFAULT 0");
+    db.exec("ALTER TABLE platform ADD COLUMN traits_from_common INTEGER NOT NULL DEFAULT 1");
   }
+  backfillTraitsFromCommon(db);
+}
+
+/**
+ * 库的 schema 版本：SQLite 自己的 `PRAGMA user_version`。
+ *
+ * 只用在「列的有没有判断不了一次性」的迁移上：`traits_from_common` 这一列早就
+ * 在库里了（默认值当时是 0），光看列存不存在永远不知道这一遍跑没跑过 —— 于是每
+ * 次启动都会把用户后来关掉的那个开关重新打开。版本号记在库里，跑过一次就不再动。
+ */
+const SCHEMA_VERSION = 1;
+
+/**
+ * 存量行的 `traits_from_common` 从 0 补成 1，只做一次。
+ *
+ * 补的是「这一层以前根本没人开过」这件事：老库 12 个平台全是 0，等于共性表那一
+ * 层从上线起就没通过电。第一次跑到这里之后写 schema 版本，之后就再也不碰这一
+ * 列 —— 用户在那之后自己关掉的平台必须保持关着。
+ */
+function backfillTraitsFromCommon(db: DatabaseSync): void {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+  if (Number(row?.user_version ?? 0) >= SCHEMA_VERSION) return;
+  db.exec("UPDATE platform SET traits_from_common = 1");
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
 

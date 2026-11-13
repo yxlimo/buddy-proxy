@@ -35,7 +35,7 @@ function check(name: string, ok: boolean, detail = ""): void {
 
 const text = fs.readFileSync(FILE, "utf8");
 const raw: unknown = JSON.parse(text);
-const doc = raw as { version?: unknown; models?: unknown };
+const doc = raw as { version?: unknown; source?: unknown; models?: unknown };
 const models = (doc.models ?? {}) as Record<string, Record<string, unknown>>;
 const keys = Object.keys(models);
 
@@ -43,7 +43,19 @@ console.log("");
 console.log("文件能解析，形状是约定的那样");
 
 check("it is a JSON object", !!raw && typeof raw === "object" && !Array.isArray(raw));
-check("version is 1", doc.version === 1, JSON.stringify(doc.version));
+// 2：从 pi 的内建库生成之后多了一层来源（source）与每条里的 providers
+check("version is 2", doc.version === 2, JSON.stringify(doc.version));
+const source = (doc.source ?? {}) as { package?: unknown; version?: unknown; generatedAt?: unknown };
+check(
+  "the file says which package it was generated from",
+  typeof source.package === "string" && source.package.length > 0 && typeof source.version === "string",
+  JSON.stringify(source),
+);
+check(
+  "the generation date is a date, not a timestamp",
+  /^\d{4}-\d{2}-\d{2}$/.test(String(source.generatedAt ?? "")),
+  JSON.stringify(source.generatedAt),
+);
 check("models is an object with entries", keys.length > 0, JSON.stringify(keys.length));
 
 // 允许写进一条的键。写错一个字段名（`context_window`）在这里就是一条错的数据，
@@ -57,6 +69,8 @@ const allowed = new Set([
   "defaultEffort",
   "credits",
   "sources",
+  // pi 内建库那一条记的「这个 id 在哪些 provider 下」（helper/build-model-traits.ts）
+  "providers",
 ]);
 const unknownFields: string[] = [];
 for (const key of keys) {
@@ -97,13 +111,24 @@ check(
 );
 
 // 溯源：每条都要说得出是从哪儿看到的，且排过序（同一条数据两次写出来得一样）。
-const noSource = keys.filter((key) => !Array.isArray(models[key]?.sources) || models[key]?.sources?.length === 0);
-check("every entry says where it was seen", noSource.length === 0, noSource.join(", "));
-const unsortedSources = keys.filter((key) => {
-  const list = (models[key]?.sources ?? []) as string[];
-  return JSON.stringify(list) !== JSON.stringify([...list].sort());
+//
+// 两种说法都算：`sources` 是人工那份记的平台 id，`providers` 是 pi 内建库那条出现
+// 在哪些 provider 下（生成的那一层）。
+const noSource = keys.filter((key) => {
+  const sources = models[key]?.sources;
+  const providers = models[key]?.providers;
+  return !(Array.isArray(sources) && sources.length > 0) && !(Array.isArray(providers) && providers.length > 0);
 });
-check("the sources are sorted", unsortedSources.length === 0, unsortedSources.join(", "));
+check("every entry says where it was seen", noSource.length === 0, noSource.join(", "));
+for (const field of ["sources", "providers"] as const) {
+  const unsorted = keys.filter((key) => {
+    const list = models[key]?.[field];
+    if (list === undefined) return false;
+    if (!Array.isArray(list) || list.some((item) => typeof item !== "string")) return true;
+    return JSON.stringify(list) !== JSON.stringify([...list].sort());
+  });
+  check(`the ${field} are sorted lists of names`, unsorted.length === 0, unsorted.join(", "));
+}
 
 // 键按字母序，且已经是归一化后的写法：表是按键查的，这两种不变量一破，完全命中那
 // 一级就悄悄失效了（只能靠近似兜着，那一步会漏、也会配错）。
@@ -213,11 +238,13 @@ check(
   lookupModelId("deepseek-v41flash", ["deepseek-v4-flash"]) === null,
   JSON.stringify(lookupModelId("deepseek-v41flash", ["deepseek-v4-flash"])),
 );
-// 同一件事在星火的压缩写法上也成立：`xopglm5.3` 不许接到 `glm-5-1` 上
+// 同一件事在星火的压缩写法上也成立：`xopglm5.3` 不许接到 `glm-5-1` 上。
+// 现在表里有 `glm-5-3` 这一条（pi 的内建库给的），它该接上的是那一条 —— 近似匹配
+// 只接同一个模型，不接同一个系列的邻居。
 check(
-  "xopglm5.3 does not reach glm-5-1",
-  commonTraitsOf("xopglm5.3") === null,
-  JSON.stringify(commonTraitsOf("xopglm5.3")),
+  "xopglm5.3 reaches glm-5-3, not glm-5-1",
+  commonTraitsOf("xopglm5.3")?.contextWindow === 1048576 && commonTraitsOf("glm-5-1")?.contextWindow === 200000,
+  JSON.stringify([commonTraitsOf("xopglm5.3"), commonTraitsOf("glm-5-1")]),
 );
 
 console.log("");

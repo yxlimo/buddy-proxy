@@ -429,6 +429,10 @@ run = "node --experimental-strip-types test/model-traits-check.ts"
 description = "Check scripts/model-traits.ts against a fake upstream: no overwriting what a person wrote, deterministic output, honest skips"
 run = "node --experimental-strip-types test/model-traits-tool-check.ts"
 
+[tasks."test:model-traits:reference"]
+description = "Check that the reference table fills what nobody stated and never overrides a clearer layer (the switch, the backfill, no prices)"
+run = "node --experimental-strip-types test/model-traits-reference-check.ts"
+
 [tasks."test:refresh-flow"]
 description = "Check the shared refresh flow: not due, refused, failed, no session"
 run = "node --experimental-strip-types test/refresh-flow-check.ts"
@@ -581,7 +585,7 @@ run = "podman build --format docker -t localhost/buddy-proxy:latest ."
 
 [tasks."check:admin"]
 description = "Admin backend and account/credential/platform/model catalogues (lib/admin, lib/credential, lib/platforms, lib/model-catalog)"
-depends = ["test:admin", "test:admin:state", "test:admin:parity", "test:admin:contract", "test:admin:login", "test:admin:policy", "test:admin:config", "test:admin:regression", "test:cleanup:admin", "test:open-platform:admin", "test:open-platform:kind", "test:open-platform:account", "test:open-platforms", "test:credential:fault", "test:credential:plan", "test:platform:availability", "test:platform:migration", "test:account-id", "test:account-weight", "test:login:record", "test:config", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:quota", "test:catalog:billing", "test:catalog:billing:panel", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:model-traits:tool", "test:model:duplicate", "test:model-visibility"]
+depends = ["test:admin", "test:admin:state", "test:admin:parity", "test:admin:contract", "test:admin:login", "test:admin:policy", "test:admin:config", "test:admin:regression", "test:cleanup:admin", "test:open-platform:admin", "test:open-platform:kind", "test:open-platform:account", "test:open-platforms", "test:credential:fault", "test:credential:plan", "test:platform:availability", "test:platform:migration", "test:account-id", "test:account-weight", "test:login:record", "test:config", "test:quota:plugin", "test:quota:plugins:three", "test:quota:state", "test:quota", "test:catalog:billing", "test:catalog:billing:panel", "test:catalog:persist", "test:model-catalog", "test:model-overrides", "test:model-traits", "test:model-traits:tool", "test:model-traits:reference", "test:model:duplicate", "test:model-visibility"]
 
 [tasks."check:routing"]
 description = "Account selection, fallback, cooldown, health, usage and the timer jobs (lib/router, lib/cooldown, lib/session, lib/periodic)"

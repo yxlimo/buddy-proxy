@@ -22,6 +22,8 @@ const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 await import("../lib/kinds/index.ts");
 const { platformOfAny } = await import("../lib/platforms.ts");
 const { updateOpenPlatform, syncPlatformModels } = await import("../lib/open-platforms.ts");
+// 参考值那一层（共性表）：上游一个参数也没报时，公布的就是它那一份。
+const { commonTraitsOf } = await import("../lib/common-model-traits.ts");
 const { addAccount, provider: providerRow } = await import("../lib/providers.ts");
 const { refreshHealthSnapshot } = await import("../lib/admin/upstreams.ts");
 const { quotaConclusionOf } = await import("../lib/quota-state.ts");
@@ -459,10 +461,27 @@ check(
   models.every((m) => !!m.displayName),
   models.map((m) => m.displayName).join(","),
 );
+// 上游一条参数也没报（syncPlatformModels 的第三格是空的）：目录里剩下的就是参考
+// 值那一层（lib/common-model-traits.ts，默认开着）。所以这里查的不再是「什么都不公
+// 布」，而是两件：参考表认识的那几个 id 拿到的是参考表那一份，参考表也不认识的那
+// 一个仍然是空的（空不是 0，也不拿同一个平台的别的条目来顶）。
+const unknownModels = models.filter((m) => commonTraitsOf(m.id) === null);
 check(
-  "平台没报的上下文档位不公布",
-  models.every((m) => m.contextWindow === undefined && m.maxOutputTokens === undefined),
-  JSON.stringify(models.map((m) => [m.contextWindow, m.maxOutputTokens])),
+  "平台没报、参考表也不认识的：上下文档位都不公布",
+  unknownModels.length > 0 &&
+    unknownModels.every((m) => m.contextWindow === undefined && m.maxOutputTokens === undefined),
+  JSON.stringify(unknownModels.map((m) => [m.id, m.contextWindow, m.maxOutputTokens])),
+);
+const knownModels = models.filter((m) => commonTraitsOf(m.id) !== null);
+check(
+  "平台没报、参考表认识的：窗口与输出上限就是参考表那两份",
+  knownModels.length > 0 &&
+    knownModels.every(
+      (m) =>
+        m.contextWindow === commonTraitsOf(m.id)?.contextWindow &&
+        m.maxOutputTokens === commonTraitsOf(m.id)?.maxOutputTokens,
+    ),
+  JSON.stringify(knownModels.map((m) => [m.id, m.contextWindow, commonTraitsOf(m.id)?.contextWindow])),
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

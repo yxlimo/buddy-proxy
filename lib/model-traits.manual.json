@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "note": "人工整理的实测值：模型 id → 能力参数。id 用归一化后的写法（小写、去厂商前缀、去日期尾巴、点与下划线折成连字符）。不知道的键不出现。sources 记这份清单是从哪看到的（平台 id；measured 表示来源没记下来）。这一份盖在 pi 内建库那份上面（helper/build-model-traits.ts 合并在上层）：这里写了的字段，pi 说什么都不改。",
+  "models": {
+    "deepseek-v4-1-flash": {
+      "contextWindow": 1000000,
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "maxOutputTokens": 384000,
+      "reasoning": true,
+      "sources": [
+        "opencode-go"
+      ],
+      "toolCall": true
+    },
+    "deepseek-v4-flash": {
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "sources": [
+        "sensenova"
+      ]
+    },
+    "glm-5-1": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "reasoning": true,
+      "sources": [
+        "tokenrhythm"
+      ],
+      "toolCall": true
+    },
+    "longcat-flash-lite": {
+      "contextWindow": 256000,
+      "maxOutputTokens": 320000,
+      "sources": [
+        "measured"
+      ]
+    },
+    "spark-x2-5": {
+      "sources": [
+        "xinghuo"
+      ]
+    },
+    "spark-x2-5-1-7b": {
+      "sources": [
+        "xinghuo"
+      ]
+    },
+    "spark-x2-5-4b": {
+      "sources": [
+        "xinghuo"
+      ]
+    },
+    "spark-x2-6": {
+      "sources": [
+        "xinghuo"
+      ]
+    },
+    "spark-x2-6-4b": {
+      "sources": [
+        "xinghuo"
+      ]
+    }
+  }
+}

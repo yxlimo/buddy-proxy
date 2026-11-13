@@ -1348,9 +1348,18 @@ check(
   JSON.stringify(openPlatformOf("common-demo")?.models),
 );
 check(
-  "开关默认关着",
-  openPlatformOf("common-demo")?.traitsFromCommon === false,
+  "新建的平台默认开着共性表",
+  openPlatformOf("common-demo")?.traitsFromCommon === true,
   String(openPlatformOf("common-demo")?.traitsFromCommon),
+);
+// 下面这一大段查的是**关掉**的样子：显式关一次，回到「只按上游与代码表」那一份。
+// 默认值改成开之后（存量行也回填成开），关掉这条路还需要有一个入口 —— 那就是面板
+// 上那一个勾，也是这一句。
+const switchedOffForThisBlock = updateOpenPlatform("common-demo", { traitsFromCommon: false });
+check(
+  "显式关掉之后才能查「开关关」那一份",
+  switchedOffForThisBlock.ok === true && openPlatformOf("common-demo")?.traitsFromCommon === false,
+  JSON.stringify([switchedOffForThisBlock.ok, openPlatformOf("common-demo")?.traitsFromCommon]),
 );
 
 const mergedOff = catalogModelsFromRow({ platform: "common-demo" }, () => [], demoKnown);
@@ -1507,8 +1516,8 @@ check(
 check("kind 列补回来了", openPlatformOf("qiniu")?.kind === "openai", String(openPlatformOf("qiniu")?.kind));
 check("region 列补回来了", openPlatformOf("qiniu")?.region === "", JSON.stringify(openPlatformOf("qiniu")?.region));
 check(
-  "共性表那一列补回来了，默认关",
-  openPlatformOf("qiniu")?.traitsFromCommon === false,
+  "共性表那一列补回来了，老库的行回填成开",
+  openPlatformOf("qiniu")?.traitsFromCommon === true,
   String(openPlatformOf("qiniu")?.traitsFromCommon),
 );
 check(
