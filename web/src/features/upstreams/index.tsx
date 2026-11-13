@@ -238,7 +238,11 @@ export function UpstreamsPage() {
                   <TableHead>状态</TableHead>
                   <TableHead>生效策略</TableHead>
                   <TableHead className='text-right'>账号</TableHead>
-                  <TableHead className='text-right'>操作</TableHead>
+                  {/* 操作列：列宽就是几个按钮的宽（w-max），窄屏时（xl 以下）
+                      收窄一点让按钮换行摆，不把它们推出可视区。 */}
+                  <TableHead className='sticky right-0 z-20 w-max max-xl:w-40 xl:min-w-max border-l bg-background text-right whitespace-nowrap'>
+                    操作
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -253,13 +257,17 @@ export function UpstreamsPage() {
                     <Fragment key={upstream.id}>
                       <TableRow
                         data-state={isExpanded ? 'selected' : undefined}
-                        className='cursor-pointer'
+                        className='group cursor-pointer'
                         onClick={() =>
                           setExpanded(isExpanded ? null : upstream.id)
                         }
                       >
-                        <TableCell>
-                          <div className='flex items-start gap-1.5'>
+                        {/* 平台这一列是能伸缩的那一列：文字（名字、id、地址、
+                            额度）允许换行，窄屏时先压缩它。 */}
+                        <TableCell className='whitespace-normal'>
+                          {/* 平台这一列能伸缩，但有下限：窄到一列只放得下
+                              一个字就难看了。 */}
+                          <div className='flex min-w-40 max-lg:min-w-32 items-start gap-1.5'>
                             <Button
                               variant='ghost'
                               size='icon-sm'
@@ -284,7 +292,7 @@ export function UpstreamsPage() {
                               </span>
                               {/* 平台的 id：客户端路径里那一段，也是客户端里那个
                                   provider 的名字。 */}
-                              <span className='font-mono text-xs text-muted-foreground'>
+                              <span className='font-mono text-xs break-all text-muted-foreground'>
                                 {upstream.id}
                               </span>
                               {/* 开放平台的配置：地址、模型目录、额度插件与额度。
@@ -306,9 +314,11 @@ export function UpstreamsPage() {
                             ? (REGION_LABELS[upstream.region] ?? upstream.region)
                             : '—'}
                         </TableCell>
-                        <TableCell>
+                        {/* 状态这一列也是能伸缩的：结论那句允许换行，但也有
+                            下限（窄到一列只放得下一个字就难看了）。 */}
+                        <TableCell className='whitespace-normal'>
                           {/* 能不能接由后端说：有开着的账号就是开着的。 */}
-                          <div className='grid gap-0.5'>
+                          <div className='grid min-w-24 max-lg:min-w-20 gap-0.5'>
                             <UpstreamStateBadge state={upstream.state} />
                             {/* 后端拼好的一句话：为什么现在不能接。 */}
                             {upstream.stateReason ? (
@@ -337,9 +347,13 @@ export function UpstreamsPage() {
                         <TableCell className='text-right font-mono'>
                           {upstream.accountCount}
                         </TableCell>
-                        <TableCell className='text-right'>
+                        {/* 操作列：宽屏时一行摆开（列宽就是按钮的宽），窄屏时
+                            收窄一点让按钮换行摆 —— 按钮不压缩，也不被推出
+                            可视区。底色不透明：横向滚动时，从它背后过去的
+                            列不会透出来。 */}
+                        <TableCell className='sticky right-0 z-10 w-max max-xl:w-40 xl:min-w-max border-l bg-background text-right whitespace-nowrap group-hover:bg-muted/50 group-data-[state=selected]:bg-muted'>
                           <div
-                            className='flex items-center justify-end gap-2'
+                            className='flex min-w-max max-xl:min-w-0 flex-wrap items-center justify-end gap-2'
                             onClick={(event) => event.stopPropagation()}
                           >
                             {/* 自定义模型：写的是平台那一行上的人工元数据，所以跟
