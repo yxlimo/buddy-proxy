@@ -80,8 +80,8 @@ export type TextField =
   | 'credits'
 
 /**
- * 能自由填的那几格。档位那一格除外：它是勾选（目录报了档位时）或把自己填的
- * 那串原文（目录没报时），两者都不是一个普通输入框。
+ * 能自由填的那几格。档位那一格除外：它是「勾选已有的档位 + 自己加一档」，
+ * 存下来是一串列表，不是一个普通输入框。
  */
 export type EditableText = Exclude<TextField, 'effortOptions'>
 
@@ -104,7 +104,10 @@ export interface ModelRow {
   id: string
   /** 目录里没有这一条：人工加的。 */
   added: boolean
-  /** 输入框里的原文。`effortOptions` 是档位那一格的逗号原文（勾选也写在这里）。 */
+  /**
+   * 输入框里的原文。`effortOptions` 是档位那一格的逗号原文：勾选、chip 上移除、
+   * 手敲一档，写的都是这一格。
+   */
   text: Record<TextField, string>
   /** 是否支持 thinking、能不能选档（见 `ThinkingMode`）。 */
   thinking: ThinkingMode
@@ -462,6 +465,24 @@ export function splitLevels(text: string): string[] {
     .map((item) => item.trim())
     .filter(Boolean)
 }
+
+/**
+ * 档位排成摆出来的那个顺序。
+ *
+ * 目录报的那几档在前（照目录的顺序）、手工加的跟在后面（照加进来的先后）。
+ * 勾选框、chip 上的移除、手敲一档，三处都过这一个函数 —— 界面上的顺序就是存进
+ * `effort_options` 的顺序，不另记一份。
+ */
+export function orderedLevels(
+  levels: readonly string[],
+  catalogLevels: readonly string[]
+): string[] {
+  const wanted = new Set(levels)
+  return [
+    ...catalogLevels.filter((level) => wanted.has(level)),
+    ...[...wanted].filter((level) => !catalogLevels.includes(level)),
+  ]
+}
 function numberValue(text: string): number | undefined {
   const trimmed = text.trim()
   if (!trimmed) return undefined
@@ -554,7 +575,7 @@ export function listProblems(rows: readonly ModelRow[]): RowProblem[] {
       row.thinking === 'levels' &&
       splitLevels(row.text.effortOptions).length === 0
     ) {
-      add(index, 'effortOptions', '档位可选，就至少勾一档')
+      add(index, 'effortOptions', '档位可选，就至少留一档')
     }
   })
   return out

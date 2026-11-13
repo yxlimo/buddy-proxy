@@ -230,6 +230,32 @@ function levelBoxes(): HTMLElement[] {
   return screen.queryAllByRole('checkbox')
 }
 
+/** 手工加的那几档：每档一个移除按钮，它的名字里就带着那一档。 */
+function manualChips(): string[] {
+  return screen
+    .queryAllByRole('button', { name: /^移除档位 / })
+    .map((button) =>
+      (button.getAttribute('aria-label') ?? '').replace('移除档位 ', '')
+    )
+}
+
+/** 在「新档位」那格敲进一档，再点「添加」。 */
+async function addLevel(
+  user: ReturnType<typeof userEvent.setup>,
+  level: string
+) {
+  await user.type(screen.getByLabelText('新档位'), level)
+  await user.click(screen.getByRole('button', { name: '添加' }))
+}
+
+/** 把手工加的那一档拿掉。 */
+async function removeLevel(
+  user: ReturnType<typeof userEvent.setup>,
+  level: string
+) {
+  await user.click(screen.getByRole('button', { name: `移除档位 ${level}` }))
+}
+
 function saveButton(): HTMLElement {
   return screen.getByRole('button', { name: '保存' })
 }
@@ -754,36 +780,75 @@ describe('自定义模型弹窗', () => {
     expect(sentEffort(sent[0])).toEqual(['low', 'high'])
   })
 
-  it('目录没报档位：退回自己填，填进去的照样存', async () => {
+  it('目录没报档位：自己加的档位摆成可移除的 chip，存下去', async () => {
     const user = setup()
     const sent: SaveInput[] = []
     openDialog(client({ sent }))
 
     await ready()
     // 目录里 glm-4.6 只说了支持 thinking，一档都没报：先摆成固定档位，
-    // 没有勾选、也没有输入框。
+    // 没有勾选、也没有加一档那一行。
     expect(selectOf('是否支持 thinking')).toHaveTextContent('固定档位')
     expect(levelBoxes()).toEqual([])
     expect(screen.queryByLabelText('可选档位')).toBeNull()
 
     await chooseOption(user, '是否支持 thinking', '档位可选')
-    // 这时才是自己填的那一格，没有档位可预填。
-    const tiers = field('可选档位')
-    expect(tiers).toHaveValue('')
-    await user.type(tiers, 'low,,high')
+    // 目录一档都没报：没有可勾的，只有加一档那一行。
+    expect(levelBoxes()).toEqual([])
+    expect(manualChips()).toEqual([])
+    expect(screen.getByRole('button', { name: '添加' })).toBeDisabled()
+    await addLevel(user, 'low')
+    // 回车等同点「添加」；敲进来的两端空白不算一档。
+    await user.type(screen.getByLabelText('新档位'), ' high {Enter}')
+    expect(manualChips()).toEqual(['low', 'high'])
 
     await user.click(saveButton())
 
     await waitFor(() => {
       expect(sent).toHaveLength(1)
     })
-    // 空段与空白不算一档。
+    // 按加的先后写回去。
     expect(sentEffort(sent[0])).toEqual(['low', 'high'])
     expect(sentOverride(sent[0])).toMatchObject({
       id: 'glm-4.6',
       reasoning: true,
       effortOptions: { levels: ['low', 'high'] },
     })
+  })
+
+  it('手改过档位之后：目录没报的那一档能加，加错能删', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: leveledCatalog(), sent }))
+
+    await ready()
+    // 目录报了 low/high/max：勾选框只是建议，不是唯一取值。
+    expect(levelBoxes()).toHaveLength(3)
+
+    // 加了目录里没有的一档：它排在目录那几档后面，带着移除。
+    await addLevel(user, 'xhigh')
+    expect(manualChips()).toEqual(['xhigh'])
+    await addLevel(user, 'medium')
+    expect(manualChips()).toEqual(['xhigh', 'medium'])
+    // 已经选着的那档不会再添一遍。
+    await user.type(screen.getByLabelText('新档位'), 'low')
+    expect(screen.getByRole('button', { name: '添加' })).toBeDisabled()
+    await user.clear(screen.getByLabelText('新档位'))
+
+    // 目录里的那档不勾就是删掉；手工加的那档用移除。
+    await user.click(screen.getByRole('checkbox', { name: 'max' }))
+    expect(
+      screen.getByRole('checkbox', { name: 'max' })
+    ).toHaveAttribute('aria-checked', 'false')
+    await removeLevel(user, 'xhigh')
+    expect(manualChips()).toEqual(['medium'])
+
+    await user.click(saveButton())
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    // 目录那几档在前、手工加的排在后面。
+    expect(sentEffort(sent[0])).toEqual(['low', 'high', 'medium'])
   })
 
   it('选「不支持 thinking」：档位那一块整块不摆，也不写档位', async () => {
@@ -910,13 +975,13 @@ describe('自定义模型弹窗', () => {
     expect(sentEffort(sent[0])).toEqual([])
   })
 
-  it('档位可选却一档都没填：保存禁用，那一格报错', async () => {
+  it('档位可选却一档都没留：保存禁用，那一格报错', async () => {
     const user = setup()
     openDialog(
       client({
         overrides: [
-          // 人工写下的那几档，清空了就是没填。目录里 glm-4.6 没报档位，
-          // 所以摆的是自己填的那一格。
+          // 人工写下的那一档，拿掉了就是没留。目录里 glm-4.6 没报档位，
+          // 所以摆的是手工加的那一档。
           create(ModelOverrideSchema, {
             id: 'glm-4.6',
             effortOptions: { levels: ['low'] },
@@ -927,14 +992,47 @@ describe('自定义模型弹窗', () => {
 
     await ready()
     expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
-    const tiers = field('可选档位')
-    await user.clear(tiers)
+    expect(manualChips()).toEqual(['low'])
+    await removeLevel(user, 'low')
 
     const message = await screen.findByText(
-      'glm-4.6 · 档位可选，就至少勾一档'
+      'glm-4.6 · 档位可选，就至少留一档'
     )
     expect(saveButton()).toBeDisabled()
-    expect(describedError(tiers)).toBe(message)
+    expect(describedError(screen.getByRole('group', { name: '可选档位' }))).toBe(
+      message
+    )
+  })
+
+  it('人工写过的那几档：摆成可移除的 chip，目录没报也能再添', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(
+      client({
+        sent,
+        overrides: [
+          create(ModelOverrideSchema, {
+            id: 'glm-4.6',
+            effortOptions: { levels: ['low', 'xhigh'] },
+          }),
+        ],
+      })
+    )
+
+    await ready()
+    // 人工写下的那两档原样摆出来，都可移除：这就是「手改过之后」进来时的样子。
+    expect(manualChips()).toEqual(['low', 'xhigh'])
+    expect(levelBoxes()).toEqual([])
+
+    // 手改过的行上照样能再添一档。
+    await addLevel(user, 'medium')
+    expect(manualChips()).toEqual(['low', 'xhigh', 'medium'])
+
+    await user.click(saveButton())
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentEffort(sent[0])).toEqual(['low', 'xhigh', 'medium'])
   })
 
   it('人工条目只写了「支持 thinking」：档位仍从目录取', async () => {

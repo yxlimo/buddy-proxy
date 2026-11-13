@@ -5,15 +5,18 @@
 //
 //   · 「是否支持 thinking」一个下拉，三档：不支持 thinking / 固定档位 / 档位可选；
 //   · 「是否支持 Tool Call」一个下拉：用原来的值 / 是 / 否；
-//   · 选「档位可选」时多出一块「可选档位」——
-//       - 目录里那个模型报了档位：摆成勾选框，一档一个（目录说几档就是几档）；
-//       - 目录没报：退回「自己填」的输入框；
+//   · 选「档位可选」时多出一块「可选档位」——三样东西同场：
+//       - 目录里那个模型报了档位：摆成勾选框组（`group[aria-label="目录报的档位"]`），
+//         一档一个（目录说几档就是几档）；
+//       - 手工加的档位：每档一个 chip，带一个「移除档位 <档位>」的按钮
+//         （`group[aria-label="手工加的档位"]`）；
+//       - 「加一档」：`textbox[aria-label="新档位"]` + 「添加」按钮，任何时候都在。
 //   · 选「不支持 thinking」时，「可选档位」整块不渲染。
 //
 // 两条用例分别走这两条路：
 //
-//   1. 空目录（平台还没拉过目录）：手填一个 id → 自己填档位 → 存下来。
-//      顺带验「选了档位可选却一档都没勾」当场挡住（不是等保存了给一个红条）。
+//   1. 空目录（平台还没拉过目录）：手填一个 id → 自己加档位 → 存下来。
+//      顺带验「选了档位可选却一档都没留」当场挡住（不是等保存了给一个红条）。
 //   2. 目录里报了档位：那一块必须是**目录报的那几档**勾选框，勾哪几档就存哪几档；
 //      切走再切回来，摆出来的还是目录那几档，不是这一行上一回留下的那串文本。
 //
@@ -39,7 +42,7 @@ import {
 import { UPSTREAM_BASE, startPanelUpstream } from './panel-upstream.ts';
 
 /** 弹窗里那条挡住保存的说明（`model-overrides.ts` 的原文）。 */
-const EFFORT_PROBLEM = '档位可选，就至少勾一档';
+const EFFORT_PROBLEM = '档位可选，就至少留一档';
 
 /** 「是否支持 thinking」的三个选项，逐字（契约就写这几个字）。 */
 const THINKING_OPTIONS = ['不支持 thinking', '固定档位', '档位可选'] as const;
@@ -132,22 +135,45 @@ test('自定义模型（目录空）：一个下拉管 thinking，三档逐字�
     for (const label of THINKING_OPTIONS) {
       await expect(screen.getByRole('option', { name: label, exact: true })).toBeVisible();
     }
-    // 换成「档位可选」：目录里没有这一条，所以摆的是「自己填」的输入框。
+    // 换成「档位可选」：目录里没有这一条，所以没有建议可勾，只有「加一档」。
     await screen.getByRole('option', { name: '档位可选', exact: true }).click();
-    const freeText = dialog.getByRole('textbox', { name: '可选档位' });
-    await expect(freeText).toBeVisible();
-    await expect(dialog.getByText('目录没报这个模型的档位，自己填')).toBeVisible();
-    // 目录报了档位的那条路上摆的是勾选框，不是输入框。
-    await expect(dialog.getByRole('group', { name: '可选档位' })).toHaveCount(0);
+    // 「可选档位」那一块在（它是这三样东西的容器），「加一档」那一格也在。
+    await expect(dialog.getByRole('group', { name: '可选档位' })).toBeVisible();
+    const newLevel = dialog.getByRole('textbox', { name: '新档位' });
+    await expect(newLevel).toBeVisible();
+    // 目录一档都没报：没有勾选框组，也没有手工 chip 组。
+    await expect(dialog.getByRole('group', { name: '目录报的档位' })).toHaveCount(0);
+    await expect(dialog.getByRole('group', { name: '手工加的档位' })).toHaveCount(0);
+    // 界面上说的是「目录没报这个模型的档位」：这句现在还摆着，只是措辞改了。
+    await expect(
+      dialog.getByText('目录没报这个模型的档位，自己加'),
+    ).toBeVisible();
+    // 旧的「自己填」那一格（自由输入的一串文本）没有了 —— 档位改成加一档一档地来。
+    await expect(dialog.getByRole('textbox', { name: '可选档位' })).toHaveCount(0);
 
-    // 一档都没填：挡住，并在下面说清是哪一条、为什么。
+    // 一档都没留：挡住，并在下面说清是哪一条、为什么。
     await expect(dialog.getByRole('alert')).toContainText(EFFORT_PROBLEM);
     await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled();
 
-    // 填上两档：那句话没了，保存又能点了。
-    await freeText.fill('low, high');
+    // 加一档：那一句没了，保存又能点了。
+    await newLevel.fill('low');
+    await dialog.getByRole('button', { name: '添加', exact: true }).click();
     await expect(dialog.getByRole('alert')).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存' })).toBeEnabled();
+    // 加进去的那一档是可移除的 chip。
+    await expect(
+      dialog.getByRole('group', { name: '手工加的档位' }).getByRole('button', {
+        name: '移除档位 low',
+      }),
+    ).toBeVisible();
+    // 再加一档：两档都在，按加的先后排着。
+    await newLevel.fill('high');
+    await dialog.getByRole('button', { name: '添加', exact: true }).click();
+    await expect(
+      dialog.getByRole('group', { name: '手工加的档位' }).getByRole('button', {
+        name: '移除档位 high',
+      }),
+    ).toBeVisible();
 
     // 「是否支持 Tool Call」也是这一版改的名字（原来是「是否工具」）。
     const toolCall = dialog.getByRole('combobox', { name: '是否支持 Tool Call' });
@@ -159,25 +185,33 @@ test('自定义模型（目录空）：一个下拉管 thinking，三档逐字�
     await browser.keyboard.press('Escape');
     await expect(screen.getByRole('option', { name: '用原来的值' })).toBeHidden();
 
-    // 换成「不支持 thinking」：档位那一块（连自己填）整块不摆 —— 连「可选档位」
+    // 换成「不支持 thinking」：档位那一块（连「加一档」）整块不摆 —— 连「可选档位」
     // 这几个字都不该还在（标签也属于这一块）。
     await pickOption(screen, thinking, '不支持 thinking');
     await expect(dialog.getByRole('textbox', { name: '可选档位' })).toHaveCount(0);
+    await expect(dialog.getByRole('textbox', { name: '新档位' })).toHaveCount(0);
     await expect(dialog.getByRole('group', { name: '可选档位' })).toHaveCount(0);
+    await expect(dialog.getByRole('group', { name: '目录报的档位' })).toHaveCount(0);
+    await expect(dialog.getByRole('group', { name: '手工加的档位' })).toHaveCount(0);
     await expect(dialog.getByText('可选档位')).toHaveCount(0);
 
-    // 再切回「档位可选」：目录没有档位，填过的那两档还在（这一行自己的）。
+    // 再切回「档位可选」：目录没有档位，加过的那两档还在（这一行自己的）。
     await pickOption(screen, thinking, '档位可选');
-    await expect(dialog.getByRole('textbox', { name: '可选档位' })).toHaveValue(
-      'low, high',
-    );
+    await expect(dialog.getByRole('textbox', { name: '新档位' })).toBeVisible();
+    for (const level of ['low', 'high']) {
+      await expect(
+        dialog.getByRole('group', { name: '手工加的档位' }).getByRole('button', {
+          name: `移除档位 ${level}`,
+        }),
+      ).toBeVisible();
+    }
 
     await markPage(browser);
     await dialog.getByRole('button', { name: '保存' }).click();
     await expect(dialog).toBeHidden();
     await expectSamePage(browser);
 
-    // 存下来了：服务端那边这一条带着那两档。
+    // 存下来了：服务端那边这一条带着那两档（按加的先后）。
     const mine = await savedOverride('e2e-models', 'my-own-model');
     expect(mine).toBeTruthy();
     expect(mine?.effortOptions?.levels).toEqual(['low', 'high']);
@@ -240,14 +274,18 @@ test('自定义模型（目录报了档位）：档位可选摆的是目录那�
     await dialog.getByRole('combobox', { name: '模型 id' }).click();
     await screen.getByRole('option', { name: LARGE, exact: true }).click();
 
-    // 选「档位可选」：这一块是勾选框（不是「自己填」的输入框），摆的就是目录
-    // 报的那三档。
+    // 选「档位可选」：这一块是勾选框，摆的就是目录报的那三档。
     const thinking = dialog.getByRole('combobox', { name: '是否支持 thinking' });
     await pickOption(screen, thinking, '档位可选');
-    const levels = dialog.getByRole('group', { name: '可选档位' });
+    const levels = dialog.getByRole('group', { name: '目录报的档位' });
     await expect(levels).toBeVisible();
-    await expect(dialog.getByText('档位来自模型目录')).toBeVisible();
-    // 输入框那条路不该同时出现：两条路上只能来一条。
+    // 界面上说的是「目录报的档位」：这句现在还摆着，只是措辞改了。
+    await expect(
+      dialog.getByText('目录报的档位可勾选，也能自己加'),
+    ).toBeVisible();
+    // 「加一档」那一格任何时候都在（目录报了档位也能自己加）。
+    await expect(dialog.getByRole('textbox', { name: '新档位' })).toBeVisible();
+    // 旧的「自己填」那一格（自由输入的一串文本）没有了。
     await expect(dialog.getByRole('textbox', { name: '可选档位' })).toHaveCount(0);
     const boxes = ['low', 'medium', 'high'];
     for (const level of boxes) {
@@ -277,9 +315,11 @@ test('自定义模型（目录报了档位）：档位可选摆的是目录那�
     await expect(high).not.toBeChecked();
     await pickOption(screen, thinking, '不支持 thinking');
     await expect(dialog.getByRole('group', { name: '可选档位' })).toHaveCount(0);
+    await expect(dialog.getByRole('group', { name: '目录报的档位' })).toHaveCount(0);
+    await expect(dialog.getByRole('textbox', { name: '新档位' })).toHaveCount(0);
     await expect(dialog.getByText('可选档位')).toHaveCount(0);
     await pickOption(screen, thinking, '档位可选');
-    const back = dialog.getByRole('group', { name: '可选档位' });
+    const back = dialog.getByRole('group', { name: '目录报的档位' });
     await expect(back).toBeVisible();
     await expect(back.getByRole('checkbox')).toHaveCount(3);
     await expect(

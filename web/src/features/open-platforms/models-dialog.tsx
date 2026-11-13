@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import type { Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -38,6 +38,7 @@ import {
   newRow,
   overridesFromRows,
   splitLevels,
+  orderedLevels,
   touchField,
   withId,
   type EditableText,
@@ -297,19 +298,11 @@ export function PlatformModelsDialog({
       }
     })
 
-  /** 勾上的那几档。勾选归在 `thinking` 这一格：契约里它跟 reasoning 是一件事。 */
+  /** 勾上 / 去掉一档：`levels` 就是新的那几档，按摆出来的顺序排好再写进去。 */
   const patchEfforts = (levels: string[]) =>
     patch((target) => ({
       ...target,
       text: { ...target.text, effortOptions: levels.join(', ') },
-      touched: touchField(target.touched, 'thinking'),
-    }))
-
-  /** 目录没报档位时自己填的那一串原文（原样留着，不在敲的时候拆）。 */
-  const patchEffortsText = (value: string) =>
-    patch((target) => ({
-      ...target,
-      text: { ...target.text, effortOptions: value },
       touched: touchField(target.touched, 'thinking'),
     }))
 
@@ -505,7 +498,6 @@ export function PlatformModelsDialog({
                 onChangeToolCall={patchToolCall}
                 onChangeThinking={patchThinking}
                 onChangeEfforts={patchEfforts}
-                onChangeEffortsText={patchEffortsText}
               />
             ) : (
               <p className='py-6 text-center text-sm text-muted-foreground'>
@@ -558,10 +550,9 @@ function ModelFields({
   onChangeToolCall,
   onChangeThinking,
   onChangeEfforts,
-  onChangeEffortsText,
 }: {
   row: ModelRow
-  /** 目录里这条模型报的档位。空 = 目录没报，这一格退回自己填。 */
+  /** 目录里这条模型报的档位。空 = 目录没报，这一格只列手工加的。 */
   catalogLevels: string[]
   /** 目录里这条模型报的计费。写不成一句话就什么都不摆（见 billingLine）。 */
   billing: ModelBilling | undefined
@@ -571,7 +562,6 @@ function ModelFields({
   onChangeToolCall: (value: TriState) => void
   onChangeThinking: (value: ThinkingMode) => void
   onChangeEfforts: (levels: string[]) => void
-  onChangeEffortsText: (value: string) => void
 }) {
   // 哪几格现在有毛病：标红并指到下面那句话。
   const contextProblem = problemId('contextWindow')
@@ -581,26 +571,8 @@ function ModelFields({
   /** 上游报的计费，一行；写不出来时是 `null`。 */
   const billingText = billingLine(billing)
 
-  /** 现在勾着的档位（原文就是逗号分隔的那一串）。 */
+  /** 现在选着的档位（原文就是逗号分隔的那一串）。 */
   const picked = splitLevels(row.text.effortOptions)
-  const pickedSet = new Set(picked)
-  // 摆出来的是目录报的那几档；人工写下的档位不在目录里也摆出来 —— 不然它们
-  // 看不见，也就勾不掉、发不回去。目录一档都没报时才是「自己填」（见下面）。
-  const levelOptions =
-    catalogLevels.length > 0
-      ? [
-          ...catalogLevels,
-          ...picked.filter((level) => !catalogLevels.includes(level)),
-        ]
-      : []
-  /** 勾上 / 取消一档：按摆出来的顺序重新写一遍，不是就着原来的字符串改。 */
-  const toggle = (level: string, on: boolean) =>
-    onChangeEfforts(
-      levelOptions.filter((item) =>
-        item === level ? on : pickedSet.has(item)
-      )
-    )
-
   return (
     <div className='grid gap-2 rounded-md border p-3'>
       <div className='grid gap-2 sm:grid-cols-2'>
@@ -706,54 +678,148 @@ function ModelFields({
         </div>
       </div>
 
-      {/* 不支持 thinking 的时候，档位这一块（包括自己填）整块不摆。 */}
+      {/* 不支持 thinking 的时候，档位这一块（连同加一档）整块不摆。 */}
       {row.thinking === 'levels' ? (
-        <div className='grid gap-1'>
-          {levelOptions.length > 0 ? (
-            <>
-              <Label>可选档位</Label>
-              <div
-                role='group'
-                aria-label='可选档位'
-                aria-invalid={effortProblem ? true : undefined}
-                aria-describedby={effortProblem}
-                className='flex flex-wrap gap-x-4 gap-y-2'
-              >
-                {levelOptions.map((level) => (
-                  <label
-                    key={level}
-                    className='flex items-center gap-1.5 text-sm'
-                  >
-                    <Checkbox
-                      aria-label={level}
-                      checked={pickedSet.has(level)}
-                      onCheckedChange={(value) => toggle(level, value === true)}
-                    />
-                    <span className='font-mono'>{level}</span>
-                  </label>
-                ))}
-              </div>
-              <p className='text-xs text-muted-foreground'>档位来自模型目录</p>
-            </>
-          ) : (
-            <>
-              <Label htmlFor='model-efforts'>可选档位</Label>
-              <Input
-                id='model-efforts'
-                aria-label='可选档位'
-                aria-invalid={effortProblem ? true : undefined}
-                aria-describedby={effortProblem}
-                placeholder='逗号分隔，比如 low, high'
-                value={row.text.effortOptions}
-                onChange={(event) => onChangeEffortsText(event.target.value)}
-              />
-              <p className='text-xs text-muted-foreground'>
-                目录没报这个模型的档位，自己填
-              </p>
-            </>
-          )}
-        </div>
+        <LevelsField
+          picked={picked}
+          catalogLevels={catalogLevels}
+          problemId={effortProblem}
+          onChange={onChangeEfforts}
+        />
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * 「可选档位」那一块。
+ *
+ * 目录报的档位是建议：勾上就是收下这一档，去掉就是不要它。目录里没有的档位也能
+ * 自己敲进来（`xhigh` 这类），自己加的那几档比勾选框多一个移除。两种来源在同一个
+ * 块里同时看得见，不是两种模式。
+ *
+ * 改的不是一串原文而是那几档：`orderedLevels` 排好之后再往上传，界面上的顺序就
+ * 是存进 `effort_options` 的顺序。
+ */
+function LevelsField({
+  picked,
+  catalogLevels,
+  problemId,
+  onChange,
+}: {
+  /** 现在选着的档位，按摆出来的顺序。 */
+  picked: string[]
+  /** 目录报的那几档：空 = 目录一档都没报。 */
+  catalogLevels: string[]
+  /** 这一格的错误在界面上的位置。 */
+  problemId: string | undefined
+  onChange: (levels: string[]) => void
+}) {
+  /** 刚敲进来的那一档，还没加。 */
+  const [text, setText] = useState('')
+  const pickedSet = new Set(picked)
+  // 目录没报的档位就是人加的：多一个移除，跟勾选框分得开。
+  const manual = picked.filter((level) => !catalogLevels.includes(level))
+  const typed = text.trim()
+  const canAdd = typed !== '' && !pickedSet.has(typed)
+  const commit = (levels: string[]) =>
+    onChange(orderedLevels(levels, catalogLevels))
+  const add = () => {
+    if (!canAdd) return
+    commit([...picked, typed])
+    setText('')
+  }
+
+  return (
+    <div className='grid gap-1'>
+      <Label>可选档位</Label>
+      <div
+        role='group'
+        aria-label='可选档位'
+        aria-invalid={problemId ? true : undefined}
+        aria-describedby={problemId}
+        className='grid gap-2'
+      >
+        {catalogLevels.length > 0 ? (
+          <div
+            role='group'
+            aria-label='目录报的档位'
+            className='flex flex-wrap gap-x-4 gap-y-2'
+          >
+            {catalogLevels.map((level) => (
+              <label key={level} className='flex items-center gap-1.5 text-sm'>
+                <Checkbox
+                  aria-label={level}
+                  checked={pickedSet.has(level)}
+                  onCheckedChange={(value) =>
+                    commit(
+                      value === true
+                        ? [...picked, level]
+                        : picked.filter((item) => item !== level)
+                    )
+                  }
+                />
+                <span className='font-mono'>{level}</span>
+              </label>
+            ))}
+          </div>
+        ) : null}
+        {manual.length > 0 ? (
+          <div
+            role='group'
+            aria-label='手工加的档位'
+            className='flex flex-wrap items-center gap-2'
+          >
+            {manual.map((level) => (
+              <span
+                key={level}
+                className='inline-flex items-center gap-1 rounded-full border py-0.5 ps-2 pe-1'
+              >
+                <span className='font-mono text-sm'>{level}</span>
+                <Button
+                  type='button'
+                  size='icon-xs'
+                  variant='ghost'
+                  aria-label={`移除档位 ${level}`}
+                  onClick={() =>
+                    commit(picked.filter((item) => item !== level))
+                  }
+                >
+                  <X />
+                </Button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className='flex items-center gap-2'>
+          <Input
+            aria-label='新档位'
+            className='h-8 w-40 font-mono text-sm'
+            placeholder='比如 xhigh'
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return
+              event.preventDefault()
+              add()
+            }}
+          />
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            disabled={!canAdd}
+            onClick={add}
+          >
+            添加
+          </Button>
+        </div>
+      </div>
+      <p className='text-xs text-muted-foreground'>
+        {catalogLevels.length > 0
+          ? '目录报的档位可勾选，也能自己加'
+          : '目录没报这个模型的档位，自己加'}
+      </p>
     </div>
   )
 }
