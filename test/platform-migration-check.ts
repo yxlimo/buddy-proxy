@@ -377,6 +377,94 @@ closeStore();
 fs.rmSync(VENDOR_DIR, { recursive: true, force: true });
 
 /* ------------------------------------------------------------------ *
+ * 三、六、版本 2 漏掉的那一种凭据形状：key 藏在 `:account` blob 里
+ * ------------------------------------------------------------------ */
+
+section("版本 2 漏掉的凭据形状：TokenRhythm 的 key 在 :account 里");
+
+// 生产事故的形状：TokenRhythm 的推理 key 不在迁移表写的那一处
+// （`key:provider:<id>:account#api_key`），而在 `key:provider:<id>:account`
+// 的 `apiKey` 格里（同一段还住着 account/password）。版本 2 按表找 `#api_key`、
+// 找不到就跳过，`:key` 没写出来 —— 迁移后整平台 no_credential。
+// 版本 3（migrateVendorKeyBackfill）按数据形状补：kind 是 openai、`:key` 不在、
+// `:account` 里有 apiKey 就写 `:key`；`:account` 原样不动（额度插件读它）。
+const TR_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "platform-migration-tokenrhythm-"));
+{
+  // 先开一次库拿到完整表结构，再改回旧形状：一行 kind=tokenrhythm，推理 key
+  // 只在 `:account` 的 apiKey 里，user_version 归零 —— 重开库时版本 2 与版本 3
+  // 都会跑。
+  process.env.BUDDY_DATA_DIR = TR_DIR;
+  const fresh = store();
+  fresh
+    .prepare(
+      "INSERT INTO platform (id, label, base_url, models, quota_plugin, kind, created_at, updated_at) " +
+        "VALUES ('tokenrhythm', 'TokenRhythm', 'https://tokenrhythm.studio/v1', ?, 'tokenrhythm', 'tokenrhythm', 1, 1)",
+    )
+    .run(JSON.stringify({ items: ["m1"], fetchedAt: 0 }));
+  fresh
+    .prepare("INSERT INTO provider (id, platform, created_at, updated_at) VALUES ('5', 'tokenrhythm', 1, 1)")
+    .run();
+  fresh
+    .prepare("INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, 'account', ?, 1)")
+    .run("key:provider:5:account", JSON.stringify({ account: "acct", password: "pw", apiKey: "sk-tr-key" }));
+  fresh.exec("PRAGMA user_version = 0");
+  closeStore();
+}
+
+// 重开库：迁移在开库时跑。
+allPlatforms();
+
+check("tokenrhythm 行改成了 openai", openPlatformOf("tokenrhythm")?.kind === "openai", String(openPlatformOf("tokenrhythm")?.kind));
+{
+  const moved = store()
+    .prepare("SELECT data FROM secrets WHERE id = 'key:provider:5:key'")
+    .get() as { data?: string } | undefined;
+  check(
+    ":key 补上了，内容就是 :account 里那把 apiKey",
+    JSON.parse(moved?.data ?? "{}").apiKey === "sk-tr-key",
+    String(moved?.data),
+  );
+  const kept = store()
+    .prepare("SELECT data FROM secrets WHERE id = 'key:provider:5:account'")
+    .get() as { data?: string } | undefined;
+  const keptData = JSON.parse(kept?.data ?? "{}") as Record<string, unknown>;
+  check(
+    ":account 原样不动（account/password/apiKey 都还在）",
+    keptData.account === "acct" && keptData.password === "pw" && keptData.apiKey === "sk-tr-key",
+    String(kept?.data),
+  );
+}
+
+// 幂等：重启再跑一遍迁移，两段凭据一个字节都不动。
+const trBefore = JSON.stringify(
+  store()
+    .prepare("SELECT id, data FROM secrets WHERE id LIKE 'key:provider:5:%' ORDER BY id")
+    .all(),
+);
+closeStore();
+allPlatforms();
+check("重跑迁移：两段凭据一个字节都不动", JSON.stringify(
+  store()
+    .prepare("SELECT id, data FROM secrets WHERE id LIKE 'key:provider:5:%' ORDER BY id")
+    .all(),
+) === trBefore, trBefore);
+// 已有 `:key` 的行绝不覆盖：手动改成另一把 key，重启之后还是改过的那把。
+store()
+  .prepare("UPDATE secrets SET data = ? WHERE id = 'key:provider:5:key'")
+  .run(JSON.stringify({ apiKey: "sk-rotated" }));
+closeStore();
+allPlatforms();
+{
+  const moved = store()
+    .prepare("SELECT data FROM secrets WHERE id = 'key:provider:5:key'")
+    .get() as { data?: string } | undefined;
+  check("已有 :key 的不被 :account 里的旧值覆盖", JSON.parse(moved?.data ?? "{}").apiKey === "sk-rotated", String(moved?.data));
+}
+
+closeStore();
+fs.rmSync(TR_DIR, { recursive: true, force: true });
+
+/* ------------------------------------------------------------------ *
  * 四、删掉的预置平台不会长回来
  * ------------------------------------------------------------------ */
 

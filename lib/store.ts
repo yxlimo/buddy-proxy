@@ -223,6 +223,9 @@ export function store(): DatabaseSync {
   migrateAccountIds(db);
   // 编号定下之后再搬凭据：这一段是按账号 id 定位凭据的，id 变了就找不到。
   migrateLegacyVendorKinds(db);
+  // 版本 2 漏掉的那一种凭据形状（key 藏在 `:account` blob 里）：生产库的版本号
+  // 已经是 2，只能用新版本号补。
+  migrateVendorKeyBackfill(db);
   return db;
 }
 
@@ -357,6 +360,7 @@ function migratePlatformColumns(db: DatabaseSync): void {
  */
 const TRAITS_VERSION = 1;
 const LEGACY_VENDOR_KIND_VERSION = 2;
+const VENDOR_KEY_BACKFILL_VERSION = 3;
 
 /** 库的 schema 版本现在是多少（没写过就是 0）。 */
 function schemaVersion(db: DatabaseSync): number {
@@ -487,6 +491,56 @@ function migrateLegacyVendorKinds(db: DatabaseSync): void {
   for (const legacy of LEGACY_VENDOR_KINDS) moveKind.run(legacy.baseUrl, now, legacy.kind);
 
   setSchemaVersion(db, LEGACY_VENDOR_KIND_VERSION);
+}
+
+/**
+ * 厂商 kind 迁移漏掉的一种凭据形状：推理 key 藏在 `:account` blob 里。
+ *
+ * 生产事故（2026-11）：TokenRhythm 的 key 不在迁移表写的那一处
+ * （`key:provider:<id>:account#api_key`），而在 `key:provider:<id>:account`
+ * 的 `apiKey` 格里（同一段还住着 account/password）。迁移按表找 `#api_key`、
+ * 找不到就跳过，`:key` 没写出来 —— 迁移后整平台 `no_credential`。
+ *
+ * 为什么要新版本号而不是改版本 2：生产库的 user_version 已经是 2，只改版本 2
+ * 的逻辑不会重跑。这一步按数据形状判（平台行是通用方言 `openai`、`:key` 不在、
+ * `:account` 里有 `apiKey`），所以幂等：补过的行再跑一遍也是同一个结果，已经
+ * 有 `:key` 的绝不覆盖。`:account` 原样不动 —— 额度插件读的是它的
+ * account/password。
+ */
+function migrateVendorKeyBackfill(db: DatabaseSync): void {
+  if (schemaVersion(db) >= VENDOR_KEY_BACKFILL_VERSION) return;
+  const now = Date.now();
+  const readSecret = db.prepare("SELECT data FROM secrets WHERE id = ?");
+  const writeSecret = db.prepare(
+    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, 'key', ?, ?) " +
+      "ON CONFLICT(id) DO NOTHING",
+  );
+  // 迁移后的厂商行 kind 都是 'openai'；原生的 openai 平台没有 `:account` blob，
+  // 按形状判它们自然落空，所以不必再区分「这行是不是厂商出身」。
+  const candidates = db.prepare(
+    "SELECT DISTINCT p.id AS id FROM provider p JOIN platform pl ON pl.id = p.platform " +
+      "WHERE pl.kind = 'openai'",
+  );
+
+  for (const row of candidates.all() as { id?: string }[]) {
+    const accountId = String(row.id ?? "");
+    if (!accountId) continue;
+    if (readSecret.get(providerSecretId(accountId, "key"))) continue;
+    const account = readSecret.get(providerSecretId(accountId, "account")) as
+      | { data?: string }
+      | undefined;
+    if (!account?.data) continue;
+    let apiKey = "";
+    try {
+      apiKey = String((JSON.parse(account.data) as Record<string, unknown>)["apiKey"] ?? "").trim();
+    } catch {
+      continue;
+    }
+    if (!apiKey) continue;
+    writeSecret.run(providerSecretId(accountId, "key"), JSON.stringify({ apiKey }), now);
+  }
+
+  setSchemaVersion(db, VENDOR_KEY_BACKFILL_VERSION);
 }
 
 
