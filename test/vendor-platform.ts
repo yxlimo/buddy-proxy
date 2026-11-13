@@ -10,6 +10,18 @@
 import { store } from "../lib/store.ts";
 
 /**
+ * 厂商那几家行上指的额度插件（kind=openai，插件是按行挂的）。星火没有额度
+ * 接口，不指。与 lib/quota-plugin-registry.ts 登记的插件 id 一字不差。
+ */
+export const VENDOR_QUOTA_PLUGINS: Readonly<Record<string, string>> = {
+  qiniu: "qiniu",
+  xinghuo: "",
+  sensenova: "sensenova-pools",
+  "intern-ai": "intern-ai-credits",
+  tokenrhythm: "tokenrhythm-wallet",
+};
+
+/**
  * 五家厂商的默认推理地址。与 lib/store.ts 的 LEGACY_VENDOR_KINDS 一字不差：
  * 迁移把这些地址写进行里，测试造的行也用同一份 —— 两处不一致的话，测的就不是
  * 生产会跑出来的形状。

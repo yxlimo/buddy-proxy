@@ -17,10 +17,10 @@
 import { setSecret } from "../lib/store.ts";
 import { addAccount } from "../lib/providers.ts";
 import { saveTokenRhythmCredential } from "../lib/tokenrhythm/accounts.ts";
+import { writeOpenPlatformKey } from "../lib/open-platform-credentials.ts";
 import { store } from "../lib/store.ts";
-import { insertVendorPlatform } from "./vendor-platform.ts";
+import { insertVendorPlatform, VENDOR_QUOTA_PLUGINS } from "./vendor-platform.ts";
 import { isSimulatedClientId } from "../lib/platform-catalog.ts";
-import { kindOf } from "../lib/provider-kinds.ts";
 import "../lib/kinds/index.ts";
 
 const now = Date.now();
@@ -66,10 +66,26 @@ function workBuddy() {
 const ON = process.env.TEST_UPSTREAMS ?? "qoder,qoder-cn,workbuddy-cn";
 const on = ON.split(",").map((id) => id.trim()).filter(Boolean);
 const accountOf: Record<string, string> = {};
+// 厂商行的常量地址是真上游；测试里真地址由 test/serve.ts 的 env 说
+// （如 TOKENRHYTHM_INFER_BASE 指向假上游）。有 env 就盖掉常量，别让离线测试
+// 打真上游。别的厂商还没进 TEST_UPSTREAMS 矩阵；进来的照这个样子给 env。
+const VENDOR_ENV_BASE: Record<string, string> = {
+  tokenrhythm: "TOKENRHYTHM_INFER_BASE",
+};
 for (const platform of on) {
-  // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：模拟客户端那几行
-  // 启动时自己播出来，厂商那几行测试自己造。
-  if (!isSimulatedClientId(platform) && kindOf(platform)) insertVendorPlatform(platform, platform);
+  // 厂商那几行不再由代码补（平台行是用户在面板上自己建的），kind 也退场了：
+  // 测试自己造迁移后的形状（kind=openai + 常量地址 + 行上的额度插件）。模拟
+  // 客户端那一族启动时自己播出来，不归这里管。
+  if (platform in VENDOR_QUOTA_PLUGINS) {
+    const envName = VENDOR_ENV_BASE[platform];
+    const envBase = envName ? process.env[envName] : undefined;
+    insertVendorPlatform(platform, platform, {
+      quotaPlugin: VENDOR_QUOTA_PLUGINS[platform],
+      ...(envBase ? { baseUrl: envBase } : {}),
+    });
+  } else if (!isSimulatedClientId(platform)) {
+    throw new Error(`TEST_UPSTREAMS 里的 ${platform} 既不是模拟客户端也不是已知厂商平台`);
+  }
   const made = addAccount({ platform, alias: "测试账号" });
   if (!made.ok || !made.id) throw new Error(`加不了 ${platform} 的账号：${made.message}`);
   accountOf[platform] = made.id;
@@ -102,13 +118,15 @@ if (accountOf["workbuddy-cn"]) {
 if (accountOf["minimax"]) {
   setSecret(`session:provider:${accountOf["minimax"]}`, "session", miniMax());
 }
-// 中转站：账号密码（查余额）+ API key（发请求），两个都是假的，mock 不看。
+// 中转站：转发走通用 openai 路径，推理 key 在迁移后的位置（key:provider:<账号>:key）；
+// 钱包那一段（账号密码，查余额用）还在原来的地方，额度插件读它。都是假的，mock 不看。
 if (accountOf["tokenrhythm"]) {
   saveTokenRhythmCredential(accountOf["tokenrhythm"], {
     account: "test-account%40example.com",
     password: "test-password",
     apiKey: "sk_tr_test_key_1",
   });
+  writeOpenPlatformKey(accountOf["tokenrhythm"], "sk_tr_test_key_1");
 }
 
 // 开关：新装的账号默认就是开着的，这里显式写一遍，免得将来默认值变了。
