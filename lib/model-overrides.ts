@@ -190,6 +190,25 @@ export function upsertModelOverrides(
 }
 
 /**
+ * 忘掉一个平台的全部人工条目。
+ *
+ * 平台删了，这几行就是没人认的指针：下次用同一个 id 建回来，它会凭空继承旧的
+ * 人工设置（档位、计费、显示名、上下文长度……）—— 用户从没为这个新平台填过
+ * 任何东西。跟平台策略是同一件事，同一个理由。
+ *
+ * 删不存在的行不报错：这条路上没有「有没有这些行」这个问题（平台没了就都没了）。
+ */
+export function forgetPlatformModelOverrides(platformId: string): number {
+  const id = String(platformId ?? "").trim();
+  if (!id) return 0;
+  const removed = store().prepare("DELETE FROM platform_model_override WHERE platform_id = ?").run(id);
+  // 缓存跟着作废：这一层独占这个库，写成功就得让读下一次时重建 —— 否则目录里
+  // 那条会继续按人工写的走。
+  cachedOverrides = null;
+  return Number(removed.changes ?? 0);
+}
+
+/**
  * 删掉一条人工条目。
  *
  * 不存在就说清楚：静默成功会让人以为删掉了，而目录里那条其实还按人工写的走。

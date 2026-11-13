@@ -138,6 +138,7 @@ import {
 import { catalogModels, deletePublishedModel, publishedModels, savePublishedModel } from "./models.ts";
 import {
   deleteModelOverride,
+  forgetPlatformModelOverrides,
   listModelOverrides,
   upsertModelOverrides,
   type ModelOverrideRow,
@@ -159,6 +160,7 @@ import {
   type OpenPlatformRow,
 } from "../open-platforms.ts";
 import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
+import { forgetUpstreamSessions } from "../upstream-session.ts";
 import { breakerPanelState } from "../upstream-breaker.ts";
 import { isSimulatedClientKind, platformKindChoices } from "../platform-catalog.ts";
 import { allQuotaPlugins } from "../quota-plugin-registry.ts";
@@ -979,10 +981,18 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // 平台自己的策略也清掉：平台没了，那一行就是一根没人认的指针（下次用
     // 同一个 id 建回来，它会凭空继承旧策略）。
     forgetPlatformPolicy(id);
+    // 人工写的那份模型元数据同理：平台没了，那些行就是没人认的指针（下次用
+    // 同一个 id 建回来，它会凭空继承旧档位、旧计费、旧显示名 —— 用户从没为
+    // 这个新平台填过任何东西）。
+    const overrides = forgetPlatformModelOverrides(id);
+    // 上游会话映射也是「旧位置的记录」：上游那一侧已经没了，那张表里的映射
+    // 指向的是一个不存在的上游会话。
+    const sessions = forgetUpstreamSessions(id);
     // 连带删掉的东西写进日志：答复里没有 message 了，出过什么事就只剩这一处。
     console.log(
       `[ADMIN] 删了开放平台 ${id}（${row.label}）：连 ${accounts.length} 个账号一起，` +
-        `${affected.length} 个已发布模型指向它（现在显示平台已停用）`,
+        `${affected.length} 个已发布模型指向它（现在显示平台已停用），` +
+        `${overrides} 条人工元数据、${sessions} 条会话映射一起`,
     );
     return create(DeletePlatformResponseSchema, {});
   },

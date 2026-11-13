@@ -94,3 +94,22 @@ function remember(key: string, sessionId: string): void {
 export function clearUpstreamSessionCache(): void {
   cache.clear();
 }
+
+/**
+ * 忘掉一个上游的会话映射。
+ *
+ * 上游（平台）没了，它那边的会话也没了：留着这张表，下次用同一个 id 建回来，
+ * 同一个客户端会话会继续拿到那个已经不存在的上游会话 id —— 上游会把它当成
+ * 旧会话的一部分。这是「旧位置的记录」，跟账号注销是同一类残留。
+ *
+ * 内存里那份快路一起清：它按「上游 + 客户端会话」记着同一个答案。
+ */
+export function forgetUpstreamSessions(upstream: string): number {
+  const id = String(upstream ?? "").trim();
+  if (!id) return 0;
+  const removed = store().prepare("DELETE FROM session_map WHERE upstream = ?").run(id);
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(`${id}\n`)) cache.delete(key);
+  }
+  return Number(removed.changes ?? 0);
+}
