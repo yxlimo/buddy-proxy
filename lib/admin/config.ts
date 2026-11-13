@@ -67,6 +67,11 @@ configNumber("QODER_LEGACY_RETRY_MS", 10_000);
 // lib/router/upstreams/qoder.ts 每次调用都读一次。
 configFlag("QODER_SKIP_QUEUE_WAIT", false);
 
+// 上游级（平台级）短熔断的总开关：默认关。开着的时候，连续几次可熔断的失败
+// 之后，一段时间内不往那个平台发请求（省掉那次上游往返），到点放一个探测进去。
+// 旋钮（失败次数、窗口、封顶）不上面板 —— 那是调参的事，不是开关。
+configFlag("UPSTREAM_BREAKER_ENABLED", false);
+
 // 签到开关是这一组里唯一一个热的：它是在 benefitUpstreams() 里按调用读的，而那个
 // 函数每一次跑腿（lib/router/benefits.ts 的 runOnce）与每一次 /health 都会问一次，
 // 所以面板改完不用重启。它的标记只能写在这里：读它的那个模块不是设置的登记处。
@@ -114,6 +119,7 @@ const DESCRIPTIONS: Record<string, string> = {
   BENEFITS_INTERVAL_MS: "签到任务多久跑一次（毫秒）。调大后奖励到账变慢",
   QODER_LEGACY_RETRY_MS: "Qoder 旧协议排队后隔多久重试（毫秒）",
   QODER_SKIP_QUEUE_WAIT: "开着时排队不等待，直接交给下一个目标。关着时先等一次再放弃",
+  UPSTREAM_BREAKER_ENABLED: "开着时某个上游连续失败几次就暂时不往它发请求，到点放一个探测进去",
 };
 
 /**
@@ -135,6 +141,7 @@ const LABELS: Record<string, string> = {
   BENEFITS_INTERVAL_MS: "签到间隔",
   QODER_LEGACY_RETRY_MS: "排队重试间隔",
   QODER_SKIP_QUEUE_WAIT: "排队时不等待",
+  UPSTREAM_BREAKER_ENABLED: "上游级熔断",
 };
 
 /** 值的结尾像密钥的，就不给人看。 */
@@ -150,8 +157,8 @@ const NOT_SECRET = new Set(["REQUIRE_API_KEY"]);
  * 请求标识。这些改了也没用（env 覆盖了照样按代码走），而且露出来只会让人
  * 改出坏状态 —— 所以不公布。
  *
- * 面板只看到这十一个：网关自己的、用量保留、三个超时旋钮、定时任务与额度快照、
- * 签到、Qoder 的排队重试。
+ * 面板只看到这十三个：网关自己的、用量保留、三个超时旋钮、定时任务与额度快照、
+ * 签到、Qoder 的排队重试、上游级熔断的开关。
  *
  * 上游的开关**不在这里**：上游那一页有开关，在这儿再放一份是重复的，而且
  * 两份会打架。
@@ -175,6 +182,8 @@ const USER_FACING = new Set([
   // Qoder 旧协议排队时的重试间隔，以及排队要不要等
   "QODER_LEGACY_RETRY_MS",
   "QODER_SKIP_QUEUE_WAIT",
+  // 上游级熔断的开关（旋钮不上面板）
+  "UPSTREAM_BREAKER_ENABLED",
 ]);
 
 /** 这个设置是不是敏感值。 */

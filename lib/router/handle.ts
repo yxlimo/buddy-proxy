@@ -47,7 +47,9 @@ import {
 import { findAggregate, publishedModel } from "./catalog-routes.ts";
 import { platformAvailabilities, type PlatformAvailability, type PlatformState } from "./availability.ts";
 import { noteUpstreamFailure } from "../upstream-failures.ts";
-import { ClientGoneError, sendError } from "./deliver.ts";
+import { checkBreaker, noteBreakerOutcome, type BreakerVerdict } from "../upstream-breaker.ts";
+import { cooldownStamp } from "./account-cooldown.ts";
+import { ClientGoneError, sendError, withRetryAfter } from "./deliver.ts";
 
 const TOKENRHYTHM_MAX_ATTEMPTS = configNumber("TOKENRHYTHM_MAX_ATTEMPTS", 3);
 // 上游排队时等多久（毫秒）：上游自己说了秒数就用它的，没说就用这个。等几次不是
@@ -168,6 +170,19 @@ async function handleAggregate(
       // The client asked for the published name; the answer says the same, even
       // though the upstream knows the model by another one.
       route.label = entry.id;
+
+      // 熔断：这个平台现在该不该打。命中就跳过 —— 这一次上游往返不花。
+      //
+      // 跳过的是**平台**，不是账号：账号级冷却（lib/router/account-cooldown.ts）
+      // 管的是「这个账号接不了」，而排队、网络错那一类失败账号级不记（理由见
+      // 那个文件顶上），所以这一层是唯一能省掉那次往返的地方。
+      //
+      // 半开时抢到探测名额的那一个请求照常打上去：没有探测，熔断就永远打不开。
+      const breaker = checkBreaker(target.group);
+      if (!breaker.allow) {
+        console.log(`[ROUTE] ${target.group}：${breaker.reason}，跳过这个目标，不打上游`);
+        throw skipTrippedTarget(entry, target, breaker, ctx, started);
+      }
 
       const uctx = upstreamContext(route.platform, availabilities);
       try {
@@ -311,6 +326,35 @@ function recordUnroutedUsage(
     latencyMs: Date.now() - started,
     error: String(err?.message ?? error).slice(0, 200),
   });
+}
+
+/**
+ * 熔断命中：这个目标跳过（这一次上游往返不花），并留下该留的记录。
+ *
+ * 用量表要留一行：不留的话用量页只看得到打上去的那几条，这批跳过像是没发生过。
+ */
+function skipTrippedTarget(
+  entry: AggregateEntry,
+  target: { group: string; upstreamModel: string },
+  breaker: BreakerVerdict,
+  ctx: Koa.Context,
+  started: number,
+): AuthError {
+  recordAggregateUsage({
+    modelId: entry.id,
+    group: target.group,
+    upstreamModel: target.upstreamModel,
+    ok: false,
+  });
+  const when = breaker.untilMs === null ? "" : `，${cooldownStamp(breaker.untilMs)} 之后再试`;
+  const error = new AuthError(
+    `upstream ${target.group} is tripped (${breaker.reason})`,
+    `上游 ${target.group} 正在熔断（${breaker.reason}${when}），先走别的目标。`,
+    503,
+  );
+  recordUnroutedUsage(entry, target, error, ctx, started);
+  // 恢复时刻说得出来就告诉客户端：它等一会儿再来就是。
+  return breaker.untilMs === null ? error : withRetryAfter(error, breaker.untilMs);
 }
 
 /**
@@ -580,6 +624,8 @@ async function callUpstream(
     // 不冷却账号，别的证据一个都不动，只有「最近几次请求的结果」能看出一个平台
     // 压根发不出去。成功也记，否则「每次都在排队」没有可比的基线。
     noteUpstreamFailure(route.platform, "ok");
+    // 平台级熔断也记一笔：成功就是「这个平台现在发得出去」。
+    noteBreakerOutcome(route.platform, "ok");
   } catch (e) {
     const err = e as AuthError;
     // 客户端走了：答复那一层给客户端的是 499，用量表也记 499，不要记成 500
@@ -597,7 +643,11 @@ async function callUpstream(
       kind?.label ?? route.platform,
     );
     // 失败分类（queued / rate-limit / …）就是判定要的那一格，不再自己判一遍。
-    noteUpstreamFailure(route.platform, classifyUpstreamError(e).kind);
+    const failureKind = classifyUpstreamError(e).kind;
+    noteUpstreamFailure(route.platform, failureKind);
+    // 平台级熔断记的是同一格：可熔断的失败（排队、网络错、5xx）攒够次数就
+    // 开闸，不该熔断的（请求本身的问题、账号的事）它自己会忽略。
+    noteBreakerOutcome(route.platform, failureKind);
     throw e;
   }
 }

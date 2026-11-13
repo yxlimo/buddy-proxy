@@ -233,10 +233,10 @@ check("Qoder 全球区现在是关着的", before.upstreams?.find((u: any) => u.
 
 const configBefore = await admin("ListConfig");
 const keys = (configBefore.items ?? []).map((i: any) => i.key);
-// 面板上这十二个：网关自己的三个、三个超时旋钮、定时任务与快照、签到、Qoder 的
-// 排队重试与「排队时不等待」。这些键的个数是面板的契约：多一个或少一个，说明
-// USER_FACING 那边动了。
-check("面板上是这十二个设置", (configBefore.items ?? []).length === 12, JSON.stringify(keys));
+// 面板上这十三个：网关自己的三个、三个超时旋钮、定时任务与快照、签到、Qoder 的
+// 排队重试与「排队时不等待」、上游级熔断的开关。这些键的个数是面板的契约：
+// 多一个或少一个，说明 USER_FACING 那边动了。
+check("面板上是这十三个设置", (configBefore.items ?? []).length === 13, JSON.stringify(keys));
 check(
   "公布的是网关自己能改的那几个",
   ["REQUIRE_API_KEY", "ADMIN_CORS_ORIGINS"].every((k) => keys.includes(k)),
