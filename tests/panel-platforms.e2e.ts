@@ -131,7 +131,7 @@ test('加账号：账号列变成 1，状态说出「没有可用凭据」这一
     dialog.getByText('在「E2E 账号站」下加一个账号。客户端地址不变。'),
   ).toBeVisible();
 
-  await dialog.getByLabel('别名（可以不填）').fill('探针一号');
+  await dialog.getByLabel('别名').fill('探针一号');
   await markPage(browser);
   await dialog.getByRole('button', { name: '加上' }).click();
   await expect(dialog).toBeHidden();

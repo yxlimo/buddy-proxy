@@ -1,4 +1,4 @@
-// tests/panel-model-billing.e2e.ts — 「自定义模型」弹窗里那行只读的「上游报价 …」。
+// tests/panel-model-billing.e2e.ts — 「自定义模型」弹窗里那行只读的「平台报价 …」。
 //
 // 实现是 `web/src/features/open-platforms/model-billing.ts` 的 billingLine()：
 // 目录里这条模型报了计费就摆一行，写不出来就一个字都不摆。这份用例对着假上游
@@ -83,10 +83,10 @@ async function pickModel(
  * 「什么都不摆」：四条逐个断言，不是只查一个元素。
  *
  * 没报价那条最容易错成 `$0` —— 把「不知道」说成免费。所以币种符号、单位、
- * 「上游报价」这几个字一个都不许出现。
+ * 「平台报价」这几个字一个都不许出现。
  */
 async function expectNoBilling(dialog: Locator): Promise<void> {
-  for (const text of ['¥', '$', '每百万 token', '上游报价']) {
+  for (const text of ['¥', '$', '每百万 token', '平台报价']) {
     // exact: false 才是子串匹配（这个框架里字符串默认整段相等）：
     // 不写它，「¥」只配得上文本恰好是 ¥ 的节点，这条断言就空了。
     await expect(dialog.getByText(text, { exact: false })).toHaveCount(0);
@@ -94,13 +94,13 @@ async function expectNoBilling(dialog: Locator): Promise<void> {
 }
 
 /**
- * 那行只读文字在：「上游报价」这几个字看得见，且弹窗文本里摆着指定的那串价。
+ * 那行只读文字在：「平台报价」这几个字看得见，且弹窗文本里摆着指定的那串价。
  *
  * 它是渲染出来的文本（getByText 找得到），不是输入框里的值；下面另断言
  * 「倍率」那一格还是空的，两者不合并。
  */
 async function expectBillingLine(dialog: Locator, price: string): Promise<void> {
-  await expect(dialog.getByText('上游报价')).toBeVisible();
+  await expect(dialog.getByText('平台报价', { exact: true })).toBeVisible();
   const text = (await dialog.textContent()) ?? '';
   expect(text).toContain(price);
 }
