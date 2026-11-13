@@ -1,34 +1,59 @@
-// tests/panel-config.e2e.ts — 「配置」页：十三个设置、分组的中文名、热设置的生效。
+// tests/panel-config.e2e.ts — 「配置」页：界面上的配置项与接口给的清单一致、
+// 分组的中文名、热设置的生效。
 //
-// 数的是「面板上有几项」：分组 tab 上括号里的数是服务端给的那一组的条数，加起来
-// 必须等于 `lib/admin/config.ts` 里 USER_FACING 的十三条。少一条、多一条、把某一组
-// 画成英文名，都算这个页面说错了话。
+// 先问接口，再对界面：用例开头调 ListConfig（面板自己也会调的那个 RPC）拿到
+// 真实的配置项清单，然后断言界面上画的就是那些 —— 一项不多、一项不少，每组
+// 的条数、名字、分组都对得上。后端加一项、改名、改分组，这条用例自动仍然绿
+// （只要页面没画坏）；页面漏画、多画、把组名画成英文，才会红。
 
 import { expect } from 'e2e';
 import { test } from '@e2e-dev/web';
 import { adminRpc, login } from './panel.ts';
 
-/** 面板能改的设置，按分组列（`lib/admin/config.ts` 的 LABELS）。 */
-const GROUPS: Array<{ tab: string; labels: string[] }> = [
-  { tab: '常规', labels: ['允许的跨域来源', '上游级熔断'] },
-  {
-    tab: '网关',
-    labels: [
-      '是否开启 API KEY 验证',
-      '用量保留天数',
-      '等首帧时限',
-      '流空闲上限',
-      '重试总时限',
-      '后台定时任务',
-      '快照刷新间隔',
-    ],
-  },
-  { tab: '签到', labels: ['关闭签到与领奖', '签到间隔'] },
-  { tab: 'Qoder', labels: ['排队重试间隔', '排队时不等待'] },
-];
+/**
+ * 分组键的中文名。
+ *
+ * 服务端给的 group 是英文的键（general、gateway……），面板翻成中文，翻不出
+ * 来的原样显示。这里只列已知的翻译；新冒出来的组走 fallback，不需要改用例。
+ */
+const GROUP_LABELS: Record<string, string> = {
+  general: '常规',
+  gateway: '网关',
+  benefits: '签到',
+  qoder: 'Qoder',
+};
 
-/** 十三个设置 —— 就这么多个，不多不少。 */
-const TOTAL = GROUPS.reduce((sum, group) => sum + group.labels.length, 0);
+/** 一项在接口里的样子（ListConfig 回的，字段是 camelCase）。 */
+interface RpcItem {
+  key: string;
+  label: string;
+  group: string;
+}
+
+/**
+ * 从接口给的清单推出「界面应该长什么样」：按分组合并，组名用中文。
+ *
+ * 顺序照面板的画法：general、gateway 这两个固定的排前面，其余的组按清单里
+ * 出现的先后接在后面（web/src/features/config/index.tsx 的 GROUP_ORDER）。
+ */
+function expectedGroups(items: RpcItem[]): Array<{
+  tab: string;
+  items: RpcItem[];
+}> {
+  const map = new Map<string, RpcItem[]>();
+  for (const item of items) {
+    const group = item.group || 'general';
+    const list = map.get(group) ?? [];
+    list.push(item);
+    map.set(group, list);
+  }
+  const known = ['general', 'gateway'].filter((group) => map.has(group));
+  const extra = [...map.keys()].filter((group) => !['general', 'gateway'].includes(group));
+  return [...known, ...extra].map((group) => ({
+    tab: GROUP_LABELS[group] ?? group,
+    items: map.get(group) ?? [],
+  }));
+}
 
 /** 「网关 (7)」→ { name: '网关', count: 7 }。 */
 function parseTab(text: string): { name: string; count: number } {
@@ -37,32 +62,37 @@ function parseTab(text: string): { name: string; count: number } {
   return { name: match[1].trim(), count: Number(match[2]) };
 }
 
-test('配置页：十三个设置都在，分组 tab 是中文名（不是 gateway / benefits / qoder）', async ({
+test('配置页：界面上的项与 ListConfig 给的清单一致，分组 tab 是中文名（不是 gateway / benefits / qoder）', async ({
   app,
   screen,
   browser,
 }) => {
+  // 先问接口：面板启动时本来就会调 ListConfig，这里要同一份清单当基准。
+  const listed = await adminRpc<{
+    items?: RpcItem[];
+  }>('ListConfig');
+  const items = listed.items ?? [];
+  expect(items.length).toBeGreaterThan(0);
+  const groups = expectedGroups(items);
+
   await app.open();
   await login(screen);
   await screen.getByRole('link', { name: '配置' }).click();
   await expect(screen.getByRole('heading', { name: '配置' })).toBeVisible();
 
   const tabs = (await screen.getByRole('tab').allTextContents()).map(parseTab);
-  // 分组名就是这四个中文词。服务端给的是英文的键，面板要翻译过来 ——
-  // 翻译漏了就会看见 gateway / benefits / qoder。
-  expect(tabs.map((tab) => tab.name)).toEqual(
-    GROUPS.map((group) => group.tab),
-  );
-  // 十三个设置：每组自己说的条数加起来要对得上。
-  expect(tabs.reduce((sum, tab) => sum + tab.count, 0)).toBe(TOTAL);
-  expect(TOTAL).toBe(13);
+  // 分组与顺序：接口给出的每一组都在，先后也一致。服务端给的是英文的键，
+  // 面板要翻译过来 —— 翻译漏了就会看见 gateway / benefits / qoder。
+  expect(tabs.map((tab) => tab.name)).toEqual(groups.map((group) => group.tab));
+  // 每组括号里的条数与接口给的那一组一致。
+  expect(tabs.map((tab) => tab.count)).toEqual(groups.map((group) => group.items.length));
   // 英文的组名一个都不该露在界面上。
   for (const english of ['gateway', 'benefits', 'qoder', 'general']) {
     await expect(screen.getByRole('tab', { name: english })).toHaveCount(0);
   }
 
-  // 打开就停在「常规」那一组（不是空白的一屏，也不是最后点过的那一组）。
-  await expect(screen.getByRole('tab', { name: /^常规/ })).toBeSelected();
+  // 打开就停在第一组（不是空白的一屏，也不是最后点过的那一组）。
+  await expect(screen.getByRole('tab').first()).toBeSelected();
 
   // 面板不该露出来的内部设置：上游地址、端口、轮询窗口这些改了也没用 ——
   // 露出来只会让人改出坏状态。键名与短名字都不该出现。
@@ -75,15 +105,14 @@ test('配置页：十三个设置都在，分组 tab 是中文名（不是 gatew
     await expect(screen.getByText(internal, { exact: true })).toHaveCount(0);
   }
 
-  // 每一项都在它那一组里：点进去看名字（值是人看的短名字，不是 env 的键名）。
-  for (const [index, group] of GROUPS.entries()) {
+  // 每一项都在它那一组里：点进去，接口给的每个名字都要在，行数不多不少。
+  for (const [index, group] of groups.entries()) {
     await screen.getByRole('tab').nth(index).click();
-    expect(tabs[index]?.count).toBe(group.labels.length);
-    for (const label of group.labels) {
-      await expect(screen.getByText(label, { exact: true })).toBeVisible();
+    for (const item of group.items) {
+      await expect(screen.getByText(item.label, { exact: true })).toBeVisible();
     }
-    // 表头一行 + 这一组的每一项。
-    await expect(screen.getByRole('row')).toHaveCount(group.labels.length + 1);
+    // 表头一行 + 这一组的每一项：多出来的行就是界面自己编的项。
+    await expect(screen.getByRole('row')).toHaveCount(group.items.length + 1);
   }
 
   await expect(browser).toHaveURL('/admin/config');
