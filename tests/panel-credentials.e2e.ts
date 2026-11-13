@@ -3,17 +3,17 @@
 // 凭据栏是「平台」页展开一个平台之后、选中一个账号时下面那张表。它要收口成两
 // 件事：
 //
-//   1. 一个账号最多两条：推理那一段 + 额度那一段（会话型平台只有一条「登录会
-//      话」）。「登录账号」这一类只是账号本身，不给它单列一行 —— 名字与密码
-//      在第 3 条里说完了，多列一行等于把一件东西摆两遍。
+//   1. 一个账号最多两条：推理那一段 + 额度那一段（只有会话的模拟客户端只有一
+//      条「登录会话」）。「登录账号」这一类只是账号本身，不给它单列一行 ——
+//      多列一行等于把一件东西摆两遍。
 //   2. 类型说人话：徽章上写「登录会话」/「推理 Key」/「额度 Cookie」，不是契约
 //      里的枚举值（session / api_key / cookie）。
 //
-// 前置数据分两步：账号用 admin RPC 建（`tests/panel.ts`），凭据用
-// `tests/seed-credentials.ts` 铺进这一次运行的库 —— 真凭据是登录换回来的，而
-// 登录要人在浏览器里点同意，那份答复没录下来（编一份就是假造上游说的话）。
-// 铺进去的形状照抄各家真的存的那一份，值是编造的。上游一律关着：这一套不发一
-// 个请求。
+// 前置数据分两步：账号用 admin RPC 建（`tests/panel.ts`），凭据也走 admin（开放
+// 平台那两段按位置写，`SetProviderKeys`）或者用 `tests/seed-credentials.ts` 铺进
+// 这一次运行的库（模拟客户端的会话是登录换回来的，那份答复没录下来 —— 编一份
+// 就是假造上游说过的话）。铺进去的形状照抄那一家真的存的那一份，值是编造的。
+// 上游一律关着：这一套不发一个请求。
 //
 // 关于「屏幕上不许出现协议值」这一条，断言的边界写清楚：整页文字里出现
 // `session:provider:12`、`account:7#cookie` 这种是**凭据 id**（表里「凭据」那一
@@ -117,28 +117,12 @@ function withoutCredentialIds(text: string): string {
 }
 
 /** 用 `tests/seed-credentials.ts` 把凭据铺进这次运行的库。 */
-function seedCredentials(shape: 'sensenova' | 'tokenrhythm' | 'minimax', accountId: string): void {
+function seedCredentials(shape: 'minimax', accountId: string): void {
   execFileSync(
     process.execPath,
     ['--experimental-strip-types', 'tests/seed-credentials.ts', shape, accountId],
     { env: { ...process.env, BUDDY_DATA_DIR: dataDir() }, stdio: 'pipe' },
   );
-}
-
-/**
- * 铺一个 sensenova 形状的平台与账号：会话 + 账号{账号名, 密码, 推理 key}。
- *
- * 三样都在一个账号上 —— 收口之前这里会列三行（会话、登录账号、推理 key）。
- */
-async function seedSenseNova(
-  platformId: string,
-  label: string,
-  alias: string,
-): Promise<string> {
-  await seedPlatform({ id: platformId, label, kind: 'sensenova' });
-  const account = await addAccount(platformId, alias);
-  seedCredentials('sensenova', account);
-  return account;
 }
 
 /**
@@ -167,91 +151,6 @@ async function kindsOnServer(accountId: string): Promise<string[]> {
     .map((entry) => String(entry.kind ?? ''));
 }
 
-test('凭据栏：sensenova 账号不再有「登录账号」那一行（屏上没有，服务端也没有）', async ({
-  app,
-  screen,
-  browser,
-}) => {
-  const platform = 'e2e-creds-login-row';
-  const account = await seedSenseNova(platform, 'E2E 凭据一号站', '凭据一号');
-  try {
-    // 服务端：账号名与密码是同一个账号上的两格，不再单独成一条凭据。
-    const kinds = await kindsOnServer(account);
-    expect(kinds).not.toContain('login');
-    // 另外两条真的在：不然「没有登录账号」这件事是被「什么都没有」冒充的。
-    expect(kinds).toContain('session');
-    expect(kinds).toContain('api_key');
-
-    await app.open();
-    await openAccountsOf(screen, browser, platform);
-    await expect(credentialTable(screen)).toBeVisible();
-
-    // 屏上：没有任何一行写着「登录账号」。
-    await expect(credentialRows(screen).filter({ hasText: '登录账号' })).toHaveCount(0);
-    const rows = await rowTexts(screen);
-    expect(rows.filter((text) => text.includes('登录账号'))).toHaveLength(0);
-    // 整页也没有（别的地方也别把它画出来）。
-    expect(await pageText(browser)).not.toContain('登录账号');
-  } finally {
-    await dropPlatformAndAccount(platform, account);
-  }
-});
-
-test('凭据栏：类型是中文，屏幕上除了凭据 id 没有 api_key / cookie / session / login', async ({
-  app,
-  screen,
-  browser,
-}) => {
-  const platform = 'e2e-creds-chinese';
-  const account = await seedSenseNova(platform, 'E2E 凭据二号站', '凭据二号');
-  try {
-    await app.open();
-    await openAccountsOf(screen, browser, platform);
-    await expect(credentialTable(screen)).toBeVisible();
-
-    // 「类型」那一列：每一格都必须是那三个中文说法之一，一个例外都不给。
-    const badges = await kindBadges(screen);
-    expect(badges.length).toBeGreaterThan(0);
-    for (const badge of badges) {
-      expect(KINDS as readonly string[]).toContain(badge);
-    }
-    expect(badges).toContain('推理 Key');
-    expect(badges).toContain('登录会话');
-
-    // 整页：除了凭据 id，协议值一个都不许露出来。
-    const readable = withoutCredentialIds(await pageText(browser));
-    for (const word of PROTOCOL_WORDS) {
-      expect(readable).not.toContain(word);
-    }
-    // `login` 连 id 里都不会有：它只可能来自把「登录账号」画出来的那一行。
-    expect(await pageText(browser)).not.toContain('login');
-  } finally {
-    await dropPlatformAndAccount(platform, account);
-  }
-});
-
-test('凭据栏：一个 sensenova 账号恰好两条（推理那一段 + 会话那一段）', async ({
-  app,
-  screen,
-  browser,
-}) => {
-  const platform = 'e2e-creds-two-rows';
-  const account = await seedSenseNova(platform, 'E2E 凭据三号站', '凭据三号');
-  try {
-    await app.open();
-    await openAccountsOf(screen, browser, platform);
-    await expect(credentialTable(screen)).toBeVisible();
-
-    // 恰好两条，不是「不超过两条」：多列一行是这个单要收掉的那件事本身。
-    await expect(credentialRows(screen)).toHaveCount(2);
-    const badges = await kindBadges(screen);
-    expect(badges).toHaveLength(2);
-    expect(badges).toContain('推理 Key');
-    expect(badges).toContain('登录会话');
-  } finally {
-    await dropPlatformAndAccount(platform, account);
-  }
-});
 
 test('凭据栏：只有会话的平台（MiniMax Code）恰好一条，类型是「登录会话」', async ({
   app,
@@ -285,32 +184,57 @@ test('凭据栏：只有会话的平台（MiniMax Code）恰好一条，类型�
   }
 });
 
-test('凭据栏：tokenrhythm 账号也是「推理 Key」+「登录会话」两条，没有「登录账号」', async ({
+test('凭据栏：迁移过来的平台（openai + 七牛额度插件）恰好两行 —— 推理 Key + 额度 Cookie', async ({
   app,
   screen,
   browser,
 }) => {
-  const platform = 'e2e-creds-tokenrhythm';
-  await seedPlatform({ id: platform, label: 'E2E 凭据四号站', kind: 'tokenrhythm' });
+  // 厂商 kind 已经没了，老行迁移成 openai + 原来那个额度插件。凭据那两段因此
+  // 来自两个地方：推理那一把归 kind（openai），额度那一段归插件（platform 行上
+  // 的 quota_plugin）—— 这一条就是「额度逻辑本来就是插件」的证据。
+  const platform = 'e2e-creds-migrated';
+  await seedPlatform({
+    id: platform,
+    label: 'E2E 凭据四号站',
+    kind: 'openai',
+    baseUrl: 'https://legacy.example/v1',
+    quotaPlugin: 'qiniu',
+  });
   const account = await addAccount(platform, '凭据四号');
   try {
-    seedCredentials('tokenrhythm', account);
+    // 两段按位置写：推理 Key，然后是插件要的那一格（七牛的门户 cookie）。
+    // 值都是编造的。
+    const accountKey = 'sk-e2e-creds-key'; // privacy:allow — 编造的样例
+    await adminRpc('SetProviderKeys', {
+      upstreamId: account,
+      keys: [accountKey, 'e2e-portal-cookie'],
+    });
 
     await app.open();
     await openAccountsOf(screen, browser, platform);
     await expect(credentialTable(screen)).toBeVisible();
 
+    // 恰好两条：推理那一段 + 额度那一段，不是「不超过两条」。
     await expect(credentialRows(screen)).toHaveCount(2);
     const badges = await kindBadges(screen);
+    expect(badges).toHaveLength(2);
     expect(badges).toContain('推理 Key');
-    expect(badges).toContain('登录会话');
+    expect(badges).toContain('额度 Cookie');
+    // 类型那一列只说中文：协议值一个例外都不给。
     for (const badge of badges) {
       expect(KINDS as readonly string[]).toContain(badge);
     }
+
+    // 整页也一样：除了凭据 id，协议值一个都不许露出来。
+    const readable = withoutCredentialIds(await pageText(browser));
+    for (const word of PROTOCOL_WORDS) {
+      expect(readable).not.toContain(word);
+    }
     expect(await pageText(browser)).not.toContain('登录账号');
 
-    // 服务端也一样：钱包那一份（账号名与密码）不单独成一条。
+    // 服务端那侧：推理那把是 api_key，插件那一格是 account；没有 login 那一条。
     const kinds = await kindsOnServer(account);
+    expect(kinds).toContain('api_key');
     expect(kinds).not.toContain('login');
   } finally {
     await dropPlatformAndAccount(platform, account);

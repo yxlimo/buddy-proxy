@@ -88,13 +88,19 @@ export async function seedPlatform(input: {
   label: string;
   kind: string;
   baseUrl?: string;
+  /**
+   * 平台行上那个额度插件 id。不给就是不用插件（空串）。
+   *
+   * 要验「额度那一段凭据」的用例自己指定 —— 凭据栏里那几行由插件说了算。
+   */
+  quotaPlugin?: string;
 }): Promise<string> {
   await adminRpc('AddPlatform', {
     id: input.id,
     label: input.label,
     kind: input.kind,
     baseUrl: input.baseUrl ?? 'https://probe.example/v1',
-    quotaPlugin: '',
+    quotaPlugin: input.quotaPlugin ?? '',
   });
   return input.id;
 }

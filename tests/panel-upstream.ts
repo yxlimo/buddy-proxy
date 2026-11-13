@@ -160,6 +160,25 @@ export const qiniuQuotaControl = {
   },
 };
 
+/**
+ * WorkBuddy 签到状态那一条（`/v2/billing/meter/checkin-activity-status`）的开关。
+ *
+ * 默认关着照旧 404：其余用例都是照着「没问到签到状态」的世界写的。要验签到页
+ * 「立即签到」的用例自己打开它 —— 假上游照这份固定正文答，还会先拖
+ * `delayMs`：拖着，「立即签到」那个按钮就能稳定停在「签到中…」。
+ */
+export const workbuddyCheckinControl = {
+  /** 开了才有这条路径的答复；没开就落到下面的 404。 */
+  enabled: false,
+  /** 答复前拖多少毫秒。 */
+  delayMs: 0,
+  /** 回到「没开」：开关与延迟都忘掉。 */
+  reset(): void {
+    this.enabled = false;
+    this.delayMs = 0;
+  },
+};
+
 /** 起过的那个（一个端口上只该有一个）。 */
 let running: Promise<FakeUpstream> | null = null;
 
@@ -355,6 +374,17 @@ async function handle(
       else answer();
       return;
     }
+  }
+
+  // ── WorkBuddy：签到状态（签到页的用例打开；默认关着，见上） ─────────────
+  if (workbuddyCheckinControl.enabled && method === 'POST' && path === '/v2/billing/meter/checkin-activity-status') {
+    const answer = (): void => {
+      // lib/workbuddy/benefits.ts 的 workbuddyCheckin 认的形状：今天已签、连签 3 天。
+      answerJson(200, { code: 0, msg: 'ok', data: { today_checked_in: true, streak_days: 3 } });
+    };
+    if (workbuddyCheckinControl.delayMs > 0) setTimeout(answer, workbuddyCheckinControl.delayMs);
+    else answer();
+    return;
   }
 
   // ── 开放平台：模型目录 ───────────────────────────────────────────────

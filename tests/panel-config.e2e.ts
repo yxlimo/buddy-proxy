@@ -1,7 +1,7 @@
-// tests/panel-config.e2e.ts — 「配置」页：十二个设置、分组的中文名、热设置的生效。
+// tests/panel-config.e2e.ts — 「配置」页：十三个设置、分组的中文名、热设置的生效。
 //
 // 数的是「面板上有几项」：分组 tab 上括号里的数是服务端给的那一组的条数，加起来
-// 必须等于 `lib/admin/config.ts` 里 USER_FACING 的十二条。少一条、多一条、把某一组
+// 必须等于 `lib/admin/config.ts` 里 USER_FACING 的十三条。少一条、多一条、把某一组
 // 画成英文名，都算这个页面说错了话。
 
 import { expect } from 'e2e';
@@ -10,7 +10,7 @@ import { adminRpc, login } from './panel.ts';
 
 /** 面板能改的设置，按分组列（`lib/admin/config.ts` 的 LABELS）。 */
 const GROUPS: Array<{ tab: string; labels: string[] }> = [
-  { tab: '常规', labels: ['允许的跨域来源'] },
+  { tab: '常规', labels: ['允许的跨域来源', '上游级熔断'] },
   {
     tab: '网关',
     labels: [
@@ -27,7 +27,7 @@ const GROUPS: Array<{ tab: string; labels: string[] }> = [
   { tab: 'Qoder', labels: ['排队重试间隔', '排队时不等待'] },
 ];
 
-/** 十二个设置 —— 就这么多个，不多不少。 */
+/** 十三个设置 —— 就这么多个，不多不少。 */
 const TOTAL = GROUPS.reduce((sum, group) => sum + group.labels.length, 0);
 
 /** 「网关 (7)」→ { name: '网关', count: 7 }。 */
@@ -37,7 +37,7 @@ function parseTab(text: string): { name: string; count: number } {
   return { name: match[1].trim(), count: Number(match[2]) };
 }
 
-test('配置页：十二个设置都在，分组 tab 是中文名（不是 gateway / benefits / qoder）', async ({
+test('配置页：十三个设置都在，分组 tab 是中文名（不是 gateway / benefits / qoder）', async ({
   app,
   screen,
   browser,
@@ -53,9 +53,9 @@ test('配置页：十二个设置都在，分组 tab 是中文名（不是 gatew
   expect(tabs.map((tab) => tab.name)).toEqual(
     GROUPS.map((group) => group.tab),
   );
-  // 十二个设置：每组自己说的条数加起来要对得上。
+  // 十三个设置：每组自己说的条数加起来要对得上。
   expect(tabs.reduce((sum, tab) => sum + tab.count, 0)).toBe(TOTAL);
-  expect(TOTAL).toBe(12);
+  expect(TOTAL).toBe(13);
   // 英文的组名一个都不该露在界面上。
   for (const english of ['gateway', 'benefits', 'qoder', 'general']) {
     await expect(screen.getByRole('tab', { name: english })).toHaveCount(0);
