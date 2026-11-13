@@ -26,21 +26,8 @@ import { Separator } from '@/components/ui/separator'
 import { QuotaSummary } from '@/features/balance/quota'
 import { DailyCheckinPanel } from '@/features/benefits/daily-checkin'
 import { useSystemStatus, useUsageSummary } from '@/features/overview/api'
+import { credentialKindLabel } from '@/lib/credential-kind'
 import { formatCompact, formatCount, formatUptime } from '@/lib/format'
-
-/**
- * 凭据是哪一种。
- *
- * 服务端给的是契约里的枚举值（session / api_key / login / plan_key）：那一串
- * 对运维等于内部术语，这里换成看得懂的词。没登记的值不摆出来 —— 不把枚举值
- * 原样给用户看。
- */
-const CREDENTIAL_KIND_LABELS: Record<string, string> = {
-  session: '登录会话',
-  api_key: 'API Key',
-  login: '账号密码',
-  plan_key: '套餐 key',
-}
 
 export function OverviewPage() {
   const status = useSystemStatus()
@@ -151,8 +138,8 @@ export function OverviewPage() {
                     {upstream.credential ? (
                       <span className='text-xs text-muted-foreground'>
                         凭据
-                        {CREDENTIAL_KIND_LABELS[upstream.credential.kind]
-                          ? `：${CREDENTIAL_KIND_LABELS[upstream.credential.kind]}`
+                        {credentialKindLabel(upstream.credential.kind)
+                          ? `：${credentialKindLabel(upstream.credential.kind)}`
                           : ''}
                       </span>
                     ) : null}

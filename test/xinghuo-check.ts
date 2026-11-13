@@ -147,7 +147,7 @@ check("加好了讯飞星火的账号", account.ok && accountId !== "", account.
   const row = listAccounts().find((a) => a.id === accountId);
   check("账号在列表里", row !== undefined, accountId);
   check("状态不是 missing", row?.status !== "missing", String(row?.status));
-  check("说是有可用的 key", String(row?.detail ?? "").includes("key"), String(row?.detail));
+  check("说是有可用的推理 Key", row?.detail === "有可用的推理 Key", String(row?.detail));
 }
 
 /* ------------------------------------------------------------------ *

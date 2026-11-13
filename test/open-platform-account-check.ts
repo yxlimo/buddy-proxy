@@ -118,7 +118,7 @@ section("填一把 key");
   check("凭据表里有一条", rows.length === 1, JSON.stringify(rows));
   const row = rows[0];
   check("形态是 api_key", row?.kind === "api_key", String(row?.kind));
-  check("名字是推理 API key", row?.label === "推理 API key", String(row?.label));
+  check("名字是推理 Key", row?.label === "推理 Key", String(row?.label));
   check("id 是凭据在库里的地址", row?.id === openPlatformKeyId(accountId), String(row?.id));
   check("掩码有值", Boolean(row?.masked), String(row?.masked));
   check("指纹有值", Boolean(row?.fingerprint), String(row?.fingerprint));
@@ -238,7 +238,7 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("SenseNova：写进去一把", result.count === 1, String(result.count));
   check(
     "SenseNova：文案说写了什么",
-    result.message.includes("SenseNova") && result.message.includes("API key"),
+    result.message.includes("SenseNova") && result.message.includes("推理 Key"),
     result.message,
   );
   check(
@@ -322,7 +322,7 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("TokenRhythm：写进去一把", result.count === 1, String(result.count));
   check(
     "TokenRhythm：文案说写了什么",
-    result.message.includes("TokenRhythm") && result.message.includes("API key"),
+    result.message.includes("TokenRhythm") && result.message.includes("推理 Key"),
     result.message,
   );
   check(

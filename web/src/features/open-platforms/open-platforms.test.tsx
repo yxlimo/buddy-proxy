@@ -744,7 +744,9 @@ describe('面板上的开放平台', () => {
               fields: [
                 create(QuotaPluginFieldSchema, {
                   name: 'account',
-                  label: '门户 cookie',
+                  // 名字只有一处产出：插件自己的声明（lib/qiniu/quota-plugin.ts），
+                  // 经契约原样过来。这里拄的就是后端发的那个值。
+                  label: '额度 Cookie',
                   secret: true,
                 }),
               ],
@@ -781,10 +783,10 @@ describe('面板上的开放平台', () => {
     expect(
       within(dialog).getByText('这个插件要这几段凭据')
     ).toBeInTheDocument()
-    expect(within(dialog).getByText(/门户 cookie/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/额度 Cookie/)).toBeInTheDocument()
     // 没有填凭据的输入框。
     expect(
-      within(dialog).queryByLabelText(/门户 cookie/)
+      within(dialog).queryByLabelText(/额度 Cookie/)
     ).not.toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('button', { name: '保存' }))

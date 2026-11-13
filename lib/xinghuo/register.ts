@@ -8,11 +8,13 @@
 // quotas / outOfCredits / recoverAt。
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { providerSecretId } from "../credential-ids.ts";
+import { keyPlan, secretRecord, valueSlot } from "../kinds/shared.ts";
 import { catalogModelsFromRow } from "../catalog-models.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 import { declareNoQuotaPlugin } from "../quota-plugins.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
-import { xinghuoInferenceKey, xinghuoStatus } from "./account.ts";
+import { xinghuoInferenceKey, xinghuoStatus, writeXinghuoKey } from "./account.ts";
 import { XINGHUO_INFER_BASE } from "./config.ts";
 import { XINGHUO_MODELS, xinghuoCatalogModels } from "./models.ts";
 
@@ -36,6 +38,27 @@ export const xinghuoKind = registerCompatiblePlatform({
   defaultBaseUrl: XINGHUO_INFER_BASE,
   // 只有这一把 key：它既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
+  // 一段凭据：推理 key。星火没有额度接口，所以没有第二段可列。
+  credentials: keyPlan({
+    title: "讯飞星火 API Key",
+    slots: () => [
+      valueSlot({
+        label: "推理 Key",
+        form: "api_key",
+        id: (account) => providerSecretId(account.id, "account"),
+        value: (account) => xinghuoInferenceKey(account.id),
+        updatedAt: (account) =>
+          secretRecord(providerSecretId(account.id, "account")).updatedAt,
+      }),
+    ],
+    field: {
+      name: "api-key",
+      label: "推理 Key",
+      hint: "在讯飞星火控制台创建的推理 key，整串粘贴",
+      placeholder: "在讯飞星火控制台复制的 API Key",
+    },
+    write: (account, value) => writeXinghuoKey(account.id, value),
+  }),
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => xinghuoInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(xinghuoStatus(provider.id), "api_key"),

@@ -5,8 +5,12 @@
 // whose credit expires first.
 
 import { catalogModelsFromRow } from "../catalog-models.ts";
+import { providerSecretId } from "../credential-ids.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
-import { tokenRhythmCredentialOf } from "../tokenrhythm/accounts.ts";
+import {
+  loadSession as loadTokenRhythmSession,
+  tokenRhythmCredentialOf,
+} from "../tokenrhythm/accounts.ts";
 // 地址在叶子模块里：这一层与 accounts.ts 互相引着，从那边读常量会在模块求值
 // 期撞上「还在初始化」。
 import { TOKENRHYTHM_API_BASE, TOKENRHYTHM_INFER_BASE } from "../tokenrhythm/config.ts";
@@ -19,7 +23,8 @@ import { TOKENRHYTHM_WALLET_PLUGIN_ID } from "../tokenrhythm/quota-plugin-id.ts"
 // 一头就有了两个来源，两边不一致时面板自相矛盾。
 import "../tokenrhythm/quota-plugin.ts";
 import { tokenRhythmStatus } from "../tokenrhythm/wallet.ts";
-import { fromUpstreamStatus, registerKind } from "./shared.ts";
+import { writeTokenRhythmKey } from "../tokenrhythm/keys.ts";
+import { fromUpstreamStatus, keyPlan, registerKind, sessionSlot, valueSlot } from "./shared.ts";
 
 registerKind({
   kind: "tokenrhythm",
@@ -37,6 +42,30 @@ registerKind({
   defaultQuotaPlugin: TOKENRHYTHM_WALLET_PLUGIN_ID,
   // 推理用的是钱包里的那把 api key：会话只用来登录与查余额。
   inferWith: "api_key",
+  // 一个账号一个钱包：推理 key 与登录会话各一段，key 先列（干活的那一段在
+  // 前面）。登录账号（account / password）不列：它既不是推理凭据，也不是额度
+  // 凭据，面板上看不出它能干什么 —— 它留在库里（cookie 丢了要靠它重新登录）。
+  credentials: keyPlan({
+    title: "TokenRhythm API Key",
+    slots: () => [
+      valueSlot({
+        label: "推理 Key",
+        form: "api_key",
+        id: (account) => `${providerSecretId(account.id, "account")}#api_key`,
+        value: (account) => String(tokenRhythmCredentialOf(account.id)?.apiKey ?? ""),
+      }),
+      // 会话 cookie 只用来登录与查余额：转发要的是那把 api key。它会自己过期
+      // 作废，所以读的时候先过平台自己的校验。
+      sessionSlot({ load: (accountId) => loadTokenRhythmSession(accountId) }),
+    ],
+    field: {
+      name: "api-key",
+      label: "推理 Key",
+      hint: "钱包里那把推理用的 key；留空表示清掉它",
+      placeholder: "sk-…",
+    },
+    write: (account, value) => writeTokenRhythmKey(account.id, value),
+  }),
   // 明文 key：转发与「问上游要模型目录」要的是同一把，各自去取一遍就是两份知识。
   keyOf: (provider, accountId) => tokenRhythmCredentialOf(accountId ?? provider.id)?.apiKey ?? "",
   credential: (provider) => fromUpstreamStatus(tokenRhythmStatus(provider.id), "session"),

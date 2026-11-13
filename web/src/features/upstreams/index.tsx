@@ -34,6 +34,7 @@ import {
   useAddAccount,
   useDeleteAccount,
   useSetAccountEnabled,
+  useProviderKinds,
   useUpstreams,
   useUpdateProvider,
 } from '@/features/upstreams/api'
@@ -63,6 +64,7 @@ import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
 import {
   providerKeyAccess,
+  providerKindsFrom,
   quotaRegistryFrom,
 } from '@/features/accounts/provider-key-fields'
 import { useSetProviderKeys } from '@/features/accounts/api'
@@ -98,6 +100,8 @@ export function UpstreamsPage() {
   const login = useAccountLogin()
   // 开放平台：面板上加的那些平台（表里的行），跟播种的模拟客户端不是一回事。
   const plugins = useQuotaPlugins()
+  // 账号类型那一份：填凭据那几格由它说（面板不留自己那张按 kind 查的表）。
+  const providerKindsQuery = useProviderKinds()
   const kindsQuery = useListPlatformKinds()
   const addPlatform = useAddPlatform()
   const updatePlatform = useUpdatePlatform()
@@ -181,6 +185,13 @@ export function UpstreamsPage() {
     error: plugins.error,
     plugins: plugins.data?.plugins,
   })
+  // 账号类型那一份：种类 → 标题与格子。没到手时凭据入口不放行（见 accessOf）。
+  const providerKinds = providerKindsFrom({
+    isPending: providerKindsQuery.isPending,
+    isError: providerKindsQuery.isError,
+    error: providerKindsQuery.error,
+    kinds: providerKindsQuery.data?.kinds,
+  })
   // 那一类平台的凭据入口：能不能填凭据、填哪几格（位置就是顺序，
   // SetProviderKeys 按位置读）。
   const accessOf = (upstream: Upstream) =>
@@ -189,6 +200,7 @@ export function UpstreamsPage() {
       isOpenPlatform: upstream.isOpenPlatform,
       platformLabel: upstream.label || upstream.id,
       quotaPlugin: upstream.quotaPlugin,
+      kinds: providerKinds,
       registry,
     })
   const keysTarget = keysFor ? findAccount(list, keysFor) : undefined

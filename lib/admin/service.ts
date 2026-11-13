@@ -41,6 +41,7 @@ import {
   ImportLoginTokenResponseSchema,
   ListAccountsResponseSchema,
   ListConfigResponseSchema,
+  CredentialFieldSchema,
   ListProviderKindsResponseSchema,
   ProviderKindSchema,
   ListCredentialsResponseSchema,
@@ -53,6 +54,7 @@ import {
   SetModelOverridesResponseSchema,
   DeleteModelOverrideResponseSchema,
   ModelOverrideSchema,
+  ModelBillingSchema,
   PlatformKindSchema,
   ListUpstreamsResponseSchema,
   ListUsageEventsResponseSchema,  LoginSessionSchema,
@@ -88,6 +90,8 @@ import {
   UsageSummarySchema,
 } from "../gen/buddy/admin/v1/admin_pb.ts";
 import { adminTokenSet } from "./token.ts";
+// 计费的形状在 lib/catalog-billing.ts 一处定：这一层只把它摆成契约里的样子。
+import type { ModelBilling } from "../catalog-billing.ts";
 import { configItems, knownConfigKeys, pendingRestart, setConfigValue } from "./config.ts";
 import {
   freshHealthSnapshot,
@@ -700,6 +704,29 @@ function modelOverrideRow(message: ModelOverride): ModelOverrideRow {
   };
 }
 
+/**
+ * 上游报的计费 → 契约那一头的形状。
+ *
+ * 分时段倍率只送 factor：`when` 是个嵌套的时段表达式，面板这一格用不上，抄过去
+ * 只会多一份没人读的解析。
+ */
+function modelBillingMessage(billing: ModelBilling) {
+  return create(ModelBillingSchema, {
+    mode: billing.mode,
+    // 没有币种就空串：契约里这一格是 string（没 presence），空串是「不知道」。
+    currency: billing.currency ?? "",
+    ...(billing.inputPerMillion === undefined ? {} : { inputPerMillion: billing.inputPerMillion }),
+    ...(billing.outputPerMillion === undefined ? {} : { outputPerMillion: billing.outputPerMillion }),
+    ...(billing.cacheReadPerMillion === undefined
+      ? {}
+      : { cacheReadPerMillion: billing.cacheReadPerMillion }),
+    ...(billing.credits === undefined ? {} : { credits: billing.credits }),
+    multipliers: (billing.multipliers ?? []).map((multiplier) => multiplier.factor),
+    // 上游报了但不是价格（全 0 又没说币种与单位）：这是结论，不是空。
+    unknown: billing.unknown === true,
+  });
+}
+
 /** 管理接口的实现。 */
 export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   /* ---------------- 系统 ---------------- */
@@ -750,6 +777,17 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           // 这一类上游支持哪几个策略：面板的选项从这里来。
           // 兜底在 platformPolicies 里（没登记的种类只给「单一」）。
           policies: k.policies.map(policyEnum),
+          // 填凭据那几格也由种类说：面板不自己留一张按 kind 查的表
+          // （那样一份知识就有两处会走样）。
+          credentialTitle: k.credentialTitle,
+          credentialFields: k.credentialFields.map((f) =>
+            create(CredentialFieldSchema, {
+              name: f.name,
+              label: f.label,
+              hint: f.hint ?? "",
+              placeholder: f.placeholder ?? "",
+            }),
+          ),
         }),
       ),
     });
@@ -1370,6 +1408,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
           // 没人报价就不写这一格：契约里它是 optional，缺键是「不知道」，0 是
           // 「免费」—— 两件事不能在答复里糊成一个。
           ...(model.credits === undefined ? {} : { credits: model.credits }),
+          // 上游没报计费就不写这一格（面板据此不显示价格）。它与上面那个 credits
+          // 不是一回事，所以不合并、不互相覆盖。
+          ...(model.billing === undefined ? {} : { billing: modelBillingMessage(model.billing) }),
         }),
       ),
     });

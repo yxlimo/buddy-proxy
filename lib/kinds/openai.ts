@@ -20,6 +20,7 @@ import { openPlatformKeyOf } from "../open-platform-credentials.ts";
 // 常量，转出来等于把环用回来了，现在能跑只靠依赖求值顺序。
 import { openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { openPlatformPlan } from "./shared.ts";
 import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { catalogModelsFromRow, type CatalogModel } from "../catalog-models.ts";
@@ -73,6 +74,9 @@ export const openaiKind = registerCompatiblePlatform({
   login: "api_key",
   // 那一把 key 既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
+  // 凭据形状与 Anthropic 那个方言的一模一样：一把推理 key，加上平台所选额度
+  // 插件要的那几段。
+  credentials: openPlatformPlan(),
   // 地址是表里那一行的。拿不到时返回空串，不抛：抛出去会让「平台列表」这类
   // 只读路径也炸。地址为空的话转发层只会看到一个笼统的上游错误（fetch 一个
   // 空地址会 TypeError，转发层把它当成上游 5xx），所以空地址在写入侧就被

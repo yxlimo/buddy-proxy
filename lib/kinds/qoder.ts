@@ -7,6 +7,7 @@ import { qoderCatalogModels } from "../catalog-models.ts";
 import {
   fromUpstreamStatus,
   registerKind,
+  sessionOnlyPlan,
   type CreditLotView,
   type HealthSnapshot,
   type ProviderRow,
@@ -73,6 +74,8 @@ registerKind({
   },
   // 推理用的就是登录会话：access token 本身是推理凭据。
   inferWith: "session",
+  // 凭据只有登录会话。
+  credentials: sessionOnlyPlan({ title: "Qoder 的凭据" }),
   credential: (provider) => fromUpstreamStatus(qoderStatus(provider.id), "session"),
   models: (provider) => qoderCatalogModels(qoderModelsForRegion(qoderRegionOf(provider.id))),
   quotas: (provider, snapshot) => qoderQuotas(provider, snapshot),

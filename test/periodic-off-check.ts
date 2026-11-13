@@ -54,6 +54,8 @@ function stubKind(kind: string): void {
       detail: "",
       generation: 0,
     }),
+    // 凭据形状不归这些测试管：只登记一个空形状的声明（凭据这一单不在这里验）。
+    credentials: { title: "", slots: () => [], fields: () => [], write: () => 0 },
     models: () => [],
     quotas: () => [],
     outOfCredits: () => false,

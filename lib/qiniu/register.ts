@@ -10,6 +10,8 @@
 // （lib/quota-state.ts）。
 
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { providerSecretId } from "../credential-ids.ts";
+import { secretRecord, valueSlot } from "../kinds/shared.ts";
 import type { ProviderRow } from "../providers.ts";
 import { declareNoLoginFlow } from "../login-flow.ts";
 import { catalogModelsFromRow } from "../catalog-models.ts";
@@ -17,7 +19,7 @@ import { catalogModelsFromRow } from "../catalog-models.ts";
 import { openPlatformOf } from "../open-platforms.ts";
 import { outOfCreditsOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
-import { qiniuInferenceKey, qiniuStatus } from "./account.ts";
+import { qiniuAccountOf, qiniuInferenceKey, qiniuStatus, writeQiniuAccount } from "./account.ts";
 import { QINIU_INFER_BASE } from "./config.ts";
 // 插件 id 从没有依赖的地方读（lib/qiniu/quota-plugin-id.ts）：插件模块与本模块
 // 互相引用，从插件对象上取 id 会在求值期撞上「还在初始化」。
@@ -49,6 +51,54 @@ export const qiniuKind = registerCompatiblePlatform({
   defaultQuotaPlugin: QINIU_QUOTA_PLUGIN_ID,
   // 推理用的是那把 API key：门户 cookie 只用来查额度。
   inferWith: "api_key",
+  // 两段凭据，两段都在同一条记录里（:account）：推理 key 与门户 cookie。
+  //
+  // 两者不能互换：用 key 去问门户问不出额度，用 cookie 去推理也不行。所以额度
+  // 读不到不是错误 —— 推理照走，额度是「不知道」。
+  credentials: {
+    title: "七牛云凭据",
+    slots: () => {
+      const recordId = (account: { id: string }) => providerSecretId(account.id, "account");
+      return [
+        valueSlot({
+          label: "推理 Key",
+          form: "api_key",
+          id: recordId,
+          value: (account) => qiniuInferenceKey(account.id),
+          updatedAt: (account) => secretRecord(recordId(account)).updatedAt,
+        }),
+        // 门户 cookie 是同一份记录里的另一段：id 用派生的写法（#cookie），免得
+        // 造一个 parseCredentialId 认不出来的后缀。它不是推理凭据。
+        valueSlot({
+          label: "额度 Cookie",
+          form: "cookie",
+          id: (account) => `${recordId(account)}#cookie`,
+          value: (account) => String(qiniuAccountOf(account.id)?.portalCookie ?? ""),
+          updatedAt: (account) => secretRecord(recordId(account)).updatedAt,
+        }),
+      ];
+    },
+    fields: () => [
+      {
+        name: "api-key",
+        label: "推理 Key",
+        hint: "发模型请求用的那一把",
+        placeholder: "sk-…",
+      },
+      {
+        name: "portal-cookie",
+        label: "额度 Cookie",
+        hint: "只用来查资源包额度，可以留空",
+        placeholder: "c=…",
+      },
+    ],
+    // 位置就是顺序：第一段是 key，第二段是 cookie。空的那段表示清掉它。
+    write: (account, values) =>
+      writeQiniuAccount(account.id, {
+        apiKey: String(values[0] ?? ""),
+        portalCookie: String(values[1] ?? ""),
+      }),
+  },
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => qiniuInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(qiniuStatus(provider.id), "api_key"),

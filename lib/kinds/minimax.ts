@@ -13,6 +13,7 @@ import {
   type ProviderRow,
   type QuotaView,
   type TokenPlanView,
+  sessionOnlyPlan,
 } from "./shared.ts";
 import { credentialStatus as minimaxCredentialStatus } from "../minimax/auth.ts";
 import { refreshSession as refreshMiniMaxSession } from "../minimax/oauth.ts";
@@ -116,6 +117,14 @@ registerKind({
   baseUrl: () => MINIMAX_UPSTREAM.replace(/\/messages$/, ""),
   // 推理用的就是登录会话：access token 本身是推理凭据，没有第二把 key。
   inferWith: "session",
+  // 凭据只有登录会话：额度也跟着它走，没有第二把 key 可填。
+  //
+  // 「这一类不收 key」这句答复带着缘故（面板上早就是这个意思）；别的登录型平台
+  // 不写它：它们的答复是「没有这个账号」，写上去就换了意思。
+  credentials: sessionOnlyPlan({
+    title: "MiniMax Code 的凭据",
+    noKeyNote: "it logs in, there is no key to write",
+  }),
   credential: (provider) => {
     const raw = minimaxCredentialStatus(provider.id);
     const view = fromUpstreamStatus(raw, "session");

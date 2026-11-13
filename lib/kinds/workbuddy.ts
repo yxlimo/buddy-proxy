@@ -7,6 +7,7 @@ import { workbuddyCatalogModels } from "../catalog-models.ts";
 import {
   fromUpstreamStatus,
   registerKind,
+  sessionOnlyPlan,
   type HealthSnapshot,
   type ProviderRow,
   type QuotaView,
@@ -87,6 +88,8 @@ registerKind({
   baseUrl: (provider) => WORKBUDDY_ENDPOINTS[regionFrom(provider.region)].base,
   // 推理用的就是登录会话：access token 本身是推理凭据。
   inferWith: "session",
+  // 凭据只有登录会话。
+  credentials: sessionOnlyPlan({ title: "WorkBuddy 的凭据" }),
   credential: (provider) => fromUpstreamStatus(workbuddyStatus(provider.id), "session"),
   // 目录是区域的：cn 和 global 各自发布一份，不能共用。发布的那一份不是抓回来的
   // 那一份：cn 以代码表为准，上游只补字段（见 workbuddyPublishList）。

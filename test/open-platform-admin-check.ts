@@ -1168,8 +1168,35 @@ const qiniu = (plugins.plugins ?? []).find((p) => p.id === "qiniu");
 check("七牛那个插件在", Boolean(qiniu), show((plugins.plugins ?? []).map((p) => p.id)));
 check("它的名字是七牛云资源包", qiniu?.label === "七牛云资源包", String(qiniu?.label));
 check("它要的那一段凭据叫 account", qiniu?.fields?.[0]?.name === "account", show(qiniu?.fields?.[0]));
-check("那一段叫门户 cookie", qiniu?.fields?.[0]?.label === "门户 cookie", show(qiniu?.fields?.[0]));
 check("那一段要遮起来显示", qiniu?.fields?.[0]?.secret === true, show(qiniu?.fields?.[0]));
+
+// 每一格的名字只有一处产出：插件自己的声明。契约上发出去的必须就是它 ——
+// 面板拿它画那一格，凭据行上的 label 也是同一个值。逐个插件逐段比，不手写
+// 一份「应当叫什么」：手写的那份就是第二套词的源头。
+const { allQuotaPlugins } = await import("../lib/quota-plugins.ts");
+for (const declared of allQuotaPlugins()) {
+  const sent = (plugins.plugins ?? []).find((p) => p.id === declared.id);
+  check(`插件 ${declared.id}：上了契约`, Boolean(sent), declared.id);
+  if (!sent) continue;
+  check(
+    `插件 ${declared.id}：名字与声明一致`,
+    sent.label === declared.label,
+    `契约 ${sent.label}，声明 ${declared.label}`,
+  );
+  check(
+    `插件 ${declared.id}：段数与声明一致`,
+    (sent.fields ?? []).length === declared.fields.length,
+    `契约 ${(sent.fields ?? []).length}，声明 ${declared.fields.length}`,
+  );
+  declared.fields.forEach((field, i) => {
+    const got = sent.fields?.[i];
+    check(
+      `插件 ${declared.id}：第 ${i + 1} 格的名字就是声明里的 label`,
+      got?.name === field.name && got?.label === field.label && got?.secret === field.secret,
+      `契约 ${show(got)}，声明 ${show(field)}`,
+    );
+  });
+}
 
 /* ------------------------------------------------------------------ *
  * 7. 策略对开放平台生效

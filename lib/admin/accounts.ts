@@ -7,12 +7,12 @@
 // 敏感的值只写不读：列表里给的是掩码与指纹。
 
 import crypto from "node:crypto";
-import { deleteProviderCredentials, deleteProviderRow, listProviders, provider, providerSecretId } from "../providers.ts";
-import { getSecret, listSecrets } from "../store.ts";
-import { clearDeadSession, deadSession } from "../session.ts";
+import { deleteProviderCredentials, deleteProviderRow, listProviders, provider } from "../providers.ts";
+import { getSecret } from "../store.ts";
+import { clearDeadSession } from "../session.ts";
 import { authLog, tokenFingerprint } from "../credential.ts";
 import { dataDir } from "../paths.ts";
-import { kindOf } from "../provider-kinds.ts";
+import { credentialsOfKind, kindOf, type CredentialSlot, type SlotReading } from "../provider-kinds.ts";
 // The kinds register themselves; importing the file is what makes them known.
 // 这一条 import 绕成 accounts → kinds → … → platform-state → accounts 的环，
 // 所以环上的模块不能在求值期读别人的常量（这里读的都是函数，调用时才取值）。
@@ -23,19 +23,16 @@ import { checkAccountHealth } from "../qoder/credits.ts";
 import { loadSession as loadWorkBuddySession } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { zcodeStatus } from "../zcode/auth.ts";
-import { qiniuAccountId, qiniuAccountOf } from "../qiniu/account.ts";
-import { xinghuoAccountId, xinghuoAccountOf } from "../xinghuo/account.ts";
-import { clearOpenPlatformKey, openPlatformKeyId, openPlatformKeyOf } from "../open-platform-credentials.ts";
+import { clearOpenPlatformKey } from "../open-platform-credentials.ts";
 import { quotaPluginOf } from "../quota-plugins.ts";
-import { pluginFieldOf } from "../quota-plugin-credentials.ts";
-import type { OpenPlatformRow } from "../open-platforms.ts";
+import { openPlatformOf } from "../open-platforms.ts";
+import { fetchOpenPlatformModels } from "../open-platform-catalog.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";
 import { internAiInferenceKey } from "../intern-ai/transport.ts";
 import {
   forgetTokenRhythmCredential,
   loadSession as loadTokenRhythmSession,
   login as loginTokenRhythm,
-  sessionId as tokenRhythmSessionId,
   tokenRhythmCredentialOf,
 } from "../tokenrhythm/accounts.ts";
 import { wallet as tokenRhythmWallet } from "../tokenrhythm/wallet.ts";
@@ -70,7 +67,7 @@ export interface CredentialRow {
   accountId: string;
   /** 账号属于哪个平台。凭据挂在账号上，平台是它所在的那一层。 */
   platform: string;
-  /** session / api_key / login。 */
+  /** session / api_key / cookie。 */
   kind: string;
   /**
    * 这条凭据能不能拿去推理。
@@ -121,326 +118,59 @@ function maskOf(value: string): string {
   return value ? tokenFingerprint(value) : "";
 }
 
-/** 一条会话凭据的样子。会话里的东西各家不一样，所以值由外面给。 */
-function sessionRow(
-  id: string,
-  account: ProviderRow,
-  label: string,
-  raw: any,
-  inference: boolean,
-  updatedAt = 0,
-): CredentialRow {
-  if (!raw) {
-    return {
-      id,
-      accountId: account.id,
-      platform: account.platform,
-      kind: "session",
-      label,
-      inference,
-      masked: "",
-      fingerprint: "",
-      status: CredentialState.MISSING,
-      generation: 0,
-      expiresAt: 0,
-      lastOkAt: 0,
-      lastError: "",
-      updatedAt: 0,
-    };
-  }
-  // ZCode 的会话里令牌叫 token（zcode JWT），别的那几个叫 accessToken。
-  const token = String(raw.accessToken ?? raw.cookie ?? raw.token ?? "");
-  const expiresAt = Number(raw.expiresAtMs ?? 0);
-  const expired = expiresAt > 0 && expiresAt <= Date.now();
+/** 一条凭据读出来是什么状态：会话过没过期、平台拒过没有。 */
+function statusOf(reading: SlotReading): CredentialState {
+  if (!reading.present) return CredentialState.MISSING;
   // 平台拒过这份会话：它已经作废了，重新授权才有新的。
-  const refused = deadSession(id);
+  if (reading.session?.refused) return CredentialState.EXPIRED;
+  const expiresAt = reading.session?.expiresAt ?? 0;
+  if (expiresAt > 0 && expiresAt <= Date.now()) return CredentialState.EXPIRED;
+  return CredentialState.USABLE;
+}
+
+/** 声明里的一段读成面板上的一行。 */
+function rowOf(account: ProviderRow, slot: CredentialSlot, reading: SlotReading): CredentialRow {
   return {
-    id,
+    id: reading.id,
     accountId: account.id,
     platform: account.platform,
-    kind: "session",
-    label,
-    inference,
-    masked: maskOf(token),
-    fingerprint: fingerprintOf(token),
-    status: refused || expired ? CredentialState.EXPIRED : CredentialState.USABLE,
-    generation: Number(raw.generation ?? 0),
-    expiresAt,
-    lastOkAt: Number(raw.refreshedAtMs ?? raw.obtainedAtMs ?? raw.loginAtMs ?? 0),
-    lastError: refused ? "这份会话已经失效，需要重新授权" : "",
-    updatedAt,
+    kind: slot.form,
+    inference: canInfer(account.kind, slot.form),
+    label: slot.label,
+    masked: maskOf(reading.value),
+    fingerprint: fingerprintOf(reading.value),
+    status: statusOf(reading),
+    generation: reading.session?.generation ?? 0,
+    expiresAt: reading.session?.expiresAt ?? 0,
+    lastOkAt: reading.session?.lastOkAt ?? 0,
+    lastError: reading.session?.refused ? "这份会话已经失效，需要重新授权" : "",
+    updatedAt: reading.updatedAt,
   };
-}
-
-/** 一条不带会话的凭据（key、登录账号）。 */
-function plainRow(
-  id: string,
-  account: ProviderRow,
-  form: string,
-  label: string,
-  value: string,
-  inference: boolean,
-  updatedAt = 0,
-): CredentialRow {
-  return {
-    id,
-    accountId: account.id,
-    platform: account.platform,
-    kind: form,
-    label,
-    inference,
-    masked: maskOf(value),
-    fingerprint: fingerprintOf(value),
-    status: value ? CredentialState.USABLE : CredentialState.MISSING,
-    generation: 0,
-    expiresAt: 0,
-    lastOkAt: 0,
-    lastError: "",
-    updatedAt,
-  };
-}
-
-/** secrets 表里那一行的内容。 */
-function secretOf(id: string): { data: any; updatedAt: number } {
-  const row = listSecrets(id).find((r) => r.id === id);
-  return { data: row?.data ?? null, updatedAt: Number(row?.updatedAt ?? 0) };
-}
-
-/**
- * 额度插件要的那几段凭据，面板上各占一行。
- *
- * 它们只用来问额度（门户 cookie 之类），不是推理凭据：能拿去推理的只有 :key
- * 那一把。所以这里的 inference 一律是 false。
- *
- * 没有值也列一行（missing）：面板上要看得见「这段还没填」，而不是看不见。
- * 平台没选插件、或插件没登记：一行都不列。
- */
-function pluginCredentialRows(account: ProviderRow, open: OpenPlatformRow): CredentialRow[] {
-  const plugin = quotaPluginOf(open.quotaPlugin?.trim() ?? "");
-  if (!plugin) return [];
-  const out: CredentialRow[] = [];
-  for (const field of plugin.fields) {
-    const secretId = providerSecretId(account.id, field.name);
-    const stored = secretOf(secretId);
-    out.push(
-      plainRow(
-        secretId,
-        account,
-        "cookie",
-        field.label,
-        pluginFieldOf(account.id, field.name),
-        false,
-        stored.updatedAt,
-      ),
-    );
-  }
-  return out;
 }
 
 /**
  * 一个账号的凭据。
  *
- * 账号下面有几条：一个登录会话、一把推理 key，也许还有一个登录账号。列表里
- * 只给已经配好的那些 —— 没配的东西不算凭据。
+ * 形状由种类的声明说（lib/provider-kinds.ts 的 CredentialPlan）：这一段是会话、
+ * 是推理 key、还是额度 cookie，叫什么名字，从哪儿读。这里只管遍历，不判哪一类
+ * 是哪一类 —— 那种 switch 与面板、与写入那一头各写一份，三份迟早不一致（同一个
+ * 平台可以有三四种叫法，就是这么来的）。
  *
- * 账号的 id 就是 provider 表那一行的 id，所以这里不看别的东西：先按 id 取行，
- * 行说它是哪个平台的，平台说它的凭据长什么样。
+ * 没配的那一段不列：面板上不能出现「有凭据」却没有凭据的行。例外是声明里写了
+ * alwaysList 的那几段（面板要看得见「这段还没填」）。
+ *
+ * 账号的 id 就是 provider 表那一行的 id：先按 id 取行，行说它是哪个平台的。
  */
 export function credentialsOf(accountId: string): CredentialRow[] {
   const out: CredentialRow[] = [];
   const account = provider(accountId);
   if (!account) return out;
-  // 开放平台的 kind 登记了（"openai"），但下面那个 switch 里没有它的那一档：
-  // 它的凭据只有一把推理用的 API key，按属于哪个平台来判。
-  const open = openPlatformOfAccount(account.id);
-  if (open) {
-    // 开放平台的凭据有一把推理用的 API key，加上额度插件要的那几段（门户 cookie
-    // 之类）。推理 key 没有就不列它 —— 面板上不能出现「有凭据」却没有凭据的行
-    // （跟七牛云、讯飞星火一个规矩）。
-    const key = openPlatformKeyOf(account.id);
-    if (key) {
-      const secretId = openPlatformKeyId(account.id);
-      const stored = secretOf(secretId);
-      out.push(
-        plainRow(
-          secretId,
-          account,
-          "api_key",
-          "推理 API key",
-          key.apiKey,
-          canInfer(account.kind, "api_key"),
-          stored.updatedAt,
-        ),
-      );
-    }
-    // 插件要的那几段：只用来问额度，不是推理凭据。
-    out.push(...pluginCredentialRows(account, open));
-    return out;
+  for (const slot of credentialsOfKind(account.kind).slots(account)) {
+    const reading = slot.read(account);
+    if (!reading.present && !slot.alwaysList) continue;
+    out.push(rowOf(account, slot, reading));
   }
-  switch (account.kind) {
-    case "minimax": {
-      // MiniMax Code 只有会话：额度也跟着会话走，没有第二把 key。
-      const sessionId = `session:provider:${account.id}`;
-      const session = secretOf(sessionId);
-      out.push(
-        sessionRow(sessionId, account, "登录会话", session.data, canInfer(account.kind, "session"), session.updatedAt),
-      );
-      return out;
-    }
-    case "qoder":
-    case "workbuddy":
-    case "zcode": {
-      const sessionId = `session:provider:${account.id}`;
-      const session = secretOf(sessionId);
-      // 这一类平台的推理凭据就是会话本身：access token 直接当 Bearer 发。
-      out.push(
-        sessionRow(sessionId, account, "登录会话", session.data, canInfer(account.kind, "session"), session.updatedAt),
-      );
-      return out;
-    }
-    case "sensenova": {
-      const sessionId = `session:provider:${account.id}`;
-      const session = secretOf(sessionId);
-      // 会话只用来问额度：推理端点要的是那把 key，不是它。
-      out.push(
-        sessionRow(sessionId, account, "登录会话", session.data, canInfer(account.kind, "session"), session.updatedAt),
-      );
-      const loginId = `key:provider:${account.id}:account`;
-      const loginRow = secretOf(loginId);
-      const login = loginRow.data;
-      if (login?.user) {
-        // 登录账号也不是推理凭据：它只是账号本身。
-        out.push(
-          plainRow(loginId, account, "login", "登录账号", String(login.user), canInfer(account.kind, "login"), loginRow.updatedAt),
-        );
-      }
-      // 推理用的 key：推理端点要的是它，不是 cookie。
-      const apiKey = String(login?.apiKey ?? "");
-      if (apiKey) {
-        out.push({
-          ...plainRow(
-            `${loginId}#api_key`,
-            account,
-            "api_key",
-            "推理 key",
-            apiKey,
-            canInfer(account.kind, "api_key"),
-            loginRow.updatedAt,
-          ),
-        });
-      }
-      return out;
-    }
-    case "intern-ai": {
-      // 会话里是一把控制台 token。
-      const sessionId = `session:provider:${account.id}`;
-      const sessionRowData = secretOf(sessionId);
-      const session = sessionRowData.data;
-      const token = String(session?.token ?? "");
-      out.push({
-        ...plainRow(
-          sessionId,
-          account,
-          "session",
-          "登录 token",
-          token,
-          // 登录 token 不能推理（推理要的是那把 key），但它仍然有用：拿它去补
-          // key、问额度。
-          canInfer(account.kind, "session"),
-          sessionRowData.updatedAt,
-        ),
-        status: token ? CredentialState.USABLE : CredentialState.MISSING,
-        lastOkAt: Number(session?.obtainedAtMs ?? 0),
-      });
-      // 推理用的 key（Discovery 子站那把）：推理端点要的是它。
-      const loginId = `key:provider:${account.id}:account`;
-      const loginRow = secretOf(loginId);
-      const discoveryKey = String(loginRow.data?.discoveryKey ?? "");
-      if (discoveryKey) {
-        out.push(
-          plainRow(
-            `${loginId}#discovery_key`,
-            account,
-            "api_key",
-            "推理 key（Discovery）",
-            discoveryKey,
-            canInfer(account.kind, "api_key"),
-            loginRow.updatedAt,
-          ),
-        );
-      }
-      return out;
-    }
-    case "tokenrhythm": {
-      // 一个账号一个钱包：登录账号一份、会话一份、推理 key 一份。
-      const credential = tokenRhythmCredentialOf(account.id);
-      if (credential?.account) {
-        const loginId = `key:provider:${account.id}:account`;
-        const loginRow = secretOf(loginId);
-        out.push({
-          ...plainRow(loginId, account, "login", "登录账号", credential.account, canInfer(account.kind, "login"), loginRow.updatedAt),
-          status:
-            credential.account && credential.password
-              ? CredentialState.USABLE
-              : CredentialState.MISSING,
-        });
-      }
-      const key = String(credential?.apiKey ?? "");
-      if (key) {
-        out.push({
-          ...plainRow(
-            `key:provider:${account.id}:account#api_key`,
-            account,
-            "api_key",
-            "推理 key",
-            key,
-            canInfer(account.kind, "api_key"),
-          ),
-        });
-      }
-      const sessionId = tokenRhythmSessionId(account.id);
-      // 会话 cookie 只用来登录与查余额：转发要的是那把 api key。
-      out.push(sessionRow(sessionId, account, "会话 cookie", loadTokenRhythmSession(account.id), canInfer(account.kind, "session")));
-      return out;
-    }
-    case "qiniu": {
-      // 七牛的凭据是两段：推理 key 与门户 cookie（额度只认 cookie）。都没有就
-      // 什么都不列 —— 面板上不能出现「有凭据」却没有凭据的行。
-      const qiniu = qiniuAccountOf(account.id);
-      if (!qiniu) return out;
-      const secretId = qiniuAccountId(account.id);
-      const stored = secretOf(secretId);
-      if (qiniu.apiKey) {
-        out.push(
-          plainRow(secretId, account, "api_key", "推理 API key", qiniu.apiKey, canInfer(account.kind, "api_key"), stored.updatedAt),
-        );
-      }
-      if (qiniu.portalCookie) {
-        // 门户 cookie 是同一份记录里的另一段：id 用派生的写法（#cookie），
-        // 免得造一个 parseCredentialId 认不出来的后缀。
-        //
-        // 它不是推理凭据：门户 cookie 只用来问额度，推理端点不认它。
-        out.push(
-          plainRow(`${secretId}#cookie`, account, "cookie", "门户 cookie", qiniu.portalCookie, canInfer(account.kind, "cookie"), stored.updatedAt),
-        );
-      }
-      return out;
-    }
-    case "xinghuo": {
-      // 讯飞星火只有一把推理 key。没有就什么都不列 —— 面板上不能出现「有凭据」
-      // 却没有凭据的行。
-      const xinghuo = xinghuoAccountOf(account.id);
-      if (!xinghuo) return out;
-      const secretId = xinghuoAccountId(account.id);
-      const stored = secretOf(secretId);
-      out.push(
-        plainRow(secretId, account, "api_key", "推理 API key", xinghuo.apiKey, canInfer(account.kind, "api_key"), stored.updatedAt),
-      );
-      return out;
-    }
-    default:
-      return out;
-  }
+  return out;
 }
 
 /**
@@ -485,7 +215,7 @@ function accountDetail(
 ): string {
   if (usable) {
     // 会话型平台的推理凭据就是登录会话。
-    return usable.kind === "session" ? `会话 ${credentialStateText(usable.status)}` : "有可用的推理 key";
+    return usable.kind === "session" ? `会话 ${credentialStateText(usable.status)}` : "有可用的推理 Key";
   }
   // 有推理凭据但用不了：说得出是哪一条、什么状态。
   if (inference.length) return `${inference[0].label} ${credentialStateText(inference[0].status)}`;
@@ -493,11 +223,11 @@ function accountDetail(
   // 只算真的配上的那一条：额度插件的那一段没填时是 missing，拿它说「只有门户
   // cookie」就是拿没配的东西说配了。
   if (credentials.some((c) => c.kind === "cookie" && hasUsableCredential(c.status))) {
-    return "没有推理用的凭据（只有门户 cookie）";
+    return "没有推理用的凭据（只有额度 Cookie）";
   }
   // 会话型平台的推理凭据就是会话：那时候说的是「还没登录」。
   if (kindOf(account.kind)?.inferWith === "session") return "还没登录";
-  return "还没配推理 key";
+  return "还没配推理 Key";
 }
 
 /**
@@ -632,6 +362,8 @@ export function deleteAccount(accountId: string): { ok: boolean; message: string
  * 哪一种」，再按账号的种类决定怎么试。
  */
 interface CredentialTarget {
+  /** 面板交回来的那条 id：凭据行说它是推理那一段还是额度那一段。 */
+  id: string;
   account: ProviderRow;
   /** session / api_key / login。 */
   form: string;
@@ -661,8 +393,9 @@ function targetOf(id: string): { ok: true; value: CredentialTarget } | { ok: fal
   return {
     ok: true,
     value: {
+      id,
       account: row,
-      // 派生出来的那一条是从登录账号里取的：它算一条 key，不算账号。
+      // 派生出来的那一条是从那一段凭据里取的：它算一条 key，不算账号。
       form: ref.derived ? "api_key" : ref.form,
       tenant: ref.tenant,
       derived: ref.derived,
@@ -706,14 +439,8 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
       return { ok: false, message: "未登录 ZCode" };
     }
     case "sensenova": {
-      // 登录凭据、推理 key 与会话是三回事，说的也要是三回事：登录凭据说的是
-      // 登录态，推理 key 说的是干活的那把钥匙，会话说的是登录态本身。
-      if (target.form === "login") {
-        const account = getSecret<{ user?: string }>(`key:provider:${p.id}:account`);
-        return account?.user
-          ? { ok: true, message: "登录账号已配置" }
-          : { ok: false, message: "未配置登录账号" };
-      }
+      // 会话与推理 key 是两回事：会话说的是登录态，推理 key 说的是干活的那把
+      // 钥匙。
       if (target.form === "session") {
         const session = getSecret<{ accessToken?: string }>(`session:provider:${p.id}`);
         return session?.accessToken
@@ -722,16 +449,10 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
       }
       const key = senseNovaInferenceKey(p.id);
       return key
-        ? { ok: true, message: "推理 key 已配置" }
-        : { ok: false, message: "未配置推理 key" };
+        ? { ok: true, message: "推理 Key 已配置" }
+        : { ok: false, message: "未配置推理 Key" };
     }
     case "intern-ai": {
-      if (target.form === "login") {
-        const account = getSecret<{ user?: string }>(`key:provider:${p.id}:account`);
-        return account?.user
-          ? { ok: true, message: "登录账号已配置" }
-          : { ok: false, message: "未配置登录账号" };
-      }
       if (target.form === "session") {
         const session = getSecret<{ token?: string }>(`session:provider:${p.id}`);
         return session?.token
@@ -740,31 +461,79 @@ async function testTarget(target: CredentialTarget): Promise<{ ok: boolean; mess
       }
       const key = internAiInferenceKey(p.id);
       return key
-        ? { ok: true, message: "推理 key（Discovery）已配置" }
-        : { ok: false, message: "未配置推理 key（Discovery）" };
+        ? { ok: true, message: "推理 Key 已配置" }
+        : { ok: false, message: "未配置推理 Key" };
     }
     case "tokenrhythm": {
       const credential = tokenRhythmCredentialOf(p.id);
       if (!credential) return { ok: false, message: "这个账号未配置凭据" };
       if (target.form === "api_key") {
         return credential.apiKey
-          ? { ok: true, message: "推理 key 已配置" }
-          : { ok: false, message: "未配置推理 key" };
+          ? { ok: true, message: "推理 Key 已配置" }
+          : { ok: false, message: "未配置推理 Key" };
       }
-      if (target.form === "login") {
-        return credential.account && credential.password
-          ? { ok: true, message: "登录账号已配置" }
-          : { ok: false, message: "登录账号不完整" };
-      }
+      if (target.form !== "session") return { ok: false, message: `不知道这条凭据的形态：${target.form}` };
       // 会话：先看有没有存着的会话（本地），有才去问平台。
       const session = loadTokenRhythmSession(p.id);
       if (!session) return { ok: false, message: "这个账号没有登录态" };
       const w = await tokenRhythmWallet(session);
       return { ok: true, message: `可以登录，可用余额 ${w.availableCny} ${w.currency}` };
     }
-    default:
+    // 一把推理 key 加额度那几段的平台（七牛云、讯飞星火）与通用开放平台
+    // （openai / anthropic）走同一个测试：它们的凭据形状是一样的。
+    case "qiniu":
+    case "xinghuo":
+      return testKeyOrQuotaCredential(p, target.id);
+    default: {
+      if (openPlatformOfAccount(p.id)) return testKeyOrQuotaCredential(p, target.id);
       return { ok: false, message: `这个账号不支持测试凭据：${p.id}` };
+    }
   }
+}
+
+/**
+ * 一把推理 key 加额度那几段的平台怎么试。
+ *
+ * 两段的试法不一样：推理 key 拿去问上游要模型清单（那是同一份鉴权，上游收下
+ * 这个 key 才答得出清单），额度那一段交给平台的额度插件问一次 —— 门户 cookie
+ * 只有那个接口认。不按 id 的后缀猜是那一段：两段共用一个存储位置的平台（七牛
+ * 云）后缀分不出来，凭据行上的 inference 才是唯一判据。
+ */
+async function testKeyOrQuotaCredential(
+  account: ProviderRow,
+  id: string,
+): Promise<{ ok: boolean; message: string }> {
+  const row = credentialsOf(account.id).find((c) => c.id === id);
+  if (!row) return { ok: false, message: `没有这条凭据：${id}` };
+  if (row.inference) return testInferenceKey(account);
+  return testQuotaCredential(account);
+}
+
+/** 推理那段：问一次上游的模型清单。 */
+async function testInferenceKey(account: ProviderRow): Promise<{ ok: boolean; message: string }> {
+  const key = String(kindOf(account.kind)?.keyOf?.(account, account.id) ?? "").trim();
+  if (!key) return { ok: false, message: "未配置推理 Key" };
+  const platform = openPlatformOf(account.platform);
+  if (!platform || !String(platform.baseUrl ?? "").trim()) {
+    // 没地址可问（平台行没填）：key 在不在就是能确认的全部。
+    return { ok: true, message: "推理 Key 已配置（这个平台没有地址，问不到上游）" };
+  }
+  const models = await fetchOpenPlatformModels(platform, key);
+  return models
+    ? { ok: true, message: `可用，上游答了 ${models.length} 个模型` }
+    : {
+        ok: false,
+        message: "上游没有答模型清单：key 可能不对，也可能是这个平台没有 /models（细节看日志）",
+      };
+}
+
+/** 额度那段：交给平台的额度插件问一次（插件不 reject，答不出来就是 unknown）。 */
+async function testQuotaCredential(account: ProviderRow): Promise<{ ok: boolean; message: string }> {
+  const plugin = quotaPluginOf(openPlatformOf(account.platform)?.quotaPlugin?.trim() ?? "");
+  if (!plugin) return { ok: false, message: "这个平台没有额度插件，这段凭据没有可以问的接口" };
+  const probe = await plugin.probe(account);
+  if (probe.state === "ok") return { ok: true, message: probe.message ? `可用，${probe.message}` : "可用" };
+  return { ok: false, message: probe.message || `额度接口没答上来（${probe.state}）` };
 }
 
 /** 强制刷新一条凭据。 */

@@ -540,6 +540,22 @@ message ProviderKind {
   repeated string regions = 5;
   // 这一类上游支持的生效策略。面板据此显示选项。
   repeated ProviderPolicy policies = 6;
+  // 填凭据那个弹窗的标题。
+  string credential_title = 7;
+  // 这个种类自己定死的凭据格子，位置就是 SetProviderKeys 的 keys[] 顺序。
+  // 开放平台那几段由平台指名的额度插件决定，不在这里（面板自己接在后面）。
+  repeated CredentialField credential_fields = 8;
+}
+
+// 面板上要填的一格凭据。
+message CredentialField {
+  // 这一格的名字（面板的 htmlFor 用它）。
+  string name = 1;
+  string label = 2;
+  // 标签下面那一行提示。
+  string hint = 3;
+  // 输入框里的占位提示。
+  string placeholder = 4;
 }
 
 // 面板上能选的类型。面板不问后端有哪些类，它问。
@@ -937,6 +953,27 @@ message ListModelsRequest {
   string upstream_id = 1;
 }
 
+// 这个模型的计费，按上游自己在 /models 里报的那一份。
+//
+// 与 CatalogModel.credits 不是一回事：那个是人工写的倍率覆盖值，这个是上游报的
+// 原样。两格并存，谁显示由面板决定。
+message ModelBilling {
+  // token / multiplier / none
+  string mode = 1;
+  // token 模式才有：CNY / USD。上游没报币种就留空。
+  string currency = 2;
+  // 三个角色一律按「每百万 token」，不管上游给的是什么单位。
+  optional double input_per_million = 3;
+  optional double output_per_million = 4;
+  optional double cache_read_per_million = 5;
+  // 倍率计费（×0.15 这种）。
+  optional double credits = 6;
+  // 分时段倍率，只抄 factor。
+  repeated double multipliers = 7;
+  // 上游没报（不是免费）。面板据此不显示价格。
+  bool unknown = 8;
+}
+
 message CatalogModel {
   string id = 1;
   string display_name = 2;
@@ -947,6 +984,8 @@ message CatalogModel {
   repeated string effort_options = 7;
   // 计费倍率。没给 = 不知道（面板不显示倍率）；给了 0 = 免费。
   optional double credits = 8;
+  // 这个模型的计费。没给 = 上游没报计费信息（面板不显示价格）。
+  optional ModelBilling billing = 9;
 }
 
 message ListModelsResponse {

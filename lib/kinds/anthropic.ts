@@ -14,6 +14,7 @@ import { declareNoLoginFlow } from "../login-flow.ts";
 import { openPlatformKeyOf } from "../open-platform-credentials.ts";
 import { openPlatformOf } from "../open-platforms.ts";
 import { fromUpstreamStatus, registerKind } from "../provider-kinds.ts";
+import { openPlatformPlan } from "./shared.ts";
 import { declareNoQuotaPlugin } from "../quota-plugins.ts";
 import { anthropicPlatformChat, ANTHROPIC_VERSION, toAnthropicPlatform } from "../router/upstreams/open-platform.ts";
 import type { ProviderRow } from "../providers.ts";
@@ -57,6 +58,8 @@ registerKind({
   baseUrl: (provider) => openPlatformOf(provider.platform)?.baseUrl ?? "",
   // 那一把 key 既是推理凭据，也是这个账号唯一的凭据。
   inferWith: "api_key",
+  // 凭据形状与 openai 那个种类的一模一样：两类的差别在报文方言，不在凭据。
+  credentials: openPlatformPlan(),
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => openPlatformKeyOf(accountId ?? provider.id)?.apiKey ?? "",
   // 问目录跟推理一个口径：这一类上游不认 Bearer，只认 x-api-key 加版本头。

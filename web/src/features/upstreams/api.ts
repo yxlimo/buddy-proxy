@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import {
   AddAccountRequestSchema,
   DeleteAccountRequestSchema,
+  ListProviderKindsRequestSchema,
   ListUpstreamsRequestSchema,
   SetAccountEnabledRequestSchema,
   SetPlatformPolicyRequestSchema,
@@ -33,6 +34,20 @@ export function useUpstreams(options?: { refetchOnMount?: boolean }) {
     queryKey: queryKeys.upstreams.all,
     queryFn: () => client.listUpstreams(create(ListUpstreamsRequestSchema)),
     ...options,
+  })
+}
+
+/**
+ * 账号类型，以及每种类型要填哪几格凭据。
+ *
+ * 填凭据那几格由服务端的种类声明说：面板不再留一张按 kind 查的表 —— 留了就是
+ * 同一样东西有两处说法，同一个平台会有几种叫法。
+ */
+export function useProviderKinds() {
+  const client = useAdminClient()
+  return useQuery({
+    queryKey: queryKeys.providerKinds.all,
+    queryFn: () => client.listProviderKinds(create(ListProviderKindsRequestSchema)),
   })
 }
 

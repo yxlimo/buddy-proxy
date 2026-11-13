@@ -12,6 +12,7 @@ import { provider as providerRow, type ProviderRow } from "../providers.ts";
 import {
   fromUpstreamStatus,
   registerKind,
+  type CredentialPlan,
   type CredentialView,
   type HealthSnapshot,
   type ProviderKind,
@@ -90,6 +91,14 @@ export interface CompatiblePlatform {
   recoverAt?(provider: ProviderRow, snapshot: HealthSnapshot): number | null;
   /** 凭据状态。不给就按 key 类的默认来。 */
   credential?(provider: ProviderRow): CredentialView;
+  /**
+   * 这个账号的凭据长什么样：有哪几段、面板上怎么填、按位置怎么写。
+   *
+   * 必填：一个种类不回答「凭据长什么样」，面板上就一条凭据也列不出来
+   * （`credentialsOf` 的那一份就是这个）。漏填不会默认成什么，直接编译不过
+   * —— 这是故意的：默认值就是第二个真相。
+   */
+  credentials: CredentialPlan;
 }
 
 /**
@@ -116,6 +125,7 @@ export function registerCompatiblePlatform(platform: CompatiblePlatform): Provid
     keyOf: platform.keyOf,
     ...(platform.catalogAuth ? { catalogAuth: platform.catalogAuth } : {}),
     credential: platform.credential ?? (() => missingCredential()),
+    credentials: platform.credentials,
     models: platform.models,
     quotas: platform.quotas ?? (() => []),
     outOfCredits: platform.outOfCredits ?? (() => false),

@@ -93,6 +93,9 @@ const { parseCredentialId } = await import("../lib/admin/credentials.ts");
 
 const shapes: [string, string, number | null][] = [
   ["session:provider:qoder", "session", null],
+  // 通用开放平台那一把推理 key 就在 :key 这个后缀上：认不出它，面板上那一行
+  // 的「试一下」就只会回「无法识别的凭据」。
+  ["key:provider:open-platform:key", "api_key", null],
   // 一把 key 一个租户的那种形状：解析器照样认得。
   ["key:provider:qiniu:key-1", "api_key", 1],
   ["key:provider:sensenova:account", "login", null],
@@ -162,7 +165,7 @@ check(
 
 section("「试一下」说的话");
 
-const { testCredential } = await import("../lib/admin/accounts.ts");
+const { testCredential, credentialsOf, listAccounts } = await import("../lib/admin/accounts.ts");
 
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
 // 测试自己造一行。
@@ -171,25 +174,42 @@ insertVendorPlatform("sensenova");
 insertVendorPlatform("tokenrhythm");
 insertVendorPlatform("qiniu");
 
+// SenseNova 也只有一个登录会话与一把推理 key：登录账号（user / password）不是
+// 凭据，面板上不列它 —— 登录身份留在库里，只是不展示。
 const senseAccount = addAccount({ platform: "sensenova", alias: "测试 SenseNova" });
 const senseId = String(senseAccount.id ?? "");
 check("SenseNova 账号建出来了", Boolean(senseId), senseId);
+writeSecret(`session:provider:${senseId}`, "session", { accessToken: "sn-session" });
 writeSecret(`key:provider:${senseId}:account`, "account", {
   user: "one@example.com",
-  password: "",
+  password: "pw-one",
   apiKey: "sk-sense-test",
 });
-const loginTried = await testCredential(`key:provider:${senseId}:account`);
+const senseCredentials = credentialsOf(senseId);
 check(
-  "登录凭据说的是登录账号",
-  loginTried.message.includes("登录账号") && !loginTried.message.includes("推理 key"),
-  loginTried.message,
+  "SenseNova 不列登录账号那一行",
+  senseCredentials.every((c) => c.kind !== "login"),
+  senseCredentials.map((c) => `${c.id}:${c.kind}`).join(","),
 );
-const apiKeyTried = await testCredential(`key:provider:${senseId}:account#api_key`);
 check(
-  "推理 key 说的是推理 key",
-  apiKeyTried.message.includes("推理 key"),
-  apiKeyTried.message,
+  "SenseNova 列的是登录会话与推理 Key 两行",
+  senseCredentials.map((c) => c.id).join(",") ===
+    `session:provider:${senseId},key:provider:${senseId}:account#api_key`,
+  senseCredentials.map((c) => `${c.id}:${c.kind}`).join(","),
+);
+check(
+  "SenseNova 的条数与列出来的行数一致",
+  listAccounts().find((a) => a.id === senseId)?.credentialCount === senseCredentials.length,
+  JSON.stringify({
+    count: listAccounts().find((a) => a.id === senseId)?.credentialCount,
+    rows: senseCredentials.length,
+  }),
+);
+const senseKeyTried = await testCredential(`key:provider:${senseId}:account#api_key`);
+check(
+  "推理 Key 说的是推理 Key",
+  senseKeyTried.message.includes("推理 Key"),
+  senseKeyTried.message,
 );
 
 /* ------------------------------------------------------------------ *
@@ -199,7 +219,6 @@ check(
 section("TokenRhythm 的凭据");
 
 const { setSecret } = await import("../lib/store.ts");
-const { credentialsOf, listAccounts } = await import("../lib/admin/accounts.ts");
 const { CredentialState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts");
 
 const trOne = addAccount({ platform: "tokenrhythm", alias: "中转站一号" });
@@ -234,9 +253,24 @@ check(
   String(sessionCredential?.id),
 );
 check(
-  "登录账号与推理 key 也列出来了",
-  rhythmCredentials.some((c) => c.kind === "login") && rhythmCredentials.some((c) => c.kind === "api_key"),
+  "推理 Key 与登录会话都列出来了",
+  rhythmCredentials.some((c) => c.kind === "api_key") &&
+    rhythmCredentials.some((c) => c.kind === "session"),
   rhythmCredentials.map((c) => c.kind).join(","),
+);
+// 登录账号（account / password）不是推理凭据，也不是额度凭据：面板上不列它。
+check(
+  "TokenRhythm 不列登录账号那一行",
+  rhythmCredentials.every((c) => c.kind !== "login"),
+  rhythmCredentials.map((c) => `${c.id}:${c.kind}`).join(","),
+);
+check(
+  "TokenRhythm 的条数与列出来的行数一致",
+  listAccounts().find((a) => a.id === trOneId)?.credentialCount === rhythmCredentials.length,
+  JSON.stringify({
+    count: listAccounts().find((a) => a.id === trOneId)?.credentialCount,
+    rows: rhythmCredentials.length,
+  }),
 );
 check(
   "账号列表里看得见这个账号",
@@ -284,7 +318,7 @@ check(
 );
 check(
   "另一个账号的凭据没动，也没串味",
-  credentialsOf(trOneId).some((c) => c.kind === "login") &&
+  credentialsOf(trOneId).some((c) => c.kind === "api_key") &&
     credentialsOf(trOneId).every((c) => c.id.includes(trOneId)),
   JSON.stringify(credentialsOf(trOneId).map((c) => c.id)),
 );
@@ -329,6 +363,54 @@ check(
   "凭据数不是 0",
   (qiniuView?.credentialCount ?? 0) >= 1,
   String(qiniuView?.credentialCount),
+);
+/* ------------------------------------------------------------------ *
+ * 三之三、通用开放平台的推理 key 就在 :key 那一格上
+ * ------------------------------------------------------------------ */
+section("开放平台的推理 key");
+
+// 通用开放平台（openai / anthropic）的账号只有一把推理 key，地址存在 key:provider:<账号>:key。
+// 那一行点「试一下」以前回「无法识别的凭据」—— 面板上一行看得见、点了必然失败。
+const { writeOpenPlatformKey } = await import("../lib/open-platform-credentials.ts");
+insertVendorPlatform("openai", "open-platform-test", { baseUrl: "http://127.0.0.1:1" });
+const openRow = addAccount({ platform: "open-platform-test", alias: "测试开放平台" });
+const openId = String(openRow.id ?? "");
+check("开放平台账号建出来了", Boolean(openId), openId);
+writeOpenPlatformKey(openId, "sk-open-platform-test"); // privacy:allow — 编造的样例
+const openCredentials = credentialsOf(openId);
+const openKeyCredential = openCredentials.find((c) => c.inference);
+check(
+  "推理 key 的 id 就是 :key 那一格",
+  openKeyCredential?.id === `key:provider:${openId}:key`,
+  JSON.stringify(openCredentials.map((c) => c.id)),
+);
+check(
+  "解析器认得 :key 那一格",
+  parseCredentialId(`key:provider:${openId}:key`)?.form === "api_key",
+  JSON.stringify(parseCredentialId(`key:provider:${openId}:key`)),
+);
+
+// 面板上的每一条凭据都得能「试一下」「刷新一下」：列得出来却点不动的行
+// （id 解析器不认识）就是一行看得见、点了必然失败的按钮。
+const unparsable = listAccounts()
+  .flatMap((a) => credentialsOf(a.id))
+  .filter((c) => parseCredentialId(c.id) === null);
+check(
+  "面板上每一条凭据的 id 都认得",
+  unparsable.length === 0,
+  unparsable.map((c) => c.id).join(","),
+);
+
+// 已经有了这一行（面板上看得见），点「试一下」就该拿到真实的试法答复。
+// 地址指向本机一个关着的端口：问不到上游是意料之中，但那是「问不到」，不是
+// 「不认识这条凭据」。正向断言那句答复：只查「不含无法识别」的话，回一句
+// 「没有这条凭据」也放得过。
+const openTried = await testCredential(`key:provider:${openId}:key`);
+check(
+  "开放平台的推理 key 试得起来（拿去问了上游的模型清单）",
+  openTried.message ===
+    "上游没有答模型清单：key 可能不对，也可能是这个平台没有 /models（细节看日志）",
+  openTried.message,
 );
 
 /* ------------------------------------------------------------------ *

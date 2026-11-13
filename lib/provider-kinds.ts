@@ -37,6 +37,129 @@ export type ProviderLoginMethod = "device" | "browser" | "password" | "code" | "
  */
 export type InferenceCredential = "session" | "api_key";
 
+/* ------------------------------------------------------------------ *
+ * The credential shape: what one account of a kind keeps, as a declaration
+ * ------------------------------------------------------------------ */
+
+/**
+ * 凭据的形态。
+ *
+ * 「能不能拿去推理」不写在每一段上：注册表的 `inferWith` 说这一类用哪一段，
+ * 形态说出这一段是哪一种，两者一致才是推理凭据（见 lib/admin/accounts.ts 的
+ * canInfer）。写两处就会有两处走样的机会。
+ */
+export type CredentialForm = "session" | "api_key" | "cookie";
+
+/**
+ * 凭据形状要的那个账号。
+ *
+ * 只有三样：哪一行、属于哪个平台、什么种类。`ProviderRow` 满足它；写凭据那
+ * 一条路也有没有行的时候（面板把平台 id 当账号 id 交回来），那时凑的是「平台
+ * id 就是它第一个账号的 id」这个约定。
+ */
+export interface CredentialOwner {
+  id: string;
+  platform: string;
+  kind: string;
+}
+
+/** 会话记录报的那几样：过期、代数、最近一次成功、平台拒过没有。 */
+export interface SessionFacts {
+  /** 到期时刻（毫秒）。0 = 这份会话没有到期时间。 */
+  expiresAt: number;
+  generation: number;
+  /** 最近一次拿到它的时刻（毫秒）。 */
+  lastOkAt: number;
+  /** 平台拒过这份会话：它已经作废了。 */
+  refused: boolean;
+}
+
+/** 一段读出来的凭据。 */
+export interface SlotReading {
+  /** 库里那条记录的 id：面板拿它「试一下」「刷新一下」。 */
+  id: string;
+  /** 这一段算不算配好了。会话看记录在不在，key 看值在不在 —— 两种都出现过。 */
+  present: boolean;
+  /** 值。只用来算掩码与指纹，不上屏。 */
+  value: string;
+  /** 库里那条记录最后一次写进来的时刻。 */
+  updatedAt: number;
+  /** 会话那一段才有。 */
+  session?: SessionFacts;
+}
+
+/**
+ * 账号名下的一个凭据位置：面板上就是一行。
+ *
+ * 一个位置只描述「面板上哪一行、值从哪儿读」：状态怎么算、能不能推理、给谁
+ * 看，都在读出来的那一层统一判（lib/admin/accounts.ts）。各家自己判一遍，就
+ * 会有几份不一样的判断。
+ */
+export interface CredentialSlot {
+  /** 面板上这一行叫什么：登录会话 / 推理 Key / 额度 Cookie。 */
+  label: string;
+  form: CredentialForm;
+  /** 读这一段：一个位置只读一次，免得同一行来来回回翻库。 */
+  read(account: CredentialOwner): SlotReading;
+  /** 没配也列一行：面板上要看得见「这段还没填」，而不是看不见。 */
+  alwaysList?: boolean;
+}
+
+/** 面板上要填的一格。位置就是 `SetProviderKeys` 的 keys[] 顺序。 */
+export interface CredentialField {
+  /** 这一格的名字（面板的 htmlFor 用它，稳定就够）。 */
+  name: string;
+  label: string;
+  /** 标签下面那一行提示：这一格拿来做什么、留空会怎样。 */
+  hint?: string;
+  /** 输入框里的占位提示。 */
+  placeholder?: string;
+}
+
+/**
+ * 这一类平台的凭据：面板上的行、要填的格、按位置怎么写。
+ *
+ * 以前这三样是分开写在三处的（`credentialsOf` 的 switch、`setProviderKeys` 的
+ * switch、面板那张 LAYOUTS 表），于是一个平台有几种叫法、多出几行没人认得出
+ * 来。现在一个种类一份声明，读、填、写都从这一份走。
+ */
+export interface CredentialPlan {
+  /** 面板上这个账号的凭据行，按面板上的顺序。 */
+  slots(account: CredentialOwner): CredentialSlot[];
+  /**
+   * 面板上要填的格子，按顺序。
+   *
+   * 空数组 = 这一类不收 key（凭据是登录会话，贴 key 过来只能拒）。
+   */
+  fields(account: CredentialOwner): CredentialField[];
+  /** 按位置写：`values` 与 `fields` 一一对应。返回写进去几段。 */
+  write(account: CredentialOwner, values: string[]): number;
+  /**
+   * 段数到运行时才知道（开放平台：由平台那一行指名的额度插件说了算）。
+   *
+   * 只有这种平台要判「发来的段数够不够」：面板的插件登记表没到手时，它只知道
+   * 推理那一格，保存上去的数组就短了，按位置写下去会把插件那几段当成空串清掉
+   * —— 那是静默丢凭据。段数定死的种类不判：空数组就是「都清掉」，那是现有的
+   * 语义。
+   */
+  dynamicFields?: boolean;
+  /** 面板上那个弹窗的标题。 */
+  title: string;
+  /**
+   * 保存/清除之后那句话里的名字（「已保存七牛云的…」）。
+   *
+   * 不给就用种类的 label。开放平台是另一回事：它的名字在平台那一行上（一个
+   * 平台一种业务，种类名只能说「开放平台」）。
+   */
+  name?(account: CredentialOwner): string;
+  /**
+   * 这一类不收 key 时说得出的那句事实（英文，不进面板文案）。
+   *
+   * 不给的走「这一类没有 key 可写」：说不清就不说，不替它编。
+   */
+  noKeyNote?: string;
+}
+
 /** 一次签到的结果。 */
 export interface BenefitOutcome {
   /** 上游的 id。 */
@@ -287,6 +410,13 @@ export interface ProviderKind {
   catalogAuth?(key: string): Record<string, string>;
   /** 凭据。 */
   credential(provider: ProviderRow): CredentialView;
+  /**
+   * 这个账号的凭据长什么样：有哪几段、面板上怎么填、按位置怎么写。
+   *
+   * 没有这一项的种类一条凭据也列不出来：凭据的形状是这一类上游自己的事，
+   * 别处不再写第二份。
+   */
+  credentials: CredentialPlan;
   /** 模型目录。 */
   models(provider: ProviderRow): CatalogModel[];
   /** 额度。 */
@@ -431,6 +561,24 @@ export function allKinds(): ProviderKind[] {
 }
 
 /**
+ * 这一类上游的凭据声明。
+ *
+ * 没登记的种类给一份空的：一条凭据也列不出来，一把 key 也写不进去。那是「不
+ * 知道」，不是「没有凭据」—— 种类没登记，猜不得。
+ */
+export function credentialsOfKind(kind: string): CredentialPlan {
+  return kindOf(kind)?.credentials ?? EMPTY_CREDENTIALS;
+}
+
+/** 没登记凭据形状的那些种类走这一份：什么都不列、什么都不写。 */
+const EMPTY_CREDENTIALS: CredentialPlan = {
+  title: "",
+  slots: () => [],
+  fields: () => [],
+  write: () => 0,
+};
+
+/**
  * 面板上能选的类型。
  *
  * The panel asks; it does not keep a list of its own.
@@ -442,6 +590,8 @@ export function selectableKinds(): {
   needsRegion: boolean;
   regions: string[];
   policies: ProviderPolicy[];
+  credentialTitle: string;
+  credentialFields: CredentialField[];
 }[] {
   return allKinds().map((k) => ({
     kind: k.kind,
@@ -450,5 +600,9 @@ export function selectableKinds(): {
     needsRegion: k.needsRegion ?? false,
     regions: k.regions ?? [],
     policies: policiesOfKind(k.kind),
+    credentialTitle: k.credentials.title,
+    // 平台的额度插件那几段不在这一份里：它们挂在平台那一行上（插件由平台指
+    // 名），面板自己把它接在后面。这里只有这个种类自己定死的那几格。
+    credentialFields: k.credentials.fields({ id: k.kind, platform: k.kind, kind: k.kind }),
   }));
 }

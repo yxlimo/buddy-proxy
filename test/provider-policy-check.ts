@@ -175,6 +175,8 @@ registerKind({
   models: () => [],
   quotas: () => [],
   outOfCredits: () => false,
+  // 凭据形状不归这些测试管：只登记一个空形状的声明（凭据这一单不在这里验）。
+  credentials: { title: "", slots: () => [], fields: () => [], write: () => 0 },
 });
 const kinds = await adminService.listProviderKinds!(create(ListProviderKindsRequestSchema, {}));
 const listed = (kinds.kinds as { kind: string; policies: number[] }[]).find(

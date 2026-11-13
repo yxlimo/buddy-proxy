@@ -75,4 +75,13 @@ export const queryKeys = {
   platformKinds: {
     all: ['platform-kinds'] as const,
   },
+  /**
+   * 账号类型，以及每种类型要填哪几格凭据。
+   *
+   * 填凭据那几格由服务端的种类声明说：面板不留自己的那张表（留了就有一份
+   * 知识两处会走样，同一个平台会有几种叫法）。
+   */
+  providerKinds: {
+    all: ['provider-kinds'] as const,
+  },
 } as const

@@ -572,4 +572,83 @@ describe('平台下的账号', () => {
     expect(await screen.findByText('凭据被上游拒了')).toBeInTheDocument()
     expect(screen.getByText('refresh 被拒绝')).toBeInTheDocument()
   })
+
+  it('类型列印中文，协议值不上屏', async () => {
+    const user = userEvent.setup({ delay: null })
+    const specs = [
+      { id: 'session:minimax', kind: 'session', label: '主会话', shown: '登录会话' },
+      {
+        id: 'key:provider:minimax',
+        kind: 'api_key',
+        label: '推理用的那把',
+        shown: '推理 Key',
+      },
+      {
+        id: 'key:provider:minimax:cookie',
+        kind: 'cookie',
+        label: '门户那段',
+        shown: '额度 Cookie',
+      },
+    ]
+    const client = mockAdminClient({
+      ListUpstreams: () =>
+        create(ListUpstreamsResponseSchema, {
+          upstreams: [platform([account({ credentialCount: 3 })])],
+        }),
+      ListAccounts: () =>
+        create(ListAccountsResponseSchema, {
+          accounts: [account({ credentialCount: 3 })],
+        }),
+      ListCredentials: (input) =>
+        create(ListCredentialsResponseSchema, {
+          credentials: specs.map((spec) =>
+            create(CredentialSchema, {
+              id: spec.id,
+              accountId: input.accountId ?? '',
+              kind: spec.kind,
+              label: spec.label,
+              masked: 'ab****',
+              fingerprint: 'a1b2',
+              status: 'usable',
+            })
+          ),
+        }),
+    })
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await expand(user)
+
+    for (const spec of specs) {
+      const row = (await screen.findByText(spec.id)).closest('tr')
+      expect(row).not.toBeNull()
+      // 徽章上写的是中文那一种。
+      expect(within(row as HTMLElement).getByText(spec.shown)).toBeInTheDocument()
+      // 协议值本身一个也不给看。
+      expect(
+        within(row as HTMLElement).queryByText(spec.kind)
+      ).not.toBeInTheDocument()
+    }
+
+    // 整屏都不得出现这三个协议值（api_key / cookie / session）。
+    for (const raw of ['api_key', 'cookie', 'session']) {
+      expect(screen.queryByText(raw)).not.toBeInTheDocument()
+    }
+  })
+
+  it('认不出的类型原样显示，不包一层「未知」', async () => {
+    const user = userEvent.setup({ delay: null })
+    const client = clientWith(
+      [account()],
+      {},
+      { credential: { kind: 'plan_key' } }
+    )
+
+    renderWithClient({ client, children: <UpstreamsPage /> })
+
+    await expand(user)
+
+    // 后端冒出表里没有的类型时，把原值摆出来：这是「还没收敛干净」的信号。
+    expect(await screen.findByText('plan_key')).toBeInTheDocument()
+  })
 })

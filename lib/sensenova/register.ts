@@ -5,6 +5,9 @@
 
 import { catalogModelsFromRow, senseNovaCatalogModels } from "../catalog-models.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { keyPlan, secretRecord, sessionSlot, valueSlot } from "../kinds/shared.ts";
+import { providerSecretId } from "../credential-ids.ts";
+import { writeSenseNovaKey } from "./keys.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { senseNovaStatus } from "./auth.ts";
@@ -32,6 +35,30 @@ export const senseNovaKind = registerCompatiblePlatform({
   defaultQuotaPlugin: SENSE_NOVA_POOLS_PLUGIN_ID,
   // 推理用的是账号里那把 apiKey：会话与 cookie 只用来问额度。
   inferWith: "api_key",
+  // 两段凭据：控制台会话（问额度）与推理 key（干活）。
+  //
+  // 登录身份（user / password）不列：它既不能发请求，也不能问额度 —— 它留在
+  // 库里（.env 丢了要靠它重新登录），只是不上屏。
+  credentials: keyPlan({
+    title: "SenseNova API Key",
+    slots: () => [
+      sessionSlot(),
+      valueSlot({
+        label: "推理 Key",
+        form: "api_key",
+        id: (account) => `${providerSecretId(account.id, "account")}#api_key`,
+        value: (account) => String(secretRecord(providerSecretId(account.id, "account")).data?.apiKey ?? ""),
+        updatedAt: (account) => secretRecord(providerSecretId(account.id, "account")).updatedAt,
+      }),
+    ],
+    field: {
+      name: "api-key",
+      label: "推理 Key",
+      hint: "发模型请求用的那一把；留空表示清掉它",
+      placeholder: "sk-…",
+    },
+    write: (account, value) => writeSenseNovaKey(account.id, value),
+  }),
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => senseNovaInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(senseNovaStatus(provider.id), "api_key"),

@@ -22,6 +22,7 @@ import { ProviderAliasCell } from '@/features/upstreams/provider-alias'
 import type { ProviderKeyAccess } from '@/features/accounts/provider-key-fields'
 import { QuotaSummary } from '@/features/balance/quota'
 import { formatDateTime, formatLocalMoment } from '@/lib/format'
+import { credentialKindLabel } from '@/lib/credential-kind'
 import type { Account, Credential } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
@@ -379,7 +380,12 @@ export function ProviderAccounts({
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant='outline'>{credential.kind || '—'}</Badge>
+                    {/* 类型用中文：协议值（api_key / session / cookie）是后端
+                        的枚举，不给操作者看。认不出的值原样显示，好让后端没
+                        收敛干净的那条露出来。 */}
+                    <Badge variant='outline'>
+                      {credentialKindLabel(credential.kind) || '—'}
+                    </Badge>
                   </TableCell>
                   <TableCell className='font-mono text-xs'>
                     {credential.masked || '—'}

@@ -21,6 +21,7 @@ import type { Account, QuotaPlugin, Upstream } from '@/gen/buddy/admin/v1/admin_
 import { UpstreamsPage } from '@/features/upstreams/index'
 import { upstreamKeys } from '@/features/upstreams/api'
 import { mockAdminClient } from '@/test/mock-transport'
+import { listProviderKinds } from '@/test/provider-kinds-fixture'
 import { makeTestQueryClient, renderWithClient } from '@/test/render'
 
 const { toastSuccess, toastError } = vi.hoisted(() => ({
@@ -36,7 +37,7 @@ vi.mock('sonner', () => ({
   Toaster: () => null,
 }))
 
-/** 一个开放平台的账号：七牛云（一段推理 key 加一段门户 cookie）。 */
+/** 一个开放平台的账号：七牛云（一段推理 key 加一段额度 Cookie）。 */
 function qiniuAccount(id = 'qiniu-1', alias = '七牛一'): Account {
   return create(AccountSchema, {
     id,
@@ -97,6 +98,7 @@ describe('账号的 API Key', () => {
     const sent: string[] = []
 
     const client = mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
@@ -135,7 +137,7 @@ describe('账号的 API Key', () => {
     await user.click(await screen.findByRole('button', { name: '凭据' }))
 
     await user.type(
-      await screen.findByLabelText('推理 API Key'),
+      await screen.findByLabelText('推理 Key'),
       'sk-tenant-one'
     )
     await user.click(screen.getByRole('button', { name: '保存' }))
@@ -150,6 +152,7 @@ describe('账号的 API Key', () => {
     const sent: string[] = []
 
     const client = mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
@@ -190,7 +193,7 @@ describe('账号的 API Key', () => {
       within(row as HTMLElement).getByRole('button', { name: '凭据' })
     )
     await user.type(
-      await screen.findByLabelText('推理 API Key'),
+      await screen.findByLabelText('推理 Key'),
       'sk-tenant-two'
     )
     await user.click(screen.getByRole('button', { name: '保存' }))
@@ -206,6 +209,7 @@ describe('账号的 API Key', () => {
     let gone = false
 
     const client = mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
@@ -253,7 +257,7 @@ describe('账号的 API Key', () => {
 })
 
 /**
- * 七牛云要两段凭据：推理 API Key 与门户 cookie。
+ * 七牛云要两段凭据：推理 Key 与额度 Cookie。
  *
  * 两段各有位置：哪一段留空就是清掉哪一段，所以空串也要传上去，不能滤掉。
  */
@@ -267,6 +271,7 @@ describe('七牛云的凭据', () => {
   /** 只列一个七牛云上游，把每次提交的两段记下来。 */
   function qiniuClient(sent: string[][]) {
     return mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, {
           upstreams: [
@@ -311,11 +316,11 @@ describe('七牛云的凭据', () => {
     await user.click(await screen.findByRole('button', { name: '凭据' }))
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
-    expect(await screen.findByLabelText('门户 Cookie')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('额度 Cookie')).toBeInTheDocument()
   })
 
-  it('只填门户 cookie：推理 key 留空也要占着位置', async () => {
+  it('只填额度 Cookie：推理 key 留空也要占着位置', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -329,7 +334,7 @@ describe('七牛云的凭据', () => {
     )
     await user.click(await screen.findByRole('button', { name: '凭据' }))
 
-    await user.type(await screen.findByLabelText('门户 Cookie'), 'c=1')
+    await user.type(await screen.findByLabelText('额度 Cookie'), 'c=1')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -337,7 +342,7 @@ describe('七牛云的凭据', () => {
     })
   })
 
-  it('两段都填：推理 key 在前，门户 cookie 在后', async () => {
+  it('两段都填：推理 key 在前，额度 Cookie 在后', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -351,8 +356,8 @@ describe('七牛云的凭据', () => {
     )
     await user.click(await screen.findByRole('button', { name: '凭据' }))
 
-    await user.type(await screen.findByLabelText('推理 API Key'), 'k1')
-    await user.type(await screen.findByLabelText('门户 Cookie'), 'c=1')
+    await user.type(await screen.findByLabelText('推理 Key'), 'k1')
+    await user.type(await screen.findByLabelText('额度 Cookie'), 'c=1')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -402,6 +407,7 @@ describe('凭据的入口按这一类的格子给', () => {
     sent?: string[][]
   ) {
     return mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () => create(ListUpstreamsResponseSchema, { upstreams: list }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () => create(ListCredentialsResponseSchema, { credentials: [] }),
@@ -547,7 +553,7 @@ describe('凭据的入口按这一类的格子给', () => {
     await user.click(await screen.findByRole('button', { name: 'API Key' }))
 
     expect(await screen.findByText('讯飞星火 API Key')).toBeInTheDocument()
-    await user.type(await screen.findByLabelText('API Key'), 'sk-xinghuo-one')
+    await user.type(await screen.findByLabelText('推理 Key'), 'sk-xinghuo-one')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -627,6 +633,7 @@ describe('凭据弹窗按平台渲染格子', () => {
     plugins: QuotaPlugin[] = []
   ) {
     return mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, { upstreams: [upstream] }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
@@ -663,7 +670,7 @@ describe('凭据弹窗按平台渲染格子', () => {
     await screen.findByRole('dialog')
   }
 
-  it('SenseNova：一格「推理 API Key」，发出去一把', async () => {
+  it('SenseNova：一格「推理 Key」，发出去一把', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -677,8 +684,8 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'sensenova')
 
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-sense-1')
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-sense-1')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -686,7 +693,7 @@ describe('凭据弹窗按平台渲染格子', () => {
     })
   })
 
-  it('书生·端砚：一格「推理 API Key」，发出去一把', async () => {
+  it('书生·端砚：一格「推理 Key」，发出去一把', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -701,10 +708,10 @@ describe('凭据弹窗按平台渲染格子', () => {
     await openDialog(user, 'intern-ai')
 
     expect(
-      await screen.findByLabelText('推理 API Key')
+      await screen.findByLabelText('推理 Key')
     ).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-disc')
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-disc')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -733,7 +740,7 @@ describe('凭据弹窗按平台渲染格子', () => {
     })
   })
 
-  it('TokenRhythm：一格「API Key」，发出去一把', async () => {
+  it('TokenRhythm：一格「推理 Key」，发出去一把', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -747,8 +754,8 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'tokenrhythm')
 
-    expect(await screen.findByLabelText('API Key')).toBeInTheDocument()
-    await user.type(screen.getByLabelText('API Key'), 'sk-tr-1')
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-tr-1')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -813,17 +820,65 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'my-open')
 
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
     expect(await screen.findByLabelText('第一段')).toBeInTheDocument()
     expect(await screen.findByLabelText('第二段')).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-infer')
     await user.type(screen.getByLabelText('第一段'), 'v1')
     await user.type(screen.getByLabelText('第二段'), 'v2')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
       expect(sent).toEqual([['sk-infer', 'v1', 'v2']])
+    })
+  })
+
+  it('开放平台：插件那一格的名字就是契约里的 label（不是插件的描述性叫法，也不是 name）', async () => {
+    const user = userEvent.setup({ delay: null })
+    const sent: string[][] = []
+    // 七牛那个插件的真形状（lib/qiniu/quota-plugin.ts 的声明）：名字只有那一处
+    // 产出，经 ListQuotaPlugins 原样到面板。面板不拿 name 兜，也不自己编中文。
+    const plugins = [
+      create(QuotaPluginSchema, {
+        id: 'qiniu',
+        label: '七牛云资源包',
+        fields: [
+          create(QuotaPluginFieldSchema, {
+            name: 'account',
+            label: '额度 Cookie',
+            secret: true,
+          }),
+        ],
+      }),
+    ]
+
+    renderWithClient({
+      client: clientOf(
+        platformOf('my-open', 'openai', '我的开放平台', {
+          isOpenPlatform: true,
+          quotaPlugin: 'qiniu',
+        }),
+        sent,
+        plugins
+      ),
+      children: <UpstreamsPage />,
+    })
+
+    await openDialog(user, 'my-open')
+
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('额度 Cookie')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).not.toContain('门户 cookie')
+    expect(dialog.textContent).not.toContain('account')
+
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-infer')
+    await user.type(screen.getByLabelText('额度 Cookie'), 'c=1')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(sent).toEqual([['sk-infer', 'c=1']])
     })
   })
 
@@ -844,13 +899,13 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'my-open')
 
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
     // 只有一格：没有插件的那几段。
     expect(
       screen.queryByLabelText('第一段')
     ).not.toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-infer')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -875,9 +930,9 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'my-open')
 
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-infer')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -910,12 +965,12 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'my-open')
 
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
     // 格子总数说准：推理那一格，加上插件那段（零段）。
     const dialog = await screen.findByRole('dialog')
     expect(dialog.querySelectorAll('input')).toHaveLength(1)
 
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-infer')
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-infer')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -944,12 +999,12 @@ describe('凭据弹窗按平台渲染格子', () => {
 
     await openDialog(user, 'sensenova')
 
-    expect(await screen.findByLabelText('推理 API Key')).toBeInTheDocument()
+    expect(await screen.findByLabelText('推理 Key')).toBeInTheDocument()
     const dialog = await screen.findByRole('dialog')
     // 一格：额度插件那段不往上加格子。
     expect(dialog.querySelectorAll('input')).toHaveLength(1)
 
-    await user.type(screen.getByLabelText('推理 API Key'), 'sk-sense-1')
+    await user.type(screen.getByLabelText('推理 Key'), 'sk-sense-1')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
@@ -1018,6 +1073,7 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
   /** 一个假客户端：额度插件登记表按给的处理器来。 */
   function openClient(listPlugins: PluginsHandler) {
     return mockAdminClient({
+      ListProviderKinds: listProviderKinds,
       ListUpstreams: () =>
         create(ListUpstreamsResponseSchema, { upstreams: [openPlatform()] }),
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
@@ -1096,6 +1152,7 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
 
     renderWithClient({
       client: mockAdminClient({
+      ListProviderKinds: listProviderKinds,
         ListUpstreams: () =>
           create(ListUpstreamsResponseSchema, {
             upstreams: [
@@ -1131,6 +1188,6 @@ describe('开放平台的凭据入口：登记表没到手就不给开', () => {
     expect(button).not.toBeDisabled()
     await user.click(button)
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
-    expect(await screen.findByLabelText('门户 Cookie')).toBeInTheDocument()
+    expect(await screen.findByLabelText('额度 Cookie')).toBeInTheDocument()
   })
 })

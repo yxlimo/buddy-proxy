@@ -609,18 +609,18 @@ const setBoth = setProviderKeys(e2eId, ["sk-demo-inference", "fake-portal-cookie
 check("两段都写进去了", setBoth.count === 2, String(setBoth.count));
 check(
   "文案说的是这两段",
-  setBoth.message.includes("API key") && setBoth.message.includes("门户 cookie"),
+  setBoth.message.includes("推理 Key") && setBoth.message.includes("额度 Cookie"),
   setBoth.message,
 );
 
 const rows = credentialsOf(e2eId);
 check("凭据表里有两行", rows.length === 2, JSON.stringify(rows.map((r) => [r.kind, r.label, r.inference])));
 check(
-  "第一行是推理 API key",
-  rows[0]?.label === "推理 API key" && rows[0]?.inference === true,
+  "第一行是推理 Key",
+  rows[0]?.label === "推理 Key" && rows[0]?.inference === true,
   JSON.stringify(rows[0]),
 );
-check("第二行是门户 cookie", rows[1]?.label === "门户 cookie", JSON.stringify(rows[1]));
+check("第二行是额度 Cookie", rows[1]?.label === "额度 Cookie", JSON.stringify(rows[1]));
 check("门户 cookie 不是推理凭据", rows[1]?.inference === false, JSON.stringify(rows[1]));
 check("门户 cookie 是能用的", rows[1]?.status === CredentialState.USABLE, String(rows[1]?.status));
 check("门户 cookie 有掩码", Boolean(rows[1]?.masked), String(rows[1]?.masked));

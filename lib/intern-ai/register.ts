@@ -5,6 +5,9 @@
 
 import { catalogModelsFromRow, internAiCatalogModels } from "../catalog-models.ts";
 import { fromUpstreamStatus } from "../provider-kinds.ts";
+import { keyPlan, secretRecord, tokenSlot, valueSlot } from "../kinds/shared.ts";
+import { providerSecretId } from "../credential-ids.ts";
+import { writeInternAiKeys } from "./keys.ts";
 import { outOfCreditsOf, quotaPluginIdOf, quotaViewsOf, recoverAtOf } from "../quota-state.ts";
 import { registerCompatiblePlatform } from "../router/compatible-platform.ts";
 import { internAiStatus } from "./auth.ts";
@@ -32,6 +35,30 @@ export const internAiKind = registerCompatiblePlatform({
   defaultQuotaPlugin: INTERN_AI_CREDITS_PLUGIN_ID,
   // 推理用的是 Discovery 那把 key：子站 token 只用来补 key 与问额度。
   inferWith: "api_key",
+  // 两段：控制台会话（只有一把 token，过期时间不在里面）与推理 key。
+  //
+  // 会话不能推理，但它仍然有用：拿它去补 key、问墨点。
+  credentials: keyPlan({
+    title: "书生·端砚的凭据",
+    slots: () => [
+      tokenSlot(),
+      valueSlot({
+        label: "推理 Key",
+        form: "api_key",
+        id: (account) => `${providerSecretId(account.id, "account")}#discovery_key`,
+        value: (account) =>
+          String(secretRecord(providerSecretId(account.id, "account")).data?.discoveryKey ?? ""),
+        updatedAt: (account) => secretRecord(providerSecretId(account.id, "account")).updatedAt,
+      }),
+    ],
+    field: {
+      name: "discovery-key",
+      label: "推理 Key",
+      hint: "推理走的就是这把 key；留空表示清掉它",
+      placeholder: "sk-…",
+    },
+    write: (account, value) => writeInternAiKeys(account.id, { discoveryKey: value }),
+  }),
   // The key is per account: the policy picks the account, the account has the key.
   keyOf: (provider, accountId) => internAiInferenceKey(accountId ?? provider.id),
   credential: (provider) => fromUpstreamStatus(internAiStatus(provider.id), "api_key"),

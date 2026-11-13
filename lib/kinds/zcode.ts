@@ -7,6 +7,7 @@ import { zcodeCatalogModels } from "../catalog-models.ts";
 import {
   fromUpstreamStatus,
   registerKind,
+  sessionOnlyPlan,
   type HealthSnapshot,
   type ProviderRow,
   type QuotaView,
@@ -81,6 +82,8 @@ registerKind({
   baseUrl: () => ZCODE_MESSAGES_URL.replace(/\/anthropic\/v1\/messages$/, ""),
   // 推理用的就是凭据文件里那份 JWT：会话本身就是推理凭据。
   inferWith: "session",
+  // 凭据只有登录会话（JWT 没有刷新通道，过期了只能重登）。
+  credentials: sessionOnlyPlan({ title: "ZCode 的凭据" }),
   credential: (provider) => fromUpstreamStatus(zcodeStatus(provider.id), "session"),
   models: () => zcodeCatalogModels(zcodeModelsInUse()),
   quotas: (provider, snapshot) => zcodeQuotas(provider, snapshot),
