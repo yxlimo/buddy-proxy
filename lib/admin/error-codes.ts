@@ -87,6 +87,8 @@ export const MODEL_NUMBER_INVALID = "MODEL_NUMBER_INVALID";
 export const MODEL_NUMBER_OUT_OF_RANGE = "MODEL_NUMBER_OUT_OF_RANGE";
 /** 倍率不是非负数（负的价钱没有意义）。 */
 export const MODEL_CREDITS_INVALID = "MODEL_CREDITS_INVALID";
+/** 人工写的计费不合法：方式不是 none/token/multiplier、币种不是 CNY/USD、单价为负。 */
+export const MODEL_BILLING_INVALID = "MODEL_BILLING_INVALID";
 
 /* ------------------------------------------------------------------ *
  * 人工模型元数据
@@ -143,6 +145,7 @@ export const ADMIN_ERRORS = {
   [MODEL_NUMBER_INVALID]: Code.InvalidArgument,
   [MODEL_NUMBER_OUT_OF_RANGE]: Code.InvalidArgument,
   [MODEL_CREDITS_INVALID]: Code.InvalidArgument,
+  [MODEL_BILLING_INVALID]: Code.InvalidArgument,
 
   [MODEL_OVERRIDE_LIST_INVALID]: Code.InvalidArgument,
   [MODEL_OVERRIDE_ENTRY_INVALID]: Code.InvalidArgument,

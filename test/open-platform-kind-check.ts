@@ -202,14 +202,14 @@ function kindIds(platform: string): string[] {
  * 方言与预置的模拟客户端）。这里要的是「表里有一行 kind=tokenrhythm 的平台」
  * —— 那是代码里的适配器，不是用户在面板上选的类型。
  */
-function insertPlatform(id: string, kind: string, baseUrl: string): void {
+function insertPlatform(id: string, kind: string, baseUrl: string, quotaPlugin = ""): void {
   const now = Date.now();
   store()
     .prepare(
       "INSERT INTO platform (id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, '', ?, '', ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)",
     )
-    .run(id, id, baseUrl, JSON.stringify({ items: [], traits: {}, fetchedAt: 0 }), kind, now, now);
+    .run(id, id, baseUrl, JSON.stringify({ items: [], traits: {}, fetchedAt: 0 }), quotaPlugin, kind, now, now);
 }
 
 // 全新库启动后厂商那几行不在表里：平台行是用户在面板上自己建的，代码这边只
@@ -222,10 +222,11 @@ check(
 );
 
 // 后面几节要用的四行：测试自己造（生产里是用户在面板上建的）。
-insertVendorPlatform("qiniu");
-insertVendorPlatform("tokenrhythm");
-insertVendorPlatform("sensenova");
-insertVendorPlatform("intern-ai");
+// 迁移后的形状：kind=openai，行上指名各家的额度插件（额度端点与凭据段数都靠它）。
+insertVendorPlatform("qiniu", "qiniu", { quotaPlugin: "qiniu" });
+insertVendorPlatform("tokenrhythm", "tokenrhythm", { quotaPlugin: "tokenrhythm-wallet" });
+insertVendorPlatform("sensenova", "sensenova", { quotaPlugin: "sensenova-pools" });
+insertVendorPlatform("intern-ai", "intern-ai", { quotaPlugin: "intern-ai-credits" });
 check(
   "造出来的四行厂商平台在表里",
   ["qiniu", "tokenrhythm", "sensenova", "intern-ai"].every((id) => openPlatformOf(id) !== null),
@@ -243,7 +244,7 @@ for (const id of ["qiniu", "tokenrhythm", "sensenova", "intern-ai"]) {
 
 // 已有库的行不被任何启动逻辑改写：插一行目录空着的厂商行，重启之后它还是那样
 // （以前那一轮播种会把它按来源填一遍）。
-insertPlatform("vendor-keep", "qiniu", "https://vendor-keep.test/v1");
+insertPlatform("vendor-keep", "openai", "https://vendor-keep.test/v1", "qiniu");
 const vendorKeepBefore = JSON.stringify(openPlatformOf("vendor-keep"));
 closeStore();
 store();
@@ -259,16 +260,16 @@ check(
 
 section("0.1 额度请求打哪台");
 
-// 判据是「这一类平台默认指哪台」（适配器自己声明的 defaultBaseUrl）：行上的
-// 地址还等于它时，额度问插件自己那台（门户、控制台、钱包）；用户把行指到别处
-// 时，跟着行走。
-const { quotaEndpointBase } = await import("../lib/quota-plugins.ts");
+// 判据：行上的地址还是迁移写进去的那台原推理地址（那不是用户指到了别处），
+// 且行上指名了这家的插件 —— 两个都成立时，额度问插件自己那台（门户、控制台、
+// 钱包）；用户把行指到别处时，跟着行走。
+const { quotaEndpointBase, quotaPluginOf } = await import("../lib/quota-plugins.ts");
 const qiniuRow = { ...bareRow("qiniu"), platform: "qiniu" };
 const qiniuBase = String(openPlatformOf("qiniu")?.baseUrl ?? "");
 check(
-  "前提：这一类声明的默认地址就是行上的地址",
-  kindOf("qiniu")?.defaultBaseUrl === qiniuBase,
-  `${kindOf("qiniu")?.defaultBaseUrl} / ${qiniuBase}`,
+  "前提：行上地址就是迁移写进去的原推理地址，插件也登记了",
+  qiniuBase === "https://api.qnaigc.com/v1" && quotaPluginOf("qiniu") !== null,
+  `${qiniuBase} / ${String(quotaPluginOf("qiniu")?.id ?? "无")}`,
 );
 check(
   "行上的地址还是默认那台：额度问插件自己那台",
@@ -942,7 +943,7 @@ section("10. 拿各家自己的推理 key 去问目录");
 const { saveSession: saveTokenRhythmSession } = await import("../lib/tokenrhythm/accounts.ts");
 
 // 中转站：推理 key 与门户会话是两个东西。问目录要带那把 key，不是 cookie。
-insertPlatform("relay-demo", "tokenrhythm", upstreamBase);
+insertPlatform("relay-demo", "openai", upstreamBase, "tokenrhythm-wallet");
 const relayAccount = addAccount({ platform: "relay-demo" });
 const relayAccountId = relayAccount.id ?? "";
 check("中转站账号加得起来", relayAccount.ok === true && relayAccountId !== "", relayAccount.message);
@@ -985,7 +986,7 @@ check(
 );
 
 // 七牛云：两段凭据，推理用第一段。
-insertPlatform("qiniu-demo", "qiniu", upstreamBase);
+insertPlatform("qiniu-demo", "openai", upstreamBase, "qiniu");
 const qiniuDemoAccount = addAccount({ platform: "qiniu-demo" });
 const qiniuKeyed = setProviderKeys(qiniuDemoAccount.id ?? "", ["sk-qiniu-infer", "PORTAL-COOKIE-QINIU"]);
 check("七牛：两段凭据都写进去了", qiniuKeyed.ok === true && qiniuKeyed.count === 2, qiniuKeyed.message);
@@ -1008,7 +1009,7 @@ check(
 check("七牛：目录写回了表里", rowIds("qiniu-demo").join(",") === "q-1", JSON.stringify(rowIds("qiniu-demo")));
 
 // 只配了门户 cookie 的七牛账号：不能推理，也就不去问目录。
-insertPlatform("cookie-demo", "qiniu", upstreamBase);
+insertPlatform("cookie-demo", "openai", upstreamBase, "qiniu");
 const cookieAccount = addAccount({ platform: "cookie-demo" });
 setProviderKeys(cookieAccount.id ?? "", ["", "PORTAL-ONLY"]);
 seen.length = 0;
@@ -1021,7 +1022,7 @@ check(
 check("只有门户 cookie：没问上游", seen.length === 0, JSON.stringify(seen));
 
 // 没有 key：报那句话，不问上游。
-insertPlatform("nokey-demo", "tokenrhythm", upstreamBase);
+insertPlatform("nokey-demo", "openai", upstreamBase);
 addAccount({ platform: "nokey-demo" });
 seen.length = 0;
 const noKeyPull2 = await refreshOpenPlatformCatalog("nokey-demo", { force: true });
@@ -1158,7 +1159,7 @@ const orphanRow = { ...bareRow("qiniu"), platform: "no-such-platform" };
 
 // 一、行是权威。
 putRowModels("qiniu", ["only-this-one"]);
-const onlyRow = kindOf("qiniu")!.models(bareRow("qiniu"));
+const onlyRow = kindOf("openai")!.models(bareRow("qiniu"));
 check(
   "qiniu：只返回行里的那一条",
   onlyRow.length === 1 && onlyRow[0]?.id === "only-this-one",
@@ -1187,20 +1188,20 @@ check(
 putRowModels("tokenrhythm", []);
 check(
   "tokenrhythm：行空就是没有（不退回代码目录）",
-  kindOf("tokenrhythm")!.models(bareRow("tokenrhythm")).length === 0,
-  JSON.stringify(kindOf("tokenrhythm")!.models(bareRow("tokenrhythm")).map((m) => m.id)),
+  kindOf("openai")!.models(bareRow("tokenrhythm")).length === 0,
+  JSON.stringify(kindOf("openai")!.models(bareRow("tokenrhythm")).map((m) => m.id)),
 );
 // 行空时它会在上游目录到手后被填上（见下面第八条），不是永久没有 —— 但「现在
 // 没有」就是没有，不从代码目录借。
 check(
   "tokenrhythm：行空就是空（不靠退回代码目录蒙上去的）",
-  kindOf("tokenrhythm")!.models(bareRow("tokenrhythm")).length === 0,
+  kindOf("openai")!.models(bareRow("tokenrhythm")).length === 0,
   JSON.stringify(openPlatformOf("tokenrhythm")?.models),
 );
 
 // 三、这一族没有代码目录：行里的 id 报出去就是最小形状（不编能力）。
 putRowModels("tokenrhythm", ["relay-model-1"]);
-const tokenFromRow = kindOf("tokenrhythm")!.models(bareRow("tokenrhythm"));
+const tokenFromRow = kindOf("openai")!.models(bareRow("tokenrhythm"));
 check(
   "tokenrhythm：id 是行里那个",
   tokenFromRow[0]?.id === "relay-model-1",
@@ -1214,7 +1215,7 @@ check(
 
 // 四、顺序跟着行。
 putRowModels("qiniu", ["model-b", "model-a"]);
-const orderFromRow = kindOf("qiniu")!
+const orderFromRow = kindOf("openai")!
   .models(bareRow("qiniu"))
   .map((m) => m.id);
 check(
@@ -1251,7 +1252,7 @@ check(
 );
 
 // 六、行读不到：没有目录。方言族的目录只有上游那一份，代码里没有第二份。
-const orphanIds = kindOf("qiniu")!
+const orphanIds = kindOf("openai")!
   .models(orphanRow)
   .map((m) => m.id);
 check(
@@ -1302,8 +1303,8 @@ putRowModels("sensenova", []);
 setRowAuto("sensenova", true);
 check(
   "行空的目录：kind 报空",
-  kindOf("sensenova")!.models(bareRow("sensenova")).length === 0,
-  String(kindOf("sensenova")!.models(bareRow("sensenova")).length),
+  kindOf("openai")!.models(bareRow("sensenova")).length === 0,
+  String(kindOf("openai")!.models(bareRow("sensenova")).length),
 );
 syncPlatformModels("sensenova", ["sense-new"]);
 check(
@@ -1367,69 +1368,6 @@ check(
   JSON.stringify(openPlatformOf("qiniu")?.models),
 );
 
-// 八、端到端：上游答了目录 -> 落到 cache -> 行跟着出现 -> kind 读得到元数据。
-// 这一条是这一单的主线：行说了算，而行的内容确实是上游那一份。
-const { refreshSenseNovaCatalog, senseNovaCatalog } = await import(
-  "../lib/sensenova/transport.ts"
-);
-
-const senseAccount = addAccount({ platform: "sensenova" });
-const senseAccountId = String(senseAccount.id ?? "");
-check("SenseNova：账号加得起来", senseAccount.ok === true && senseAccountId !== "", senseAccount.message);
-const senseKey = setProviderKeys(senseAccountId, ["sk-sense-test"]);
-check("SenseNova：推理 key 写进去了", senseKey.ok === true && senseKey.count === 1, senseKey.message);
-
-// 把行清成空的，才看得出后续那一步是「上游答了 → 行被填上」。
-putRowModels("sensenova", []);
-setRowAuto("sensenova", true);
-check(
-  "SenseNova：动手之前行里是空的",
-  rowItems("sensenova").length === 0,
-  JSON.stringify(openPlatformOf("sensenova")?.models),
-);
-check(
-  "SenseNova：行空的时候 kind 也报空（不从 cache 借）",
-  kindOf("sensenova")!.models(bareRow("sensenova")).length === 0,
-  JSON.stringify(kindOf("sensenova")!.models(bareRow("sensenova")).map((m) => m.id)),
-);
-modelsPayload = {
-  data: [
-    {
-      id: "sense-from-upstream",
-      name: "Sense From Upstream",
-      context_length: 65536,
-      max_output_length: 4096,
-      supported_features: ["tools", "reasoning"],
-    },
-  ],
-};
-await refreshSenseNovaCatalog(true, senseAccountId);
-check(
-  "SenseNova：上游答的目录落在 cache 里",
-  senseNovaCatalog().some((m) => m.id === "sense-from-upstream"),
-  JSON.stringify(senseNovaCatalog().map((m) => m.id)),
-);
-check(
-  "SenseNova：行跟着变成了上游那一份",
-  rowItems("sensenova").join(",") === "sense-from-upstream",
-  JSON.stringify(openPlatformOf("sensenova")?.models),
-);
-const senseFromRow = kindOf("sensenova")!.models(bareRow("sensenova"));
-check(
-  "SenseNova：kind 读得到行里的那一份",
-  senseFromRow.length === 1 && senseFromRow[0]?.id === "sense-from-upstream",
-  JSON.stringify(senseFromRow.map((m) => m.id)),
-);
-check(
-  "SenseNova：元数据是 cache 里那一份（名字、上下文、输出、能力）",
-  senseFromRow[0]?.displayName === "Sense From Upstream" &&
-    senseFromRow[0]?.contextWindow === 65536 &&
-    senseFromRow[0]?.maxOutputTokens === 4096 &&
-    senseFromRow[0]?.reasoning === true &&
-    senseFromRow[0]?.toolCall === true,
-  JSON.stringify(senseFromRow[0]),
-);
-
 /* ------------------------------------------------------------------ *
  * 人工元数据：发布目录的最后一道覆盖
  * ------------------------------------------------------------------ */
@@ -1480,7 +1418,7 @@ check(
 );
 check(
   "开放平台：人工条目不在时不会出现在别的平台上",
-  kindOf("sensenova")!
+  kindOf("openai")!
     .models(bareRow("sensenova"))
     .every((m) => m.id !== "row-three"),
 );
@@ -1500,6 +1438,8 @@ section("14. 新建平台的族");
 
 // 判据只有一处（lib/platform-catalog.ts 的 platformCategoryOfKind）：方言族一律
 // 从上游拉，模拟客户端那一族由代码给出。
+// 厂商那五家不再是能新建的一类：建平台被拒（它们名下的存量行由启动时的迁移
+// 改成 openai，见 lib/store.ts 的 migrateLegacyVendorKinds）。
 const VENDOR_KINDS = ["qiniu", "tokenrhythm", "xinghuo", "sensenova", "intern-ai"];
 for (const kind of VENDOR_KINDS) {
   const id = `new-${kind}`;
@@ -1509,17 +1449,11 @@ for (const kind of VENDOR_KINDS) {
     baseUrl: upstreamBase,
     kind,
   });
-  check(`${kind}：平台建得起来`, created.ok === true, created.message);
-  check(
-    `${kind}：方言族（目录从上游拉）`,
-    platformCategoryOfKind(kind) === "dialect",
-    platformCategoryOfKind(kind),
-  );
-  check(
-    `${kind}：建出来时没有目录`,
-    (openPlatformOf(id)?.models.items ?? []).length === 0,
-    JSON.stringify(openPlatformOf(id)?.models),
-  );
+  check(`${kind}：不再能建平台`, created.ok === false, created.message);
+  check(`${kind}：那一行没写进表`, openPlatformOf(id) === null, String(openPlatformOf(id)));
+  // kind 也从登记表里退场了：迁移之后的行上是 openai，不再有「靠旧 kind 解析」
+  // 的存量行。
+  check(`${kind}：kind 已从登记表退场`, kindOf(kind) === null, String(kindOf(kind)));
 }
 
 // 方言：一样从上游拉。
@@ -1554,21 +1488,46 @@ section("15. ListPlatformKinds 的默认地址");
 
 const kindsAnswer = await adminService.listPlatformKinds!({} as any, {} as any);
 const kindsListed = (kindsAnswer.kinds ?? []) as any[];
+// 厂商那五家不再提供给新建：面板下拉那一份里没有它们（能建的清单只剩两种
+// 方言，见 lib/platform-catalog.ts）。
 for (const one of VENDOR_KINDS) {
   const row = kindsListed.find((k) => k.kind === one);
-  const registryBase = kindOf(one)?.defaultBaseUrl ?? "";
-  check(`${one}：清单里有这一格`, Boolean(row), String(row));
-  check(
-    `${one}：默认地址不是空串`,
-    typeof row?.defaultBaseUrl === "string" && row.defaultBaseUrl !== "",
-    String(row?.defaultBaseUrl),
-  );
-  check(
-    `${one}：默认地址等于注册表那一格`,
-    row?.defaultBaseUrl === registryBase,
-    `${row?.defaultBaseUrl} / ${registryBase}`,
-  );
+  check(`${one}：下拉里不再提供`, row === undefined, String(row));
 }
+// 登记表里也没有它们了：默认地址随 kind 退场，改由迁移写进行里
+// （lib/store.ts 的 LEGACY_VENDOR_KINDS）；行上地址是不是「我们自己写的」由
+// 插件 id 对表判断（lib/quota-plugin-registry.ts 的 VENDOR_INFERENCE_BASES）。
+check(
+  "厂商 kind 已从登记表退场",
+  VENDOR_KINDS.every((kind) => kindOf(kind) === null),
+  VENDOR_KINDS.map((kind) => `${kind}:${String(kindOf(kind)?.kind ?? "无")}`).join(","),
+);
+check(
+  "下拉里剩下的方言就是那两种",
+  kindsListed
+    .filter((k) => k.category === "dialect")
+    .map((k) => k.kind)
+    .join(",") === "openai,anthropic",
+  kindsListed.map((k) => `${k.category}:${k.kind}`).join(","),
+);
+// 并排的一条：接口也不接 —— 「不提供」不是只在界面上藏起来，能建的白名单里
+// 已经没有它了。写不进去，所以没有要收尾的行。
+let refusedKind = "";
+try {
+  await adminService.addPlatform!(
+    {
+      id: "qiniu-rebuilt",
+      label: "重建的七牛",
+      baseUrl: "https://qiniu.example.test/v1",
+      kind: "qiniu",
+    } as any,
+    {} as any,
+  );
+} catch (e) {
+  refusedKind = String((e as { message?: string })?.message ?? e);
+}
+check("AddPlatform 不再接受 kind=qiniu", refusedKind !== "", refusedKind);
+check("那一行没写进表", openPlatformOf("qiniu-rebuilt") === null, String(openPlatformOf("qiniu-rebuilt")));
 
 /* ------------------------------------------------------------------ *
  * 16. 建平台：额度插件与目录都预填
@@ -1576,48 +1535,12 @@ for (const one of VENDOR_KINDS) {
 
 section("16. 建平台时预填额度插件与目录");
 
-// 额度插件：这一类默认用哪个插件写在 kind 注册表里（ProviderKind.defaultQuotaPlugin）。
-// 面板建平台时拿它预填那一格，用户可以改。
-const VENDOR_PLUGIN: { kind: string; plugin: string }[] = [
-  { kind: "qiniu", plugin: "qiniu" },
-  { kind: "sensenova", plugin: "sensenova-pools" },
-  { kind: "intern-ai", plugin: "intern-ai-credits" },
-  { kind: "tokenrhythm", plugin: "tokenrhythm-wallet" },
-  { kind: "xinghuo", plugin: "" },
-];
-for (const one of VENDOR_PLUGIN) {
-  const row = kindsListed.find((k) => k.kind === one.kind);
-  check(
-    `${one.kind}：清单里的默认插件是 ${one.plugin || "（空）"}`,
-    row?.defaultQuotaPlugin === one.plugin,
-    String(row?.defaultQuotaPlugin),
-  );
-  check(
-    `${one.kind}：与注册表那一格一致`,
-    (kindOf(one.kind)?.defaultQuotaPlugin ?? "") === one.plugin,
-    String(kindOf(one.kind)?.defaultQuotaPlugin),
-  );
-}
-
-// 建平台：额度插件写进行里（像以前那些模板一样）。
-for (const one of VENDOR_PLUGIN) {
-  const id = `prefill-${one.kind}`;
-  const created = createOpenPlatform({
-    id,
-    label: one.kind,
-    baseUrl: upstreamBase,
-    kind: one.kind,
-  });
-  check(`${one.kind}：平台建得起来`, created.ok === true, created.message);
-  check(
-    `${one.kind}：额度插件预填成 ${one.plugin || "（空）"}`,
-    openPlatformOf(id)?.quotaPlugin === one.plugin,
-    String(openPlatformOf(id)?.quotaPlugin),
-  );
-}
+// 「建平台时按这一类的默认插件预填」随厂商 kind 退场消失：默认插件写在 kind
+// 注册表里，五家退场后没有可建的 kind 带默认插件。存量行上的插件是迁移原样
+// 留下的（不按 kind 补）。
 
 // 目录：建平台一律不预填（目录归上游，刷新才拿得到）。
-for (const kind of ["qiniu", "xinghuo", "tokenrhythm"]) {
+for (const kind of ["openai", "anthropic"]) {
   const id = `prefill-models-${kind}`;
   const created = createOpenPlatform({
     id,
@@ -1636,7 +1559,7 @@ for (const kind of ["qiniu", "xinghuo", "tokenrhythm"]) {
 }
 
 // 目录归上游的那几家：建的时候目录是空的，等上游那份。
-for (const kind of ["sensenova", "intern-ai", "openai"]) {
+for (const kind of ["openai", "anthropic"]) {
   const id = `prefill-empty-${kind}`;
   const created = createOpenPlatform({
     id,
@@ -1657,7 +1580,6 @@ const given = createOpenPlatform({
   id: "prefill-given",
   label: "given",
   baseUrl: upstreamBase,
-  kind: "qiniu",
   models: ["my/model-a", "my/model-b"],
 } as never);
 check("给了目录的平台建得起来", given.ok === true, given.message);
@@ -1669,7 +1591,9 @@ check(
 
 // 三种给法是三件事（这一层是定规矩的地方）：
 //   不给这一格 = 这一类声明的默认插件；给了空串 = 不用插件；给了 id = 用这个。
-const DEFAULT_PLUGIN_KIND = "qiniu";
+// 只剩两种方言，都没有默认插件：不给这一格建出来就是空串（不再是「这一类声明的
+// 默认插件」—— 那种 kind 已经不能建了）。
+const DEFAULT_PLUGIN_KIND = "openai";
 const defaultPluginRow = createOpenPlatform({
   id: "plugin-default",
   label: "默认插件",
@@ -1678,8 +1602,8 @@ const defaultPluginRow = createOpenPlatform({
 });
 check("不给插件：平台建得起来", defaultPluginRow.ok === true, defaultPluginRow.message);
 check(
-  "不给就是这一类声明的默认插件",
-  openPlatformOf("plugin-default")?.quotaPlugin === "qiniu",
+  "这一类没有默认插件，所以不给这一格建出来就是空串",
+  openPlatformOf("plugin-default")?.quotaPlugin === "",
   String(openPlatformOf("plugin-default")?.quotaPlugin),
 );
 
@@ -1723,14 +1647,14 @@ check(
 section("17. 目录归上游还是归代码");
 
 // 一、方言族建平台时没有目录，刷新之后目录是上游答的那份。
+// 一家原来的厂商平台，迁移之后就是这个形状：kind 是 openai、地址在行上。
 const qiniuProbeCreated = createOpenPlatform({
   id: "qiniu-probe",
   label: "Qiniu Probe",
   baseUrl: upstreamBase,
-  kind: "qiniu",
   quotaPlugin: "",
 });
-check("方言族（qiniu）的平台建得起来", qiniuProbeCreated.ok === true, qiniuProbeCreated.message);
+check("方言族的平台建得起来", qiniuProbeCreated.ok === true, qiniuProbeCreated.message);
 check(
   "行里没有目录（建平台不预填）",
   (openPlatformOf("qiniu-probe")?.models.items ?? []).length === 0,

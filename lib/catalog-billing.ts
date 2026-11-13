@@ -57,6 +57,96 @@ export interface ModelBilling {
    * model rather than 0 — see the rule in `readModelBilling`
    */
   unknown?: boolean;
+  /**
+   * This billing came from a person's override, not from the upstream.
+   *
+   * It states where the value came from, not whether it differs: an override that
+   * repeats the upstream's own numbers is still `overridden`. Callers label the
+   * price with it; nothing may infer it by comparing values.
+   */
+  overridden?: boolean;
+}
+
+/**
+ * The billing a person wrote for one model, before it is checked.
+ *
+ * Every field is optional: a missing `mode` is "nobody said", which is not the
+ * same as `mode: "none"` — that one is a person stating the model is not charged
+ * for at all.
+ */
+export interface BillingOverride {
+  mode?: string;
+  currency?: string;
+  inputPerMillion?: number;
+  outputPerMillion?: number;
+  cacheReadPerMillion?: number;
+  multiplier?: number;
+}
+
+/** The three modes a person may pick. */
+const OVERRIDE_MODES: BillingMode[] = ["none", "token", "multiplier"];
+
+/**
+ * What is wrong with one billing override, or null when it is fine.
+ *
+ * The message names the field instead of saying "invalid": a row carries four
+ * boxes, and "invalid" alone would leave a person hunting through them.
+ */
+export function billingOverrideProblem(billing: BillingOverride): string | null {
+  if (billing.mode !== undefined && !OVERRIDE_MODES.includes(billing.mode as BillingMode)) {
+    return `billing mode is not one of ${OVERRIDE_MODES.join("/")}: ${billing.mode}`;
+  }
+  if (billing.currency !== undefined) {
+    const currency = billing.currency.trim().toUpperCase();
+    // Only these two: another code has no symbol and no rate to normalise against,
+    // so storing one would just print a string the panel cannot read.
+    if (currency !== "CNY" && currency !== "USD") {
+      return `billing currency is not CNY/USD: ${billing.currency}`;
+    }
+  }
+  for (const [field, value] of [
+    ["inputPerMillion", billing.inputPerMillion],
+    ["outputPerMillion", billing.outputPerMillion],
+    ["cacheReadPerMillion", billing.cacheReadPerMillion],
+    ["multiplier", billing.multiplier],
+  ] as [string, number | undefined][]) {
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return `billing ${field} is not a non-negative number: ${String(value)}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The billing a person wrote, as the catalogue carries it.
+ *
+ * `mode` absent means no override at all: the caller keeps whatever it had.
+ *
+ * Only the fields the chosen mode reads are carried — a price left over from the
+ * mode a person switched away from would otherwise sit in the catalogue looking
+ * current. Note the two meanings of `none` meeting here: a person writes it for
+ * "not charged", while the reader in this file uses it for "nothing to report";
+ * `overridden` is what tells them apart downstream.
+ */
+export function overrideBilling(billing: BillingOverride): ModelBilling | undefined {
+  const mode = billing.mode as BillingMode | undefined;
+  if (mode === undefined) return undefined;
+  if (mode === "none") return { mode: "none", overridden: true };
+  if (mode === "multiplier") {
+    return billing.multiplier === undefined
+      ? { mode: "multiplier", overridden: true }
+      : { mode: "multiplier", credits: billing.multiplier, overridden: true };
+  }
+  const out: ModelBilling = { mode: "token", overridden: true };
+  const currency = billing.currency?.trim().toUpperCase();
+  if (currency === "CNY" || currency === "USD") out.currency = currency;
+  if (billing.inputPerMillion !== undefined) out.inputPerMillion = billing.inputPerMillion;
+  if (billing.outputPerMillion !== undefined) out.outputPerMillion = billing.outputPerMillion;
+  if (billing.cacheReadPerMillion !== undefined) {
+    out.cacheReadPerMillion = billing.cacheReadPerMillion;
+  }
+  return out;
 }
 
 /** The billing roles a descriptor maps paths to. */

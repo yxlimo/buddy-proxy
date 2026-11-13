@@ -490,24 +490,14 @@ check("登记的插件选得回来", restoredPlugin !== null, errDetail());
 // AddPlatform 接 quota_plugin 了（契约里 AddPlatformRequest 有这一格，带
 // presence）：没给 = 这一类声明的默认插件；给了空串 = 不用插件；给了 id = 用
 // 那个（必须已登记，没登记就拒，一个字都不落库）。
-const pluginDefault = await guard(() => addPlatform({
-  id: "acme-plugin-default",
-  label: "默认插件的加平台",
-  baseUrl: "https://api.acme.test/v1",
-  kind: "qiniu",
-}));
-check("加平台：不带 quota_plugin 建得起来", pluginDefault !== null, errDetail());
-check(
-  "不带就是这一类声明的默认插件（qiniu）",
-  openPlatformOf("acme-plugin-default")?.quotaPlugin === "qiniu",
-  String(openPlatformOf("acme-plugin-default")?.quotaPlugin),
-);
-
+// 「不带 = 用这一类声明的默认插件」这一条现在没有可建的 kind 能演示：剩下的两种
+// 方言都没有默认插件（默认插件属于厂商那五家，它们已经不能建了）。所以这里只留
+// 「空串 = 不用插件」那半边，另一半靠厂商 kind 被拒来证明。
 const pluginEmpty = await guard(() => addPlatform({
   id: "acme-plugin-empty",
   label: "不用插件的加平台",
   baseUrl: "https://api.acme.test/v1",
-  kind: "qiniu",
+  kind: "openai",
   quotaPlugin: "",
 }));
 check("加平台：quota_plugin 给空串建得起来", pluginEmpty !== null, errDetail());
@@ -537,7 +527,7 @@ check(
 );
 
 // 这两个平台只是为了上面那几行断言：删掉，免得影响后面按行数比的那几节。
-for (const id of ["acme-plugin-default", "acme-plugin-empty"]) {
+for (const id of ["acme-plugin-empty"]) {
   const dropped = await guard(() => deletePlatform({ id }));
   check(`为了那条断言建的平台删得掉：${id}`, dropped !== null, errDetail());
 }
@@ -835,8 +825,8 @@ check(
   errDetail().includes("no-such-kind") &&
     errDetail().includes("openai") &&
     errDetail().includes("anthropic") &&
-    // 厂商五家现在也是能建的一类：候选里列得出它们。
-    ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].every((kind) =>
+    // 厂商那五家已经不是能建的一类：候选里不该再出现它们。
+    !["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].some((kind) =>
       errDetail().includes(kind),
     ),
   errDetail(),
@@ -845,29 +835,21 @@ check("被拒的那一行没写进表", openPlatformOf("kind-bad") === null, sho
 // 这种「目录里根本没有这一类」的也不许指向预置列表：能建的那两种方言已经列出来了。
 check("没登记的 kind 不让人去选预置", !errDetail().includes("preset"), errDetail());
 
-// 厂商那几家也是能建的一类（模板表没了，平台行由用户在面板上自己建）：
-// 建出来的那一格「自动拉目录」跟着 kind 注册表走。
-for (const kind of ["sensenova"]) {
-  const built = await guard(() => addPlatform({
+// 厂商那五家不再能建：走 AddPlatform 会撞在能建的白名单上，一个字节也不落库。
+for (const kind of ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"]) {
+  const refused = await guard(() => addPlatform({
     id: `kind-build-${kind}`,
     label: `Kind Build ${kind}`,
     baseUrl: "https://api.kind.test/v1",
     kind,
   }));
-  check(`厂商类型可建：${kind}`, built !== null, show(built));
+  check(`厂商类型不再能建：${kind}`, refused === null, show(refused));
   check(
-    `${kind} 的机器码不是「没有这一类」`,
-    errCode() !== errorCodes.PLATFORM_KIND_UNKNOWN,
+    `${kind} 的机器码是「没有这一类」`,
+    errCode() === errorCodes.PLATFORM_KIND_UNKNOWN,
     `${errCode()} / ${errDetail()}`,
   );
-  check(`${kind} 写进表了`, openPlatformOf(`kind-build-${kind}`)?.kind === kind, show(openPlatformOf(`kind-build-${kind}`)));
-  check(
-    `${kind}：建出来时没有目录`,
-    (openPlatformOf(`kind-build-${kind}`)?.models.items ?? []).length === 0,
-    show(openPlatformOf(`kind-build-${kind}`)?.models),
-  );
-  // 收尾：这一行是这一节自己造的，后面按行数比的小节不留它。
-  await guard(() => deletePlatform({ id: `kind-build-${kind}` }));
+  check(`${kind} 没有写进表`, openPlatformOf(`kind-build-${kind}`) === null, show(openPlatformOf(`kind-build-${kind}`)));
 }
 
 // 建好之后换不了类型。
@@ -995,33 +977,21 @@ check(
   kindOptions.some((k: any) => k.kind === "zcode" || k.presetId === "zcode"),
   show(kindOptions.map((k: any) => k.presetId)),
 );
-// 厂商那五家也在能选的两族里（模板表没了，平台行由用户在面板上自己建）：
-// 它们的默认地址取自 kind 注册表，不是空串。
+// 厂商那五家不在下拉里，也从登记表里退场了：迁移后的行上是 kind=openai，
+// 登记表里没有它们 —— 默认地址改由迁移写进行里（lib/store.ts 的
+// LEGACY_VENDOR_KINDS，地址表另有一份在 lib/quota-plugin-registry.ts 的
+// VENDOR_INFERENCE_BASES，给额度端点用）。
 const VENDOR_KINDS = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
 check(
-  "厂商类型在里面",
-  VENDOR_KINDS.every((kind) => kindOptions.some((k: any) => k.kind === kind)),
+  "厂商类型不在下拉里",
+  VENDOR_KINDS.every((kind) => !kindOptions.some((k: any) => k.kind === kind)),
   show(kindOptions.map((k: any) => k.kind)),
 );
-for (const kind of VENDOR_KINDS) {
-  const option = kindOptions.find((k: any) => k.kind === kind);
-  const registryBase = kindOf(kind)?.defaultBaseUrl ?? "";
-  check(
-    `${kind}：默认地址不是空串`,
-    typeof option?.defaultBaseUrl === "string" && option.defaultBaseUrl !== "",
-    show(option?.defaultBaseUrl),
-  );
-  check(
-    `${kind}：默认地址等于 kind 注册表那一格`,
-    option?.defaultBaseUrl === registryBase,
-    `${option?.defaultBaseUrl} / ${registryBase}`,
-  );
-  check(
-    `${kind}：族是判据（方言族一律从上游拉）`,
-    option?.category === platformCategoryOfKind(kind),
-    show([option?.category, platformCategoryOfKind(kind)]),
-  );
-}
+check(
+  "厂商 kind 不在登记表里（退场了）",
+  VENDOR_KINDS.every((kind) => kindOf(kind) === null),
+  VENDOR_KINDS.map((kind) => `${kind}:${String(kindOf(kind)?.kind ?? "无")}`).join(","),
+);
 
 /* ------------------------------------------------------------------ *
  * 4d. 建预置的模拟客户端

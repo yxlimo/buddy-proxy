@@ -13,7 +13,8 @@
 import type { QuotaView, CreditLotView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { quotaProbe } from "../quota-state.ts";
-import { quotaEndpointBase, registerQuotaPlugin, type QuotaProbe } from "../quota-plugins.ts";
+import { quotaEndpointBase } from "../quota-plugins.ts";
+import { registerQuotaPlugin, type QuotaProbe } from "../quota-plugin-registry.ts";
 import { SENSENOVA_PLATFORM_BASE } from "./config.ts";
 // 插件 id 住在一个没有依赖的地方（lib/sensenova/quota-plugin-id.ts）：本模块与
 // register 互相引用，id 若在本模块里，register 在求值期读它就会撞上「还在初始化」。

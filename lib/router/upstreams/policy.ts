@@ -1,9 +1,9 @@
 // lib/router/upstreams/policy.ts — one upstream's accounts, under its policy.
 //
-// Every adapter that is not the relay station runs its call through
-// underPolicy: the platform's policy picks the account, the account is
-// skipped while it cools down, and the failure is shaped into what the
-// client sees. UpstreamContext is what an adapter is handed.
+// Every adapter runs its call through underPolicy: the platform's policy
+// picks the account, the account is skipped while it cools down, and the
+// failure is shaped into what the client sees. UpstreamContext is what an
+// adapter is handed.
 
 import { AuthError } from "../../credential.ts";
 import type { WorkBuddyModel } from "../../workbuddy/models.ts";
@@ -30,6 +30,8 @@ import { type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { credentialFaultError, platformWithoutAccount } from "../routes.ts";
 import { platformAvailability, type PlatformAvailability } from "../availability.ts";
+// 余额到期优先的次序：按平台钉一个账号（余额从额度快照读，不问钱包接口）。
+import { forgetPinnedAccount, pinNextAccount } from "../balance-order.ts";
 import { withRetryAfter, ClientGoneError } from "../deliver.ts";
 
 /** What the adapters need to know about the router they run in. */
@@ -903,8 +905,10 @@ export function settlement(): Settlement {
  * that is refused a request that is itself wrong is not left behind — another
  * account would fail the same way.
  *
- * `expiry_first` is the relay station's alone: its order comes from the
- * wallet, so it has its own adapter (toTokenRhythm) and never reaches here.
+ * `expiry_first` reaches here like the other policies: the order comes from
+ * the balances the quota plugin reported (lib/router/balance-order.ts), and
+ * only "this account has no money left" moves the request on to the next
+ * account. No platform is special: any platform may pick this policy.
  *
  * `settle` is for the callers that consume the answer after this returns (the
  * streaming ones): the headers arriving is not the answer arriving, so the
@@ -1055,12 +1059,30 @@ export async function underPolicy<T>(
         }),
     })),
   );
+  // expiry_first 的候选：次序由余额决定，所以「下一个」每次都得重新钉。
+  //
+  // 钉住的单位是平台，状态在 balance-order 里；这里只负责「把手上的候选按 id
+  // 递出去」。试过的账号不再给第二次机会 —— 否则重新钉的时候又会钉回同一个。
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const attempted: string[] = [];
+  const nextByBalance = async () => {
+    const rest = usable.map((account) => account.id).filter((id) => !attempted.includes(id));
+    if (!rest.length) return null;
+    const id = pinNextAccount(platform, rest);
+    if (id === null) return null;
+    const candidate = candidateById.get(id);
+    if (!candidate) return null;
+    attempted.push(id);
+    return candidate;
+  };
+
   // 有没有别的账号可换：策略与候选数说了算。降级且不止一个候选时才算有。
   //
   // 没有别人可换时不记冷却（见 cooldownForFailure）：记了只会让这个平台在一
   // 段时间里一个上游请求都不打，而客户端拿到的还是同一条报错。结算那条路
   // （流式答复的 failure）问的是同一件事，所以同一个答案带下去。
-  const hasAlternative = policy === "fallback" && candidates.length > 1;
+  const hasAlternative =
+    (policy === "fallback" || policy === "expiry_first") && candidates.length > 1;
   settle?.hasAlternatives(hasAlternative);
 
   // 试的次序：权重大的先试（select 里也是这个次序，byWeight）。
@@ -1082,6 +1104,13 @@ export async function underPolicy<T>(
   }
 
   return selectProvider(policy, candidates, {
+    // expiry_first：只有「这个账号没钱了」才换人，判据是通用的那一份（402 /
+    // 平台自己的余额不足码）。它说没钱时把钉住的账号忘掉，下一次重新钉。
+    insufficient: isNoBalanceFailure,
+    next: policy === "expiry_first" ? nextByBalance : undefined,
+    onMissingBalance: async () => {
+      forgetPinnedAccount(platform);
+    },
     // 账号层「这个失败要不要换人」的判据。
     //
     // 它只看得到 `run` 抛出来的错，而老协议那条路上 `run` 只把流的迭代器交回来

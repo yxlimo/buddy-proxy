@@ -37,7 +37,7 @@ import {
 import { isPlatform, platformOfAny } from "../platforms.ts";
 // 开放平台的额度是数据：平台那一行指名的插件去问。
 import { OPEN_PLATFORM_KIND_NAME } from "../open-platforms.ts";
-import { quotaPluginOf, type QuotaProbe } from "../quota-plugins.ts";
+import { quotaPluginOf, type QuotaProbe } from "../quota-plugin-registry.ts";
 import { applyProbeEffect, quotaPluginIdOf, quotaProbe } from "../quota-state.ts";
 // The kinds register themselves; importing the file is what makes them known.
 import "../kinds/index.ts";

@@ -81,7 +81,9 @@ insertVendorPlatform("sensenova");
 insertVendorPlatform("intern-ai");
 
 check("写得进去", setPlatformPolicy("qoder", "single").ok === true);
-// 每个平台都收降级（只有 tokenrhythm 多一个余额到期优先）：读回来也得是 fallback。
+// 每个平台都收降级：读回来也得是 fallback。（厂商 kind 退场后，迁移后的行上是
+// kind=openai，声明的是 single 与 fallback；expiry_first 的挑选逻辑还在路由里，
+// 但面板的选项表由 kind 声明说。）
 const fallbackOnQoder = setPlatformPolicy("qoder", "fallback");
 check("Qoder 收降级", fallbackOnQoder.ok === true, JSON.stringify(fallbackOnQoder));
 check("Qoder 读回来是 fallback", platformPolicy("qoder") === "fallback", platformPolicy("qoder"));
@@ -100,7 +102,9 @@ const bad = setPlatformPolicy("tokenrhythm", "nope" as never);
 check("不认识的策略不收", bad.ok === false, JSON.stringify(bad));
 check(
   "错的话说了只认哪几个",
-  bad.message.includes("single") && bad.message.includes("fallback") && bad.message.includes("expiry_first"),
+  bad.message.includes("single") &&
+    bad.message.includes("fallback") &&
+    bad.message.includes("expiry_first"),
   bad.message,
 );
 check("原来的策略没被动", platformPolicy("tokenrhythm") === "fallback", platformPolicy("tokenrhythm"));
@@ -132,17 +136,15 @@ check(
 console.log("");
 console.log("一类上游支持哪几个策略");
 
+// 厂商那五类退场后，面板的选项表只剩各 kind 自己的声明：迁移后的行上是
+// kind=openai，与七牛当年一样是 single,fallback；expiry_first 不在 openai 的
+// 声明里（面板选不了），按余额挑账号的那套逻辑由路由自己认这个策略值。
 check(
-  "tokenrhythm 三个",
-  policiesOfKind("tokenrhythm").join(",") === "single,fallback,expiry_first",
-  policiesOfKind("tokenrhythm").join(","),
+  "openai（迁移后的厂商行）两个",
+  policiesOfKind("openai").join(",") === "single,fallback",
+  policiesOfKind("openai").join(","),
 );
-check(
-  "七牛云两个",
-  policiesOfKind("qiniu").join(",") === "single,fallback",
-  policiesOfKind("qiniu").join(","),
-);
-for (const kind of ["minimax", "qoder", "workbuddy", "sensenova", "intern-ai", "zcode"]) {
+for (const kind of ["minimax", "qoder", "workbuddy", "zcode"]) {
   check(
     `${kind} 收 single 与 fallback`,
     policiesOfKind(kind).join(",") === "single,fallback",
@@ -192,13 +194,29 @@ check(
 console.log("");
 console.log("SetPlatformPolicy");
 
+// 白名单只有一处（lib/platforms.ts 的 platformPolicies），任何已知平台都是
+// 这三个策略。
+for (const platform of ["qoder", "tokenrhythm", "qiniu"]) {
+  check(
+    `${platform} 的策略白名单是单一、降级、余额到期优先`,
+    platformPolicies(platform).join(",") === "single,fallback,expiry_first",
+    platformPolicies(platform).join(","),
+  );
+}
+
 const trFallback = await setPolicy("tokenrhythm", ContractPolicy.FALLBACK);
 check("中转站能设降级", trFallback.ok === true, JSON.stringify(trFallback));
 check("设完就是降级", platformPolicy("tokenrhythm") === "fallback", platformPolicy("tokenrhythm"));
 
+// 余额到期优先是通用策略：白名单只在 lib/platforms.ts 一处决定，任何已知
+// 平台都能选它（选不选是平台自己的事，不是 kind 决定的）。
 const trExpiry = await setPolicy("tokenrhythm", ContractPolicy.EXPIRY_FIRST);
-check("中转站能设余额到期优先", trExpiry.ok === true, JSON.stringify(trExpiry));
-check("设完就是余额到期优先", platformPolicy("tokenrhythm") === "expiry_first", platformPolicy("tokenrhythm"));
+check("中转站收余额到期优先", trExpiry.ok === true, JSON.stringify(trExpiry));
+check(
+  "中转站读回来是 expiry_first",
+  platformPolicy("tokenrhythm") === "expiry_first",
+  platformPolicy("tokenrhythm"),
+);
 
 const trSingle = await setPolicy("tokenrhythm", ContractPolicy.SINGLE);
 check("中转站能设回单一", trSingle.ok === true && platformPolicy("tokenrhythm") === "single");
@@ -206,14 +224,12 @@ check("中转站能设回单一", trSingle.ok === true && platformPolicy("tokenr
 const apiFallback = await setPolicy("qiniu", ContractPolicy.FALLBACK);
 check("七牛云能设降级", apiFallback.ok === true, JSON.stringify(apiFallback));
 const apiExpiry = await setPolicy("qiniu", ContractPolicy.EXPIRY_FIRST);
-check("七牛云不收余额到期优先", apiExpiry.ok === false, JSON.stringify(apiExpiry));
-// 文案由 lib/platforms.ts 生成（它列的是策略 id），这里只核对它说了哪些。
+check("七牛云也收余额到期优先", apiExpiry.ok === true, JSON.stringify(apiExpiry));
 check(
-  "拒收的话说了这个平台支持哪几个",
-  String(apiExpiry.message).includes("single") && String(apiExpiry.message).includes("fallback"),
-  String(apiExpiry.message),
+  "七牛云读回来是 expiry_first",
+  platformPolicy("qiniu") === "expiry_first",
+  platformPolicy("qiniu"),
 );
-check("拒收的没写进库", platformPolicy("qiniu") === "fallback", platformPolicy("qiniu"));
 await setPolicy("qiniu", ContractPolicy.SINGLE);
 
 // 降级是所有平台都有的选项：逐个平台设一遍，再读回来，再设回单一。
@@ -232,8 +248,8 @@ for (const platform of ["qoder", "minimax", "workbuddy-cn", "sensenova", "intern
 const unspecified = await setPolicy("tokenrhythm", ContractPolicy.UNSPECIFIED);
 check("UNSPECIFIED 不收", unspecified.ok === false, JSON.stringify(unspecified));
 check(
-  "错的话说了只认哪三个",
-  ["single", "fallback", "expiry_first"].every((v) => String(unspecified.message).includes(v)),
+  "错的话说了只认哪几个",
+  ["single", "fallback"].every((v) => String(unspecified.message).includes(v)),
   String(unspecified.message),
 );
 const unknown = await setPolicy("tokenrhythm", 7);
@@ -243,7 +259,7 @@ check("给错了的没写进库", platformPolicy("tokenrhythm") === "single", pl
 const noSuch = await setPolicy("no-such-platform", ContractPolicy.SINGLE);
 check("没有这个平台就不改", noSuch.ok === false, JSON.stringify(noSuch));
 
-// 只有 tokenrhythm 有余额到期优先，拿它当「不支持」的样本。
+// 余额到期优先不在 openai 的声明里，拿它当「不支持」的样本。
 const unsupportedText = unsupportedPolicyText("tokenrhythm", "expiry_first", ["single", "fallback"]);
 check(
   "拒收的话是中文",

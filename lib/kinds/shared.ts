@@ -12,7 +12,7 @@ import { providerSecretId } from "../credential-ids.ts";
 import { deadSession } from "../session.ts";
 import { listSecrets } from "../store.ts";
 import { openPlatformOf } from "../open-platforms.ts";
-import { quotaPluginOf } from "../quota-plugins.ts";
+import { quotaPluginOf } from "../quota-plugin-registry.ts";
 import { pluginFieldOf, writePluginField } from "../quota-plugin-credentials.ts";
 import { openPlatformKeyOf, writeOpenPlatformKey } from "../open-platform-credentials.ts";
 

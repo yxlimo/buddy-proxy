@@ -11,5 +11,4 @@ export * from "./minimax.ts";
 export * from "./workbuddy.ts";
 export * from "./qoder.ts";
 export * from "./zcode.ts";
-export * from "./tokenrhythm.ts";
 export * from "./open-platform.ts";

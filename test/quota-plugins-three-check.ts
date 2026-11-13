@@ -322,7 +322,7 @@ const internRow = provider(internAccount.row)!;
 
 /** 一组额度，去掉两个「这一条是谁的」的 id。 */
 function stripIds(views: any[]): any[] {
-  return views.map(({ upstreamId, accountId, ...rest }) => rest);
+  return views.map(({ upstreamId: _upstreamId, accountId: _accountId, ...rest }) => rest);
 }
 
 /** 快照里那一家的一份额度：插件 id → 账号 id → 那一次的结论（与 refreshOne 存的位置一样）。 */
@@ -425,7 +425,7 @@ check("没有到期时刻也算 ok", senseOK.recoverAt === null, String(senseOK.
 
 // 口径没变：插件桶里那一份经 kind 出来还是这些数。
 const senseSnapshot = snapshotWithProbe(senseNovaPoolsPlugin.id, senseRow.id, senseOK);
-const senseKindViews = kindOf("sensenova")!.quotas(senseRow, senseSnapshot);
+const senseKindViews = kindOf("openai")!.quotas(senseRow, senseSnapshot);
 // 两个 id 不比：插件那一份的 upstreamId 是它当时挂的那个 id，kind 读的时候一律
 // 按当前账号行写（upstreamId = 平台、accountId = 账号），面板靠它们分组。
 check(
@@ -443,8 +443,8 @@ check(
   senseKindViews[0]?.credits?.remaining === 5000 && senseKindViews[0]?.tokenPlan?.windows?.length === 2,
   JSON.stringify(senseKindViews[0]),
 );
-check("ok 不算见底", kindOf("sensenova")!.outOfCredits(senseRow, senseSnapshot) === false);
-check("ok 没有恢复时刻", (kindOf("sensenova")!.recoverAt?.(senseRow, senseSnapshot) ?? null) === null);
+check("ok 不算见底", kindOf("openai")!.outOfCredits(senseRow, senseSnapshot) === false);
+check("ok 没有恢复时刻", (kindOf("openai")!.recoverAt?.(senseRow, senseSnapshot) ?? null) === null);
 
 mode.sensenova = "drained";
 const senseDrained = await senseNovaPoolsPlugin.probe(senseRow);
@@ -458,10 +458,10 @@ check(
 );
 check("见底那句话说了用尽", senseDrained.message.includes("用尽"), senseDrained.message);
 const senseDrainedSnapshot = snapshotWithProbe(senseNovaPoolsPlugin.id, senseRow.id, senseDrained);
-check("见底的结论 → kind 也说见底", kindOf("sensenova")!.outOfCredits(senseRow, senseDrainedSnapshot) === true);
+check("见底的结论 → kind 也说见底", kindOf("openai")!.outOfCredits(senseRow, senseDrainedSnapshot) === true);
 check(
   "见底的恢复时刻照结论",
-  (kindOf("sensenova")!.recoverAt?.(senseRow, senseDrainedSnapshot) ?? null) === senseDrained.recoverAt,
+  (kindOf("openai")!.recoverAt?.(senseRow, senseDrainedSnapshot) ?? null) === senseDrained.recoverAt,
   String(senseDrained.recoverAt),
 );
 
@@ -518,7 +518,7 @@ check("两批赠金", twOK.views[0]?.balance?.lots?.length === 2, JSON.stringify
 check("额度挂在账号上", twOK.views[0]?.accountId === twRow.id, String(twOK.views[0]?.accountId));
 
 const twSnapshot = snapshotWithProbe(tokenRhythmWalletPlugin.id, twRow.id, twOK);
-const twKindViews = kindOf("tokenrhythm")!.quotas(twRow, twSnapshot);
+const twKindViews = kindOf("openai")!.quotas(twRow, twSnapshot);
 // 两个 id 不比：插件那一份写的是平台（钱包挂平台），kind 读的时候一律按账号写
 // （与开放平台同一条规矩，面板靠 accountId 分清是哪一条余额）。
 check(
@@ -532,7 +532,7 @@ check(
   JSON.stringify(twKindViews[0]),
 );
 check("额度挂在账号上", twKindViews[0]?.accountId === twRow.id, String(twKindViews[0]?.accountId));
-check("有钱不算见底", kindOf("tokenrhythm")!.outOfCredits(twRow, twSnapshot) === false);
+check("有钱不算见底", kindOf("openai")!.outOfCredits(twRow, twSnapshot) === false);
 
 mode.tokenrhythm = "drained";
 const twDrained = await probeWallet(twRow);
@@ -591,7 +591,7 @@ check("一个批次报一条", internOK.views[0]?.credits?.lots?.length === 1, J
 check("两个窗口都报了", internOK.views[0]?.tokenPlan?.windows?.length === 1, JSON.stringify(internOK.views[0]?.tokenPlan));
 
 const internSnapshot = snapshotWithProbe(internAiCreditsPlugin.id, internRow.id, internOK);
-const internKindViews = kindOf("intern-ai")!.quotas(internRow, internSnapshot);
+const internKindViews = kindOf("openai")!.quotas(internRow, internSnapshot);
 check(
   "插件那一份经 kind 出来与 probe 逐字段相同（两个 id 除外）",
   same(stripIds(internKindViews), stripIds(internOK.views)),
@@ -604,7 +604,7 @@ check(
     internKindViews[0]?.tokenPlan?.windows?.length === 1,
   JSON.stringify(internKindViews[0]),
 );
-check("墨点还没用完 → 不算见底", kindOf("intern-ai")!.outOfCredits(internRow, internSnapshot) === false);
+check("墨点还没用完 → 不算见底", kindOf("openai")!.outOfCredits(internRow, internSnapshot) === false);
 
 mode.intern = "drained";
 const internDrained = await internAiCreditsPlugin.probe(internRow);
@@ -904,10 +904,10 @@ check("恢复成默认值", pluginOf("sensenova") === "sensenova-pools" && plugi
 // 必须说「没有结论」—— 两边用两个来源时，面板会拿着 A 插件的数字、从 B 插件
 // 读结论。
 setPlatformPlugin("tokenrhythm", "");
-check("平台行没指名插件 → kind 说没有额度", kindOf("tokenrhythm")!.quotas(twRow, twSnapshot).length === 0, JSON.stringify(kindOf("tokenrhythm")!.quotas(twRow, twSnapshot)));
-check("平台行没指名插件 → 也不算见底", kindOf("tokenrhythm")!.outOfCredits(twRow, twSnapshot) === false);
+check("平台行没指名插件 → kind 说没有额度", kindOf("openai")!.quotas(twRow, twSnapshot).length === 0, JSON.stringify(kindOf("openai")!.quotas(twRow, twSnapshot)));
+check("平台行没指名插件 → 也不算见底", kindOf("openai")!.outOfCredits(twRow, twSnapshot) === false);
 setPlatformPlugin("tokenrhythm", "tokenrhythm-wallet");
-check("填回去又读得到（快照里那一份没动）", kindOf("tokenrhythm")!.quotas(twRow, twSnapshot).length === 1, JSON.stringify(kindOf("tokenrhythm")!.quotas(twRow, twSnapshot)));
+check("填回去又读得到（快照里那一份没动）", kindOf("openai")!.quotas(twRow, twSnapshot).length === 1, JSON.stringify(kindOf("openai")!.quotas(twRow, twSnapshot)));
 
 /* ------------------------------------------------------------------ *
  * refreshOne 走插件
@@ -962,11 +962,11 @@ check(
 );
 check(
   "面板那条路读得到数字",
-  (kindOf("sensenova")!.quotas(senseRow, snapshot)[0]?.credits?.remaining ?? 0) === 5000 &&
-    (kindOf("tokenrhythm")!.quotas(twRow, snapshot)[0]?.balance?.availableCny ?? 0) === 18.5,
+  (kindOf("openai")!.quotas(senseRow, snapshot)[0]?.credits?.remaining ?? 0) === 5000 &&
+    (kindOf("openai")!.quotas(twRow, snapshot)[0]?.balance?.availableCny ?? 0) === 18.5,
   JSON.stringify({
-    sensenova: kindOf("sensenova")!.quotas(senseRow, snapshot),
-    tokenrhythm: kindOf("tokenrhythm")!.quotas(twRow, snapshot),
+    sensenova: kindOf("openai")!.quotas(senseRow, snapshot),
+    tokenrhythm: kindOf("openai")!.quotas(twRow, snapshot),
   }),
 );
 

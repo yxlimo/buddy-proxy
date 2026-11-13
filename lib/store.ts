@@ -24,6 +24,8 @@ import { DatabaseSync } from "node:sqlite";
 import { dbPath } from "./paths.ts";
 // 预置的模拟客户端目录（叶子模块，不引任何东西）：启动时按它把表里的行播出来。
 import { SIMULATED_CLIENTS } from "./platform-catalog.ts";
+// 凭据 id 的唯一算法（叶子模块）：迁移要按账号定位推理 key 原来存哪、挪到哪。
+import { providerSecretId } from "./credential-ids.ts";
 
 /** What kind of secret a row holds. */
 export type SecretKind = "session" | "key" | "account" | "salt";
@@ -219,6 +221,8 @@ export function store(): DatabaseSync {
   // 路由、面板、额度、目录全都按表里的行找平台。
   migrateSimulatedClients(db);
   migrateAccountIds(db);
+  // 编号定下之后再搬凭据：这一段是按账号 id 定位凭据的，id 变了就找不到。
+  migrateLegacyVendorKinds(db);
   return db;
 }
 
@@ -344,11 +348,27 @@ function migratePlatformColumns(db: DatabaseSync): void {
 /**
  * 库的 schema 版本：SQLite 自己的 `PRAGMA user_version`。
  *
- * 只用在「列的有没有判断不了一次性」的迁移上：`traits_from_common` 这一列早就
+ * 只用在「光看列与数据判断不了一次性」的迁移上：`traits_from_common` 这一列早就
  * 在库里了（默认值当时是 0），光看列存不存在永远不知道这一遍跑没跑过 —— 于是每
  * 次启动都会把用户后来关掉的那个开关重新打开。版本号记在库里，跑过一次就不再动。
+ *
+ * 每一步有自己的号、各判各的：用一个「当前版本」去找前面的步，后加的步就会把
+ * 前面那些重跑一遍（`traits_from_common` 抹回 1，用户关掉的那一格就没了）。
  */
-const SCHEMA_VERSION = 1;
+const TRAITS_VERSION = 1;
+const LEGACY_VENDOR_KIND_VERSION = 2;
+
+/** 库的 schema 版本现在是多少（没写过就是 0）。 */
+function schemaVersion(db: DatabaseSync): number {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+  return Number(row?.user_version ?? 0);
+}
+
+/** 把版本推到 n；已经更高就不动（步骤是往上堆的，不能回写旧号）。 */
+function setSchemaVersion(db: DatabaseSync, n: number): void {
+  if (schemaVersion(db) >= n) return;
+  db.exec(`PRAGMA user_version = ${n}`);
+}
 
 /**
  * 存量行的 `traits_from_common` 从 0 补成 1，只做一次。
@@ -358,10 +378,115 @@ const SCHEMA_VERSION = 1;
  * 列 —— 用户在那之后自己关掉的平台必须保持关着。
  */
 function backfillTraitsFromCommon(db: DatabaseSync): void {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-  if (Number(row?.user_version ?? 0) >= SCHEMA_VERSION) return;
+  if (schemaVersion(db) >= TRAITS_VERSION) return;
   db.exec("UPDATE platform SET traits_from_common = 1");
-  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  setSchemaVersion(db, TRAITS_VERSION);
+}
+
+/**
+ * 退场的厂商 kind：它们一直用的推理地址，与推理 key 原来在哪一段凭据里。
+ *
+ * 地址是常量而不是 `baseUrl()`：那五家的 `baseUrl()` 根本不读平台行，一直返回
+ * 这几个常量 —— 行里存的地址从来没生效过。迁移把当时真正生效的那台写进行里，
+ * 否则那条不知哪来的旧地址会在迁移后突然变成生效地址。
+ *
+ * key 的位置：七牛/星火/SenseNova 在 `:account` 的 `apiKey`，孟点（intern-ai）
+ * 在 `:account` 的 `discoveryKey`，TokenRhythm 在 `:account#api_key` 的 `apiKey`。
+ */
+const LEGACY_VENDOR_KINDS: readonly {
+  kind: string;
+  baseUrl: string;
+  /** 推理 key 原来那段凭据的后缀（`providerSecretId(账号, 后缀)`）。 */
+  secretSuffix: string;
+  /** 那段凭据里装 key 的那一格。 */
+  keyField: string;
+}[] = [
+  { kind: "qiniu", baseUrl: "https://api.qnaigc.com/v1", secretSuffix: "account", keyField: "apiKey" },
+  {
+    kind: "xinghuo",
+    baseUrl: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+    secretSuffix: "account",
+    keyField: "apiKey",
+  },
+  {
+    kind: "sensenova",
+    baseUrl: "https://token.sensenova.cn/v1",
+    secretSuffix: "account",
+    keyField: "apiKey",
+  },
+  {
+    kind: "intern-ai",
+    baseUrl: "https://discovery-api.intern-ai.org.cn/v1",
+    secretSuffix: "account",
+    keyField: "discoveryKey",
+  },
+  {
+    kind: "tokenrhythm",
+    baseUrl: "https://tokenrhythm.studio/v1",
+    secretSuffix: "account#api_key",
+    keyField: "apiKey",
+  },
+];
+
+/**
+ * 五个厂商 kind 退场（2026-11）：存量行改成通用方言 `openai`。
+ *
+ * 为什之要改：那五家不再是「能新建的一类平台」（面板上只剩两种方言与模拟客户端），
+ * 它们名下已经建过的行不能因此变成没人认得的 kind —— kind 认不出 = 无路可走。
+ *
+ * 两件事一起做，顺序有意义：
+ *
+ *   1. 凭据先搬。推理 key 从各处搬到开放平台读的那一处（`:key` 的 `{apiKey}`）。
+ *      不搬的话，迁移之后每个账号都是「没凭据」：面板显示 MISSING，路由发不出去。
+ *      原来那段（`:account` …）一律不动 —— 额度插件读的就是它（七牛的门户 cookie
+ *      就在同一段里）。
+ *   2. 平台行改 kind 与地址。地址写当时真正生效的那台（见 LEGACY_VENDOR_KINDS）。
+ *      `quota_plugin` 不动：插件是按行挂的，与 kind 无关。`models`（含 traits）
+ *      也不动：目录本来就在行里，不属于 kind。
+ *   3. 策略值不动：`expiry_first` 是一等策略（按余额到期挑账号），任何平台都能选 ——
+ *      它不随 kind 走，因此这里不重写。
+ *
+ * 幂等：版本号到了就不再跑；凭据那一步还另判「目标已有就不覆盖」，手动重跑一遍
+ * 也只会把已经对的东西再对一遍。
+ */
+function migrateLegacyVendorKinds(db: DatabaseSync): void {
+  if (schemaVersion(db) >= LEGACY_VENDOR_KIND_VERSION) return;
+  const now = Date.now();
+  const readSecret = db.prepare("SELECT data FROM secrets WHERE id = ?");
+  const writeSecret = db.prepare(
+    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, 'key', ?, ?) " +
+      "ON CONFLICT(id) DO NOTHING",
+  );
+  const accountsOfKind = db.prepare(
+    "SELECT p.id AS id FROM provider p JOIN platform pl ON pl.id = p.platform WHERE pl.kind = ?",
+  );
+
+  for (const legacy of LEGACY_VENDOR_KINDS) {
+    for (const row of accountsOfKind.all(legacy.kind) as { id?: string }[]) {
+      const accountId = String(row.id ?? "");
+      if (!accountId) continue;
+      const from = readSecret.get(providerSecretId(accountId, legacy.secretSuffix)) as
+        | { data?: string }
+        | undefined;
+      if (!from?.data) continue;
+      let apiKey = "";
+      try {
+        apiKey = String((JSON.parse(from.data) as Record<string, unknown>)[legacy.keyField] ?? "").trim();
+      } catch {
+        // 读不出来的凭据就是没凭据：下面的写入自然跳过它。
+        continue;
+      }
+      if (!apiKey) continue;
+      writeSecret.run(providerSecretId(accountId, "key"), JSON.stringify({ apiKey }), now);
+    }
+  }
+
+  const moveKind = db.prepare(
+    "UPDATE platform SET kind = 'openai', base_url = ?, updated_at = ? WHERE kind = ?",
+  );
+  for (const legacy of LEGACY_VENDOR_KINDS) moveKind.run(legacy.baseUrl, now, legacy.kind);
+
+  setSchemaVersion(db, LEGACY_VENDOR_KIND_VERSION);
 }
 
 

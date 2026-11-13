@@ -32,12 +32,12 @@ const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
 const { platformOfAny } = await import("../lib/platforms.ts");
-const { syncPlatformModels } = await import("../lib/open-platforms.ts");
+const { syncPlatformModels, openPlatformOf } = await import("../lib/open-platforms.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { listAccounts } = await import("../lib/admin/accounts.ts");
 const { beginLogin } = await import("../lib/admin/login.ts");
-const { xinghuoInferenceKey, xinghuoStatus } = await import("../lib/xinghuo/account.ts");
+const { openPlatformKeyOf } = await import("../lib/open-platform-credentials.ts");
 
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
 // 测试自己造一行。
@@ -47,7 +47,8 @@ insertVendorPlatform("xinghuo", "xinghuo");
 const PROVIDER = {
   id: "xinghuo-test",
   platform: "xinghuo",
-  kind: "xinghuo",
+  // 迁移后的形状：厂商 kind 退场，行上就是通用方言 openai。
+  kind: "openai",
   region: "",
   alias: "讯飞星火测试账号",
   enabled: true,
@@ -63,21 +64,20 @@ const PROVIDER = {
 
 section("登记");
 
-const kind = kindOf("xinghuo");
-check("种类在", kind !== null, String(kind));
-check("名字是讯飞星火", kind?.label === "讯飞星火", String(kind?.label));
-check("登录方式是 api_key", kind?.login === "api_key", String(kind?.login));
+// 星火的 kind 已经退场：读目录、凭据这些能力由通用方言那一类接手。
+const kind = kindOf("openai");
+check("通用方言那一类在", kind !== null, String(kind));
 // 星火现在在平台表里（不再在代码里的模板里）：两处数据源合起来才认得它。
 check("平台在", platformOfAny("xinghuo") !== null, String(platformOfAny("xinghuo")));
 check(
   "收 single 与 fallback",
-  policiesOfKind("xinghuo").join(",") === "single,fallback",
-  policiesOfKind("xinghuo").join(","),
+  policiesOfKind("openai").join(",") === "single,fallback",
+  policiesOfKind("openai").join(","),
 );
 check(
-  "推理地址是星火的那条",
-  kind?.baseUrl(PROVIDER) === "https://maas-api.cn-huabei-1.xf-yun.com/v2",
-  String(kind?.baseUrl(PROVIDER)),
+  "行上地址是星火的那条（迁移写进去的那台）",
+  openPlatformOf("xinghuo")?.baseUrl === "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+  String(openPlatformOf("xinghuo")?.baseUrl),
 );
 
 /* ------------------------------------------------------------------ *
@@ -109,26 +109,28 @@ check(
 
 section("凭据");
 
+/** 迁移后推理 key 的位置：开放平台读的那一处。 */
+function inferenceKey(accountId: string): string {
+  return openPlatformKeyOf(accountId)?.apiKey ?? "";
+}
+
 {
   const result = setProviderKeys("xinghuo", ["k1"]);
   check("写成功了", result.ok, result.message);
   check("写进去一段", result.count === 1, String(result.count));
-  check("推理 key 是它", xinghuoInferenceKey("xinghuo") === "k1", xinghuoInferenceKey("xinghuo"));
-  check("状态说有 key", String(xinghuoStatus("xinghuo").detail).includes("API key"), String(xinghuoStatus("xinghuo").detail));
+  check("推理 key 是它（在迁移后的位置）", inferenceKey("xinghuo") === "k1", inferenceKey("xinghuo"));
+  // 面板状态那一面在「面板上的账号」那节用真账号验；这里只有一个平台 id，
+  // 不查凭据行（面板那层按账号行列）。
 }
 
 section("清掉");
 
 {
-  const result = setProviderKeys("xinghuo", []);
+  const result = setProviderKeys("xinghuo", [""]);
   check("写成功了", result.ok, result.message);
   check("写进去零段", result.count === 0, String(result.count));
-  check("推理 key 是空的", xinghuoInferenceKey("xinghuo") === "", xinghuoInferenceKey("xinghuo"));
-  check(
-    "状态说没有推理用的 key",
-    String(xinghuoStatus("xinghuo").detail).includes("没有推理用的 API key"),
-    String(xinghuoStatus("xinghuo").detail),
-  );
+  check("推理 key 是空的", inferenceKey("xinghuo") === "", inferenceKey("xinghuo"));
+  check("key 真的清掉了", inferenceKey("xinghuo") === "", inferenceKey("xinghuo"));
 }
 
 /* ------------------------------------------------------------------ *

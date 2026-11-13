@@ -54,13 +54,6 @@ let minimaxTokenRequests = 0;
 /** 发了第几次 qoder 的 deviceToken poll。 */
 let qoderPollRequests = 0;
 /**
- * 建推理 key 的接口被问了几次。
- *
- * 开放平台侧的 key 一律由用户自己填：以前登录成功之后网关会顺手建一把
- * （ensure），现在不建了 —— 这个计数器就是判据。
- */
-let trKeyCreates = 0;
-/**
  * 自测放行的那一次登录的 nonce。
  *
  * 上游的 poll 端点用 404 说「用户还没点」：那是等待，不是失败。只有 nonce
@@ -164,30 +157,6 @@ const mock = http.createServer(async (req, res) => {
     res.end(
       JSON.stringify({
         data: { status: "ready", token: "zcode-test-token", user: { user_id: "u-1" } },
-      }),
-    );
-    return;
-  }
-  if (req.url?.startsWith("/api/auth/login")) {
-    // TokenRhythm 的登录：会话在 cookie 里（tr_session），写操作还要 csrf。
-    res.setHeader("Set-Cookie", ["tr_session=fake-session", "tr_csrf=fake-csrf"]);
-    res.end(JSON.stringify({ data: { user: { id: "u-1", name: "fake" } } }));
-    return;
-  }
-  if (req.url?.startsWith("/api/api-keys")) {
-    // 建推理 key：以前登录成功之后网关会调它（ensure）。
-    trKeyCreates++;
-    res.end(
-      JSON.stringify({
-        code: 0,
-        data: {
-          id: "key-made-by-gateway",
-          name: "buddy",
-          maskedKey: "sk-••••made",
-          keyPrefix: "sk-",
-          status: "active",
-          key: "sk-made-by-the-gateway", // privacy:allow — 编造的样例 (fabricated sample)
-        },
       }),
     );
     return;
@@ -378,19 +347,14 @@ check(
   JSON.stringify(zcode.body?.message),
 );
 
-const tokenrhythm = await call("BeginLogin", { upstreamId: "tokenrhythm" });
-check("TokenRhythm 是密码流", tokenrhythm.body?.session?.method === "password", JSON.stringify(tokenrhythm.body?.session));
-
-const sensenova = await call("BeginLogin", { upstreamId: "sensenova" });
-check("SenseNova 是密码流", sensenova.body?.session?.method === "password", JSON.stringify(sensenova.body?.session));
-
-const internAi = await call("BeginLogin", { upstreamId: "intern-ai" });
-check("intern-ai 是回填流", internAi.body?.session?.method === "token", JSON.stringify(internAi.body?.session));
-check(
-  "intern-ai 给了 SSO 的登录页",
-  String(internAi.body?.session?.authorizationUrl ?? "").includes("sso."),
-  JSON.stringify(internAi.body?.session?.authorizationUrl),
-);
+// TokenRhythm / SenseNova / intern-ai 的登录流（密码流与回填流）随厂商 kind
+// 退场：迁移后的行上没有登录这一说，点登录与七牛一样被拒 —— 该用 API Key。
+// 面板上不再能新登录这三家；存量会话只有插件内部读得到。
+for (const id of ["tokenrhythm", "sensenova", "intern-ai"]) {
+  const res = await call("BeginLogin", { upstreamId: id });
+  check(`${id} 不开始登录（登录流随 kind 退场）`, res.body?.ok !== true, JSON.stringify(res.body));
+  check(`${id} 说该用 API Key`, String(res.body?.message ?? "").includes("API Key"), JSON.stringify(res.body?.message));
+}
 
 const unknown = await call("BeginLogin", { upstreamId: "nope" });
 check("不认识的上游不开始", unknown.body?.ok !== true, JSON.stringify(unknown.body));
@@ -418,7 +382,8 @@ const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
 // main file only, which is what a checkpoint has written so far.
 db.exec("PRAGMA journal_mode = WAL");
 const rows = db.prepare("SELECT id, data FROM cache WHERE id LIKE 'login:%'").all() as any[];
-check("会话写进了 cache 表", rows.length >= 6, String(rows.length));
+// 厂商那三家的登录流退场后，开始得了的登录只剩模拟客户端的四个浏览器流。
+check("会话写进了 cache 表", rows.length >= 4, String(rows.length));
 
 const minimaxRow = rows.find((r) => r.id === `login:${minimax.body?.session?.loginId}`);
 check("MiniMax 的会话在 cache 表里", Boolean(minimaxRow), JSON.stringify(rows.map((r) => r.id)));
@@ -460,11 +425,9 @@ check("日志里没有 code verifier", !log().includes(FAKE_VERIFIER));
 console.log("");
 console.log("状态机");
 
-// 没有轮询的那条（密码流）会一直 pending。
-const pending = await call("GetLoginStatus", { loginId: tokenrhythm.body?.session?.loginId });
-check("查得到这次登录", pending.body?.ok === true, JSON.stringify(pending.body));
-check("还是 pending", pending.body?.session?.status === "pending", JSON.stringify(pending.body?.session?.status));
-check("方法还是密码流", pending.body?.session?.method === "password", JSON.stringify(pending.body?.session?.method));
+// 密码流随厂商 kind 退场，「没有轮询的那条一直 pending」的分支跟着消失：
+// 面板上开始的每一条登录都是带轮询的浏览器流（上面那些 pending/failed/approved
+// 的断言已经覆盖了状态机的其余分支）。
 
 // 轮询被拒 → 失败。
 const failed = await waitFor(async () => {
@@ -628,32 +591,10 @@ check("空授权码不换", noCode.body?.ok !== true, JSON.stringify(noCode.body
 console.log("");
 console.log("登录不再替用户建 key");
 
-// 开放平台侧的 key 一律由用户自己填（面板上的 setProviderKeys）：以前登录成功
-// 之后网关会顺手建一把（ensure），建出来的那把用户既看不到也换不掉。
-//
-// 这里是判据：把 ensure 加回去，下面这几条立刻变红。
-const trLogin = await call("LoginWithPassword", {
-  upstreamId: "tokenrhythm",
-  accountId: accountIdOf["tokenrhythm"],
-  username: "someone",
-  password: "secret",
-});
-check("TokenRhythm 登录成功", trLogin.body?.ok === true, JSON.stringify(trLogin.body));
-await new Promise((r) => setTimeout(r, 300));
-check("TokenRhythm：网关没有替用户建 key", trKeyCreates === 0, String(trKeyCreates));
-const trCredential = db
-  .prepare("SELECT data FROM secrets WHERE id = ?")
-  .get(`key:provider:${accountIdOf["tokenrhythm"]}:account`) as any;
-check(
-  "TokenRhythm：账号上没有多出 key",
-  !String(trCredential?.data ?? "").includes("sk-"),
-  String(trCredential?.data ?? ""),
-);
-check(
-  "TokenRhythm：登录态还在（账号与密码存下了）",
-  String(trCredential?.data ?? "").includes("someone"),
-  String(trCredential?.data ?? ""),
-);
+// 开放平台侧的 key 一律由用户自己填（面板上的 setProviderKeys）。这条的判据
+// 本来是「TokenRhythm 密码登录成功后网关不替用户建 key」—— 密码流随厂商 kind
+// 退场后登录到不了那一步，登录分派对不认的流一律拒绝（上面已验），ensure 没有
+// 可达的入口了。
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);

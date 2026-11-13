@@ -44,7 +44,6 @@ const {
   selectProvider,
 } = await import("../lib/router/provider-selection.ts");
 const { withBusinessCode, withCooldownUntil, withUpstreamStatus, upstreamStatusOf } = await import("../lib/upstream-status.ts");
-const { tokenRhythmAccounts } = await import("../lib/router/upstreams/index.ts");
 
 let pass = 0;
 let fail = 0;
@@ -209,25 +208,32 @@ console.log("次序");
 }
 
 console.log("");
-console.log("账号的次序（TokenRhythm）");
+console.log("账号的次序（expiry_first，通用路径）");
 
-/** 一个租户的样子。 */
-function tenant(
-  index: number,
+// 厂商 kind 退场后，expiry_first 不再是 TokenRhythm 专属：次序由余额决定，
+// 余额是额度插件报上来的那份快照（lib/router/balance-order.ts）。这条用例
+// 用假的快照读器喂余额与到期时间，不依赖任何厂商 kind —— 证明通用化真的
+// 接上了。
+const { orderByBalance, balanceOrderOf, pinNextAccount, pinnedAccountOf, forgetPinnedAccount } =
+  await import("../lib/router/balance-order.ts");
+
+/** 一个账号的余额视图（插件 ok 时 views 里那一份的形状）。 */
+function wallet(
+  accountId: string,
   available: number,
-  gift: number,
+  expiring: number,
   nextExpiryAt: string | null,
-  extra: Record<string, unknown> = {},
 ): any {
   return {
-    index,
-    account: `190***${index}`,
-    name: `租户 ${index}`,
-    hasKey: true,
-    wallet: { availableCny: available, giftAvailableCny: gift },
-    credits: nextExpiryAt ? { summary: { nextExpiryAt } } : null,
-    error: null,
-    ...extra,
+    upstreamId: "platform",
+    accountId,
+    balance: {
+      availableCny: available,
+      currency: "CNY",
+      lots: [],
+      nextExpiryAt: nextExpiryAt ? Date.parse(nextExpiryAt) : 0,
+      expiringCny: expiring,
+    },
   };
 }
 
@@ -235,57 +241,72 @@ const soon = "2026-11-19T04:28:10.883Z";
 const later = "2026-11-20T04:28:10.883Z";
 const never = "2099-12-31T15:59:59.000Z";
 
-const statuses = [
-  tenant(1, 100, 0, never), // 只有充值的本金
-  tenant(2, 18, 18, soon), // 最先到期
-  tenant(3, 18, 18, later),
-];
+/** 快照读器：账号 id → views。读不到的账号就是「不知道」。 */
+function readerOf(
+  balances: Record<string, any[]>,
+): (platform: string) => Record<string, any[]> {
+  return () => balances;
+}
+
+const ids = ["1", "2", "3"];
+const balances = {
+  "1": [wallet("1", 100, 0, never)], // 只有充值的本金
+  "2": [wallet("2", 18, 18, soon)], // 最先到期
+  "3": [wallet("3", 18, 18, later)],
+};
 
 {
-  const order = tokenRhythmAccounts(statuses, "expiry_first").map((t: any) => t.index);
-  check("余额到期优先：最先到期的先上", order[0] === 2, order.join(","));
-  check("余额到期优先：本金排最后", order.join(",") === "2,3,1", order.join(","));
+  const order = orderByBalance(ids, balances).join(",");
+  check("余额到期优先：最先到期的先上", order.startsWith("2"), order);
+  check("余额到期优先：本金排最后", order === "2,3,1", order);
 }
 
 {
-  const order = tokenRhythmAccounts(statuses, "single").map((t: any) => t.index);
-  check("单一：按租户次序", order.join(",") === "1,2,3", order.join(","));
+  // 余额读不到（快照里没有这份）：那是「不知道」，不是「没钱」—— 谁也不排除，
+  // 保持账号行的次序。single 与 fallback 本来也不按余额排。
+  const order = orderByBalance(ids, {}).join(",");
+  check("读不到余额：按账号行的次序，不排除谁", order === "1,2,3", order);
 }
 
 {
-  const order = tokenRhythmAccounts(statuses, "fallback").map((t: any) => t.index);
-  check("降级：按租户次序", order.join(",") === "1,2,3", order.join(","));
+  // 查询出错的那份（state 不是 ok）根本进不了快照桶：效果与读不到一样。
+  const mixed = {
+    "3": [wallet("3", 18, 18, later)],
+    "4": [wallet("4", 18, 18, soon)],
+  };
+  const order = orderByBalance(["1", "2", "3", "4"], mixed).join(",");
+  check("查不到余额的照样留着，查到的按到期排", order === "4,3,1,2", order);
 }
 
 {
-  const mixed = [
-    tenant(1, 0, 0, soon), // 余额读到了，是空的 → 没钱
-    tenant(2, 18, 18, soon, { hasKey: false }), // 没有 key → 发不出请求
-    tenant(3, 18, 18, soon, { error: "登录过期" }), // 查询出错 → 不知道，不是没钱
-    tenant(4, 18, 18, later), // 能用
-  ];
-  const order = tokenRhythmAccounts(mixed, "fallback").map((t: any) => t.index);
-  // 没钱的、没 key 的排除；查询出错的照样留着（余额读不到不等于没钱）。
-  // 降级按账号行的次序，不按余额排 —— 序号就是行的次序。
-  check("没钱、没 key 的排除，查不到余额的留着", order.join(",") === "3,4", order.join(","));
+  // 走一遍平台级的入口（钉住的状态也在这层）：不建平台行，读器是假的。
+  forgetPinnedAccount("p");
+  const order = balanceOrderOf("p", ids, readerOf(balances));
+  check("balanceOrderOf：最先到期的先上", order[0] === "2", order.join(","));
 }
 
 console.log("");
-console.log("钱包变了之后换账号");
+console.log("钱包变了之后换账号（钉住）");
 
 {
-  // 钱包说租户 2 最先到期 → 它先上。
-  const before = tokenRhythmAccounts(statuses, "expiry_first").map((t: any) => t.index);
-  check("先是租户 2", before[0] === 2, before.join(","));
+  forgetPinnedAccount("p");
+  // 钱包说租户 2 最先到期 → 钉它。
+  const before = pinNextAccount("p", ids, readerOf(balances));
+  check("先是租户 2", before === "2" && pinnedAccountOf("p") === "2", String(before));
 
   // 钱包变了：租户 2 的赠金用完了，租户 3 的最先到期。
-  const moved = [
-    tenant(1, 100, 0, never),
-    tenant(2, 18, 0, never),
-    tenant(3, 18, 18, soon),
-  ];
-  const after = tokenRhythmAccounts(moved, "expiry_first").map((t: any) => t.index);
-  check("钱包说了算，换成租户 3", after[0] === 3, after.join(","));
+  const moved = {
+    "1": [wallet("1", 100, 0, never)],
+    "2": [wallet("2", 18, 0, never)],
+    "3": [wallet("3", 18, 18, soon)],
+  };
+  const after = pinNextAccount("p", ids, readerOf(moved));
+  check("钱包说了算，换成租户 3", after === "3" && pinnedAccountOf("p") === "3", String(after));
+
+  // 已钉住的账号在名单里时，排序不动它（定时器已经算过一次，不再改主意）。
+  const withPin = orderByBalance(ids, moved, pinnedAccountOf("p")).join(",");
+  check("钉住的那个保持在第一位", withPin.startsWith("3"), withPin);
+  forgetPinnedAccount("p");
 }
 
 console.log("");

@@ -927,7 +927,10 @@ message DeletePublishedModelResponse {
 message GetBenefitStatusRequest {}
 
 message BenefitStatus {
+  // 平台 id（如 workbuddy-cn）。签到按平台分组展示，面板拿它去 join 平台行。
   string upstream_id = 1;
+  // 账号 id。签到是账号的事：一个平台可能有多个账号，各自有各自的签到记录。
+  string account_id = 7;
   // 今日已签到 / 活动已领 / 暂无新活动
   string summary = 2;
   repeated string lines = 3;
@@ -953,12 +956,15 @@ message ListModelsRequest {
   string upstream_id = 1;
 }
 
-// 这个模型的计费，按上游自己在 /models 里报的那一份。
+// 这个模型生效的计费：上游自己在 /models 里报的那一份，人写了覆盖就按人的。
 //
 // 与 CatalogModel.credits 不是一回事：那个是人工写的倍率覆盖值，这个是上游报的
 // 原样。两格并存，谁显示由面板决定。
 message ModelBilling {
   // token / multiplier / none
+  //
+  // overridden 为真时 mode 多一层意思："none" 是人说的「不收费」（见
+  // ModelOverride.billing_mode），不是「上游没报」。
   string mode = 1;
   // token 模式才有：CNY / USD。上游没报币种就留空。
   string currency = 2;
@@ -972,6 +978,11 @@ message ModelBilling {
   repeated double multipliers = 7;
   // 上游没报（不是免费）。面板据此不显示价格。
   bool unknown = 8;
+  // 这一份是人工覆盖来的，不是上游报的。
+  //
+  // 说的是**来源**，不是「和上游不一样」：人写了跟前一份一样的价，这里也是真。
+  // 别拿「值相等」推来源 —— 那会把人的话算成上游的话。
+  bool overridden = 10;
 }
 
 message CatalogModel {
@@ -1019,6 +1030,20 @@ message ModelOverride {
   reserved 8;
   // 计费倍率。没给 = 不知道（面板不显示倍率）；给了 0 = 免费。
   optional double credits = 9;
+  // 人写的计费方式：none / token / multiplier。
+  //
+  // 没给这一格 = 没写（沿用原来的来源，通常是上游报的那份）。给了 "none" =
+  // 明确不收费 —— 与「没写」是两件事，不拿缺键表示免费。写了这一格之后，下面
+  // 几格里与这个方式无关的那些不会写。
+  optional string billing_mode = 10;
+  // token 模式的币种：CNY / USD。
+  optional string billing_currency = 11;
+  // token 模式：三个角色一律「每百万 token」的单价，0 是免费。
+  optional double billing_input_per_million = 12;
+  optional double billing_output_per_million = 13;
+  optional double billing_cache_read_per_million = 14;
+  // multiplier 模式的倍率（×0.15 这种）。
+  optional double billing_multiplier = 15;
 }
 
 // 看某个平台当前「人写的」那部分：哪些模型是人工加的、各自写了哪些字段。

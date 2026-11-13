@@ -174,7 +174,9 @@ section("SenseNova 的积分池");
 // 注册表里的那一条：注册发生在 lib/kinds.ts（import 即注册）。
 await import("../lib/kinds/index.ts");
 const { kindOf } = await import("../lib/provider-kinds.ts");
-const senseNova = kindOf("sensenova");
+// 迁移后 SenseNova 那行的 kind 是 openai：额度读的是平台行指名的插件快照
+// （quota_plugin = sensenova-pools），kind 注册表里那条 openai 就是这条链。
+const senseNova = kindOf("openai");
 
 const poolUsage = {
   plan: { id: "free", name: "Free Plan", type: "TOKEN_PLAN_PLAN_TYPE_FREE" },
@@ -218,7 +220,7 @@ insertVendorPlatform("sensenova", "sensenova", { quotaPlugin: "sensenova-pools" 
 const SENSE_ROW = {
   id: "sensenova",
   platform: "sensenova",
-  kind: "sensenova",
+  kind: "openai",
   alias: "",
   region: "",
   enabled: true,

@@ -5,19 +5,19 @@
 // are independent, and this file is the upstream's side of it.
 //
 // `single` and `fallback` are the shared package's (lib/router/selection.ts).
-// `expiry_first` belongs to the relay stations: the account whose balance runs
-// out first takes the request, and when the wallet says another account runs
-// out first, that one takes over. It is a `single` with a different order —
-// the candidates come in the order the wallet says, and only the first one is
-// used.
+// `expiry_first` is a `single` with a different order: the account whose
+// balance runs out first takes the request, and when the platform says it has
+// no credit, the next account by a fresh balance scan takes over. Any
+// platform may pick it — the order comes from the quota plugin's numbers
+// (lib/router/balance-order.ts), not from any particular vendor.
 //
 // The upstream side also knows what a failure means: the account that cannot
 // serve the request hands it to the next one, but a request that is wrong
 // does not — another account would fail the same way.
 //
-// `expiry_first` is a single with a hook: the account whose balance runs out
-// first takes the request, and when the platform says it has no credit, the
-// hook scans the balances again and the next account takes over.
+// `expiry_first` moves on only when the platform says "no money left": that
+// is a different question from "this account cannot serve it right now", and
+// only the former justifies spending somebody else's credit.
 
 import { select, type SelectionCandidate } from "./selection.ts";
 import { AuthError } from "../credential.ts";
@@ -31,14 +31,7 @@ export type { ProviderPolicy };
 /** A candidate on the upstream side: one account. */
 export type ProviderCandidate<T> = SelectionCandidate<T>;
 
-/**
- * Run the request under the upstream's policy.
- *
- * `single` and `fallback` go through the shared package. `expiry_first` is a
- * `single` with a hook: its candidates are already in the order the wallet
- * says, and when one of them says it has no credit, the hook scans the
- * balances again and the next account takes over.
- */
+
 /** How the upstream side picks an account. */
 export interface ProviderSelectionOptions<T> {
   /** The failures the next account could serve instead. */

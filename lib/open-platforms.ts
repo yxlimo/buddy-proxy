@@ -22,7 +22,7 @@ import {
 // 额度插件的登记表（lib/quota-plugins.ts）反过来要读这一层的平台表，所以这两
 // 个模块是个环。环上的模块不能在求值期读别人的常量：这里只在函数里用它，
 // 那里也不在求值期读这边的东西。
-import { allQuotaPlugins, quotaPluginOf } from "./quota-plugins.ts";
+import { allQuotaPlugins, quotaPluginOf } from "./quota-plugin-registry.ts";
 // kind 注册表：这一类的能力描述（能不能拉模型目录、默认地址）事实在那边。
 import { kindOf } from "./provider-kinds.ts";
 // 失败的机器码与排查用的事实。文案在面板那一侧，这里只说「哪一格不对」。

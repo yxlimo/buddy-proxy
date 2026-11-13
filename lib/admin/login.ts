@@ -229,33 +229,6 @@ async function startWorkBuddy(accountId: string): Promise<Started> {
   };
 }
 
-/** 账号密码型：面板画一个表单。 */
-function startPassword(): Started {
-  return {
-    method: "password",
-    authorizationUrl: "",
-    userCode: "",
-    // 面板上填账号密码这件事没有「窗口」可言，但给个时刻，面板好算倒计时
-    // （密码流的面板上没有倒计时，这一栏只是让它有个值）。
-    expiresAt: Date.now() + 30 * 60 * 1000,
-    message: "在面板中填写账号与密码，然后点击「登录」。",
-    poll: null,
-  };
-}
-
-/** intern-ai：只能半自动 —— 人在浏览器里登录，把 token 贴回来。 */
-async function startInternAi(ctx: LoginContext): Promise<Started> {
-  const ticket = await beginLoginFlow("intern-ai", ctx);
-  return {
-    method: ticket.method,
-    authorizationUrl: ticket.authorizationUrl,
-    userCode: ticket.userCode,
-    expiresAt: ticket.expiresAtMs,
-    message: ticket.message,
-    poll: null,
-  };
-}
-
 /**
  * 在某个账号上开始一次登录。
  *
@@ -289,19 +262,16 @@ export async function beginLogin(upstreamId: string, accountId = ""): Promise<St
         return startZcode(row.id, row.platform);
       case "workbuddy":
         return startWorkBuddy(row.id);
-      case "tokenrhythm":
-      case "sensenova":
-        return startPassword();
-      case "intern-ai":
-        return startInternAi({ accountId: row.id, platform: row.kind, region: row.region });
-      case "qiniu":
-        // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
-        throw new AuthError("no login", "七牛云不扫码登录，请用「API Key」按钮保存一把 key。", 400);
-      case "xinghuo":
-        // 开放平台没有登录：它用 API Key。说清楚，别让人以为是坏了。
-        throw new AuthError("no login", "讯飞星火不扫码登录，请用「API Key」按钮保存一把 key。", 400);
       default:
-        throw new AuthError("unknown upstream", `这个上游没有登录方式：${upstreamId}`, 400);
+        // 两种方言（用户自己加的开放平台）没有登录这一说：它用推理 Key。
+        // 说清楚怎么办，而不是只说「不行」—— 按钮的名字照面板上实际的写
+        // （一格时写「API Key」，几段凭据时写「凭据」）。
+        throw new AuthError(
+          "no login",
+          `这个上游没有登录方式：${upstreamId}。这类平台用推理 Key，` +
+            `点账号那一行的「API Key」（有额度凭据时是「凭据」）把它填进去。`,
+          400,
+        );
     }
   });
   const session: StoredLogin = {
@@ -565,8 +535,9 @@ function contextOf(row: ProviderRow): LoginContext {
 /**
  * 用账号密码登录。
  *
- * TokenRhythm 与 SenseNova 的密码登录是纯服务端的；intern-ai 还要人机校验的
- * 三个值（浏览器里过一次验证码才有）。
+ * 账号密码这一登录方式随那几家平台一起退场了：现在能建的平台只有两种方言
+ * （用推理 Key）与模拟客户端（各自的登录流，不走这里）。这一条留着是因为面板
+ * 上还有这条路径，答复要说清「不支持」，而不是静默失败。
  *
  * account_id 是账号行的 id：登录落在哪一行，凭据就存在哪一行下面。没给就用这个
  * 平台下的第一个账号。
@@ -592,66 +563,6 @@ export async function loginWithPassword(input: {
   }
   try {
     switch (row.kind) {
-      case "tokenrhythm": {
-        // 登录链在 lib/tokenrhythm/accounts.ts 里登记：怎么换凭据、怎么落库，
-        // 都在那边写着，这里只管把账号与密码递进去。
-        const credentialId = await submitLogin(row.kind, contextOf(row), {
-          username: input.username,
-          password: input.password,
-          // 「记住密码」是面板上的那个勾：没勾就只记账号，密码不进数据库。
-          extra: { remember: input.remember ? "true" : "false" },
-        });
-        closePendingLogins(row.id, { ok: true, credentialId });
-        return {
-          ok: true,
-          message: `${row.alias || row.id} 登录完成。`,
-          credentialId,
-          accountId: row.id,
-        };
-      }
-      case "sensenova": {
-        // 登录链在 lib/sensenova/auth.ts 里登记。
-        // 推理用的 key 建出来没有，只有提交的结果里知道 —— 凭据 id 里没有它。
-        const { credentialId, result } = await submitLoginResult<SenseNovaLogin>(row.kind, contextOf(row), {
-          username: input.username,
-          password: input.password,
-        });
-        closePendingLogins(row.id, { ok: true, credentialId });
-        return {
-          ok: true,
-          message: result.hasKey
-            ? "SenseNova 登录完成，推理用的 key 已就绪。"
-            : "SenseNova 登录完成，但账号上没有推理用的 API key，请在面板上填一把。",
-          credentialId,
-          accountId: row.id,
-        };
-      }
-      case "intern-ai": {
-        // 授权阶段在 lib/intern-ai/login-flow.ts 里登记。这里只把账号行与表单
-        // 交过去。
-        const { credentialId, result } = await submitLoginResult<InternAiLogin>(
-          "intern-ai",
-          { accountId: row.id, platform: row.kind, region: row.region },
-          {
-            username: input.username,
-            password: input.password,
-            extra: {
-              captchaVerifyParam: input.captchaVerifyParam,
-              sceneId: input.captchaSceneId,
-              prefix: input.captchaPrefix,
-            },
-          },
-        );
-        closePendingLogins(row.id, { ok: true, credentialId });
-        return {
-          ok: true,
-          message: result.hasKey
-            ? "intern-ai 登录完成，推理用的 key 已就绪。"
-            : "intern-ai 登录完成，但账号上没有推理用的 API key，请在面板上填一把。",
-          credentialId,
-          accountId: row.id,
-        };
-      }
       default: {
         const message = `这个账号不支持账号密码登录：${row.alias || row.id}`;
         closePendingLogins(row.id, { ok: false, message });

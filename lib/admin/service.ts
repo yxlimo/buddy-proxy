@@ -161,7 +161,7 @@ import {
 import { refreshOpenPlatformCatalog } from "../open-platform-catalog.ts";
 import { breakerPanelState } from "../upstream-breaker.ts";
 import { isSimulatedClientKind, platformKindChoices } from "../platform-catalog.ts";
-import { allQuotaPlugins } from "../quota-plugins.ts";
+import { allQuotaPlugins } from "../quota-plugin-registry.ts";
 import { quotaConclusionOf, quotaPluginIdOf, type QuotaConclusion } from "../quota-state.ts";
 import { peekHealthSnapshot } from "../health-cache.ts";
 import { listAggregateModels } from "../aggregate.ts";
@@ -697,6 +697,14 @@ function modelOverrideMessage(row: ModelOverrideRow) {
     effortOptions:
       row.effortOptions === undefined ? undefined : create(EffortListSchema, { levels: [...row.effortOptions] }),
     credits: row.credits,
+    // 计费那几格全是 optional：没写就要真的缺键 —— 面板靠缺/在分辨「沿用上游」
+    // 与「人说不收费」，多送一个空串就把两件事糊成一个了。
+    billingMode: row.billingMode,
+    billingCurrency: row.billingCurrency,
+    billingInputPerMillion: row.billingInputPerMillion,
+    billingOutputPerMillion: row.billingOutputPerMillion,
+    billingCacheReadPerMillion: row.billingCacheReadPerMillion,
+    billingMultiplier: row.billingMultiplier,
   });
 }
 
@@ -719,7 +727,36 @@ function modelOverrideRow(message: ModelOverride): ModelOverrideRow {
     ...(message.toolCall !== undefined ? { toolCall: message.toolCall } : {}),
     ...(levels === undefined ? {} : { effortOptions: [...levels] }),
     ...(message.credits !== undefined ? { credits: message.credits } : {}),
+    ...billingOverrideRow(message),
   };
+}
+
+/**
+ * 面板发过来的计费那几格。
+ *
+ * 只搬原文：认不得的方式与币种不在这里断言，写入那一处会拒（checkRow →
+ * billingError）。没写的格就不出现 —— 契约里 presence 就是「沿用上游」与
+ * 「人说不收费」的分界。
+ */
+function billingOverrideRow(message: ModelOverride): Partial<ModelOverrideRow> {
+  const out: Partial<ModelOverrideRow> = {};
+  if (message.billingMode !== undefined) {
+    out.billingMode = message.billingMode as ModelOverrideRow["billingMode"];
+  }
+  if (message.billingCurrency !== undefined) {
+    out.billingCurrency = message.billingCurrency as ModelOverrideRow["billingCurrency"];
+  }
+  if (message.billingInputPerMillion !== undefined) {
+    out.billingInputPerMillion = message.billingInputPerMillion;
+  }
+  if (message.billingOutputPerMillion !== undefined) {
+    out.billingOutputPerMillion = message.billingOutputPerMillion;
+  }
+  if (message.billingCacheReadPerMillion !== undefined) {
+    out.billingCacheReadPerMillion = message.billingCacheReadPerMillion;
+  }
+  if (message.billingMultiplier !== undefined) out.billingMultiplier = message.billingMultiplier;
+  return out;
 }
 
 /**
@@ -742,6 +779,8 @@ function modelBillingMessage(billing: ModelBilling) {
     multipliers: (billing.multipliers ?? []).map((multiplier) => multiplier.factor),
     // 上游报了但不是价格（全 0 又没说币种与单位）：这是结论，不是空。
     unknown: billing.unknown === true,
+    // 这一份是人写的，不是上游报的。
+    overridden: billing.overridden === true,
   });
 }
 
@@ -985,9 +1024,9 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
   },
 
   async listPlatformKinds() {
-    // 两族：先是「用户自己加的一类」（方言与厂商 kind，选的是这一类怎么跟上游
-    // 说话），再是预置的模拟客户端（从目录里挑一个）。顺序照表里的顺序：面板按
-    // 答复渲染下拉，不自己排。
+    // 两族：先是「用户自己加的一类」（两种方言，选的是这一类怎么跟上游说话），
+    // 再是预置的模拟客户端（从目录里挑一个）。顺序照表里的顺序：面板按答复渲染
+    // 下拉，不自己排。
     //
     // 默认地址取自 kind 注册表（ProviderKind.defaultBaseUrl）：catalog 那一列是
     // 空的，地址是各自适配器的地址常量，不写在面板这一层。额度插件同理（注册表
@@ -1360,11 +1399,15 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async getBenefitStatus() {
     const state = benefits.lastRun;
-    const benefitsOut = benefitUpstreams().map((upstream) => {
-      const outcome = state.lastOutcome?.find((o) => o.upstream === upstream);
+    const benefitsOut = benefitUpstreams().map((accountId) => {
+      // 签到是账号的事，但面板按平台分组展示：upstreamId 填账号所属的平台，
+      // accountId 填账号本身，两者不能混（面板拿 upstreamId 去 join 平台行）。
+      const platform = provider(accountId)?.platform ?? "";
+      const outcome = state.lastOutcome?.find((o) => o.upstream === accountId);
       if (!outcome) {
         return create(BenefitStatusSchema, {
-          upstreamId: upstream,
+          upstreamId: platform,
+          accountId,
           summary: "暂无签到记录",
           lines: [],
           checkedAt: 0n,
@@ -1389,7 +1432,8 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
               ? "平台不支持"
               : "今日暂无新活动";
       return create(BenefitStatusSchema, {
-        upstreamId: upstream,
+        upstreamId: platform,
+        accountId,
         summary,
         lines: outcome.report,
         checkedAt: BigInt(Date.parse(outcome.at) || 0),

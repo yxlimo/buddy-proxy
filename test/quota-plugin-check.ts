@@ -187,8 +187,10 @@ const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
 // 行上的地址写死成这一类的默认地址（值取自常量）：「行上的地址 == 默认地址
-// → 额度问插件自己那台」那条要的就是这个前提。
-insertVendorPlatform("qiniu", "qiniu", { baseUrl: QINIU_INFER_BASE });
+// → 额度问插件自己那台」那条要的就是这个前提。迁移后 kind 是 openai，地址
+// 等于登记表里那个插件的原厂商推理地址（VENDOR_INFERENCE_BASES）；插件跟着
+// 行走 —— 不指名的话额度探测会被打到行上那台。
+insertVendorPlatform("qiniu", "qiniu", { baseUrl: QINIU_INFER_BASE, quotaPlugin: qiniuQuotaPlugin.id });
 const QINIU_ACCOUNT = {
   id: "qiniu-plugin-account",
   platform: "qiniu",
@@ -337,7 +339,7 @@ section("种类");
 const qiniuPlatform = updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 check("七牛的平台行指名了插件", qiniuPlatform.ok === true, qiniuPlatform.message);
 
-const qiniuKind = kindOf("qiniu");
+const qiniuKind = kindOf("openai");
 const kindSnapshot = {
   plugins: { [qiniuQuotaPlugin.id]: { [QINIU_ACCOUNT.id]: OK_PROBE } },
 } as any;
@@ -556,11 +558,9 @@ check(
 );
 
 check(
-  "星火声明了自己没有额度接口",
-  typeof noQuotaPluginReason("xinghuo") === "string" && noQuotaPluginReason("xinghuo")!.length > 0,
-  String(noQuotaPluginReason("xinghuo")),
+  "没声明的平台说不出缘由",
+  noQuotaPluginReason("qiniu") === null,
 );
-check("别的平台没有声明", noQuotaPluginReason("qiniu") === null);
 declareNoQuotaPlugin("dummy-declared", "只是测一下");
 check(
   "声明了就有理由",
@@ -967,58 +967,31 @@ section("默认地址与额度问哪台");
 const { QINIU_PORTAL_BASE } = await import("../lib/qiniu/config.ts");
 const { SENSENOVA_INFER_BASE } = await import("../lib/sensenova/config.ts");
 const { INTERN_AI_DISCOVERY_API_BASE } = await import("../lib/intern-ai/config.ts");
-const { XINGHUO_INFER_BASE } = await import("../lib/xinghuo/config.ts");
 const { TOKENRHYTHM_INFER_BASE } = await import("../lib/tokenrhythm/config.ts");
 
-// 五家各自声明的默认地址就是各自的地址常量（值取自常量，不写字面量）。
+// 迁移后 kind 注册表里不再登记那五家的默认地址：登记表换成了插件的原厂商
+// 推理地址（VENDOR_INFERENCE_BASES，按插件 id 找）—— 地址写在存量平台行上，
+// 与迁移写进库里的那一份一字不差。
+const { VENDOR_INFERENCE_BASES } = await import("../lib/quota-plugin-registry.ts");
 check(
-  "五家的默认地址都登记在注册表里",
+  "五家的默认地址都登记在插件注册表里",
   [
     ["qiniu", QINIU_INFER_BASE],
-    ["sensenova", SENSENOVA_INFER_BASE],
-    ["intern-ai", INTERN_AI_DISCOVERY_API_BASE],
-    ["xinghuo", XINGHUO_INFER_BASE],
-    ["tokenrhythm", TOKENRHYTHM_INFER_BASE],
-  ].every(([kind, base]) => kindOf(String(kind))?.defaultBaseUrl === base),
-  ["qiniu", "sensenova", "intern-ai", "xinghuo", "tokenrhythm"]
-    .map((kind) => `${kind}=${kindOf(kind)?.defaultBaseUrl ?? ""}`)
-    .join(" "),
+    ["sensenova-pools", SENSENOVA_INFER_BASE],
+    ["intern-ai-credits", INTERN_AI_DISCOVERY_API_BASE],
+    ["tokenrhythm-wallet", TOKENRHYTHM_INFER_BASE],
+  ].every(([plugin, base]) => VENDOR_INFERENCE_BASES[String(plugin)] === base),
+  Object.entries(VENDOR_INFERENCE_BASES).map(([plugin, base]) => `${plugin}=${base}`).join(" "),
 );
 
-// 方向一：行上的地址还等于这一类的默认地址 → 额度问插件自己那台。
-// 拿七牛与星火两家做尺：七牛有额度插件（门户那台），星火没有额度接口（这一格
-// 只管「默认指哪台」）。
-insertVendorPlatform("xinghuo", "xinghuo-default-base", { baseUrl: XINGHUO_INFER_BASE });
-const xinghuoRow = {
-  id: "xinghuo-default-base",
-  platform: "xinghuo-default-base",
-  kind: "xinghuo",
-  region: "",
-  alias: "",
-  enabled: true,
-  weight: 0,
-  policy: "single",
-  createdAt: 0,
-  updatedAt: 0,
-} as any;
-const xinghuoRowBase = String(openPlatformOf("xinghuo-default-base")?.baseUrl ?? "");
-check(
-  "前提：星火的默认地址就是行上的地址",
-  kindOf("xinghuo")?.defaultBaseUrl === xinghuoRowBase,
-  `${kindOf("xinghuo")?.defaultBaseUrl ?? ""} / ${xinghuoRowBase}`,
-);
-check(
-  "行上的地址 == 默认地址 → 额度问插件自己那台",
-  quotaEndpointBase(xinghuoRow as any, "https://vendor.invalid") === "https://vendor.invalid",
-  quotaEndpointBase(xinghuoRow as any, "https://vendor.invalid"),
-);
-
-const defaultRow = { ...QINIU_ACCOUNT, platform: "qiniu", kind: "qiniu" };
+// 方向一：行上的地址还等于登记表里那个原厂商推理地址 → 额度问插件自己那台。
+// 拿七牛做尺（它有额度插件，门户那台）：
+const defaultRow = { ...QINIU_ACCOUNT, platform: "qiniu", kind: "openai" };
 const qiniuRowBase = String(openPlatformOf("qiniu")?.baseUrl ?? "");
 check(
   "前提：七牛的默认地址就是行上的地址",
-  kindOf("qiniu")?.defaultBaseUrl === qiniuRowBase,
-  `${kindOf("qiniu")?.defaultBaseUrl ?? ""} / ${qiniuRowBase}`,
+  VENDOR_INFERENCE_BASES["qiniu"] === qiniuRowBase,
+  `${VENDOR_INFERENCE_BASES["qiniu"] ?? ""} / ${qiniuRowBase}`,
 );
 check(
   "七牛：行上的地址 == 默认地址 → 额度问插件自己那台",

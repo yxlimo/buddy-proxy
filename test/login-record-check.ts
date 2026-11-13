@@ -1,17 +1,16 @@
-// test/login-record-check.ts — 登录记录合得上。
+// test/login-record-check.ts — 密码型平台退场后的登录语义。
 //
 //   node --experimental-strip-types test/login-record-check.ts
 //
-// 面板点「登录」会在 cache 表里留一行 pending。设备流那条路有轮询，轮询到结果
-// 就会把那一行合上；密码这条路没有轮询，没人替它合 —— 记录留着 pending，面板
-// 就永远停在「正在登录」，额度栏也空着。
+// 原来的密码登录（SenseNova / TokenRhythm 自己的 kind）随厂商 kind 一起退场了：
+// 这两类平台迁移成开放平台（kind = openai），凭据就是面板上填的一把推理 Key。
+// 面板再点「登录」已经没有意义 —— 网关要拒掉，说清该去填 Key，并且**不留登录
+// 记录**：没有 pending 的一行，面板就不会永远停在「正在登录」。
 //
-// 这里起一个假的上游（不碰任何真平台），走一遍真实的密码登录，看那一行最后是
-// 什么状态，以及面板看到的「正在登录」对不对。
+// 会话型平台（qoder / zcode / minimax / workbuddy）的设备流登录记录合得上，
+// 那条能力由各自的测试管（test:refresh-flow、test:zcode:session 等），这里不重复。
 
 import fs from "node:fs";
-import http from "node:http";
-import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -19,9 +18,6 @@ import { startGateway } from "./harness.ts";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVICE = "/buddy.admin.v1.AdminService";
-
-/** 假上游：密码是这个就登录成，别的一律回 401。 */
-const GOOD_PASSWORD = "good-password";
 
 let pass = 0;
 let fail = 0;
@@ -37,99 +33,21 @@ function check(name: string, ok: boolean, detail = ""): void {
 }
 
 /* ------------------------------------------------------------------ *
- * 假的上游
- * ------------------------------------------------------------------ */
-
-let mockBase = "";
-
-const mock = http.createServer(async (req, res) => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  const body = Buffer.concat(chunks).toString("utf8");
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  res.setHeader("content-type", "application/json");
-  // 第一步：OAuth2 的门，给一个 login_challenge。
-  if (url.pathname === "/oauth2/auth") {
-    res.statusCode = 302;
-    res.setHeader("location", `${mockBase}/iam/authn/v1/login?login_challenge=CHAL-MOCK`);
-    res.end("");
-    return;
-  }
-  // 第二步：账号密码换一个「继续登录」的地址。
-  if (url.pathname === "/iam/authn/v1/auth/nova/login") {
-    let password = "";
-    try {
-      password = String(JSON.parse(body || "{}").password ?? "");
-    } catch {
-      password = "";
-    }
-    if (password !== GOOD_PASSWORD) {
-      res.statusCode = 401;
-      res.end(JSON.stringify({ code: 16, message: "账号或密码不对" }));
-      return;
-    }
-    res.end(JSON.stringify({ redirect: `${mockBase}/oauth2/authorize?code=CODE-MOCK` }));
-    return;
-  }
-  // 第三步：走完同意页，地址里带着授权码。
-  if (url.pathname === "/oauth2/authorize") {
-    res.end("{}");
-    return;
-  }
-  // 第四步：授权码换 token。
-  if (url.pathname === "/oauth2/token") {
-    res.end(
-      JSON.stringify({
-        access_token: "at-mock",
-        refresh_token: "rt-mock",
-        token_type: "Bearer",
-        expires_in: 3600,
-      }),
-    );
-    return;
-  }
-  // 别的（控制台的 key 接口、模型清单）都不给：登录本身不该依赖它们。
-  res.statusCode = 404;
-  res.end("{}");
-});
-
-await new Promise<void>((resolve) => mock.listen(0, "127.0.0.1", () => resolve()));
-mockBase = `http://127.0.0.1:${(mock.address() as net.AddressInfo).port}`;
-
-/* ------------------------------------------------------------------ *
  * 网关
  * ------------------------------------------------------------------ */
 
 const gateway = await startGateway({
   env: {
-    // 上游全关：自测不碰任何平台，也不自动登录。
+    // 上游全关：自测不碰任何平台。
     MINIMAX_CODE: "",
     QODER_GLOBAL: "",
     QODER_CN: "",
     WORKBUDDY_CN: "",
     TOKENRHYTHM: "",
-    // 假的上游。
-    MINIMAX_OAUTH_ORIGIN: mockBase,
-    WORKBUDDY_CN_BASE: mockBase,
-    ZCODE_BASE_URL: mockBase,
-    QODER_GLOBAL_OPENAPI_BASE: mockBase,
-    QODER_CN_OPENAPI_BASE: mockBase,
-    // SenseNova 的三个地址都指到假上游：自测不碰真平台。
-    SENSENOVA_BASE: `${mockBase}/v1`,
-    SENSENOVA_PLATFORM_BASE: mockBase,
-    SENSENOVA_IAM_BASE: mockBase,
-    // 轮询快一点：自测不用等上游那一秒。
-    ZCODE_POLL_INTERVAL_MS: "200",
-    MINIMAX_POLL_INTERVAL_MS: "200",
-    QODER_POLL_INTERVAL_MS: "200",
   },
 });
 const base = gateway.base;
 const DATA_DIR = gateway.dataDir;
-
-process.on("exit", () => {
-  mock.close();
-});
 
 const token = fs.readFileSync(path.join(DATA_DIR, "admin-token"), "utf8").trim();
 
@@ -150,12 +68,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
   return { status: res.status, body: parsed };
 }
 
-/* ------------------------------------------------------------------ *
- * 面板那个进程和网关那个进程看的是同一份 cache 表
- * ------------------------------------------------------------------ */
-
 process.env.BUDDY_DATA_DIR = DATA_DIR;
-// import() 要 URL：Windows 上 "D:\..." 这样的路径会被当成 d: 协议。
 const lib = (rel: string) => pathToFileURL(path.join(ROOT, rel)).href;
 // 这几个模块之间有循环引用，加载顺序得跟网关一样（router-proxy.ts 就是这个
 // 顺序），不然模块顶层会读到还没初始化的东西。
@@ -166,24 +79,25 @@ await import(lib("lib/providers.ts"));
 const { loginActivity } = await import(lib("lib/admin/login.ts"));
 
 const db = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
-// The gateway writes in WAL mode; a reader that does not speak WAL sees the
-// main file only, which is what a checkpoint has written so far.
 db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA busy_timeout = 5000");
 
-/** cache 表里那一条登录记录。 */
-function recordOf(loginId: string): any {
-  const row = db.prepare("SELECT data FROM cache WHERE id = ?").get(`login:${loginId}`) as any;
-  if (!row?.data) return null;
-  try {
-    return JSON.parse(String(row.data));
-  } catch {
-    return null;
-  }
+/** cache 表里这个账号名下的登录记录（没有就是 null）。 */
+function loginRecordsFor(accountId: string): any[] {
+  const rows = db.prepare("SELECT id, data FROM cache WHERE id LIKE 'login:%'").all() as any[];
+  return rows
+    .map((row) => {
+      try {
+        return JSON.parse(String(row.data));
+      } catch {
+        return null;
+      }
+    })
+    .filter((record) => record?.accountId === accountId);
 }
 
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
-// 测试自己造一行。
+// 测试自己造一行 —— 迁移后的形状：kind = openai。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
 insertVendorPlatform("sensenova");
 
@@ -193,91 +107,35 @@ async function addAccount(alias: string): Promise<string> {
   return String(made.body?.id ?? "");
 }
 
-/** 面板点「登录」：留一条 pending 的记录。 */
-async function beginLogin(accountId: string): Promise<string> {
-  const begun = await call("BeginLogin", { upstreamId: "sensenova", accountId });
-  if (begun.body?.ok !== true) {
-    console.log(`  （开始不了登录：${JSON.stringify(begun.body)}）`);
-    return "";
-  }
-  return String(begun.body?.session?.loginId ?? "");
-}
-
 console.log("");
-console.log("密码登录：记录要合上");
+console.log("点登录：告知去填推理 Key，不留登录记录");
 
-const goodAccount = await addAccount("密码登录成功");
-check("账号加上了", goodAccount.length > 0, goodAccount);
+const account = await addAccount("迁移后的账号");
+check("账号加上了", /^\d+$/.test(account), account);
 
-const goodLoginId = await beginLogin(goodAccount);
-check("面板点登录留了一条记录", goodLoginId.length > 0, goodLoginId);
-check("开始时是 pending", recordOf(goodLoginId)?.status === "pending", JSON.stringify(recordOf(goodLoginId)));
+const begun = await call("BeginLogin", { upstreamId: "sensenova", accountId: account });
+check("点登录被拒了", begun.body?.ok !== true, JSON.stringify(begun.body));
+check(
+  "说的是这类平台用推理 Key",
+  String(begun.body?.message ?? "").includes("推理 Key"),
+  JSON.stringify(begun.body),
+);
 
-const okLogin = await call("LoginWithPassword", {
+const withPassword = await call("LoginWithPassword", {
   upstreamId: "sensenova",
-  accountId: goodAccount,
+  accountId: account,
   username: "user-ok",
-  password: GOOD_PASSWORD,
+  password: "whatever",
 });
-check("密码对就登录成", okLogin.body?.ok === true, JSON.stringify(okLogin.body));
-
-const goodRecord = recordOf(goodLoginId);
-check("记录合上了：approved", goodRecord?.status === "approved", JSON.stringify(goodRecord));
+check("账号密码登录也不收", withPassword.body?.ok !== true, JSON.stringify(withPassword.body));
 check(
-  "记录里带着这次登录的凭据",
-  goodRecord?.credentialId === `session:provider:${goodAccount}`,
-  JSON.stringify(goodRecord?.credentialId),
-);
-check("登录完了就不再说正在登录", loginActivity(goodAccount).loggingIn === false);
-
-console.log("");
-console.log("密码错：记录也要合上");
-
-const badAccount = await addAccount("密码登录失败");
-const badLoginId = await beginLogin(badAccount);
-check("失败也有那条记录", badLoginId.length > 0, badLoginId);
-
-const badLogin = await call("LoginWithPassword", {
-  upstreamId: "sensenova",
-  accountId: badAccount,
-  username: "user-bad",
-  password: "wrong-password",
-});
-check("密码错就不成", badLogin.body?.ok !== true, JSON.stringify(badLogin.body));
-
-const badRecord = recordOf(badLoginId);
-check("记录合上了：failed", badRecord?.status === "failed", JSON.stringify(badRecord));
-check("失败时说清楚为什么", String(badRecord?.message ?? "").length > 0, JSON.stringify(badRecord?.message));
-check("失败了也不再说正在登录", loginActivity(badAccount).loggingIn === false);
-
-console.log("");
-console.log("过期的记录不再冒充「正在登录」");
-
-// 面板点过「登录」，但网关重启了、轮询没起来：那条记录就永远 pending。
-const staleAccount = await addAccount("过期的那条");
-const staleLoginId = await beginLogin(staleAccount);
-check("有过期的记录", staleLoginId.length > 0, staleLoginId);
-const staleRow = db.prepare("SELECT data FROM cache WHERE id = ?").get(`login:${staleLoginId}`) as any;
-const staleData = JSON.parse(String(staleRow?.data ?? "{}"));
-staleData.expiresAt = Date.now() - 1000;
-db.prepare("UPDATE cache SET data = ? WHERE id = ?").run(JSON.stringify(staleData), `login:${staleLoginId}`);
-
-check("过期的不算正在登录", loginActivity(staleAccount).loggingIn === false);
-check("过期的被标成 expired", recordOf(staleLoginId)?.status === "expired", JSON.stringify(recordOf(staleLoginId)));
-check(
-  "过期时说的是人话",
-  String(recordOf(staleLoginId)?.message ?? "").includes("过期"),
-  JSON.stringify(recordOf(staleLoginId)?.message),
+  "说的是这个账号不支持账号密码登录",
+  String(withPassword.body?.message ?? "").includes("账号密码登录"),
+  JSON.stringify(withPassword.body),
 );
 
-console.log("");
-console.log("控制组：还在等的登录仍然算「正在登录」");
-
-const controlAccount = await addAccount("正在登录");
-const controlLoginId = await beginLogin(controlAccount);
-check("控制组有那条记录", controlLoginId.length > 0, controlLoginId);
-check("控制组还是 pending", recordOf(controlLoginId)?.status === "pending", JSON.stringify(recordOf(controlLoginId)));
-check("控制组算正在登录", loginActivity(controlAccount).loggingIn === true);
+check("没有留下登录记录", loginRecordsFor(account).length === 0, JSON.stringify(loginRecordsFor(account)));
+check("面板上不说正在登录", loginActivity(account).loggingIn === false);
 
 console.log("");
 console.log(`pass=${pass} fail=${fail}`);
@@ -285,5 +143,4 @@ db.close();
 const { closeStore } = await import(lib("lib/store.ts"));
 closeStore();
 await gateway.stopAndWait();
-mock.close();
 process.exit(fail ? 1 : 0);

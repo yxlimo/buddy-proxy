@@ -280,7 +280,7 @@ process.env.BENEFITS_DISABLED = "1";
 process.env.PERIODIC_ENABLED = "false";
 
 const { app } = await import("../lib/router/app.ts");
-const { insertVendorPlatform } = await import("./vendor-platform.ts");
+const { store } = await import("../lib/store.ts");
 const { addAccount } = await import("../lib/providers.ts");
 const { saveSession } = await import("../lib/zcode/auth.ts");
 const { rewriteAnswerStream } = await import("../lib/zcode/rewrite-answer.ts");
@@ -298,8 +298,18 @@ const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 section("准备：一个 ZCode 账号、一个发布模型");
 
 // ZCode 的平台行在目录里是 `hidden` 的那一条（lib/platform-catalog.ts），启动时不
-// 播种 —— 所以这一趟自己造一行，与面板上建一行等价。
-insertVendorPlatform("zcode", "zcode", { baseUrl: upstreamBase });
+// 播种 —— 所以这一趟自己造一行，与面板上建一行等价。ZCode 是模拟客户端那一族：
+// kind 必须还是 `zcode`（厂商 kind 迁移只波及那五家），地址指向假上游。
+{
+  const now = Date.now();
+  store()
+    .prepare(
+      "INSERT INTO platform (id, label, base_url, models, models_auto, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES ('zcode', 'zcode', ?, '[]', 0, '', 'zcode', '', ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET base_url = excluded.base_url, kind = 'zcode', updated_at = excluded.updated_at",
+    )
+    .run(upstreamBase, now, now);
+}
 
 const account = addAccount({ platform: "zcode", alias: "测试账号" });
 const accountId = account.id ?? "";

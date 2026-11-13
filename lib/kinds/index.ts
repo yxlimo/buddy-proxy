@@ -10,16 +10,11 @@
 // Importing a platform module is what registers it, and the order below is the
 // order of the registry.
 
-// 这两个种类在自己的模块里登记：接一个开放平台是写一段声明，不是在这里
-// 再加一个 registerKind 块。放在这里 import 是为了让登记在 kindOf() 之前发生。
-import "../sensenova/register.ts";
-import "../intern-ai/register.ts";
-import "../qiniu/register.ts";
-import "../xinghuo/register.ts";
+// 登记发生在 import 的时候：接一个平台是写一段声明，不是在这里再加一个
+// registerKind 块。
 import "./minimax.ts";
 import "./qoder.ts";
 import "./workbuddy.ts";
-import "./tokenrhythm.ts";
 import "./zcode.ts";
 // 开放平台：用户在面板上加的那些平台（表里的行）都是这一类。放在最后：它排在
 // 面板的 kind 列表末尾（下面的顺序就是注册表的顺序）。

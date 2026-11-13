@@ -17,6 +17,11 @@
 // `0` and "not written" are two different things throughout: `credits: 0` is a
 // free model, and no `credits` is "nobody says what it costs" — the same split
 // CatalogModel carries (see the comment on its fields).
+//
+// Billing is the same split one level up: no `billingMode` is "nobody said", and
+// `billingMode: "none"` is a person stating the model is not charged for. The two
+// must not collapse into each other — the first keeps whatever the upstream
+// reported, the second throws it away on purpose.
 
 import { store } from "./store.ts";
 // 失败的机器码与排查用的事实。文案在面板那一侧，这一层只说哪一格不对。
@@ -24,6 +29,14 @@ import type { AdminFailure, AdminResult } from "./admin/error-codes.ts";
 // 只为形状：编译后这一行就没有了。catalog-models 引了开放平台那一层，从注册表
 // 走过来的链上不能再长（见 registerKind 的注释）。
 import type { CatalogModel } from "./catalog-models.ts";
+// 计费的形状与人工那份的合成只在 catalog-billing.ts 一处定，这里只用它。
+import {
+  billingOverrideProblem,
+  overrideBilling,
+  type BillingCurrency,
+  type BillingMode,
+  type BillingOverride,
+} from "./catalog-billing.ts";
 
 /** int32 那一格能放下的最大值：再大的数字写进契约就是溢出。 */
 const INT32_MAX = 2147483647;
@@ -50,6 +63,21 @@ export interface ModelOverrideRow {
   effortOptions?: string[];
   /** 计费倍率。0 是免费；没有这一格是「不知道」，不是免费。 */
   credits?: number;
+  /**
+   * 人写的计费方式：`none` / `token` / `multiplier`。
+   *
+   * 没有这一格是「没写」，跟着上游报的那份；`none` 是明确「不收费」。两者不能混
+   * —— 前者留着上游的价格，后者是有意地把上游那份盖掉。
+   */
+  billingMode?: BillingMode;
+  /** `token` 模式的币种。 */
+  billingCurrency?: BillingCurrency;
+  /** `token` 模式三个角色的单价，一律「每百万 token」，0 是免费。 */
+  billingInputPerMillion?: number;
+  billingOutputPerMillion?: number;
+  billingCacheReadPerMillion?: number;
+  /** `multiplier` 模式的倍率（×0.15 这种）。 */
+  billingMultiplier?: number;
 }
 
 /**
@@ -226,6 +254,7 @@ function checkRow(
     numberError(position, "contextWindow", raw.contextWindow),
     numberError(position, "maxOutputTokens", raw.maxOutputTokens),
     creditsError(position, raw.credits),
+    billingError(position, raw),
   ].find((problem) => problem !== null);
   if (bad) return bad;
   seen.set(folded, position);
@@ -286,7 +315,30 @@ function withOverride(base: CatalogModel, override: ModelOverrideRow): CatalogMo
   if (override.effortOptions !== undefined) model.effortOptions = [...override.effortOptions];
   // 没写就沿用基础那一条（可能也没有：那就是「不知道」）；写了 0 就是免费。
   if (override.credits !== undefined) model.credits = override.credits;
+  // 计费：人写了就整个人那份说了算（人工 override → 上游目录 → 没有），
+  // 没写就留着上游报的那一份。
+  const billing = overrideBilling(billingOfRow(override));
+  if (billing !== undefined) model.billing = billing;
   return model;
+}
+
+/**
+ * 一条人工条目里那几格计费，归成计费那一层要的形状。
+ *
+ * 只搬不判：合不合法在写入那一处已经过了，这里搬过去只为了不把 row 的类型
+ * 泄给计费那一层。
+ */
+function billingOfRow(row: ModelOverrideRow): BillingOverride {
+  const billing: BillingOverride = {};
+  if (row.billingMode !== undefined) billing.mode = row.billingMode;
+  if (row.billingCurrency !== undefined) billing.currency = row.billingCurrency;
+  if (row.billingInputPerMillion !== undefined) billing.inputPerMillion = row.billingInputPerMillion;
+  if (row.billingOutputPerMillion !== undefined) billing.outputPerMillion = row.billingOutputPerMillion;
+  if (row.billingCacheReadPerMillion !== undefined) {
+    billing.cacheReadPerMillion = row.billingCacheReadPerMillion;
+  }
+  if (row.billingMultiplier !== undefined) billing.multiplier = row.billingMultiplier;
+  return billing;
 }
 
 /** 基础目录里没有的那一条：人工写的字段 + 最小形状。 */
@@ -298,6 +350,8 @@ function fromOverride(override: ModelOverrideRow): CatalogModel {
   if (override.toolCall !== undefined) model.toolCall = override.toolCall;
   if (override.effortOptions !== undefined) model.effortOptions = [...override.effortOptions];
   if (override.credits !== undefined) model.credits = override.credits;
+  const billing = overrideBilling(billingOfRow(override));
+  if (billing !== undefined) model.billing = billing;
   return model;
 }
 
@@ -354,6 +408,16 @@ function readRow(id: string, data: unknown): ModelOverrideRow | null {
   row.toolCall = bool(parsed.toolCall);
   if (Array.isArray(parsed.effortOptions)) row.effortOptions = parsed.effortOptions.map(String);
   row.credits = num(parsed.credits);
+  // 计费那几格：认不得的方式与币种当作没写（那是唯一能确定的事），数字沿用上面
+  // 的判据。
+  const mode = text(parsed.billingMode);
+  if (mode === "none" || mode === "token" || mode === "multiplier") row.billingMode = mode;
+  const currency = text(parsed.billingCurrency)?.toUpperCase();
+  if (currency === "CNY" || currency === "USD") row.billingCurrency = currency;
+  row.billingInputPerMillion = num(parsed.billingInputPerMillion);
+  row.billingOutputPerMillion = num(parsed.billingOutputPerMillion);
+  row.billingCacheReadPerMillion = num(parsed.billingCacheReadPerMillion);
+  row.billingMultiplier = num(parsed.billingMultiplier);
   return cleanRow(row);
 }
 
@@ -375,6 +439,26 @@ function cleanRow(row: ModelOverrideRow): ModelOverrideRow {
   if (row.toolCall !== undefined) out.toolCall = row.toolCall;
   if (row.effortOptions !== undefined) out.effortOptions = row.effortOptions.map(String);
   if (row.credits !== undefined) out.credits = row.credits;
+  // 计费的其余格只在写了方式时才有意义：没写方式就没写覆盖，几个价没地方落。
+  // 与方式无关的那几格也扔掉（比如从 token 改成倍率时留下的单价），否则它们会
+  // 以「当前值」的样子躺在库里，下次读出来就成了另一个意思。
+  if (row.billingMode !== undefined) {
+    out.billingMode = row.billingMode;
+    if (row.billingMode === "token") {
+      if (row.billingCurrency !== undefined) out.billingCurrency = row.billingCurrency;
+      if (row.billingInputPerMillion !== undefined) {
+        out.billingInputPerMillion = row.billingInputPerMillion;
+      }
+      if (row.billingOutputPerMillion !== undefined) {
+        out.billingOutputPerMillion = row.billingOutputPerMillion;
+      }
+      if (row.billingCacheReadPerMillion !== undefined) {
+        out.billingCacheReadPerMillion = row.billingCacheReadPerMillion;
+      }
+    } else if (row.billingMode === "multiplier") {
+      if (row.billingMultiplier !== undefined) out.billingMultiplier = row.billingMultiplier;
+    }
+  }
   return out;
 }
 
@@ -401,6 +485,28 @@ function numberError(position: number, field: string, value: unknown): AdminFail
     };
   }
   return null;
+}
+
+/**
+ * 人写的那几格计费合不合法。
+ *
+ * 判据在 catalog-billing.ts（那是形状的家）：这一层只负责把哪一条、哪一格报出来。
+ */
+function billingError(position: number, raw: Partial<ModelOverrideRow>): AdminFailure | null {
+  const problem = billingOverrideProblem({
+    mode: raw.billingMode,
+    currency: raw.billingCurrency,
+    inputPerMillion: raw.billingInputPerMillion,
+    outputPerMillion: raw.billingOutputPerMillion,
+    cacheReadPerMillion: raw.billingCacheReadPerMillion,
+    multiplier: raw.billingMultiplier,
+  });
+  if (!problem) return null;
+  return {
+    ok: false,
+    code: "MODEL_BILLING_INVALID",
+    message: `entry ${position} ${problem}`,
+  };
 }
 
 /**

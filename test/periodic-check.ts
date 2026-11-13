@@ -35,16 +35,14 @@ const { registerKind } = await import("../lib/provider-kinds.ts");
 const { runPeriodicOnce } = await import("../lib/periodic.ts");
 
 let refreshed: string[] = [];
-let scanned: string[] = [];
 let failWith: Error | null = null;
-let failScanWith: Error | null = null;
 
 /**
  * 一个种类，只记下「刷新过」「扫过」。
  *
- * 平台是代码里的模板，种类名必须是那九个之一，所以这里直接顶掉两个真种类：
- * 定时器看的是注册表，与上游没有关系。选的这两个（中转站与七牛云）在没有
- * 凭据时不会去问上游，测试全程离线。
+ * 迁移后两行的 kind 都是 openai：定时器看的是注册表，与上游没有关系，所以
+ * 这里直接顶掉 openai 这一个真种类，两个平台的账号都走它。没有凭据时不会
+ * 去问上游，测试全程离线。
  */
 function stubKind(kind: string): void {
   registerKind({
@@ -71,10 +69,6 @@ function stubKind(kind: string): void {
       if (failWith) throw failWith;
       refreshed.push(provider.id);
     },
-    scan: async (provider) => {
-      if (failScanWith) throw failScanWith;
-      scanned.push(provider.id);
-    },
   });
 }
 
@@ -84,8 +78,7 @@ const { insertVendorPlatform } = await import("./vendor-platform.ts");
 insertVendorPlatform("tokenrhythm");
 insertVendorPlatform("qiniu");
 
-stubKind("tokenrhythm");
-stubKind("qiniu");
+stubKind("openai");
 
 const rhythmAccount = addAccount({ platform: "tokenrhythm", alias: "第一个" });
 const qiniuAccount = addAccount({ platform: "qiniu", alias: "第二个" });
@@ -99,7 +92,19 @@ check(
   refreshed.includes(rhythmAccount.id!) && refreshed.includes(qiniuAccount.id!),
   JSON.stringify(refreshed),
 );
-check("余额也扫了", scanned.length === 2, JSON.stringify(scanned));
+
+// 余额的定时那一件事不再是 kind.scan：它是「余额到期优先」平台的重新钉号
+// （repinBalancedPlatforms，按平台那一行的策略）。给中转站标上这个策略，
+// 看定时器真的把它的账号钉住了。
+const { setPlatformPolicy } = await import("../lib/platforms.ts");
+const { pinnedAccountOf } = await import("../lib/router/balance-order.ts");
+setPlatformPolicy("tokenrhythm", "expiry_first");
+await runPeriodicOnce();
+check(
+  "余额到期优先的平台被定时器重新钉号",
+  pinnedAccountOf("tokenrhythm") === rhythmAccount.id,
+  String(pinnedAccountOf("tokenrhythm")),
+);
 
 console.log("");
 console.log("刷不出来的时候别刷屏");

@@ -22,7 +22,7 @@ import path from "node:path";
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-intern-ai-quota-view-"));
 process.env.BUDDY_DATA_DIR = DATA_DIR;
 
-const { internAiKind } = await import("../lib/intern-ai/register.ts");
+const { kindOf } = await import("../lib/provider-kinds.ts");
 
 let pass = 0;
 let fail = 0;
@@ -45,7 +45,8 @@ insertVendorPlatform("intern-ai", "intern-ai", { quotaPlugin: "intern-ai-credits
 const PROVIDER = {
   id: "intern-ai-test",
   platform: "intern-ai",
-  kind: "intern-ai",
+  // 迁移后的形状：厂商 kind 退场，行上就是通用方言 openai。
+  kind: "openai",
   region: "",
   alias: "端砚测试账号",
   enabled: true,
@@ -148,7 +149,7 @@ console.log("");
 console.log("面板看得到窗口（那才是端砚的使用限额）");
 
 {
-  const views = internAiKind.quotas(PROVIDER, snapshotWith(balance()));
+  const views = kindOf("openai")?.quotas(PROVIDER, snapshotWith(balance()));
   const view = views[0];
   const win = view?.tokenPlan?.windows?.[0];
 
@@ -179,7 +180,7 @@ console.log("");
 console.log("墨点与窗口不混（余额是钱，窗口是限额）");
 
 {
-  const credits = internAiKind.quotas(PROVIDER, snapshotWith(balance()))[0]?.credits;
+  const credits = kindOf("openai")?.quotas(PROVIDER, snapshotWith(balance()))[0]?.credits;
   check("余额就是 available_credits", credits?.remaining === 506.179, String(credits?.remaining));
   check("总额只由批次求和", credits?.total === 1000, String(credits?.total));
   check("窗口的 10000 不混进总额", credits?.total !== 10000, String(credits?.total));
@@ -191,7 +192,7 @@ console.log("窗口见底时，恢复时间取窗口自己的时刻");
 
 {
   const only5h = balance({ window5h: { ...WINDOW_5H, remainingCredits: 0 } });
-  const at5h = internAiKind.recoverAt?.(PROVIDER, snapshotWith(only5h)) ?? null;
+  const at5h = kindOf("openai")?.recoverAt?.(PROVIDER, snapshotWith(only5h)) ?? null;
   check(
     "5 小时窗口见底 → 取 5 小时窗口的 next_recover_at",
     at5h === platformMs("2026-10-28 20:56:38"),
@@ -202,7 +203,7 @@ console.log("窗口见底时，恢复时间取窗口自己的时刻");
     window5h: { ...WINDOW_5H, remainingCredits: 0 },
     window7d: { ...WINDOW_7D, remainingCredits: 0 },
   });
-  const atBoth = internAiKind.recoverAt?.(PROVIDER, snapshotWith(both)) ?? null;
+  const atBoth = kindOf("openai")?.recoverAt?.(PROVIDER, snapshotWith(both)) ?? null;
   check(
     "两个窗口都见底 → 取较晚的那个",
     atBoth === platformMs("2026-10-29 12:56:38"),
@@ -217,11 +218,11 @@ console.log("额度没用完时没有恢复时刻（那不是「下次重置」�
   const tomorrow = platformStamp(Date.now() + 24 * 3600_000);
   const packs = [{ ...PACKS[0], expireAt: tomorrow, cycleEndAt: tomorrow }];
   const snapshot = snapshotWith(balance(), packs);
-  const at = internAiKind.recoverAt?.(PROVIDER, snapshot) ?? null;
+  const at = kindOf("openai")?.recoverAt?.(PROVIDER, snapshot) ?? null;
   // 恢复时刻只在账号确实见底时有意义：还有墨点时它答 null，不拿批次的到期时间
   // 顶上（那不是「等多久能再用」）。
   check("还有额度 → 不知道什么时候恢复", at === null, String(at));
-  const lot = internAiKind.quotas(PROVIDER, snapshot)[0]?.credits?.lots?.[0];
+  const lot = kindOf("openai")?.quotas(PROVIDER, snapshot)[0]?.credits?.lots?.[0];
   check("批次的到期时间还在批次上", lot?.expiresAt === platformMs(tomorrow), `${lot?.expiresAt} vs ${platformMs(tomorrow)}`);
 }
 
@@ -229,21 +230,21 @@ console.log("");
 console.log("平台说账号不可用，就不再往它发请求");
 
 {
-  const blocked = internAiKind.outOfCredits(PROVIDER, snapshotWith(balance({ accessStatus: 0 })));
+  const blocked = kindOf("openai")?.outOfCredits(PROVIDER, snapshotWith(balance({ accessStatus: 0 })));
   check("access_status = 0 → 当作没钱", blocked === true, String(blocked));
 
-  const normal = internAiKind.outOfCredits(PROVIDER, snapshotWith(balance()));
+  const normal = kindOf("openai")?.outOfCredits(PROVIDER, snapshotWith(balance()));
   check("access_status = 1 且有余额 → 有钱", normal === false, String(normal));
 
   // 平台没报这个字段时是 null，不是 0。「没说」不能当成「说不行」—— 0 会被
   // 当成账号不可用，把整条路的请求全拦死。
   const unreported = balance({ accessStatus: null });
-  const unreportedOut = internAiKind.outOfCredits(PROVIDER, snapshotWith(unreported));
+  const unreportedOut = kindOf("openai")?.outOfCredits(PROVIDER, snapshotWith(unreported));
   check("平台没报 access_status（null）→ 不拦", unreportedOut === false, String(unreportedOut));
 
   const legacy = balance();
   delete legacy.accessStatus;
-  const legacyOut = internAiKind.outOfCredits(PROVIDER, snapshotWith(legacy));
+  const legacyOut = kindOf("openai")?.outOfCredits(PROVIDER, snapshotWith(legacy));
   check("老数据没有 access_status → 不误判", legacyOut === false, String(legacyOut));
 }
 

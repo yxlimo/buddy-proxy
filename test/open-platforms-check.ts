@@ -529,16 +529,16 @@ check(
     badKind.message.includes("no-such-kind") &&
     badKind.message.includes("openai") &&
     badKind.message.includes("anthropic") &&
-    // 厂商五家也列在候选里（它们现在由用户自己建）。
-    ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].every((kind) =>
+    // 厂商那五家已经不能建了：候选里不该再出现它们。
+    !["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"].some((kind) =>
       badKind.message.includes(kind),
     ),
   badKind.message,
 );
 check("被拒的那一行没写进表", openPlatformOf("kinds-bad") === null, JSON.stringify(openPlatformOf("kinds-bad")));
 
-// 厂商那几家现在也是用户能建的一类（模板表没了，平台行由用户在面板上建）。
-// 建出来的那一格「自动拉目录」跟着 kind 注册表走。
+// 厂商那五家不再是能建的一类：建平台被拒，一个字节也不落库。它们名下的存量行
+// 由启动时的迁移改成 openai（lib/store.ts 的 migrateLegacyVendorKinds）。
 for (const kind of ["sensenova"]) {
   const built = createOpenPlatform({
     id: `kinds-${kind}`,
@@ -546,18 +546,11 @@ for (const kind of ["sensenova"]) {
     baseUrl: "https://simulated.test/v1",
     kind,
   });
-  check(`厂商类型可建：${kind}`, built.ok === true, built.message);
-  check(
-    `${kind} 的机器码不是「没有这一类」`,
-    built.code !== "PLATFORM_KIND_UNKNOWN",
-    JSON.stringify(built),
-  );
-  check(`${kind} 那一行写进表了`, openPlatformOf(`kinds-${kind}`)?.kind === kind);
-  check(
-    `${kind}：方言族（目录从上游拉）`,
-    platformCategoryOfKind(kind) === "dialect",
-    platformCategoryOfKind(kind),
-  );
+  check(`厂商类型不再能建：${kind}`, built.ok === false, built.message);
+  check(`${kind} 的机器码是「没有这一类」`, built.code === "PLATFORM_KIND_UNKNOWN", JSON.stringify(built));
+  check(`${kind} 那一行没写进表`, openPlatformOf(`kinds-${kind}`) === null, String(openPlatformOf(`kinds-${kind}`)));
+  // kind 也从登记表里退场了：迁移之后的行上是 openai，不再有靠旧 kind 解析的行。
+  check(`${kind}：kind 已从登记表退场`, kindOf(kind) === null, String(kindOf(kind)));
   // 收尾：这一行是这一节自己造的，后面的行数比对不留它。
   deleteOpenPlatform(`kinds-${kind}`);
 }
@@ -663,16 +656,16 @@ check(
 // 那张表本身：两种方言（向上游讲 OpenAI 格式，还是讲 Anthropic Messages）加
 // 厂商五家 —— 模板表没了，厂商那几行也由用户在面板上自己建。
 const VENDOR_KINDS = ["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"];
-check("能建的一共七类", PLATFORM_KIND_OPTIONS.length === 7, String(PLATFORM_KIND_OPTIONS.length));
+check("能建的只剩两种方言", PLATFORM_KIND_OPTIONS.length === 2, String(PLATFORM_KIND_OPTIONS.length));
 check(
   "两种方言在前，openai 在最前",
   PLATFORM_KIND_OPTIONS.slice(0, 2).map((o) => o.kind).join(",") === "openai,anthropic",
   PLATFORM_KIND_OPTIONS.slice(0, 2).map((o) => o.kind).join(","),
 );
 check(
-  "厂商五家也在表里",
+  "厂商五家不在表里（已退场）",
   VENDOR_KINDS.every(
-    (kind) => platformKindOptionOf(kind) !== null && PLATFORM_KIND_OPTIONS.some((o) => o.kind === kind),
+    (kind) => platformKindOptionOf(kind) === null && !PLATFORM_KIND_OPTIONS.some((o) => o.kind === kind),
   ),
   PLATFORM_KIND_OPTIONS.map((o) => o.kind).join(","),
 );
@@ -745,8 +738,8 @@ check(
   choices.map((c) => c.presetId).join(","),
 );
 check(
-  "厂商那几家也在里面（用户自己建的一类）",
-  VENDOR_KINDS.every((kind) => choices.some((c) => c.kind === kind)),
+  "厂商那几家不在下拉里（它们只是存量行）",
+  VENDOR_KINDS.every((kind) => !choices.some((c) => c.kind === kind)),
   choices.map((c) => c.kind).join(","),
 );
 

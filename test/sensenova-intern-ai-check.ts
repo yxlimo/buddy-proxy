@@ -159,13 +159,20 @@ const SENSE_LIST = {
     input_modalities: m.inputModalities,
     output_modalities: m.outputModalities,
     supported_features: m.features,
+    // 迁移后目录走开放平台那条通用解析（lib/open-platform-catalog.ts 的
+    // TRAIT_PATHS）：能力认的是 supports_reasoning / supports_tools 这两个
+    // 布尔。原厂商 kind 那套 supported_features 翻译随 kind 退场了。
+    supports_reasoning: m.features.includes("reasoning"),
+    supports_tools: m.features.includes("tools"),
   })),
 };
 
 const INTERN_LIST = {
   object: "list",
   data: [
-    { id: "intern-s2", object: "model" },
+    // 目录从 /v1/models 一份拿全（迁移前是推理清单与控制台清单两份合并）：
+    // 上下文与能力随这份报。
+    { id: "intern-s2", object: "model", context_length: 131072, supports_reasoning: true, supports_tools: true },
     { id: "qwen3.8-27b", object: "model" },
   ],
 };
@@ -202,10 +209,10 @@ const SENSE_POOLS_RAW = {
 };
 
 /** 网关把平台的回答读成的样子（快照里存的是这一份）。 */
-const SENSE_POOLS = parsePoolUsage(SENSE_POOLS_RAW);
+const _SENSE_POOLS = parsePoolUsage(SENSE_POOLS_RAW);
 
 /** 每个池子的积分都空了的样子。 */
-const SENSE_POOLS_EMPTY = parsePoolUsage({
+const _SENSE_POOLS_EMPTY = parsePoolUsage({
   ...SENSE_POOLS_RAW,
   pools: SENSE_POOLS_RAW.pools.map((pool) => ({
     ...pool,
@@ -243,13 +250,13 @@ const INTERN_BALANCE_RAW = {
   calculated_at: "2026-10-22 16:28:14",
 };
 
-const INTERN_BALANCE = parseBalance(INTERN_BALANCE_RAW);
+const _INTERN_BALANCE = parseBalance(INTERN_BALANCE_RAW);
 
 /** 墨点没了。 */
-const INTERN_BALANCE_EMPTY = parseBalance({ ...INTERN_BALANCE_RAW, available_credits: "0" });
+const _INTERN_BALANCE_EMPTY = parseBalance({ ...INTERN_BALANCE_RAW, available_credits: "0" });
 
 /** 5 小时的窗口用满了。 */
-const INTERN_BALANCE_WINDOW = parseBalance({
+const _INTERN_BALANCE_WINDOW = parseBalance({
   ...INTERN_BALANCE_RAW,
   usage_windows: {
     "5h": { ...INTERN_BALANCE_RAW.usage_windows["5h"], remaining_credits: "0" },
@@ -313,7 +320,7 @@ const INTERN_PACKS_RAW = {
   ],
 };
 
-const INTERN_PACKS = INTERN_PACKS_RAW.packages.map(parseCreditPack);
+const _INTERN_PACKS = INTERN_PACKS_RAW.packages.map(parseCreditPack);
 
 /** 书生·端砚控制台上在售的模型（补上下文与能力用的那份）。 */
 const INTERN_CONSOLE_MODELS = {
@@ -395,13 +402,15 @@ const fake = http.createServer(async (req, res) => {
     });
     return;
   }
-  // SenseNova 的控制台：积分池。
-  if (route === "/sensenova/lite/console/v1/tokenplan/pool-usage") {
+  // SenseNova 的控制台：积分池。行上的地址指到这台假上游时，额度请求按
+  // new URL(路径, 行上的地址) 落在根路径上（迁移前原厂商 kind 会换成控制台
+  // 那台，现在没有那张表了）。
+  if (route === "/lite/console/v1/tokenplan/pool-usage") {
     json(sensePoolsRaw);
     return;
   }
   // SenseNova 的控制台：建推理 key。以前网关会在登录后与读目录时调它（ensure）。
-  if (route === "/sensenova/lite/console/v1/metered/api-keys" && req.method === "POST") {
+  if (route === "/lite/console/v1/metered/api-keys" && req.method === "POST") {
     senseKeyCreates++;
     json({
       api_key: {
@@ -443,12 +452,12 @@ const fake = http.createServer(async (req, res) => {
     return;
   }
   // 书生·端砚的控制台：墨点与在售的模型。
-  if (route === "/intern-ai/api/tokenplan/v1/credits/balance") {
+  if (route === "/api/tokenplan/v1/credits/balance") {
     json({ code: 0, msg: "ok", data: internBalanceRaw });
     return;
   }
   // 书生·端砚的控制台：建推理 key。以前网关会在登录后与回填 token 时调它。
-  if (route === "/intern-ai/api/tokenplan/v1/keys" && req.method === "POST") {
+  if (route === "/api/tokenplan/v1/keys" && req.method === "POST") {
     internKeyCreates++;
     json({
       code: 0,
@@ -463,11 +472,11 @@ const fake = http.createServer(async (req, res) => {
     });
     return;
   }
-  if (route === "/intern-ai/api/tokenplan/v1/credits/packages") {
+  if (route === "/api/tokenplan/v1/credits/packages") {
     json({ code: 0, msg: "ok", data: INTERN_PACKS_RAW });
     return;
   }
-  if (route === "/intern-ai/api/tokenplan/v1/models") {
+  if (route === "/api/tokenplan/v1/models") {
     json({ code: 0, msg: "ok", data: INTERN_CONSOLE_MODELS });
     return;
   }
@@ -591,8 +600,10 @@ async function enableUpstream(id: string): Promise<void> {
   );
   // 地址与网关那边一样（那一类默认指哪台）：额度请求认得「行上的地址还是默认
   // 那台」，于是问控制台（假上游）而不是推理端点。
-  insert.run("sensenova", "sensenova", `${fakeBase}/sensenova/v1`, "[]", 1, "sensenova-pools", "sensenova", now, now);
-  insert.run("intern-ai", "intern-ai", `${fakeBase}/intern-ai/v1`, "[]", 1, "intern-ai-credits", "intern-ai", now, now);
+  // 迁移后这两行的 kind 是 openai（厂商 kind 已退场）：地址写行上，额度插件跟着行。凭据
+  // = 推理 key（key:provider:<账号>:key）+ 插件要的段（这两家插件不要段）。
+  insert.run("sensenova", "sensenova", `${fakeBase}/sensenova/v1`, "[]", 1, "sensenova-pools", "openai", now, now);
+  insert.run("intern-ai", "intern-ai", `${fakeBase}/intern-ai/v1`, "[]", 1, "intern-ai-credits", "openai", now, now);
   conn.close();
 }
 
@@ -621,7 +632,7 @@ function writeSecret(id: string, kind: string, data: unknown): void {
   }
 }
 
-function writeCached(id: string, data: unknown): void {
+function _writeCached(id: string, data: unknown): void {
   const conn = db();
   try {
     conn
@@ -707,9 +718,9 @@ await fetch(`${base}/sensenova/v1/models`);
 await new Promise((r) => setTimeout(r, 1000));
 check("SenseNova：网关没有替用户建 key", senseKeyCreates === 0, String(senseKeyCreates));
 check(
-  "SenseNova：账号上还是那把没有 key 的账号",
-  !String(readSecret(`key:provider:${SENSE_ID}:account`) ?? "").includes("sk-"),
-  String(readSecret(`key:provider:${SENSE_ID}:account`) ?? ""),
+  "SenseNova：账号上还是那把没有 key 的账号（key 的位置 key:provider:<账号>:key）",
+  readSecret(`key:provider:${SENSE_ID}:key`) === null,
+  String(readSecret(`key:provider:${SENSE_ID}:key`) ?? ""),
 );
 
 // 回填 token：以前贴回 token 之后会建一把 Discovery 的 key。
@@ -722,35 +733,27 @@ check("intern-ai：token 导入成功", imported?.ok === true, JSON.stringify(im
 await new Promise((r) => setTimeout(r, 500));
 check("intern-ai：网关没有替用户建 key", internKeyCreates === 0, String(internKeyCreates));
 check(
-  "intern-ai：账号上还是那把没有 key 的账号",
-  !String(readSecret(`key:provider:${INTERN_ID}:account`) ?? "").includes("sk-"),
-  String(readSecret(`key:provider:${INTERN_ID}:account`) ?? ""),
+  "intern-ai：账号上还是那把没有 key 的账号（key 的位置 key:provider:<账号>:key）",
+  readSecret(`key:provider:${INTERN_ID}:key`) === null,
+  String(readSecret(`key:provider:${INTERN_ID}:key`) ?? ""),
 );
 
-// key 还是用户自己填进去的（面板上的 setProviderKeys）。
-writeSecret(`key:provider:${SENSE_ID}:account`, "account", {
-  user: "someone",
-  password: "",
-  apiKey: "sk-sensenova-test",
-});
+// key 是用户自己填进去的（迁移后的位置：key:provider:<账号>:key，形状 {apiKey}）。
+writeSecret(`key:provider:${SENSE_ID}:key`, "key", { apiKey: "sk-sensenova-test" });
 writeSecret(`session:provider:${INTERN_ID}`, "session", {
   token: "intern-token",
   ssoUid: "sso-uid",
   obtainedAtMs: now,
   username: "someone",
 });
-writeSecret(`key:provider:${INTERN_ID}:account`, "account", {
-  user: "someone",
-  password: "",
-  discoveryKey: "sk-intern-test",
-});
+writeSecret(`key:provider:${INTERN_ID}:key`, "key", { apiKey: "sk-intern-test" });
 
 check("有 key 之后 SenseNova → UPSTREAM_STATE_READY", (await upstreamStateOf("sensenova")) === "UPSTREAM_STATE_READY", await upstreamStateOf("sensenova"));
 check("有 key 之后书生·端砚 → UPSTREAM_STATE_READY", (await upstreamStateOf("intern-ai")) === "UPSTREAM_STATE_READY", await upstreamStateOf("intern-ai"));
 check(
-  "凭据状态变成 authenticated",
-  (await upstreamCredentialOf("sensenova"))?.status === "CREDENTIAL_STATE_AUTHENTICATED" &&
-    (await upstreamCredentialOf("intern-ai"))?.status === "CREDENTIAL_STATE_AUTHENTICATED",
+  "凭据状态变成可用（开放平台那格报的是 usable，不再是登录态的 authenticated）",
+  (await upstreamCredentialOf("sensenova"))?.status === "CREDENTIAL_STATE_USABLE" &&
+    (await upstreamCredentialOf("intern-ai"))?.status === "CREDENTIAL_STATE_USABLE",
   JSON.stringify([await upstreamCredentialOf("sensenova"), await upstreamCredentialOf("intern-ai")]),
 );
 

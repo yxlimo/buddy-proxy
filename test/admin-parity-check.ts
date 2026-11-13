@@ -74,7 +74,8 @@ process.env.BUDDY_DATA_DIR = DATA_DIR;
 
 const { addAccount, setProviderEnabled } = await import("../lib/providers.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
-const { writeXinghuoKey } = await import("../lib/xinghuo/account.ts");
+// 迁移后推理 key 的写入口就是面板那条路（kind=openai 的凭据声明）。
+const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 const { setSecret, store } = await import("../lib/store.ts");
 const { allKinds } = await import("../lib/provider-kinds.ts");
 const { isPlatform } = await import("../lib/platforms.ts");
@@ -197,14 +198,15 @@ setProviderEnabled(accountId, true);
 
 section("把 API key 填上：两边同时变成可用");
 
-writeQiniuAccount(accountId, { apiKey: "sk-test-key" });
+setProviderKeys(accountId, ["sk-test-key"]);
 
 const ready = platformAvailability("qiniu");
 check("判定 → ready", ready.state === "ready", ready.state);
 check("判定说有一个能接的账号", ready.usable.length === 1, String(ready.usable.length));
 check("面板的状态 → UPSTREAM_STATE_READY", upstreamState("qiniu") === UpstreamState.READY, String(upstreamState("qiniu")));
 const readyCredential = upstreamCredential("qiniu");
-check("面板的凭据 → 有能用的凭据", readyCredential.status === CredentialState.AUTHENTICATED, String(readyCredential.status));
+// 迁移后这一层的词由通用方言那份声明说（openPlatformStatus）："usable"。
+check("面板的凭据 → 有能用的凭据", readyCredential.status === CredentialState.USABLE, String(readyCredential.status));
 check(
   "填上 key 之后凭据只给前 10 个字符",
   readyCredential.fingerprint.startsWith("sk-test-key".slice(0, 10)) &&
@@ -269,18 +271,8 @@ section("每个 kind 的推理凭据");
 const kinds = allKinds();
 // 断言名单而不是个数：加一个 kind 就变红太脆，注册表里该有谁才是要守的。
 const kindNames = kinds.map((k) => k.kind);
-const wantedKinds = [
-  "sensenova",
-  "intern-ai",
-  "qiniu",
-  "xinghuo",
-  "openai",
-  "minimax",
-  "qoder",
-  "workbuddy",
-  "tokenrhythm",
-  "zcode",
-];
+// 厂商 kind 退场：注册表里只剩模拟客户端与两种方言。
+const wantedKinds = ["openai", "anthropic", "minimax", "qoder", "workbuddy", "zcode"];
 check(
   "注册表里有那几个 kind",
   wantedKinds.every((name) => kindNames.includes(name)),
@@ -312,48 +304,16 @@ check(
 );
 
 /**
- * 给一个账号把凭据配齐（每家的形状不一样）。
+ * 给一个账号把凭据配齐（会话型的形状）。
  *
- * 配的是**每一段**凭据：会话、登录账号、key、门户 cookie 都配上 —— 这样才
- * 看得出「哪一段才是推理用的那一份」。
+ * 厂商那五类（sensenova / intern-ai / tokenrhythm / qiniu / xinghuo）随 kind
+ * 退场，它们的分支一起删；剩下的每一家推理凭据都是登录会话。
  */
 function seedCredentials(kind: string, accountId: string): void {
   const session = `session:provider:${accountId}`;
-  const account = `key:provider:${accountId}:account`;
   const year = Date.now() + 365 * 24 * 3600 * 1000;
   if (kind === "minimax" || kind === "qoder" || kind === "workbuddy" || kind === "zcode") {
     setSecret(session, "session", { accessToken: "at-test", expiresAtMs: year, generation: 1 });
-    return;
-  }
-  if (kind === "sensenova") {
-    setSecret(session, "session", { accessToken: "at-test", expiresAtMs: year, generation: 1 });
-    setSecret(account, "account", { user: "tester", apiKey: "sk-sense-test" });
-    return;
-  }
-  if (kind === "intern-ai") {
-    setSecret(session, "session", { token: "site-token", obtainedAtMs: Date.now() });
-    setSecret(account, "account", { discoveryKey: "dk-test" });
-    return;
-  }
-  if (kind === "tokenrhythm") {
-    setSecret(account, "account", { account: "tester", password: "pw", apiKey: "sk-tr-test" });
-    setSecret(session, "session", {
-      cookie: "c=1",
-      csrf: "csrf",
-      userId: "u",
-      name: "n",
-      obtainedAtMs: Date.now(),
-      expiresAtMs: year,
-    });
-    return;
-  }
-  if (kind === "qiniu") {
-    writeQiniuAccount(accountId, { apiKey: "sk-qiniu-test", portalCookie: "pc=1" });
-    return;
-  }
-  if (kind === "xinghuo") {
-    writeXinghuoKey(accountId, "sk-xinghuo-test");
-    return;
   }
 }
 
@@ -364,11 +324,6 @@ const KIND_PLATFORM: Record<string, string> = {
   qoder: "qoder",
   workbuddy: "workbuddy-cn",
   zcode: "zcode",
-  sensenova: "sensenova",
-  "intern-ai": "intern-ai",
-  tokenrhythm: "tokenrhythm",
-  qiniu: "qiniu",
-  xinghuo: "xinghuo",
 };
 
 for (const kind of kinds) {

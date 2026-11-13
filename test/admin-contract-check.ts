@@ -286,7 +286,8 @@ if (!seededId) throw new Error(`AddAccount 没有给出账号 id：${seeded.text
 }
 
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的七牛行，
-// 测试自己写进网关那个库。
+// 测试自己写进网关那个库 —— 写的是迁移后的形状：kind=openai，行上指名七牛的
+// 额度插件（额度 Cookie 那一段由它带进来，两段凭据的契约才有得验）。
 const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
 {
   const conn = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
@@ -295,9 +296,9 @@ const { QINIU_INFER_BASE } = await import("../lib/qiniu/config.ts");
     .prepare(
       "INSERT OR IGNORE INTO platform " +
         "(id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, 'openai', '', ?, ?)",
     )
-    .run("qiniu", "qiniu", QINIU_INFER_BASE, "[]", "", "qiniu", Date.now(), Date.now());
+    .run("qiniu", "qiniu", QINIU_INFER_BASE, "[]", "qiniu", Date.now(), Date.now());
   conn.close();
 }
 
@@ -378,7 +379,8 @@ const CALLS: Array<{ method: string; request: unknown }> = [
   { method: "LoginWithPassword", request: { upstreamId: "qoder", username: "x", password: "y" } },
   { method: "ExchangeLoginCode", request: { upstreamId: "intern-ai", code: "" } },
   { method: "ImportLoginToken", request: { upstreamId: "intern-ai", token: "" } },
-  { method: "SetProviderKeys", request: { upstreamId: "qiniu", keys: [] } },
+  // 段数由插件决定：清掉也要给全段数（空串），数组短了会被拒（防静默丢凭据）。
+  { method: "SetProviderKeys", request: { upstreamId: "qiniu", keys: ["", ""] } },
   { method: "ListProviderKinds", request: {} },
   { method: "AddAccount", request: { platform: "qiniu", alias: "契约账号" } },
   { method: "UpdateProvider", request: { id: "qoder", alias: "契约测试账号" } },
@@ -988,29 +990,37 @@ console.log("权益：签到那一行写什么");
   const { benefits } = await import("../lib/admin/benefits.ts");
   const { addAccount } = await import("../lib/providers.ts");
   const account = addAccount({ platform: "qoder-cn" });
-  const upstreamId = String(account.id ?? "");
-  check("加好了中国区的账号", account.ok === true && upstreamId !== "", JSON.stringify(account));
+  const accountId = String(account.id ?? "");
+  check("加好了中国区的账号", account.ok === true && accountId !== "", JSON.stringify(account));
 
   /** 给一次签到的结果，看面板上那一行写出来的是什么。 */
   const summaryOf = async (outcome: Record<string, unknown>): Promise<string> => {
     benefits.lastRun.lastOutcome = [outcome as any];
     const res = await adminService.getBenefitStatus!({} as any, {} as any);
-    const row = res.benefits.find((b: any) => b.upstreamId === upstreamId);
+    // 签到是账号的事：行按 accountId 找；upstreamId 是它所属的平台。
+    const row = res.benefits.find((b: any) => b.accountId === accountId);
     return String(row?.summary ?? "");
   };
+
+  // 字段语义钉死：upstream_id 是平台 id，account_id 是账号 id，不能混。
+  benefits.lastRun.lastOutcome = [];
+  const pinned = await adminService.getBenefitStatus!({} as any, {} as any);
+  const row = pinned.benefits.find((b: any) => b.accountId === accountId);
+  check("upstreamId 是平台 id", row?.upstreamId === "qoder-cn", String(row?.upstreamId));
+  check("accountId 是账号 id", row?.accountId === accountId, String(row?.accountId));
   const at = new Date().toISOString();
 
   check(
     "没成功就是「签到未成功」",
-    (await summaryOf({ upstream: upstreamId, ok: false, credits: 0, report: [], at })) === "签到未成功",
+    (await summaryOf({ upstream: accountId, ok: false, credits: 0, report: [], at })) === "签到未成功",
   );
   check(
     "签到了也拿到了积分",
-    (await summaryOf({ upstream: upstreamId, ok: true, credits: 100, signedIn: true, report: [], at })) ===
+    (await summaryOf({ upstream: accountId, ok: true, credits: 100, signedIn: true, report: [], at })) ===
       "今日已签到 +100",
   );
   const signedInNoCredits = await summaryOf({
-    upstream: upstreamId,
+    upstream: accountId,
     ok: true,
     credits: 0,
     signedIn: true,
@@ -1025,12 +1035,12 @@ console.log("权益：签到那一行写什么");
   );
   check(
   "平台不支持",
-  (await summaryOf({ upstream: upstreamId, ok: true, credits: 0, statusUnavailable: true, report: [], at })) ===
+  (await summaryOf({ upstream: accountId, ok: true, credits: 0, statusUnavailable: true, report: [], at })) ===
   "平台不支持",
   );
   check(
     "别的就是「今日暂无新活动」",
-    (await summaryOf({ upstream: upstreamId, ok: true, credits: 0, report: [], at })) === "今日暂无新活动",
+    (await summaryOf({ upstream: accountId, ok: true, credits: 0, report: [], at })) === "今日暂无新活动",
   );
 }
 

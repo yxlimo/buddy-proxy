@@ -1,16 +1,15 @@
 // lib/router/bootstrap.ts — what runs at startup, after the server is listening.
 //
 // The order matters: the credentials come first (an account with no session logs
-// in here, in the background), then the catalogues that need one, then the
-// wallets. The periodic timer starts once, not once per account — a token is
-// one-shot, and a second refresh of the same session looks like a replay to the
-// platform (lib/periodic.ts).
+// in here, in the background), then the catalogues that need one. The periodic
+// timer starts once, not once per account — a token is one-shot, and a second
+// refresh of the same session looks like a replay to the platform
+// (lib/periodic.ts).
 
 import { configNumber } from "../config.ts";
 import { AuthError } from "../credential.ts";
 import { readCredential } from "../minimax/auth.ts";
 import { startPeriodic } from "../periodic.ts";
-import { tokenRhythmStatuses } from "../tokenrhythm/wallet.ts";
 import { qoderStatus } from "../qoder/auth.ts";
 import { workbuddyStatus } from "../workbuddy/auth.ts";
 import {
@@ -19,21 +18,6 @@ import {
   ensureWorkBuddySession,
   providersNeedingLogin,
 } from "../login.ts";
-import {
-  refreshSenseNovaCatalog,
-  senseNovaCatalog,
-  senseNovaInferenceKey,
-} from "../sensenova/transport.ts";
-import {
-  loadSession as loadSenseNovaSession,
-  login as loginSenseNova,
-} from "../sensenova/auth.ts";
-import {
-  internAiCatalog,
-  internAiInferenceKey,
-  refreshInternAiCatalog,
-} from "../intern-ai/transport.ts";
-import { loadSession as loadInternAiSession } from "../intern-ai/auth.ts";
 import { listOpenPlatforms } from "../open-platforms.ts";
 import {
   openPlatformCatalogRefreshable,
@@ -41,8 +25,6 @@ import {
   openPlatformHasKey,
   refreshOpenPlatformCatalog,
 } from "../open-platform-catalog.ts";
-import { allPlatforms } from "../platforms.ts";
-import { accountsOfPlatform } from "../providers.ts";
 import { benefits } from "../admin/benefits.ts";
 import { pruneUsage } from "../usage.ts";
 import { refreshWorkBuddyCatalog } from "./catalog-routes.ts";
@@ -136,67 +118,6 @@ export function startUpstreams(): void {
         void benefits.runOnce();
       })
       .catch((e) => console.warn(`  [AUTH] ${provider} login failed: ${(e as Error).message}`));
-  }
-
-  // 中转站：一个账号一行一个钱包，启动时问一遍平台，余额不明就早说。
-  // 平台全在表里（代码里的模板名单已经空了），按 allPlatforms() 走。
-  for (const template of allPlatforms()) {
-    if (template.kind !== "tokenrhythm") continue;
-    if (!accountsOfPlatform(template.id).length) continue;
-    void tokenRhythmStatuses(template.id)
-      .then((accounts) => {
-        for (const account of accounts) {
-          const wallet = account.wallet;
-          const left = wallet ? `${wallet.availableCny} 元` : "未知";
-          console.log(
-            `  [TOKENRHYTHM] ${account.accountId} (${account.account}): 可用 ${left}` +
-              (account.error ? ` — ${account.error}` : ""),
-          );
-        }
-      })
-      .catch((e) => console.warn(`  [TOKENRHYTHM] 账号状态获取失败: ${(e as Error).message}`));
-  }
-
-  // 账号一行一个：谁的会话没了就补谁的，不停在整个平台上。
-  //
-  // 这里要的是「开着的账号」，不是「能服务的账号」：没有凭据的那个正是要
-  // 登录的那一个（enabledAccounts 只给已经拿着凭据的那些）。
-  for (const row of accountsOfPlatform("sensenova").filter((account) => account.enabled)) {
-    // 推理端点要的是一把 key，不是 cookie。key 由用户自己在面板上填：没有就
-    // 没有，网关不替人建一把（平台只把完整值给一次）。
-    void (async () => {
-      // SenseNova 的登录是账号密码加 PKCE，不用开浏览器，所以没有会话时
-      // 网关自己登 —— 凭据在环境里，够用。
-      let session = loadSenseNovaSession(row.id);
-      if (!session) {
-        console.log(`  [SENSENOVA] ${row.id} 还没有登录态，用环境里的账号密码登录`);
-        session = await loginSenseNova(undefined, undefined, row.id);
-      }
-      if (!senseNovaInferenceKey(row.id)) {
-        console.log(`  [SENSENOVA] ${row.id} 没有推理用的 API key，请在面板上填一把`);
-        return;
-      }
-      await refreshSenseNovaCatalog(true, row.id);
-      console.log(`  [SENSENOVA] ${row.id} 模型清单：${senseNovaCatalog().length} 个`);
-    })().catch((e) => console.warn(`  [SENSENOVA] ${row.id}: ${(e as Error).message}`));
-  }
-
-  for (const row of accountsOfPlatform("intern-ai").filter((account) => account.enabled)) {
-    // 与 SenseNova 一样：推理端点认的是 Discovery 子站那把 key。
-    void (async () => {
-      const session = loadInternAiSession(row.id);
-      if (!session) {
-        // 端砚的登录要过人机验证，服务器替不了：让人在面板上登一次。
-        console.log(`  [INTERN-AI] ${row.id} 还没有登录态，在面板上登录一次即可`);
-        return;
-      }
-      if (!internAiInferenceKey(row.id)) {
-        console.log(`  [INTERN-AI] ${row.id} 没有推理用的 API key，请在面板上填一把`);
-        return;
-      }
-      await refreshInternAiCatalog(true, row.id);
-      console.log(`  [INTERN-AI] ${row.id} 模型目录：${internAiCatalog().length} 个`);
-    })().catch((e) => console.warn(`  [INTERN-AI] ${row.id}: ${(e as Error).message}`));
   }
 
   // The daily benefits of the China accounts — the check-in, the growth centre

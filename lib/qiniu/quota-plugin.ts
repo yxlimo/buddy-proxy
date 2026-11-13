@@ -5,7 +5,8 @@
 // 的状态（没填 cookie / 凭据被拒 / 被限流 / 问不到）。
 
 import { quotaProbe, type QuotaState } from "../quota-state.ts";
-import { quotaEndpointBase, registerQuotaPlugin } from "../quota-plugins.ts";
+import { quotaEndpointBase } from "../quota-plugins.ts";
+import { registerQuotaPlugin } from "../quota-plugin-registry.ts";
 import type { CreditLotView, QuotaView } from "../provider-kinds.ts";
 import type { ProviderRow } from "../providers.ts";
 import { qiniuPortalCookie, QINIU_ACCOUNT_FIELD } from "./account.ts";

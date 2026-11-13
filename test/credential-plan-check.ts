@@ -105,20 +105,31 @@ const PLATFORM_ROWS: Record<string, [string, string, boolean][]> = {
     ["登录会话", "session", false],
     ["推理 Key", "api_key", true],
   ],
-  // key 先列：干活的那一段在前面。
-  tokenrhythm: [
-    ["推理 Key", "api_key", true],
-    ["登录会话", "session", false],
-  ],
+  // 迁移后的形状：厂商 kind 退场，五家都是 kind=openai + 行上的 quota_plugin。
+  // 登录会话那一行随 kind 一起消失（登录流是 kind 带的）；额度那格由插件声明
+  // —— 五家里只有七牛的插件要格（额度 Cookie），其余三家读存量会话、不占格子。
+  tokenrhythm: [["推理 Key", "api_key", true]],
   qiniu: [
     ["推理 Key", "api_key", true],
     ["额度 Cookie", "cookie", false],
   ],
   xinghuo: [["推理 Key", "api_key", true]],
+  sensenova: [["推理 Key", "api_key", true]],
+  "intern-ai": [["推理 Key", "api_key", true]],
 };
 
-/** 厂商那几家的平台行是用户在面板上建的：库里没有就是没有，测试自己插一行。 */
-const VENDOR_KINDS = ["sensenova", "intern-ai", "tokenrhythm", "qiniu", "xinghuo"];
+/**
+ * 厂商那几家的平台行是用户在面板上建的：库里没有就是没有，测试自己插一行。
+ * 值是那家行上指的额度插件（迁移后 kind=openai，额度那格由它带进来；星火没有
+ * 额度接口，不指）。
+ */
+const VENDOR_PLUGIN: Record<string, string> = {
+  xinghuo: "",
+  sensenova: "sensenova-pools",
+  "intern-ai": "intern-ai-credits",
+  tokenrhythm: "tokenrhythm-wallet",
+  qiniu: "qiniu",
+};
 
 /** 没配凭据时列哪几行。 */
 const EMPTY_ROWS: Record<string, [string, string, boolean][]> = {
@@ -129,13 +140,13 @@ const EMPTY_ROWS: Record<string, [string, string, boolean][]> = {
   "workbuddy-cn": [["登录会话", "session", true]],
   "workbuddy-global": [["登录会话", "session", true]],
   zcode: [["登录会话", "session", true]],
-  // 会话 + 推理 key：没配的 key 不列
-  sensenova: [["登录会话", "session", false]],
-  "intern-ai": [["登录会话", "session", false]],
-  // 登录会话列着，推理 key 没配就不列
-  tokenrhythm: [["登录会话", "session", false]],
-  // 两段都没有：一条也不列（面板上不能出现「有凭据」却没有凭据的行）
-  qiniu: [],
+  // 迁移后：会话行不列了（登录流随 kind 退场），插件要的那段要一直列着（
+  // 面板要看得见「这段还没填」），推理 key 没配就不列。
+  sensenova: [],
+  "intern-ai": [],
+  tokenrhythm: [],
+  // 插件要的那段还没填：额度 Cookie 一行（missing）
+  qiniu: [["额度 Cookie", "cookie", false]],
   xinghuo: [],
 };
 
@@ -148,7 +159,9 @@ for (const platform of Object.keys(PLATFORM_ROWS)) {
   // 厂商那几家（七牛云 / 星火 / SenseNova / 端砚 / TokenRhythm）的行是用户在面板
   // 上建的：库里没有就是没有，测试自己插一行。模拟客户端那一族启动时已经播种好了
   // （它们没有 defaultBaseUrl，不是「厂商那几行」的口径）。
-  if (VENDOR_KINDS.includes(platform)) insertVendorPlatform(platform);
+  if (platform in VENDOR_PLUGIN) {
+    insertVendorPlatform(platform, platform, { quotaPlugin: VENDOR_PLUGIN[platform] });
+  }
   const made = addAccount({ platform, alias: `测试 ${platform}` });
   if (!made.ok || !made.id) {
     check(`${platform}：账号建得起来`, false, made.message);
@@ -434,11 +447,6 @@ for (const kind of allKinds()) {
 section("按位置写");
 
 const FIELD_COUNT: Record<string, number> = {
-  qiniu: 2,
-  xinghuo: 1,
-  sensenova: 1,
-  "intern-ai": 1,
-  tokenrhythm: 1,
   openai: 1,
   anthropic: 1,
 };
@@ -454,10 +462,21 @@ createOpenPlatform({
 
 for (const [kind, count] of Object.entries(FIELD_COUNT)) {
   const plan = credentialsOfKind(kind);
-  const platform = kind === "openai" || kind === "anthropic" ? "test-open-plain" : kind;
+  const platform = "test-open-plain";
   const owner = { id: platform, platform, kind };
   const fields = plan.fields(owner);
   check(`${kind}：要填 ${count} 格`, fields.length === count, String(fields.length));
+}
+
+// 迁移后的厂商平台：kind 是 openai，格子数 = 推理 Key + 行上插件要的那几段。
+for (const [platform, plugin] of Object.entries(VENDOR_PLUGIN)) {
+  const fields = credentialsOfKind("openai").fields({ id: platform, platform, kind: "openai" });
+  const want = plugin === "qiniu" ? 2 : 1;
+  check(
+    `${platform}（openai + ${plugin || "无插件"}）：要填 ${want} 格`,
+    fields.length === want,
+    `${fields.length}: ${fields.map((f) => f.label).join("+")}`,
+  );
 }
 
 // 清掉：空串表示清掉那一段，全空就是都清掉 —— 与七牛云、讯飞星火一个语义。
@@ -465,10 +484,15 @@ for (const [kind, count] of Object.entries(FIELD_COUNT)) {
   const id = accountOf["qiniu"];
   const cleared = setProviderKeys(id, ["", ""]);
   check("七牛云：两段都清掉", cleared.ok && cleared.count === 0, `${cleared.message} / ${cleared.count}`);
-  sameRows("七牛云：清掉后一条也不列", rowsOf(id), []);
+  // 插件要的那段要一直列着（面板要看得见「这段还没填」），清掉后它还在（missing）。
+  sameRows("七牛云：清掉后只剩额度 Cookie 那一行（missing）", rowsOf(id), [["额度 Cookie", "cookie", false]]);
   const one = setProviderKeys(id, ["sk-TESTONLY-qiniu-2", ""]); // privacy:allow — 编造的样例
   check("七牛云：只写推理 key", one.ok && one.count === 1, `${one.message} / ${one.count}`);
-  sameRows("七牛云：只剩推理 Key 那一行", rowsOf(id), [["推理 Key", "api_key", true]]);
+  sameRows(
+    "七牛云：key 填上了，额度 Cookie 还空着（missing 照列）",
+    rowsOf(id),
+    [["推理 Key", "api_key", true], ["额度 Cookie", "cookie", false]],
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -528,24 +552,9 @@ const { markSessionDead, clearDeadSession } = await import("../lib/session.ts");
   );
 }
 
-// ③ 只有一把 token 的会话（书生·端砚）：记录在而 token 空 → MISSING。
-// 记录在就算配好了的话，「没配」会被说成「能用」。
-{
-  const id = accountOf["intern-ai"];
-  setSecret(`session:provider:${id}`, "session", { token: "", obtainedAtMs: Date.now() });
-  const row = credentialsOf(id).find((c) => c.kind === "session");
-  check(
-    "token 空的会话：状态是 MISSING（记录在也不算配好）",
-    row?.status === CredentialState.MISSING,
-    `状态 ${row?.status}`,
-  );
-  setSecret(`session:provider:${id}`, "session", { token: "tok-TESTONLY", obtainedAtMs: Date.now() });
-  check(
-    "token 回来了：状态是 USABLE",
-    credentialsOf(id).find((c) => c.kind === "session")?.status === CredentialState.USABLE,
-    String(credentialsOf(id).find((c) => c.kind === "session")?.status),
-  );
-}
+// ③ 只有一把 token 的会话（书生·端砚）—— 这一整类断言随厂商 kind 退场消失：
+// 迁移后的行上没有会话那一格（登录流是 kind 带的），会话只在插件内部读，
+// 面板上不再列。会话状态的三个分支由 ①②（会话型的平台）继续覆盖。
 
 /* ------------------------------------------------------------------ *
  * 八、面板夹具与后端声明对账
@@ -561,10 +570,16 @@ section("面板夹具与后端声明对账");
  */
 const { PROVIDER_KIND_ROWS } = await import("../web/src/test/provider-kinds-data.ts");
 const declaredKinds = new Map(selectableKinds().map((row) => [row.kind, row]));
+// 厂商 kind 退场后，后端不再声明那五类；面板那份夹具归面板那条线维护
+// （web/** 不在这张单子的授权范围里），它删掉之前这里只验后端还声明的那些。
+const RETIRED_KINDS = new Set(["qiniu", "xinghuo", "sensenova", "intern-ai", "tokenrhythm"]);
 for (const fixture of PROVIDER_KIND_ROWS) {
   const backend = declaredKinds.get(fixture.kind);
-  check(`夹具 ${fixture.kind}：后端登记了这一类`, Boolean(backend), fixture.kind);
-  if (!backend) continue;
+  if (!backend) {
+    check(`夹具 ${fixture.kind}：后端不再声明的只许是退场的厂商 kind`, RETIRED_KINDS.has(fixture.kind), fixture.kind);
+    continue;
+  }
+  check(`夹具 ${fixture.kind}：后端登记了这一类`, true, fixture.kind);
   for (const key of ["label", "login", "credentialTitle"] as const) {
     check(
       `夹具 ${fixture.kind}：${key} 与后端一致`,

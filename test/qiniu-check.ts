@@ -21,7 +21,8 @@ const { kindOf, policiesOfKind } = await import("../lib/provider-kinds.ts");
 // 种类登记在注册表里：导入它，种类才都在。
 await import("../lib/kinds/index.ts");
 const { platformOfAny } = await import("../lib/platforms.ts");
-const { updateOpenPlatform, syncPlatformModels } = await import("../lib/open-platforms.ts");
+const { updateOpenPlatform, syncPlatformModels, openPlatformOf } = await import("../lib/open-platforms.ts");
+const { quotaPluginOf, quotaEndpointBase } = await import("../lib/quota-plugins.ts");
 // 参考值那一层（共性表）：上游一个参数也没报时，公布的就是它那一份。
 const { commonTraitsOf } = await import("../lib/common-model-traits.ts");
 const { addAccount, provider: providerRow } = await import("../lib/providers.ts");
@@ -87,7 +88,8 @@ insertVendorPlatform("qiniu");
 const PROVIDER = {
   id: "qiniu-test",
   platform: "qiniu",
-  kind: "qiniu",
+  // 迁移后的形状：厂商 kind 退场，行上就是通用方言 openai。
+  kind: "openai",
   region: "",
   alias: "七牛云测试账号",
   enabled: true,
@@ -184,7 +186,9 @@ section("额度");
 const named = updateOpenPlatform("qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 check("平台行指名了插件", named.ok === true, named.message);
 
-const kind = kindOf("qiniu");
+// 厂商 kind 退场后，读额度的就是通用方言那一类（kindOf("openai")）：额度按
+// 平台行指名的插件读，kind 本身不再有七牛自己的那份声明。
+const kind = kindOf("openai");
 const views = kind?.quotas(PROVIDER, snapshotWith(okProbe(QUOTA))) ?? [];
 const credits = views[0]?.credits;
 check("报一个额度", views.length === 1, String(views.length));
@@ -409,20 +413,42 @@ globalThis.fetch = realFetch;
 
 section("登记");
 
-check("种类在", kind !== null, String(kind));
-check("名字是七牛云", kind?.label === "七牛云", String(kind?.label));
-check("登录方式是 api_key", kind?.login === "api_key", String(kind?.login));
+check("通用方言那一类在", kind !== null, String(kind));
 check("平台在", platformOfAny("qiniu") !== null, String(platformOfAny("qiniu")));
 check(
   "收 single 与 fallback",
-  policiesOfKind("qiniu").join(",") === "single,fallback",
-  policiesOfKind("qiniu").join(","),
+  policiesOfKind("openai").join(",") === "single,fallback",
+  policiesOfKind("openai").join(","),
 );
 check(
-  "推理地址是七牛云的",
-  kind?.baseUrl(PROVIDER) === "https://api.qnaigc.com/v1",
-  String(kind?.baseUrl(PROVIDER)),
+  "行上地址是七牛云的（迁移写进去的那台）",
+  openPlatformOf("qiniu")?.baseUrl === "https://api.qnaigc.com/v1",
+  String(openPlatformOf("qiniu")?.baseUrl),
 );
+// 插件登记：迁移后的行（kind=openai + quota_plugin=qiniu）必须取得到插件实例。
+// 登记集中在 lib/quota-plugins.ts（引用即登记），没人登记的话额度全变「不知道」。
+check("额度插件登记了", quotaPluginOf("qiniu") === qiniuQuotaPlugin, String(quotaPluginOf("qiniu")?.id));
+check(
+  "行上地址还是原来的推理地址 → 额度问门户，不打推理主机",
+  quotaEndpointBase(PROVIDER, "https://portal.qiniu.com") === "https://portal.qiniu.com",
+  String(quotaEndpointBase(PROVIDER, "https://portal.qiniu.com")),
+);
+{
+  // 反证：用户真把地址指到别处时，额度跟着行上地址走 —— 这个设计意图不能被
+  // 「迁移写的地址不算用户指到别处」这条规则砍掉。
+  updateOpenPlatform("qiniu", { baseUrl: "https://mirror.example.com/v1" });
+  check(
+    "行上地址指到别处 → 额度跟行上地址",
+    quotaEndpointBase(PROVIDER, "https://portal.qiniu.com") === "https://mirror.example.com/v1",
+    String(quotaEndpointBase(PROVIDER, "https://portal.qiniu.com")),
+  );
+  updateOpenPlatform("qiniu", { baseUrl: "https://api.qnaigc.com/v1" });
+  check(
+    "改回去 → 额度又回门户",
+    quotaEndpointBase(PROVIDER, "https://portal.qiniu.com") === "https://portal.qiniu.com",
+    String(quotaEndpointBase(PROVIDER, "https://portal.qiniu.com")),
+  );
+}
 
 /* ------------------------------------------------------------------ *
  * 模型目录：写死的那一份

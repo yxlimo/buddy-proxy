@@ -237,7 +237,8 @@ const now = Date.now();
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
-insertVendorPlatform("sensenova");
+// 迁移后的行上 kind=openai：推理与目录都按行上地址走，所以地址得指到假上游。
+insertVendorPlatform("sensenova", "sensenova", { baseUrl: `${fakeBase}/sensenova/v1` });
 
 const rateAccount = addRateAccount({ platform: "sensenova", alias: "假账号" });
 if (!rateAccount.ok || !rateAccount.id) throw new Error(`加不了账号：${rateAccount.message}`);
@@ -265,6 +266,15 @@ db.prepare(
   `key:provider:${ACCOUNT}:account`,
   "account",
   JSON.stringify({ user: "someone", password: "", apiKey: "sk-sensenova-test" }),
+  now,
+);
+// 迁移后的位置：推理 key 在开放平台读的那一处（:key）。
+db.prepare(
+  "INSERT OR REPLACE INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?)",
+).run(
+  `key:provider:${ACCOUNT}:key`,
+  "key",
+  JSON.stringify({ apiKey: "sk-sensenova-test" }),
   now,
 );
 

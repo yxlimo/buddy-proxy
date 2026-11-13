@@ -55,8 +55,9 @@ export interface ProviderRow {
  * `single`      one account, always the first.
  * `fallback`    try them in order; an account that cannot serve the request
  *               hands it to the next one.
- * `expiry_first` one account: the one whose balance runs out first. Only the
- *               relay stations have balances, so this is theirs alone.
+ * `expiry_first` one account: the one whose balance runs out first. Any
+ *               platform may pick it — the order comes from the balances
+ *               the quota plugin reported, not from any particular vendor.
  *
  * The column has no per-kind default: the code does not know which upstream
  * has several accounts and which one has a balance, so the operator sets it.

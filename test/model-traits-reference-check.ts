@@ -139,13 +139,31 @@ check(
  * 平台
  * ------------------------------------------------------------------ */
 
+/**
+ * 插一行「迁移之后」的形状：kind 是 openai，地址在行上。
+ *
+ * 厂商那几家已经不能经 AddPlatform 建了（lib/platform-catalog.ts 只剩两种方言），
+ * 而这一节要的只是「库里有这么一行」。
+ */
+function insertMigratedPlatform(id: string, label: string, baseUrl: string): void {
+  const now = Date.now();
+  store()
+    .prepare(
+      "INSERT INTO platform (id, label, base_url, models, quota_plugin, kind, region, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, '', 'openai', '', ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET label = excluded.label, base_url = excluded.base_url, " +
+        "kind = excluded.kind, updated_at = excluded.updated_at",
+    )
+    .run(id, label, baseUrl, JSON.stringify({ items: [], traits: {}, fetchedAt: 0 }), now, now);
+}
+
 section("参考值补上游没报的那几格");
 
-platformOk(
-  createOpenPlatform({ id: "tokenrhythm", label: "中转站", baseUrl: "https://relay.test/v1", kind: "tokenrhythm" }),
-  "tokenrhythm",
-);
-// kind 换成中转站那一类：它的目录只有行里那一份（没有代码表），正是这一层的用武之地
+// 一家原先是中转站的平台，迁移之后就是这个形状（kind 已是 openai、地址在行上）：
+// 这一节测的是参考值那一层，不是建平台，所以直接把行插成迁移后的样子。
+insertMigratedPlatform("tokenrhythm", "中转站", "https://relay.test/v1");
+check("the migrated platform row exists", openPlatformOf("tokenrhythm") !== null);
+// 它的目录只有行里那一份（没有代码表），正是这一层的用武之地
 const tokenrhythmKind = openPlatformOf("tokenrhythm");
 check("the platform row exists", tokenrhythmKind !== null);
 check(

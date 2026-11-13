@@ -9,8 +9,9 @@
 //   PLATFORM_KIND_OPTIONS 面板新增平台时的下拉：能建哪几类。
 //
 // 模板表没了：平台行都是用户在面板上自己建的。区别只是 kind 决定它怎么跟上游
-// 说话 —— 方言类（openai / anthropic）讲通用格式，厂商那五家（七牛云 / 讯飞星火
-// / SenseNova / 书生·端砚 / TokenRhythm）讲自己那家的格式与鉴权。
+// 说话 —— 方言类（openai / anthropic）讲通用格式。厂商那五家（七牛云 / 讯飞星火
+// / SenseNova / 书生·端砚 / TokenRhythm）退场了：存量行由启动时的迁移改成
+// openai，它们不再是能新建的一类。
 //
 // 这一层不引任何模块（引了 store 就成环），所以这里只放 kind 的身份；默认地址
 // 与「目录归不归上游」的事实写在 kind 注册表里（lib/provider-kinds.ts）：
@@ -131,9 +132,9 @@ export interface PlatformKindOption {
  * 两类方言（openai / anthropic）：向上游讲 OpenAI 格式，还是讲 Anthropic
  * Messages 格式。哪家中转站、哪个自建服务，只有用户知道，所以没有默认地址。
  *
- * 厂商五家（七牛云 / 讯飞星火 / SenseNova / 书生·端砚 / TokenRhythm）也在
- * 这里：模板表没了，它们跟方言一样由用户自己新建，区别只是 kind 决定它怎么跟
- * 上游说话。它们有默认地址 —— 那是各自适配器的地址常量，不是字面量。
+ * 厂商五家（七牛云 / 讯飞星火 / SenseNova / 书生·端砚 / TokenRhythm）不在：
+ * 它们不再是「能新建的一类平台」，存量行由启动时的迁移改成通用方言
+ * （lib/store.ts 的 migrateLegacyVendorKinds），从此按 openai 那一类走。
  *
  * 模拟客户端那五家（minimax / qoder / qoder-cn / workbuddy-cn /
  * workbuddy-global）不在：一个客户端一份会话，靠登录拿凭据，
@@ -156,48 +157,6 @@ export const PLATFORM_KIND_OPTIONS: readonly PlatformKindOption[] = [
     label: "Anthropic 兼容",
     category: "dialect",
     presetId: "",
-    region: "",
-    defaultBaseUrl: "",
-  },
-  {
-    kind: "qiniu",
-    label: "七牛云",
-    category: "dialect",
-    presetId: "",
-    region: "cn",
-    // 默认地址在注册表里（ProviderKind.defaultBaseUrl），不在这里写死。
-    defaultBaseUrl: "",
-  },
-  {
-    kind: "xinghuo",
-    label: "讯飞星火",
-    category: "dialect",
-    presetId: "",
-    region: "cn",
-    defaultBaseUrl: "",
-  },
-  {
-    kind: "sensenova",
-    label: "SenseNova",
-    category: "dialect",
-    presetId: "",
-    region: "cn",
-    defaultBaseUrl: "",
-  },
-  {
-    kind: "intern-ai",
-    label: "书生·端砚",
-    category: "dialect",
-    presetId: "",
-    region: "cn",
-    defaultBaseUrl: "",
-  },
-  {
-    kind: "tokenrhythm",
-    label: "TokenRhythm",
-    category: "dialect",
-    presetId: "",
-    // 中转站没有区域之分。
     region: "",
     defaultBaseUrl: "",
   },

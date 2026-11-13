@@ -113,7 +113,10 @@ const modelOf = (models: any[], id: string) => models.find((model) => model.id =
 
 section("tokenrhythm：上游报的价，原样到面板");
 
-const tokenrhythm = platformWithUpstreamCatalog("tokenrhythm", "tokenrhythm", [tokenrhythmEntry]);
+// 一家原来的中转站平台，迁移之后就是这个形状：id 还是原来那个，kind 已经是
+// openai、地址在行上（lib/store.ts 的 migrateLegacyVendorKinds）。这里直接从
+// 这个形状开始建。
+const tokenrhythm = platformWithUpstreamCatalog("tokenrhythm", "openai", [tokenrhythmEntry]);
 check("建起一个 tokenrhythm 平台（目录来自上游那一份）", tokenrhythm.ok, tokenrhythm.message);
 
 const trModels = await listModels("tokenrhythm");
@@ -160,7 +163,7 @@ check(
 
 section("sensenova：全 0 又没有币种与单位 → unknown");
 
-const sensenova = platformWithUpstreamCatalog("sensenova", "sensenova", [sensenovaEntry]);
+const sensenova = platformWithUpstreamCatalog("sensenova", "openai", [sensenovaEntry]);
 check("建起一个 sensenova 平台", sensenova.ok, sensenova.message);
 
 const snPriced = modelOf(await listModels("sensenova"), sensenovaEntry.id);

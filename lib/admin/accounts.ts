@@ -24,7 +24,7 @@ import { loadSession as loadWorkBuddySession } from "../workbuddy/auth.ts";
 import { fetchWorkBuddyCredits } from "../workbuddy/credits.ts";
 import { zcodeStatus } from "../zcode/auth.ts";
 import { clearOpenPlatformKey } from "../open-platform-credentials.ts";
-import { quotaPluginOf } from "../quota-plugins.ts";
+import { quotaPluginOf } from "../quota-plugin-registry.ts";
 import { openPlatformOf } from "../open-platforms.ts";
 import { fetchOpenPlatformModels } from "../open-platform-catalog.ts";
 import { senseNovaInferenceKey } from "../sensenova/transport.ts";

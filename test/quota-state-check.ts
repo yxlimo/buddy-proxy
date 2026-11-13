@@ -61,7 +61,9 @@ function account(id: string): any {
   return {
     id,
     platform: "qiniu",
-    kind: "qiniu",
+    // 迁移后七牛云那行的 kind 是 openai（恢复时刻走 kind 注册表里 openai 那条
+    // 的 recoverAt，按平台行的 quota_plugin 找插件）。
+    kind: "openai",
     region: "",
     alias: id,
     enabled: true,

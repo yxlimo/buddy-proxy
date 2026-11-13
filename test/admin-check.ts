@@ -206,8 +206,11 @@ const created: Record<string, string> = {};
 // 厂商那几行不再由代码补（平台行是用户在面板上自己建的）：这一节要用的行，
 // 测试自己造一行。
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
+const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
 insertVendorPlatform("tokenrhythm");
-insertVendorPlatform("qiniu");
+// 迁移后七牛云那行的 kind 是 openai：凭据 = 推理 key + 所选额度插件要的那几段。
+// 这一节要写两段（key 与门户 cookie），所以行上指名七牛的额度插件。
+insertVendorPlatform("qiniu", "qiniu", { quotaPlugin: qiniuQuotaPlugin.id });
 
 for (const platform of ["qoder-cn", "qoder", "tokenrhythm", "qiniu"]) {
   const res = await call("AddAccount", { platform, alias: `${platform} 主账号` }, token);
@@ -326,7 +329,8 @@ const setExpiry = await call(
 );
 check("余额到期优先也改得掉", setExpiry.body?.ok === true, JSON.stringify(setExpiry.body));
 
-// 每个平台都收降级（只有 tokenrhythm 多一个余额到期优先）：qoder 也收。
+// 每个平台都收降级与余额到期优先：白名单只在 lib/platforms.ts 一处决定，
+// 与 kind 无关。
 const qoderFallback = await call(
   "SetPlatformPolicy",
   { platform: "qoder", policy: "PROVIDER_POLICY_FALLBACK" },
@@ -338,12 +342,7 @@ const qoderExpiry = await call(
   { platform: "qoder", policy: "PROVIDER_POLICY_EXPIRY_FIRST" },
   token,
 );
-check("Qoder 不收余额到期优先", qoderExpiry.body?.ok !== true, JSON.stringify(qoderExpiry.body));
-check(
-  "拒收的话说了这个平台支持哪几个",
-  ["single", "fallback"].every((v) => String(qoderExpiry.body?.message ?? "").includes(v)),
-  String(qoderExpiry.body?.message),
-);
+check("Qoder 也收余额到期优先", qoderExpiry.body?.ok === true, JSON.stringify(qoderExpiry.body));
 await call("SetPlatformPolicy", { platform: "qoder", policy: "PROVIDER_POLICY_SINGLE" }, token);
 
 // 给错了不收，而且说清楚只认哪三个。
@@ -378,14 +377,24 @@ await call("SetPlatformPolicy", { platform: "tokenrhythm", policy: "PROVIDER_POL
 
 const kinds = await call("ListProviderKinds", {}, token);
 const kindPolicies = (kind: string) => list(list(kinds.body?.kinds).find((k: any) => k.kind === kind)?.policies);
-check("中转站三个策略", kindPolicies("tokenrhythm").length === 3, JSON.stringify(kindPolicies("tokenrhythm")));
 check("其余两个策略", kindPolicies("qoder").length === 2, JSON.stringify(kindPolicies("qoder")));
-check(
-  "中转站那三个是单一、降级、余额到期优先",
-  kindPolicies("tokenrhythm").join(",") ===
-    "PROVIDER_POLICY_SINGLE,PROVIDER_POLICY_FALLBACK,PROVIDER_POLICY_EXPIRY_FIRST",
-  kindPolicies("tokenrhythm").join(","),
-);
+
+// 策略集合来自一处（lib/platforms.ts），每个平台的列表里都是那三个。
+const upstreamPolicies = async (id: string) =>
+  list(
+    list((await call("ListUpstreams", {}, token)).body?.upstreams).find((u: any) => u.id === id)
+      ?.policies,
+  );
+for (const id of ["qoder", "tokenrhythm"]) {
+  const offered = await upstreamPolicies(id);
+  check(`${id} 的平台列表是三个策略`, offered.length === 3, JSON.stringify(offered));
+  check(
+    `${id} 的平台列表是单一、降级、余额到期优先`,
+    offered.join(",") ===
+      "PROVIDER_POLICY_SINGLE,PROVIDER_POLICY_FALLBACK,PROVIDER_POLICY_EXPIRY_FIRST",
+    offered.join(","),
+  );
+}
 
 console.log("");
 console.log("账号数");
@@ -477,43 +486,22 @@ check(
   oneAccount.body?.credentials?.every((c: any) => c.accountId === created["qoder-cn"]),
 );
 
-// 中转站的会话挂在账号行上：一个账号一份，不再按租户号拼 id。
-// 写一份会话进去，面板上那条会话凭据就不是 missing。
-const rhythmDb = new DatabaseSync(path.join(DATA_DIR, "buddy.db"));
-rhythmDb.exec("PRAGMA busy_timeout = 5000");
-rhythmDb
-  .prepare(
-    "INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, ?, ?, ?) " +
-      "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-  )
-  .run(
-    `session:provider:${rhythmAccountId}`,
-    "session",
-    JSON.stringify({
-      accountId: rhythmAccountId,
-      cookie: "tr_session=test",
-      csrf: "test-csrf",
-      userId: "u-1",
-      name: "测试账号",
-      obtainedAtMs: Date.now(),
-      expiresAtMs: Date.now() + 30 * 24 * 3600 * 1000,
-    }),
-    Date.now(),
-  );
-rhythmDb.close();
+// 迁移后中转站不再有登录会话：它是一个 openai 平台，账号唯一的凭据就是那把
+// 推理 key（key:provider:<账号>:key）。从面板写进去，面板上那条凭据就不是 missing。
+await call("SetProviderKeys", { upstreamId: rhythmAccountId, keys: ["sk-tr-test-one"] }, token);
 
 const rhythmCredentials = list((await call("ListCredentials", { accountId: rhythmAccountId }, token)).body?.credentials);
-const rhythmSession = rhythmCredentials.find((c: any) => c.kind === "session");
-check("中转站的会话凭据列出来了", Boolean(rhythmSession), JSON.stringify(rhythmCredentials));
+const rhythmKey = rhythmCredentials.find((c: any) => c.kind === "api_key");
+check("中转站的推理 key 凭据列出来了", Boolean(rhythmKey), JSON.stringify(rhythmCredentials));
 check(
-  "中转站的会话凭据不是 missing",
-  rhythmSession?.status === "usable",
-  String(rhythmSession?.status),
+  "中转站的推理 key 凭据不是 missing",
+  rhythmKey?.status === "usable",
+  String(rhythmKey?.status),
 );
 check(
-  "中转站的会话凭据 id 就是账号那一格",
-  rhythmSession?.id === `session:provider:${rhythmAccountId}`,
-  String(rhythmSession?.id),
+  "中转站的推理 key 凭据 id 就是 key:provider:<账号>:key",
+  rhythmKey?.id === `key:provider:${rhythmAccountId}:key`,
+  String(rhythmKey?.id),
 );
 
 const testCredential = await call("TestCredential", { credentialId: "nope:nope" }, token);

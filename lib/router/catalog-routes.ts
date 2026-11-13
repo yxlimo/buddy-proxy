@@ -32,8 +32,6 @@ import {
 import { platformAvailabilities, platformAvailability, type PlatformAvailability } from "./availability.ts";
 import { fetchWorkBuddyCatalog } from "../workbuddy/transport.ts";
 import { regionOf, type WorkBuddyRegion } from "../workbuddy/auth.ts";
-import { refreshSenseNovaCatalog } from "../sensenova/transport.ts";
-import { refreshInternAiCatalog } from "../intern-ai/transport.ts";
 
 // WorkBuddy's models are addressed by prefix only: several of them (glm-5.3,
 // kimi-k2.8-preview) carry the same name as a Qoder model, so a bare name
@@ -80,11 +78,6 @@ export function enabledAccounts(platform: string) {
   return platformAvailability(platform).serving;
 }
 
-/** Does the platform have at least one account that can serve a request? */
-export function platformServing(platform: string): boolean {
-  return enabledAccounts(platform).length > 0;
-}
-
 /** The platform's models. Without an account nobody can serve them, but the
  * catalogue is the platform's, not the account's: 额度用尽与冷却不摘模型。 */
 export function modelsOfPlatform(platform: string): string[] {
@@ -99,36 +92,50 @@ export function modelsOfPlatform(platform: string): string[] {
  * fetch needs an account (a session or a key), so it goes account by account.
  */
 function refreshLiveCatalogs(): void {
-  // 开放平台按平台记一次：名下有几个账号都一样，目录是平台的。
-  const openPlatforms = new Set<string>();
   for (const row of listProviders()) {
     if (!row.enabled) continue;
     if (!kindOf(row.kind)) continue;
     if (row.kind === "workbuddy") void refreshWorkBuddyCatalog();
-    if (row.kind === "sensenova") void refreshSenseNovaCatalog(false, row.id);
-    if (row.kind === "intern-ai") void refreshInternAiCatalog(false, row.id);
-    if (row.kind === OPEN_PLATFORM_KIND_NAME) openPlatforms.add(row.platform);
   }
-  for (const platform of openPlatforms) {
-    const row = openPlatformOf(platform);
-    // 人写死的目录不动（那是明确的意思，不是默认值）；刚拉过的也不必再问上游
-    // —— 目录刷新在请求路径上，每个请求都问一次上游是白花钱。跟代码里的模板
-    // 重名的表行也不拉（模板优先，那一行不生效，写回去也会被拒）。
-    if (!row || !openPlatformCatalogRefreshable(row)) continue;
-    if (!openPlatformCatalogStale(row)) continue;
-    // 拉目录是后台的事：不等它，答复不能被上游的慢拖住。
-    //
-    // 双保险：refreshOpenPlatformCatalog 自己不 reject（库开不了、SQLITE_BUSY
-    // 都归一成 { ok: false }），这里再兜一层 —— 请求路径上一个没人接的
-    // rejection 就是一次未处理的 rejection（Node 当它致命）。
-    //
-    // 拉不到的那一行告警由目录自己写（lib/open-platform-catalog.ts），这里不
-    // 重复：同一次失败只留一行，两处都写就是刷屏。
-    void refreshOpenPlatformCatalog(platform).catch(() => {
-      /* 目录自己记了告警，这里只保证不 reject */
-    });
-  }
+  for (const platform of openPlatformsWithAccounts()) refreshOpenPlatformCatalogQuietly(platform);
 }
+
+/**
+ * 名下有账号的开放平台。
+ *
+ * 按平台记一次：名下有几个账号都一样，目录是平台的。
+ */
+function openPlatformsWithAccounts(): Set<string> {
+  const platforms = new Set<string>();
+  for (const row of listProviders()) {
+    if (!row.enabled) continue;
+    if (row.kind !== OPEN_PLATFORM_KIND_NAME) continue;
+    platforms.add(row.platform);
+  }
+  return platforms;
+}
+
+/**
+ * 拉一次这个平台的目录，不等它、也不让它 reject。
+ *
+ * 人写死的目录不动（那是明确的意思，不是默认值）；刚拉过的也不必再问上游
+ * —— 目录刷新在请求路径上，每个请求都问一次上游是白花钱。
+ *
+ * 拉不到的那一行告警由目录自己写（lib/open-platform-catalog.ts），这里不重复：
+ * 同一次失败只留一行，两处都写就是刷屏。refreshOpenPlatformCatalog 自己不
+ * reject（库开不了、SQLITE_BUSY 都归一成 { ok: false }），这里再兜一层 ——
+ * 请求路径上一个没人接的 rejection 就是一次未处理的 rejection（Node 当它致命）。
+ */
+function refreshOpenPlatformCatalogQuietly(platform: string): void {
+  const row = openPlatformOf(platform);
+  if (!row || !openPlatformCatalogRefreshable(row)) return;
+  if (!openPlatformCatalogStale(row)) return;
+  // 拉目录是后台的事：不等它，答复不能被上游的慢拖住。
+  void refreshOpenPlatformCatalog(platform).catch(() => {
+    /* 目录自己记了告警，这里只保证不 reject */
+  });
+}
+
 /**
  * The models the root route publishes.
  *

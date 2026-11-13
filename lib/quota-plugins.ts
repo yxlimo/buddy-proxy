@@ -10,79 +10,61 @@
 // lib/quota-state.ts 一处 —— 插件里再各写一遍，就会有七份不一样的判断。
 // 开放平台只要在 platform.quota_plugin 里填插件 id。
 //
-// 插件的登记是模块求值期的副作用：每个平台在自己的模块里 import 自己的插件
-// 文件，登记就发生了。启动时的校验（assertQuotaPlugins）必须等这些副作用跑完
-// —— 它在 router-proxy.ts 里，assertLoginFlows() 旁边，app.listen 之前。
+// 插件的登记是模块求值期的副作用，集中在这里：本模块 import 各家的插件文件，
+// 求值期登记就发生了。谁要用插件（面板、路由、启动校验）import 本模块一处就够
+// —— 之前是「各平台模块自己 import 自己的」，那批模块随厂商 kind 退场删掉之后
+// 没人 import 插件了，登记表空着，开放平台挑不到插件，额度全变「不知道」。
+// 启动时的校验（assertQuotaPlugins）必须等这些副作用跑完 —— 它在
+// router-proxy.ts 里，assertLoginFlows() 旁边，app.listen 之前。
 
-import type { QuotaView } from "./provider-kinds.ts";
+// 登记表本身住在叶上（lib/quota-plugin-registry.ts）：插件文件求值期就登记，
+// 而它们又在本模块的 import 表里 —— 环上的 const map 会撞 TDZ。
+// 本模块是登记 hub：只做两件事 —— 引各家插件文件（引用即登记）与带着运行时
+// 依赖的额度端点/启动校验。登记表、类型与「没额度」的声明住在叶上
+// （lib/quota-plugin-registry.ts，零依赖）：
+//
+//   * 谁只想读登记表，引叶；谁要触发登记（启动、测试），引本模块。
+//   * 纪律：在 open-platforms 的依赖子树里求值的模块（quota-state → admin/*
+//     那一片）不许引本模块 —— 本模块引 open-platforms，从那边引回来会在
+//     open-platforms 求值中途把整个应用图拉进来，它顶部的常量还没初始化
+//     （TDZ，实测撞过两次）。
+//
+// 启动时的校验（assertQuotaPlugins）必须等这些副作用跑完 —— 它在
+// router-proxy.ts 里，assertLoginFlows() 旁边，app.listen 之前。
+
+import {
+  allQuotaPlugins,
+  declareNoQuotaPlugin,
+  noQuotaPluginReason,
+  registerQuotaPlugin,
+  VENDOR_INFERENCE_BASES,
+  quotaPluginOf,
+  type QuotaField,
+  type QuotaPlugin,
+  type QuotaProbe,
+} from "./quota-plugin-registry.ts";
 import { kindOf } from "./provider-kinds.ts";
 import type { ProviderRow } from "./providers.ts";
 import { listOpenPlatforms, openPlatformOf } from "./open-platforms.ts";
-import type { QuotaState } from "./quota-state.ts";
 
-/** 面板按它渲染的一个输入框。 */
-export interface QuotaField {
-  /** 凭据里的那一段叫什么。 */
-  name: string;
-  /** 面板上给人看的名字。 */
-  label: string;
-  /** 面板上要遮起来显示。 */
-  secret: boolean;
-}
+// 引用即登记：四家在用的插件都在这一处进门。新增插件也加在这里 —— 别处 import
+// 插件文件等于把「哪些插件登记了」这份知识散出去。
+import "./qiniu/quota-plugin.ts";
+import "./sensenova/quota-plugin.ts";
+import "./intern-ai/quota-plugin.ts";
+import "./tokenrhythm/quota-plugin.ts";
 
-/** 插件问一次上游的结果。 */
-export interface QuotaProbe {
-  state: QuotaState;
-  /** 面板上显示的那几行（余额/积分/套餐）。没有就是空数组。 */
-  views: QuotaView[];
-  /** 什么时候恢复（毫秒）；不知道就是 null。 */
-  recoverAt: number | null;
-  /** 给人看的一句话（日志与面板提示）。不要放凭据。 */
-  message: string;
-}
+export {
+  allQuotaPlugins,
+  declareNoQuotaPlugin,
+  noQuotaPluginReason,
+  registerQuotaPlugin,
+  quotaPluginOf,
+  type QuotaField,
+  type QuotaPlugin,
+  type QuotaProbe,
+};
 
-/**
- * 一个额度插件：问一次上游，把答复或异常翻成一个结论。
- *
- * 插件只做翻译：上游说了什么（见底了、账号停用了、凭据被拒、限流了），或者什么
- * 也没说出来（网络、解析）。结论怎么处理由平台统一做，插件不判「能不能接」。
- */
-export interface QuotaPlugin {
-  /** 插件 id：写进 platform.quota_plugin 的那个字符串。 */
-  id: string;
-  /** 面板上给人看的名字。 */
-  label: string;
-  /** 查额度要哪些凭据。 */
-  fields: QuotaField[];
-  /** 去问一次，把答复或异常翻成状态。不许 reject：翻不动的都归到 unknown。 */
-  probe(account: ProviderRow): Promise<QuotaProbe>;
-}
-
-const PLUGINS = new Map<string, QuotaPlugin>();
-
-/**
- * 登记一个插件。
- *
- * 同一个 id 注册两次直接抛：那是代码写错了，不是运行时的状况。两个插件抢一个
- * id，「用的是哪一个」就没答案了，面板上会把一个平台的数字挂在另一个平台名下。
- */
-export function registerQuotaPlugin(plugin: QuotaPlugin): QuotaPlugin {
-  if (PLUGINS.has(plugin.id)) {
-    throw new Error(`额度插件 ${plugin.id} 注册了两次`);
-  }
-  PLUGINS.set(plugin.id, plugin);
-  return plugin;
-}
-
-/** 这个 id 的插件；没登记就是 null。 */
-export function quotaPluginOf(id: string): QuotaPlugin | null {
-  return PLUGINS.get(id) ?? null;
-}
-
-/** 登记过的全部插件。 */
-export function allQuotaPlugins(): QuotaPlugin[] {
-  return [...PLUGINS.values()];
-}
 
 /**
  * 两个地址是不是「同一台同一段」。
@@ -109,8 +91,14 @@ function sameBase(a: string, b: string): boolean {
  * 「这个平台在跟谁说话」—— 用户把地址指到别处（自建端点、自测端点）时，额度
  * 也该问同一台，否则那个平台的额度永远问不到，自测只能靠改写主机名绕过去。
  *
- * 「默认那台」由适配器自己说（ProviderKind.defaultBaseUrl）：行上的地址还等于
- * 它时，额度问插件自己那台 —— 那一格说的是这一类平台默认指哪台，不是平台清单。
+ * 「默认那台」有两处来源，任一命中就用插件自己那台：
+ *
+ *   1. kind 自己声明的默认地址（ProviderKind.defaultBaseUrl）：行上的地址还等于
+ *      它时，额度问插件自己那台。
+ *   2. 插件 id 对得上的原厂商推理地址（VENDOR_INFERENCE_BASES）：迁移把那台写
+ *      进了存量行，那是我们写进去的默认值，不是用户指到了别处 —— 额度照样问
+ *      插件自己那台（门户、控制台）。厂商 kind 退场后 openai 没有默认地址，
+ *      没有这张表的话，存量平台的额度探测会被打到推理主机上。
  *
  * 返回的是行上那个地址原文：路径怎么拼是调用方的事（`new URL(路径, 它)`）。
  */
@@ -123,13 +111,16 @@ export function quotaEndpointBase(account: ProviderRow, vendorBase: string): str
   // 地址就是用户要的地址。
   const kind = account.kind || row.kind;
   const defaultBase = kindOf(kind)?.defaultBaseUrl ?? "";
+  if (defaultBase && sameBase(base, defaultBase)) return vendorBase;
+  const pluginId = String(row.quotaPlugin ?? "").trim();
+  const legacyBase = pluginId ? VENDOR_INFERENCE_BASES[pluginId] : undefined;
+  if (legacyBase && sameBase(base, legacyBase)) return vendorBase;
   if (!defaultBase) {
     // 这一类没有默认地址，额度只能问行上那台 —— 插件自己那台（门户、控制台）
     // 问不到。说一声：额度请求打到了推理端点时，这里是唯一说得清为什么的地方。
     warnNoDefaultBase(kind);
     return base;
   }
-  if (sameBase(base, defaultBase)) return vendorBase;
   return base;
 }
 
@@ -147,27 +138,6 @@ function warnNoDefaultBase(kind: string): void {
   if (!id || warnedNoDefaultBase.has(id)) return;
   warnedNoDefaultBase.add(id);
   console.warn(`[QUOTA] 这一类没有默认地址，额度按行上的地址问：${id}`);
-}
-
-/**
- * 「这个平台没有额度接口」的声明。
- *
- * 理由留着：「这个平台没有额度」与「还没顾上搬」是两回事，只有前者是决定。
- */
-const NO_PLUGINS = new Map<string, string>();
-
-/**
- * 显式声明这个平台没有额度接口。
- *
- * 不声明的话，启动校验分不出「没搬」与「没人问」—— 沉默的平台看着像漏了。
- */
-export function declareNoQuotaPlugin(id: string, reason: string): void {
-  NO_PLUGINS.set(id, reason);
-}
-
-/** 这个平台为什么没有额度插件；没声明过就是 null。 */
-export function noQuotaPluginReason(id: string): string | null {
-  return NO_PLUGINS.get(id) ?? null;
 }
 
 /**
@@ -190,7 +160,7 @@ const warnedUnknownPlugins = new Set<string>();
 export function warnUnknownQuotaPlugin(platformId: string, pluginId: string): void {
   const id = String(pluginId ?? "").trim();
   if (!id) return;
-  if (PLUGINS.has(id)) return;
+  if (quotaPluginOf(id)) return;
   const key = `${platformId}:${id}`;
   if (warnedUnknownPlugins.has(key)) return;
   warnedUnknownPlugins.add(key);

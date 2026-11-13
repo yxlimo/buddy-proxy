@@ -15,6 +15,9 @@
 // 缓存一样。
 
 import { listProviders } from "./providers.ts";
+import { platformPolicy } from "./platforms.ts";
+// 余额到期优先的次序：余额从额度快照读，钉住的状态按平台存在那一层。
+import { pinNextAccount, pinnedAccountOf } from "./router/balance-order.ts";
 import { kindOf } from "./provider-kinds.ts";
 import { benefits } from "./admin/benefits.ts";
 import { HEALTH_CACHE_MS, refreshHealthSnapshot } from "./admin/upstreams.ts";
@@ -87,6 +90,67 @@ export async function runPeriodicOnce(): Promise<void> {
 /** 这一轮是不是正在跑。 */
 let running = false;
 
+/**
+ * 重新钉「余额到期优先」的那些平台的账号。
+ *
+ * 判据是平台那一行的策略，不是 kind —— 赠金会过期这件事与哪一家平台无关。
+ * 钉住的只是「现在该先用哪个账号」；余额本身是额度插件刚问回来的那一份，
+ * 这里不去问上游。
+ *
+ * `force` 是两种情形：
+ *
+ *   - true：扫余额的节奏到了，按快照里的到期时刻重排一次（余额变了，次序要变）
+ *   - false：这一轮只补「还没钉住」的平台 —— 策略刚改成余额到期优先时，
+ *     下一轮就得能用上这个次序，不能等下一次扫余额
+ *
+ * 已经钉住的不在非 force 那一轮里改：路由那一层刚钉的「下一个账号」说的是
+ * 「这个账号没钱了以后换谁」，这里改回去等于把它撤了。
+ */
+function repinBalancedPlatforms(force: boolean): void {
+  for (const [platform, ids] of enabledAccountsByPlatform()) {
+    if (platformPolicy(platform) !== "expiry_first") continue;
+    if (!force && pinnedAccountOf(platform)) continue;
+    pinOnePlatform(platform, ids);
+  }
+}
+
+/** 开着的账号，按平台分组。 */
+function enabledAccountsByPlatform(): Map<string, string[]> {
+  const byPlatform = new Map<string, string[]>();
+  for (const provider of listProviders()) {
+    if (!provider.enabled) continue;
+    byPlatform.set(provider.platform, [...(byPlatform.get(provider.platform) ?? []), provider.id]);
+  }
+  return byPlatform;
+}
+
+/** 给一个平台重新钉一个账号：失败了记一笔，不打断别的平台。 */
+function pinOnePlatform(platform: string, ids: string[]): void {
+  try {
+    pinNextAccount(platform, ids);
+    lastFailure.delete(`${platform}:scan`);
+  } catch (e) {
+    const err = e as { message?: string; hint?: string };
+    noteFailure(`${platform}:scan`, err?.message ?? String(e), err?.hint);
+  }
+}
+
+/**
+ * 这一轮的重钉：扫余额的节奏到了就按快照重排一次；没到的那几轮只补「还没钉
+ * 住」的平台。
+ *
+ * 策略刚改成余额到期优先时，下一轮就得钉上 —— 等下一次扫余额才钉的话，中间
+ * 那段时间路由没有次序可用。重钉读的是缓存的快照，不花上游的额度。
+ */
+function repinBalancedPlatformsIfDue(): void {
+  if (!due("scan")) {
+    repinBalancedPlatforms(false);
+    return;
+  }
+  done("scan");
+  repinBalancedPlatforms(true);
+}
+
 async function runOnce(): Promise<void> {
   for (const provider of listProviders()) {
     const kind = kindOf(provider.kind);
@@ -113,21 +177,8 @@ async function runOnce(): Promise<void> {
     }
   }
 
-  // 3. 余额该扫就扫；扫完按策略看「现在该用哪个账户」要不要换。
-  if (due("scan")) {
-    done("scan");
-    for (const provider of listProviders()) {
-      const kind = kindOf(provider.kind);
-      if (!kind?.scan) continue;
-      try {
-        await kind.scan(provider);
-        lastFailure.delete(`${provider.id}:scan`);
-      } catch (e) {
-        const err = e as { message?: string; hint?: string };
-        noteFailure(`${provider.id}:scan`, err?.message ?? String(e), err?.hint);
-      }
-    }
-  }
+  // 3. 重新钉「余额到期优先」的那些平台的账号。
+  repinBalancedPlatformsIfDue();
 
   // 4. 读一次状态。
   if (due("snapshot")) {

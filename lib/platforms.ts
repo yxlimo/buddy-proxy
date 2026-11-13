@@ -19,12 +19,12 @@
 
 import { store } from "./store.ts";
 import { PROVIDER_POLICIES, type ProviderPolicy } from "./providers.ts";
-import { kindOf } from "./provider-kinds.ts";
 import { listOpenPlatforms, openPlatformOf, OPEN_PLATFORM_KIND_NAME } from "./open-platforms.ts";
 import { PLATFORMS, type Platform } from "./platform-templates.ts";
-// 注册表要有内容，`kindOf` 才答得出「这个平台支持哪几个策略」。这条 import 会
-// 绕成 platforms → kinds → … 的环，所以环上任何模块都不能在模块求值期读别人的
-// 常量（lib/qoder/benefits.ts 就是为此改成函数内取值的）。
+// 副作用 import：把种类登记上（注册表要有内容，别的模块才答得出「这一类
+// 上游是什么」）。这条 import 会绕成 platforms → kinds → … 的环，所以环上任何
+// 模块都不能在模块求值期读别人的常量（lib/qoder/benefits.ts 就是为此改成函数
+// 内取值的）。
 import "./kinds/index.ts";
 
 // 模板住在叶子模块里（lib/platform-templates.ts）：表里的开放平台也要认得
@@ -105,16 +105,15 @@ export function isPlatform(id: string): boolean {
 /**
  * 这个平台支持哪些选账号的策略。
  *
- * 注册表说一类上游支持什么，平台照搬；没登记的只给单一。
+ * 三个策略任何平台都能选：它们说的都是「这个平台下的几个账号怎么选」，与
+ * 哪一家平台无关。余额到期优先尤其如此 —— 次序由额度插件报上来的余额决定
+ * （lib/router/balance-order.ts），那一层的判据里没有 kind。
  *
- * 平台有两处数据源（模板与表里的开放平台），两处都认：开放平台的 kind 登记了
- * 「单一 / 降级」，只认模板的话它会被说成只支持单一。
+ * 白名单只在这里一份：别处不再各写一遍「哪几个策略」。
  */
 export function platformPolicies(platform: string): ProviderPolicy[] {
-  const p = platformOfAny(platform);
-  if (!p) return ["single"];
-  const policies = kindOf(p.kind)?.policies;
-  return policies && policies.length ? policies : ["single"];
+  if (!platformOfAny(platform)) return ["single"];
+  return [...PROVIDER_POLICIES];
 }
 
 /* ------------------------------------------------------------------ *

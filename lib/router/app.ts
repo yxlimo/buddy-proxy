@@ -181,16 +181,12 @@ function cooldownOf(
   return { untilMs: row.untilMs, reason: row.reason };
 }
 
-/** 快照里一个账号的那一段：桶的名字跟 kind 不同名（internAi）。 */
+/** 快照里一个账号的那一段：只有模拟客户端的会话有自己的桶。 */
 const SNAPSHOT_BUCKET: Record<string, string> = {
   minimax: "minimax",
   zcode: "zcode",
   qoder: "qoder",
   workbuddy: "workbuddy",
-  tokenrhythm: "tokenrhythm",
-  sensenova: "sensenova",
-  "intern-ai": "internAi",
-  qiniu: "qiniu",
 };
 
 /** 一个账号的健康快照，没有就是 null。 */

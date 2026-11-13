@@ -64,6 +64,7 @@ const { cooldownStamp } = await import("../lib/router/account-cooldown.ts");
 const { platformAvailability } = await import("../lib/router/availability.ts");
 const { inferenceCredentialOf } = await import("../lib/admin/accounts.ts");
 const { hasUsableCredential } = await import("../lib/admin/credentials.ts");
+const { writeOpenPlatformKey } = await import("../lib/open-platform-credentials.ts");
 const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
 const { qiniuQuotaPlugin } = await import("../lib/qiniu/quota-plugin.ts");
 const { updateOpenPlatform } = await import("../lib/open-platforms.ts");
@@ -107,6 +108,7 @@ check("没有凭据 → 目录还是平台的（恒为全量）", noKey.ids.leng
 
 // 只填门户 cookie：额度问得到，推理发不出去 —— 那不是推理凭据。
 writeQiniuAccount(accountId, { portalCookie: "pc-test-cookie" });
+// 门户 cookie 只进插件的字段行，推理 key 那一行（key:provider:<账号>:key）仍然是空的。
 const cookieOnly = platformAvailability("qiniu");
 check("只有门户 cookie → inferenceCredentialOf 返回 null", inferenceCredentialOf(accountId) === null);
 check("只有门户 cookie → 平台状态是 no_credential", cookieOnly.state === "no_credential", cookieOnly.state);
@@ -124,8 +126,8 @@ check("账号都关着 → 账号数还是 1", off.accounts === 1, String(off.ac
 check("账号都关着 → 没有能接的账号", off.usable.length === 0 && off.serving.length === 0, off.state);
 setProviderEnabled(accountId, true);
 
-// 填上凭据：就绪。
-writeQiniuAccount(accountId, { apiKey: "sk-test-key" });
+// 填上凭据：就绪。迁移后的位置：推理 key 在 key:provider:<账号>:key。
+writeOpenPlatformKey(accountId, "sk-test-key");
 const ready = platformAvailability("qiniu");
 check("填上凭据 → ready", ready.state === "ready", ready.state);
 check("就绪 → 有一个能接的账号", ready.usable.length === 1, String(ready.usable.length));
@@ -453,8 +455,8 @@ section("目录没拿到：503，不是 404");
 // 一个目录为空的平台：kind 登记了、账号有凭据（所以就绪），但目录没拿到。
 const noCatalog = addAccount({ platform: "sensenova", alias: "目录空的" });
 if (!noCatalog.ok || !noCatalog.id) throw new Error(`sensenova 的账号建不出来：${noCatalog.message}`);
-// SenseNova 的推理凭据是账号里那把 apiKey（会话只用来问额度）。
-setSecret(`key:provider:${noCatalog.id}:account`, "account", { user: "test-user", apiKey: "sk-test-key" });
+// 迁移后 SenseNova 是一个 openai 平台：推理凭据就是那一把 key（key:provider:<账号>:key）。
+writeOpenPlatformKey(noCatalog.id, "sk-test-key");
 const noCatalogPlatform = platformAvailability("sensenova");
 check("目录空的平台 → 就绪", noCatalogPlatform.state === "ready", noCatalogPlatform.state);
 check("目录空的平台 → 目录确实是空的", noCatalogPlatform.ids.length === 0, JSON.stringify(noCatalogPlatform.ids));
@@ -731,7 +733,9 @@ function addOpenPlatform(id: string): void {
 
 // 账号与会话。
 await seedQoderAccount();
-addVendorPlatform("qiniu", "qiniu", QINIU_INFER_BASE);
+// 厂商 kind 已退场：迁移把存量行改成 openai + 行上写死的默认地址，网关库里
+// 造的行也用同一个形状（kind 写 openai，地址取七牛的常量推理地址）。
+addVendorPlatform("qiniu", "openai", QINIU_INFER_BASE);
 const added = await admin("AddAccount", { platform: "qiniu", alias: "测试七牛" });
 check("面板能加一个七牛云的账号", typeof added?.id === "string" && Boolean(added.id), JSON.stringify(added));
 // 账号 id 是面板起的（自增数）：开关、冷却都挂在它上面，不是平台 id。

@@ -294,6 +294,89 @@ closeStore();
 fs.rmSync(OLD_DIR, { recursive: true, force: true });
 
 /* ------------------------------------------------------------------ *
+ * 三、五、厂商 kind 退场：存量行迁到 openai，凭据搬到新位置
+ * ------------------------------------------------------------------ */
+
+section("厂商 kind 退场：存量行迁到 openai");
+
+const VENDOR_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "platform-migration-vendor-"));
+{
+  // 先开一次库拿到完整表结构，再把它改成旧库的样子：一行 kind=qiniu（地址是
+  // 一台从未生效过的旧机器）、推理 key 还在 `:account` 的 apiKey 里（门户
+  // cookie 与它同住一段）、user_version 归零 —— 重开库时 migrateLegacyVendorKinds
+  // 就会跑。
+  process.env.BUDDY_DATA_DIR = VENDOR_DIR;
+  const fresh = store();
+  fresh
+    .prepare(
+      "INSERT INTO platform (id, label, base_url, models, quota_plugin, kind, created_at, updated_at) " +
+        "VALUES ('qiniu', '七牛云', 'https://stale.example/v1', ?, 'qiniu', 'qiniu', 1, 1)",
+    )
+    .run(JSON.stringify({ items: ["m1"], traits: { m1: { contextWindow: 8192 } }, fetchedAt: 0 }));
+  fresh
+    .prepare("INSERT INTO provider (id, platform, created_at, updated_at) VALUES ('77', 'qiniu', 1, 1)")
+    .run();
+  fresh
+    .prepare("INSERT INTO secrets (id, kind, data, updated_at) VALUES (?, 'account', ?, 1)")
+    .run("key:provider:77:account", JSON.stringify({ apiKey: "sk-old-key", portalCookie: "pc=1" }));
+  fresh.exec("PRAGMA user_version = 0");
+  closeStore();
+}
+
+// 重开库：迁移在开库时跑。
+allPlatforms();
+
+const vendorRow = openPlatformOf("qiniu");
+check("kind 改成了 openai", vendorRow?.kind === "openai", String(vendorRow?.kind));
+check(
+  "base_url 是七牛的常量推理地址（不是行里原来那台旧机器）",
+  vendorRow?.baseUrl === "https://api.qnaigc.com/v1",
+  String(vendorRow?.baseUrl),
+);
+check("quota_plugin 原样留着（插件按行挂，不随 kind 迁移）", vendorRow?.quotaPlugin === "qiniu", String(vendorRow?.quotaPlugin));
+check(
+  "models（含 traits）原样留着（目录在行里，不属于 kind）",
+  (vendorRow?.models.items ?? []).join(",") === "m1" &&
+    (vendorRow?.models.traits?.m1 as any)?.contextWindow === 8192,
+  JSON.stringify(vendorRow?.models),
+);
+{
+  // 推理 key 搬到开放平台读的那一处：`key:provider:<账号>:key` 的 {apiKey}。
+  // 目标已有就不覆盖（ON CONFLICT DO NOTHING），这里目标本来没有。
+  const moved = store()
+    .prepare("SELECT data FROM secrets WHERE id = 'key:provider:77:key'")
+    .get() as { data?: string } | undefined;
+  check(
+    "推理 key 到了 key:provider:77:key",
+    JSON.parse(moved?.data ?? "{}").apiKey === "sk-old-key",
+    String(moved?.data),
+  );
+  // 原来那段一律不动：额度插件读的就是它（门户 cookie 在里面）。
+  const kept = store()
+    .prepare("SELECT data FROM secrets WHERE id = 'key:provider:77:account'")
+    .get() as { data?: string } | undefined;
+  const keptData = JSON.parse(kept?.data ?? "{}") as Record<string, unknown>;
+  check(
+    ":account 的门户 cookie 还在，apiKey 也没被抹掉",
+    keptData.portalCookie === "pc=1" && keptData.apiKey === "sk-old-key",
+    String(kept?.data),
+  );
+}
+
+// 幂等：再跑一遍迁移，什么都不要再动。
+closeStore();
+allPlatforms();
+const vendorRowAgain = openPlatformOf("qiniu");
+check(
+  "重跑一遍迁移：行还是迁移后的样子",
+  vendorRowAgain?.kind === "openai" && vendorRowAgain?.baseUrl === "https://api.qnaigc.com/v1",
+  JSON.stringify([vendorRowAgain?.kind, vendorRowAgain?.baseUrl]),
+);
+
+closeStore();
+fs.rmSync(VENDOR_DIR, { recursive: true, force: true });
+
+/* ------------------------------------------------------------------ *
  * 四、删掉的预置平台不会长回来
  * ------------------------------------------------------------------ */
 

@@ -187,15 +187,12 @@ section("再填一次，然后删账号");
 
 section("三家的推理 key 由用户自己填");
 
-// SenseNova、书生·端砚、TokenRhythm 的 key 都是用户自己贴进来的：网关不替人
-// 建一把（平台只把完整值给一次，建出来的那把用户既看不到也换不掉）。
+// SenseNova、书生·端砚、TokenRhythm 的 key 都是用户自己贴进来的。迁移后的
+// 位置：kind=openai，推理 key 在 :key（开放平台读的那一处）；:account 里旧的
+// 登录记录（账号、密码）不是面板的格子，写 key 不碰它。这里验两件事：
 //
-// 这里验两件事：
-//
-//   1. 写了 key 之后，账号上原来那份记录（账号、密码）原样还在 —— 整份覆盖成
-//      只有 key 的壳就等于把登录态清了；
-//   2. 空串表示清掉那一格（与七牛云、讯飞星火一个意思），清的时候登录态照样
-//      在。
+//   1. 写了 key 之后，:account 里原来那份记录原样还在；
+//   2. 空串表示清掉那一格，清的时候那份记录照样在。
 
 const { storedAccount: storedSenseNova } = await import("../lib/sensenova/auth.ts");
 const { storedAccount: storedInternAi } = await import("../lib/intern-ai/auth.ts");
@@ -238,13 +235,13 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("SenseNova：写进去一把", result.count === 1, String(result.count));
   check(
     "SenseNova：文案说写了什么",
-    result.message.includes("SenseNova") && result.message.includes("推理 Key"),
+    result.message.includes("推理 Key"),
     result.message,
   );
   check(
-    "SenseNova：key 是刚写的那个",
-    storedSenseNova(senseNovaId)?.apiKey === "sk-sense-1",
-    JSON.stringify(storedSenseNova(senseNovaId)),
+    "SenseNova：key 是刚写的那个（在 :key）",
+    openPlatformKeyOf(senseNovaId)?.apiKey === "sk-sense-1",
+    JSON.stringify(openPlatformKeyOf(senseNovaId)),
   );
   check(
     "SenseNova：账号还在（没把登录态清了）",
@@ -261,8 +258,8 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("SenseNova：空串清掉了", cleared.count === 0, String(cleared.count));
   check(
     "SenseNova：key 没了",
-    !storedSenseNova(senseNovaId)?.apiKey,
-    JSON.stringify(storedSenseNova(senseNovaId)),
+    !openPlatformKeyOf(senseNovaId)?.apiKey,
+    JSON.stringify(openPlatformKeyOf(senseNovaId)),
   );
   check(
     "SenseNova：清 key 的时候账号还在",
@@ -281,9 +278,9 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("书生·端砚：写成功了", result.ok === true, result.message);
   check("书生·端砚：写进去一把", result.count === 1, String(result.count));
   check(
-    "书生·端砚：位置 0 是 Discovery 的",
-    storedInternAi(internAiId)?.discoveryKey === "sk-disc-1",
-    JSON.stringify(storedInternAi(internAiId)),
+    "书生·端砚：位置 0 是推理 Key（在 :key）",
+    openPlatformKeyOf(internAiId)?.apiKey === "sk-disc-1",
+    JSON.stringify(openPlatformKeyOf(internAiId)),
   );
   check(
     "书生·端砚：账号还在（没把登录态清了）",
@@ -301,8 +298,8 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("书生·端砚：清掉了", cleared.count === 0, String(cleared.count));
   check(
     "书生·端砚：key 没了",
-    !storedInternAi(internAiId)?.discoveryKey,
-    JSON.stringify(storedInternAi(internAiId)),
+    !openPlatformKeyOf(internAiId)?.apiKey,
+    JSON.stringify(openPlatformKeyOf(internAiId)),
   );
   check(
     "书生·端砚：清 key 的时候账号还在",
@@ -322,13 +319,13 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("TokenRhythm：写进去一把", result.count === 1, String(result.count));
   check(
     "TokenRhythm：文案说写了什么",
-    result.message.includes("TokenRhythm") && result.message.includes("推理 Key"),
+    result.message.includes("推理 Key"),
     result.message,
   );
   check(
-    "TokenRhythm：key 是刚写的那个",
-    tokenRhythmCredentialOf(tokenRhythmId)?.apiKey === "sk-tr-1",
-    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+    "TokenRhythm：key 是刚写的那个（在 :key）",
+    openPlatformKeyOf(tokenRhythmId)?.apiKey === "sk-tr-1",
+    JSON.stringify(openPlatformKeyOf(tokenRhythmId)),
   );
   check(
     "TokenRhythm：账号还在（没把登录态清了）",
@@ -345,8 +342,8 @@ saveTokenRhythmCredential(tokenRhythmId, { account: "someone", password: "pw-tr"
   check("TokenRhythm：空串清掉了", cleared.count === 0, String(cleared.count));
   check(
     "TokenRhythm：key 没了",
-    !tokenRhythmCredentialOf(tokenRhythmId)?.apiKey,
-    JSON.stringify(tokenRhythmCredentialOf(tokenRhythmId)),
+    !openPlatformKeyOf(tokenRhythmId)?.apiKey,
+    JSON.stringify(openPlatformKeyOf(tokenRhythmId)),
   );
   check(
     "TokenRhythm：清 key 的时候账号还在",

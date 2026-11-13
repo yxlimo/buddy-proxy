@@ -449,20 +449,6 @@ export interface ProviderKind {
    */
   refresh?(provider: ProviderRow): Promise<void>;
   /**
-   * 定时扫描这个上游的状态，把「现在该用哪个账户」定下来。
-   *
-   * 中转站的赠金会过期：最先到期的那个账户该先用，而那是余额说了算。
-   * 定时器（lib/periodic.ts）按时调它。
-   */
-  scan?(provider: ProviderRow): Promise<void>;
-  /**
-   * 这个失败是不是「余额不足」。
-   *
-   * 余额到期优先是个包过的单一：钉住的账户接不了时，这个钩子说「是余额
-   * 没了」，于是重新扫描、重新钉一个别的接手。
-   */
-  isRequestMissingBalance?(error: unknown): boolean;
-  /**
    * 这一类上游怎么转发。没有它就说明这个种类还没接。
    *
    * 请求怎么发出去、答案怎么写回客户端，是转发那一条路的事

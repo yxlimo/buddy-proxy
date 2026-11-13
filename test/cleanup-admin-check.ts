@@ -172,29 +172,21 @@ const { testCredential, credentialsOf, listAccounts } = await import("../lib/adm
 const { insertVendorPlatform } = await import("./vendor-platform.ts");
 insertVendorPlatform("sensenova");
 insertVendorPlatform("tokenrhythm");
-insertVendorPlatform("qiniu");
+// 七牛要两段凭据（推理 Key + 额度 Cookie），额度那一段由插件带进来：行上指名它。
+insertVendorPlatform("qiniu", "qiniu", { quotaPlugin: "qiniu" });
+const { setProviderKeys } = await import("../lib/admin/credentials.ts");
 
-// SenseNova 也只有一个登录会话与一把推理 key：登录账号（user / password）不是
-// 凭据，面板上不列它 —— 登录身份留在库里，只是不展示。
+// 迁移后的形状：SenseNova 的行上 kind=openai。登录会话随 kind 退场不再列
+// （面板上没有登录流了），推理 key 在开放平台读的那一处（:key）。
 const senseAccount = addAccount({ platform: "sensenova", alias: "测试 SenseNova" });
 const senseId = String(senseAccount.id ?? "");
 check("SenseNova 账号建出来了", Boolean(senseId), senseId);
 writeSecret(`session:provider:${senseId}`, "session", { accessToken: "sn-session" });
-writeSecret(`key:provider:${senseId}:account`, "account", {
-  user: "one@example.com",
-  password: "pw-one",
-  apiKey: "sk-sense-test",
-});
+setProviderKeys(senseId, ["sk-sense-test"]);
 const senseCredentials = credentialsOf(senseId);
 check(
-  "SenseNova 不列登录账号那一行",
-  senseCredentials.every((c) => c.kind !== "login"),
-  senseCredentials.map((c) => `${c.id}:${c.kind}`).join(","),
-);
-check(
-  "SenseNova 列的是登录会话与推理 Key 两行",
-  senseCredentials.map((c) => c.id).join(",") ===
-    `session:provider:${senseId},key:provider:${senseId}:account#api_key`,
+  "SenseNova 只列推理 Key 一行（会话与登录账号都不列）",
+  senseCredentials.map((c) => c.id).join(",") === `key:provider:${senseId}:key`,
   senseCredentials.map((c) => `${c.id}:${c.kind}`).join(","),
 );
 check(
@@ -205,10 +197,10 @@ check(
     rows: senseCredentials.length,
   }),
 );
-const senseKeyTried = await testCredential(`key:provider:${senseId}:account#api_key`);
+const senseKeyTried = await testCredential(`key:provider:${senseId}:key`);
 check(
-  "推理 Key 说的是推理 Key",
-  senseKeyTried.message.includes("推理 Key"),
+  "推理 Key 试得起来（不回「无法识别」）",
+  !senseKeyTried.message.includes("无法识别"),
   senseKeyTried.message,
 );
 
@@ -224,11 +216,8 @@ const { CredentialState } = await import("../lib/gen/buddy/admin/v1/admin_pb.ts"
 const trOne = addAccount({ platform: "tokenrhythm", alias: "中转站一号" });
 const trOneId = String(trOne.id ?? "");
 check("第一个账号建出来了", Boolean(trOneId), trOneId);
-setSecret(`key:provider:${trOneId}:account`, "account", {
-  account: "one@example.com",
-  password: "pw-one",
-  apiKey: "sk_tr_one",
-});
+// 迁移后：推理 key 在 :key，会话只在插件内部读（面板上不列，登录流退场了）。
+setProviderKeys(trOneId, ["sk_tr_one"]);
 setSecret(`session:provider:${trOneId}`, "session", {
   accountId: trOneId,
   cookie: "tr_session=abc",
@@ -240,29 +229,15 @@ setSecret(`session:provider:${trOneId}`, "session", {
 });
 
 const rhythmCredentials = credentialsOf(trOneId);
-const sessionCredential = rhythmCredentials.find((c) => c.kind === "session");
-check("会话凭据列出来了", Boolean(sessionCredential), JSON.stringify(rhythmCredentials));
 check(
-  "会话凭据不是 missing",
-  sessionCredential?.status === CredentialState.USABLE,
-  String(sessionCredential?.status),
-);
-check(
-  "会话凭据的 id 就是账号那一格",
-  sessionCredential?.id === `session:provider:${trOneId}`,
-  String(sessionCredential?.id),
-);
-check(
-  "推理 Key 与登录会话都列出来了",
-  rhythmCredentials.some((c) => c.kind === "api_key") &&
-    rhythmCredentials.some((c) => c.kind === "session"),
-  rhythmCredentials.map((c) => c.kind).join(","),
-);
-// 登录账号（account / password）不是推理凭据，也不是额度凭据：面板上不列它。
-check(
-  "TokenRhythm 不列登录账号那一行",
-  rhythmCredentials.every((c) => c.kind !== "login"),
+  "只列推理 Key 一行（会话与登录账号都不列）",
+  rhythmCredentials.map((c) => c.id).join(",") === `key:provider:${trOneId}:key`,
   rhythmCredentials.map((c) => `${c.id}:${c.kind}`).join(","),
+);
+check(
+  "推理 Key 不是 missing",
+  rhythmCredentials[0]?.status === CredentialState.USABLE,
+  String(rhythmCredentials[0]?.status),
 );
 check(
   "TokenRhythm 的条数与列出来的行数一致",
@@ -297,19 +272,15 @@ check(
 // 注销一个账号：它自己那一份凭据全删，另一个账号的不动。
 const { logoutAccount } = await import("../lib/admin/accounts.ts");
 const { getSecret: readSecret } = await import("../lib/store.ts");
-setSecret(`key:provider:${trTwoId}:account`, "account", {
-  account: "two@example.com",
-  password: "pw-two",
-  apiKey: "sk_tr_two",
-});
-check("它自己的凭据先在", readSecret(`key:provider:${trTwoId}:account`) !== null);
+setProviderKeys(trTwoId, ["sk_tr_two"]);
+check("它自己的凭据先在", readSecret(`key:provider:${trTwoId}:key`) !== null);
 
 const loggedOut = logoutAccount(trTwoId);
 check("注销一个账号", loggedOut.ok === true && loggedOut.removed > 0, JSON.stringify(loggedOut));
 check(
   "它自己的凭据删了",
-  readSecret(`key:provider:${trTwoId}:account`) === null,
-  JSON.stringify(readSecret(`key:provider:${trTwoId}:account`)),
+  readSecret(`key:provider:${trTwoId}:key`) === null,
+  JSON.stringify(readSecret(`key:provider:${trTwoId}:key`)),
 );
 check(
   "注销的那个账号名下没有可用凭据了",
@@ -328,13 +299,12 @@ check(
  * ------------------------------------------------------------------ */
 section("七牛云的凭据");
 
-// 七牛云的凭据是两段：推理 key 与门户 cookie（额度只认 cookie）。两段都要
-// 列出来 —— 面板上说「暂无凭据」，而上游层明明是已登录的。
-const { writeQiniuAccount } = await import("../lib/qiniu/account.ts");
+// 七牛云的凭据是两段：推理 Key 与额度 Cookie。两段都要列出来 —— 面板上说
+// 「暂无凭据」，而上游层明明是配好的。写入口是面板那条路（两段按位置收）。
 const qiniuRow = addAccount({ platform: "qiniu", alias: "测试七牛" });
 const qiniuId = String(qiniuRow.id ?? "");
 check("七牛账号建出来了", Boolean(qiniuId), qiniuId);
-writeQiniuAccount(qiniuId, { apiKey: "sk-qiniu-test-key", portalCookie: "portal_cookie=abc" });
+setProviderKeys(qiniuId, ["sk-qiniu-test-key", "portal_cookie=abc"]);
 
 const qiniuCredentials = credentialsOf(qiniuId);
 check(
@@ -352,6 +322,14 @@ check(
   "cookie 是掩码，不是原值",
   Boolean(cookieCredential) && cookieCredential!.masked !== "portal_cookie=abc",
   String(cookieCredential?.masked),
+);
+check(
+  "七牛凭据的条数与列出来的行数一致",
+  listAccounts().find((a) => a.id === qiniuId)?.credentialCount === qiniuCredentials.length,
+  JSON.stringify({
+    count: listAccounts().find((a) => a.id === qiniuId)?.credentialCount,
+    rows: qiniuCredentials.length,
+  }),
 );
 const qiniuView = listAccounts().find((a) => a.id === qiniuId);
 check(

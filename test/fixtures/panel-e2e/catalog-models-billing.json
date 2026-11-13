@@ -4,5 +4,5 @@
   "headers": {
     "content-type": "application/json; charset=utf-8"
   },
-  "body": "{\"object\":\"list\",\"data\":[{\"id\":\"billing-probe-cny\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"pricing\":{\"currency\":\"CNY\",\"unit\":\"per_1m_tokens\",\"prompt\":\"8\",\"completion\":\"28\",\"cache_read\":\"2\"}},{\"id\":\"billing-probe-usd\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"pricing\":{\"currency\":\"USD\",\"unit\":\"per_1m_tokens\",\"prompt\":\"3\",\"completion\":\"15\"}},{\"id\":\"billing-probe-zero\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\",\"cache_read\":\"0\"}},{\"id\":\"billing-probe-unpriced\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\"}]}"
+  "body": "{\"object\":\"list\",\"data\":[{\"id\":\"billing-probe-priced\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"cost\":{\"text\":{\"input\":{\"price\":\"8\",\"cache\":{\"read\":\"2\"}},\"output\":{\"price\":\"28\"}}}},{\"id\":\"billing-probe-partial\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"cost\":{\"text\":{\"input\":{\"price\":\"3\"},\"output\":{\"price\":\"15\"}}}},{\"id\":\"billing-probe-unpriced\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\"}]}"
 }

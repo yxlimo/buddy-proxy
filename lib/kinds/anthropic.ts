@@ -15,7 +15,7 @@ import { openPlatformKeyOf } from "../open-platform-credentials.ts";
 import { openPlatformOf } from "../open-platforms.ts";
 import { fromUpstreamStatus, registerKind } from "../provider-kinds.ts";
 import { openPlatformPlan } from "./shared.ts";
-import { declareNoQuotaPlugin } from "../quota-plugins.ts";
+import { declareNoQuotaPlugin } from "../quota-plugin-registry.ts";
 import { anthropicPlatformChat, ANTHROPIC_VERSION, toAnthropicPlatform } from "../router/upstreams/open-platform.ts";
 import type { ProviderRow } from "../providers.ts";
 

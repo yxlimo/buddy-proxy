@@ -25,16 +25,7 @@ import { classifyUpstreamError, describeUpstreamError } from "./provider-selecti
 import { recordUsage, maxTotals, usageTotals } from "../usage.ts";
 import { clientForwardHeaders, detectAgent, detectSession, type SessionInfo } from "../agent.ts";
 import { workbuddyCatalog } from "../admin/upstreams.ts";
-import {
-  toMinimax,
-  toZcode,
-  toQoder,
-  toTokenRhythm,
-  toWorkBuddy,
-  toSenseNova,
-  toInternAi,
-  type UpstreamContext,
-} from "./upstreams/index.ts";
+import { toMinimax, toZcode, toQoder, toWorkBuddy, type UpstreamContext } from "./upstreams/index.ts";
 import {
   routeInGroup,
   publishedModelUnavailable,
@@ -567,10 +558,10 @@ async function callUpstream(
   // 认错了就找不到它的 kind，请求也就发不出去。
   const template = platformOfAny(route.platform);
   const kind = template ? kindOf(template.kind) : null;
-  // 开放 API 平台（MiniMax 开放平台、TokenRhythm、SenseNova、书生·端砚）
-  // 是原样转发的，客户端发来的头跟着过去（网关自己的那几个摘掉，见
-  // clientForwardHeaders）。模拟客户端的那些（Qoder、WorkBuddy、MiniMax
-  // Code、ZCode）按客户端的样子重建请求，不用这些头。
+  // 开放 API 平台（`openPlatform`：用户自己加的那几种方言）是原样转发的，
+  // 客户端发来的头跟着过去（网关自己的那几个摘掉，见 clientForwardHeaders）。
+  // 模拟客户端的那些（Qoder、WorkBuddy、MiniMax Code、ZCode）按客户端的样子
+  // 重建请求，不用这些头。
   if (kind?.openPlatform) {
     uctx.forwardedHeaders = clientForwardHeaders(ctx.request.headers);
   }
@@ -581,21 +572,6 @@ async function callUpstream(
         break;
       case "workbuddy":
         await toWorkBuddy(uctx, body, route, dialect, stream, ctx);
-        break;
-      case "tokenrhythm":
-        await toTokenRhythm(uctx, body, route, dialect, stream, ctx);
-        break;
-      // The compatible platforms carry their own dispatch: registering one is
-      // a declaration (lib/router/compatible-platform.ts), not a case here.
-      case "sensenova":
-        await (kind?.dispatch
-          ? kind.dispatch(uctx, body, route, dialect, stream, ctx)
-          : toSenseNova(uctx, body, route, dialect, stream, ctx));
-        break;
-      case "intern-ai":
-        await (kind?.dispatch
-          ? kind.dispatch(uctx, body, route, dialect, stream, ctx)
-          : toInternAi(uctx, body, route, dialect, stream, ctx));
         break;
       // MiniMax Code 有自己的 case：它没有登记 dispatch（登记的是它的种类
       // 模板，不是转发）。漏了它，default 会把它当成「还没接的上游」。

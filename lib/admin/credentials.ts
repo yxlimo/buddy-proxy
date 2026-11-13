@@ -7,7 +7,7 @@
 // status 仍是字符串），那是给人看的词。
 
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import { openPlatformOf, OPEN_PLATFORM_KIND_NAME, type OpenPlatformRow } from "../open-platforms.ts";
+import { openPlatformOf, type OpenPlatformRow } from "../open-platforms.ts";
 import { isSimulatedClientKind } from "../platform-catalog.ts";
 import { platformOfAny } from "../platforms.ts";
 import { credentialsOfKind, kindOf } from "../provider-kinds.ts";
@@ -41,12 +41,10 @@ export function openPlatformOfAccount(accountId: string): OpenPlatformRow | null
  * openai 与 anthropic 只差报文方言，凭据完全一样（同一把 x-api-key），所以
  * 它们走同一档，各写一份就是两份知识。名字分别住在 lib/kinds/openai.ts 与
  * lib/kinds/anthropic.ts；这里写成字面量是因为那一层会把转发层（lib/router/）
- * 拖进来，反过来引它就成了环。
+ * 拖进来，反过来引它就成了环 —— 而且额度插件的集中登记（lib/quota-plugins.ts）
+ * 会把本模块在 open-platforms 求值中途拉进依赖图，那时那个常量还没初始化。
  */
-const GENERIC_OPEN_PLATFORM_KINDS: ReadonlySet<string> = new Set([
-  OPEN_PLATFORM_KIND_NAME,
-  "anthropic",
-]);
+const GENERIC_OPEN_PLATFORM_KINDS: ReadonlySet<string> = new Set(["openai", "anthropic"]);
 
 /**
  * 这个账号（或那个平台）属于哪一类上游。
