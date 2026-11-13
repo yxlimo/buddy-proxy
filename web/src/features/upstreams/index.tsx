@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useIsFetching } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ChevronRight, Plus } from 'lucide-react'
+import { ChevronRight, GripVertical, Plus } from 'lucide-react'
 import { PageShell } from '@/components/layout/page-shell'
 import {
   EmptyState,
@@ -70,6 +70,11 @@ import {
 import { useSetProviderKeys } from '@/features/accounts/api'
 import { formatLocalMoment } from '@/lib/format'
 import { describeError } from '@/lib/errors'
+import {
+  movePlatformOrder,
+  useOrderedPlatforms,
+  writePlatformOrder,
+} from '@/lib/platform-order'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
 import type {
@@ -120,6 +125,8 @@ export function UpstreamsPage() {
   const [editingPlatform, setEditingPlatform] = useState<Upstream | null>(null)
   /** 上一次刷新模型目录的结果：按平台记着，照服务端的话显示。 */
   const [refreshOutcomes, setRefreshOutcomes] = useState<Record<string, RefreshOutcome>>({})
+  /** 排序模式：只在这个模式下能拖行，退出后行回到原来的用法。 */
+  const [sorting, setSorting] = useState(false)
 
   /** 打开弹窗：把上一次提交留下的错误清掉，别让新的表单接着显示旧话。 */
   const openAddPlatform = () => {
@@ -166,6 +173,14 @@ export function UpstreamsPage() {
     ]
   )
 
+  // 平台列表：次序照操作者自己排的那一份（存在浏览器里），服务端次序作后备。
+  // 用 useMemo 稳住这份清单：重排拿它当依赖，每次渲染新建一份会白排一次。
+  const platforms = useMemo(
+    () => upstreams.data?.upstreams ?? [],
+    [upstreams.data]
+  )
+  const list = useOrderedPlatforms(platforms)
+
   if (upstreams.isPending) {
     return <LoadingState />
   }
@@ -175,7 +190,6 @@ export function UpstreamsPage() {
     )
   }
 
-  const list = upstreams.data.upstreams
   const loginTarget = login.target
   // 额度插件登记表的状态：三档（加载中 / 取不到 / 到手）。开放平台的凭据格子
   // 数由它说了算，判据在 providerKeyAccess 那一层。
@@ -215,10 +229,19 @@ export function UpstreamsPage() {
       title='平台'
       description='平台分两种：内置的模板平台，和自己在面板上加的开放平台。每个平台下可以有多个账号。'
       actions={
-        <Button onClick={openAddPlatform}>
-          <Plus />
-          新增平台
-        </Button>
+        <div className='flex items-center gap-2'>
+          <Button
+            variant='outline'
+            aria-pressed={sorting}
+            onClick={() => setSorting((value) => !value)}
+          >
+            {sorting ? '完成排序' : '排序'}
+          </Button>
+          <Button onClick={openAddPlatform}>
+            <Plus />
+            新增平台
+          </Button>
+        </div>
       }
     >
 
@@ -228,6 +251,15 @@ export function UpstreamsPage() {
             <EmptyState
               title='网关没有返回任何平台'
               description='正常情况下会有九个内置平台'
+            />
+          ) : sorting ? (
+            <PlatformSortList
+              platforms={list}
+              onMove={(from, to) => {
+                const ids = list.map((upstream) => upstream.id)
+                const next = movePlatformOrder(ids, from, to)
+                if (next !== ids) writePlatformOrder(next)
+              }}
             />
           ) : (
             <Table>
@@ -627,6 +659,107 @@ export function UpstreamsPage() {
         </AlertDialogContent>
       </AlertDialog>
     </PageShell>
+  )
+}
+
+/**
+ * 排序模式下的平台列表：一行一个平台，拖着走，或者用行尾那两个按钮挪。
+ *
+ * 只在这一模式下出现：退出后行回到表格里，点行展开、按钮可点。
+ * 次序只存进浏览器，不传后端。
+ */
+function PlatformSortList({
+  platforms,
+  onMove,
+}: {
+  platforms: Upstream[]
+  onMove: (from: number, to: number) => void
+}) {
+  /** 正在拖的那一行（平台 id）。 */
+  const [dragging, setDragging] = useState<string | null>(null)
+
+  return (
+    <div className='grid gap-2 p-3'>
+      <p className='text-xs text-muted-foreground'>拖动行调整顺序</p>
+      <ul aria-label='平台排序' className='grid gap-1'>
+        {platforms.map((upstream, index) => {
+          const last = index === platforms.length - 1
+          return (
+            <li
+              key={upstream.id}
+              data-platform-id={upstream.id}
+              draggable
+              tabIndex={0}
+              onDragStart={(event) => {
+                setDragging(upstream.id)
+                event.dataTransfer?.setData('text/plain', upstream.id)
+                if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+              }}
+              // 只有落在别的一行上才算一次换位：不 preventDefault 就收不到 drop。
+              onDragOver={(event) => {
+                if (dragging !== null && dragging !== upstream.id) {
+                  event.preventDefault()
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                const from = platforms.findIndex((row) => row.id === dragging)
+                setDragging(null)
+                if (from < 0 || from === index) return
+                onMove(from, index)
+              }}
+              onDragEnd={() => setDragging(null)}
+              // 键盘上另有一条：焦点在行上时 Alt + 上/下箭头。
+              onKeyDown={(event) => {
+                if (!event.altKey) return
+                if (event.key === 'ArrowUp' && index > 0) {
+                  event.preventDefault()
+                  onMove(index, index - 1)
+                }
+                if (event.key === 'ArrowDown' && !last) {
+                  event.preventDefault()
+                  onMove(index, index + 1)
+                }
+              }}
+              className={`flex cursor-grab items-center gap-2 rounded-md border px-3 py-2 ${
+                dragging === upstream.id ? 'opacity-50' : ''
+              }`}
+            >
+              <GripVertical
+                aria-hidden
+                className='size-4 shrink-0 text-muted-foreground'
+              />
+              <div className='grid min-w-0 flex-1 gap-0.5'>
+                <span className='text-sm font-medium'>
+                  {upstream.label || upstream.id}
+                </span>
+                <span className='font-mono text-xs break-all text-muted-foreground'>
+                  {upstream.id}
+                </span>
+              </div>
+              <Button
+                size='sm'
+                variant='outline'
+                aria-label={`上移 ${upstream.id}`}
+                disabled={index === 0}
+                onClick={() => onMove(index, index - 1)}
+              >
+                上移
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                aria-label={`下移 ${upstream.id}`}
+                disabled={last}
+                onClick={() => onMove(index, index + 1)}
+              >
+                下移
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 

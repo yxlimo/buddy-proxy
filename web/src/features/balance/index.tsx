@@ -23,6 +23,7 @@ import {
   PlatformQuotaSkeleton,
 } from '@/features/balance/platform-row'
 import { useUpstreams } from '@/features/upstreams/api'
+import { useOrderedPlatforms } from '@/lib/platform-order'
 import type { UpstreamQuota } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
@@ -98,10 +99,15 @@ export function BalancePage() {
   /** 平台多的时候，收起只摆前几个；这一位是「其余的都摆出来」。 */
   const [showAll, setShowAll] = useState(false)
 
+  // 平台清单：行集合由它定；次序照操作者自己排的那一份（平台页上拖出来的）。
+  const platformList = useOrderedPlatforms(
+    useMemo(() => platforms.data?.upstreams ?? [], [platforms.data]),
+  )
+
   // 该问哪几家额度：平台清单说一家问一趟。
   const platformIds = useMemo(
-    () => (platforms.data?.upstreams ?? []).map((upstream) => upstream.id),
-    [platforms.data],
+    () => platformList.map((upstream) => upstream.id),
+    [platformList],
   )
 
   // 每家平台各问一趟：谁先回来谁先渲染，慢的不拖累快的。
@@ -133,7 +139,7 @@ export function BalancePage() {
   }
 
   // 一行一个平台：平台清单是左表，额度按 id 并进去。
-  const rows: PlatformRow[] = (platforms.data?.upstreams ?? []).map(
+  const rows: PlatformRow[] = platformList.map(
     (upstream, index) => ({
       upstreamId: upstream.id,
       // 面板别处都是「有名字写名字，没名字写 id」。
