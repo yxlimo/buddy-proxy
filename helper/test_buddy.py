@@ -740,16 +740,17 @@ class SyncCheckTest(unittest.TestCase):
             )
             self.assertEqual(buddy_sync.check_target("pi", path, False, models), [])
 
-    def test_a_change_the_mapping_cannot_express_is_not_reported(self):
-        # 五档和三档写进 pi 是同一张映射，所以「五档变三档」在 pi 这边没有
-        # 可修的东西。
+    def test_a_change_the_mapping_can_express_is_reported(self):
+        # 映射改成往**下**取之后，五档与三档在 pi 侧不再是同一张映射
+        # （medium 不再被抬到 xhigh）。档位差别 pi 表达得出来，所以这个
+        # 差异是能修的（重写配置就行），--check 应当报。
         five = [("space-bunny", "太空兔", ["low", "medium", "high", "xhigh", "max"], 1000, 100)]
         three = [("space-bunny", "太空兔", ["low", "high", "max"], 1000, 100)]
         pi_cfg = {"providers": {"buddy": buddy_sync.pi_provider(five, "buddy", "Buddy")}}
         local = buddy_sync.canonical_pi_models(pi_cfg, "buddy")
         self.assertEqual(
             buddy_sync.compare_models(buddy_sync.pi_expectations(buddy_sync.canonical_gateway_models(three)), local),
-            [],
+            ["space-bunny efforts: 网关 low,high,max / 本地 low,medium,high,xhigh,max"],
         )
 
     def test_a_stale_pi_map_is_reported(self):
@@ -798,8 +799,188 @@ class SyncCheckTest(unittest.TestCase):
         )
         self.assertEqual(
             buddy_sync.compare_models(moved, local),
-            ["space-bunny efforts: 网关 high / 本地 low,high,max"],
+            ["space-bunny efforts: 网关 high / 本地 low,medium,high,xhigh,max"],
         )
+
+
+class LevelMapTest(unittest.TestCase):
+    """pi 的档位映射：往**下**取，不往**上**取。
+
+    pi 的默认档位是 medium，客户端没写档位时映射不能把它抬到高档 ——
+    抬高档就是「思考拉满」，代价是输出全烧在思考里。
+    """
+
+    def test_medium_goes_down_when_the_upstream_has_no_medium(self):
+        mapping = buddy_sync.level_map(["low", "high", "max"])
+        self.assertEqual(mapping["medium"], "low")
+        self.assertEqual(mapping["high"], "high")
+        self.assertEqual(mapping["max"], "max")
+
+    def test_medium_stays_on_medium_when_the_upstream_has_it(self):
+        mapping = buddy_sync.level_map(["low", "medium", "high", "max"])
+        self.assertEqual(mapping["medium"], "medium")
+        self.assertEqual(mapping["high"], "high")
+
+    def test_medium_goes_up_only_when_there_is_nothing_lower(self):
+        # 唯一的例外：上游没有更低的档位时只能往上取。
+        mapping = buddy_sync.level_map(["high", "max"])
+        self.assertEqual(mapping["medium"], "high")
+
+    def test_xhigh_goes_down_to_the_nearest_level_below_it(self):
+        self.assertEqual(buddy_sync.level_map(["low", "high", "max"])["xhigh"], "high")
+        self.assertEqual(buddy_sync.level_map(["low", "medium", "high", "xhigh", "max"])["xhigh"], "xhigh")
+
+    def test_the_ends_are_still_the_ends(self):
+        mapping = buddy_sync.level_map(["low", "high", "max"])
+        self.assertEqual(mapping["minimal"], "low")
+        self.assertEqual(mapping["low"], "low")
+        self.assertEqual(mapping["max"], "max")
+
+    def test_a_model_without_levels_maps_to_nothing(self):
+        self.assertEqual(
+            buddy_sync.level_map([]),
+            dict.fromkeys(buddy_sync.PI_LEVELS),
+        )
+
+    def test_the_mapping_only_points_at_levels_the_upstream_has(self):
+        for efforts in ([], ["low"], ["low", "high", "max"], ["high", "max"], ["default", "low", "medium", "high", "xhigh", "max"]):
+            values = set(buddy_sync.level_map(efforts).values()) - {None}
+            self.assertTrue(values <= set(efforts), f"{efforts} 映到了上游没有的档位 {values}")
+
+    def test_the_mapping_is_idempotent(self):
+        for efforts in ([], ["low"], ["low", "high", "max"], ["default", "low", "medium", "high", "xhigh", "max"]):
+            self.assertEqual(buddy_sync.level_map(efforts), buddy_sync.level_map(efforts))
+
+
+class OffEffortTest(unittest.TestCase):
+    """off 是一个正式的思考档位（阶梯最浅的一档），不是一个布尔开关。
+
+    网关那边模型没有思考能力（reasoning = false）就只发布 off 这一档；
+    脚本照着如实生成，不做任何探测或猜测。
+    """
+
+    def test_only_off_maps_every_level_to_off(self):
+        mapping = buddy_sync.level_map(["off"])
+        self.assertEqual(set(mapping), set(buddy_sync.PI_LEVELS))
+        self.assertEqual(set(mapping.values()), {"off"})
+        # pi 靠 map.off !== null 才允许 thinkingEnabled: false。
+        self.assertEqual(mapping["off"], "off")
+
+    def test_off_next_to_other_levels_only_covers_the_off_slot(self):
+        mapping = buddy_sync.level_map(["off", "low", "high", "max"])
+        self.assertEqual(mapping["off"], "off")
+        # 想思考的客户端不该被静默关掉思考：非 off 的档位一个都不能落到 off。
+        for level in ("minimal", "low", "medium", "high", "xhigh", "max"):
+            self.assertNotEqual(mapping[level], "off")
+        self.assertEqual(mapping["medium"], "low")
+        self.assertEqual(mapping["high"], "high")
+
+    def test_without_off_thinking_cannot_be_turned_off(self):
+        for efforts in ([], ["low", "high", "max"], ["low", "medium", "high", "max"], ["high", "max"]):
+            self.assertIsNone(buddy_sync.level_map(efforts)["off"], f"{efforts} 应当关不掉思考")
+
+    def test_the_levels_still_step_down_when_off_is_there(self):
+        mapping = buddy_sync.level_map(["off", "low", "high", "max"])
+        self.assertEqual(mapping["minimal"], "low")
+        self.assertEqual(mapping["max"], "max")
+
+    def test_a_model_without_reasoning_publishes_off_only(self):
+        models = [("quiet", "安静", None, 1000, 100, False)]
+        pi = buddy_sync.pi_provider(models, "buddy", "Buddy")["models"][0]
+        self.assertFalse(pi["reasoning"])
+        self.assertEqual(set(pi["thinkingLevelMap"].values()), {"off"})
+        opencode = buddy_sync.opencode_provider(models, "buddy", "Buddy")["models"]["quiet"]
+        self.assertFalse(opencode["capabilities"]["reasoning"]["supported"])
+        self.assertEqual(opencode["capabilities"]["reasoning"]["effort"], ["off"])
+
+    def test_an_unknown_reasoning_keeps_the_old_behaviour(self):
+        # 不知道支不支持思考 ≠ 不支持：宁可多给一档。
+        models = [("unknown", "不知道", None, 1000, 100, None)]
+        pi = buddy_sync.pi_provider(models, "buddy", "Buddy")["models"][0]
+        self.assertTrue(pi["reasoning"])
+        self.assertIsNone(pi["thinkingLevelMap"]["off"])
+        opencode = buddy_sync.opencode_provider(models, "buddy", "Buddy")["models"]["unknown"]
+        self.assertTrue(opencode["capabilities"]["reasoning"]["supported"])
+        self.assertNotIn("effort", opencode["capabilities"]["reasoning"])
+
+    def test_a_model_with_reasoning_publishes_off_as_a_variant(self):
+        models = [("thinker", "会想的", ["off", "low", "high"], 1000, 100, True)]
+        opencode = buddy_sync.opencode_provider(models, "buddy", "Buddy")["models"]["thinker"]
+        self.assertEqual(opencode["capabilities"]["reasoning"]["effort"], ["off", "low", "high"])
+        pi = buddy_sync.pi_provider(models, "buddy", "Buddy")["models"][0]
+        self.assertEqual(pi["thinkingLevelMap"]["off"], "off")
+        self.assertEqual(pi["thinkingLevelMap"]["medium"], "low")
+
+    def test_fetch_models_reads_the_reasoning_field(self):
+        payload = {
+            "data": [
+                {"id": "a", "display_name": "A", "effort_options": ["low"], "reasoning": True},
+                {"id": "b", "display_name": "B", "effort_options": ["off"], "reasoning": False},
+                {"id": "c", "display_name": "C"},
+            ]
+        }
+        with mock.patch.object(buddy_sync.common, "http_get_json", return_value=(payload, "")):
+            models, err = buddy_sync.fetch_models("http://gw", "")
+        self.assertIsNone(err)
+        self.assertEqual([m[5] for m in models], [True, False, None])
+        self.assertEqual(models[1][2], ["off"])
+        # 缺失的字段是「不知道」，不是 False。
+        self.assertIsNone(models[2][5])
+
+    def test_what_the_sync_writes_passes_its_own_check(self):
+        models = [
+            ("quiet", "安静", None, 1000, 100, False),
+            ("thinker", "会想的", ["off", "low", "high"], 2000, 200, True),
+            ("fixed", "固定档", None, 3000, 300, None),
+        ]
+        gateway = buddy_sync.canonical_gateway_models(models)
+        opencode_cfg = {"providers": {"buddy": buddy_sync.opencode_provider(models, "buddy", "Buddy")}}
+        pi_cfg = {"providers": {"buddy": buddy_sync.pi_provider(models, "buddy", "Buddy")}}
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_opencode_models(opencode_cfg, "buddy")),
+            [],
+        )
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, buddy_sync.canonical_pi_models(pi_cfg, "buddy")),
+            [],
+        )
+
+    def test_the_pi_expectation_of_an_off_only_model_is_off(self):
+        gateway = buddy_sync.pi_expectations(
+            buddy_sync.canonical_gateway_models([("quiet", "安静", None, 1000, 100, False)])
+        )
+        self.assertEqual(gateway["quiet"]["efforts"], ["off"])
+
+    def test_a_stale_reasoning_flag_is_reported(self):
+        gateway = buddy_sync.canonical_gateway_models([("quiet", "安静", None, 1000, 100, False)])
+        local = buddy_sync.canonical_pi_models(
+            {"providers": {"buddy": {"models": [
+                {
+                    "id": "quiet",
+                    "name": "安静",
+                    "contextWindow": 1000,
+                    "maxTokens": 100,
+                    "reasoning": True,
+                    "thinkingLevelMap": dict.fromkeys(buddy_sync.PI_LEVELS),
+                }
+            ]}}},
+            "buddy",
+        )
+        self.assertEqual(
+            buddy_sync.compare_models(gateway, local),
+            ["quiet efforts: 网关 off / 本地 None", "quiet reasoning: 网关 False / 本地 True"],
+        )
+
+    def test_an_unknown_reasoning_is_not_reported(self):
+        # 网关没说支不支持思考 → 不比这一格，别把「不知道」报成过期。
+        gateway = buddy_sync.canonical_gateway_models([("quiet", "安静", None, 1000, 100, None)])
+        local = buddy_sync.canonical_pi_models(
+            {"providers": {"buddy": {"models": [
+                {"id": "quiet", "name": "安静", "contextWindow": 1000, "maxTokens": 100, "reasoning": True}
+            ]}}},
+            "buddy",
+        )
+        self.assertEqual(buddy_sync.compare_models(gateway, local), [])
 
 
 class OpencodeTargetTest(unittest.TestCase):

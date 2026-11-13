@@ -115,12 +115,89 @@ export function anthropicToOpenAI(body: Json): Json {
     else if (tc.type === "auto") out.tool_choice = "auto";
     else if (tc.type === "none") out.tool_choice = "none";
   }
-  if (body.thinking?.type === "enabled" || body.thinking?.type === "adaptive") {
-    const effort = effortOf(body);
-    if (effort) out.reasoning_effort = effort;
-  }
+  // Thinking is spelled out by one place for both directions (thinkingFields), so
+  // "off" and "a level" cannot drift apart between the two conversions
+  Object.assign(out, thinkingFields(body, "openai"));
   if (typeof body.stream === "boolean") out.stream = body.stream;
   return out;
+}
+
+/**
+ * What a request says about thinking: switched off, or a level.
+ *
+ * `undefined` is not "off": a request with no opinion must reach the upstream
+ * with no thinking fields at all, so the upstream's own default is what runs.
+ * That is the behaviour every client that never mentions thinking already has,
+ * and it must not change.
+ */
+export type ThinkingIntent = { off: true } | { off: false; effort: string };
+
+/**
+ * The names a client writes when it means "no thinking".
+ *
+ * `off` is pi's tier name and the one opencode's variants will use; `disabled`
+ * is what an Anthropic-shaped body says; `none` is the OpenAI effort level that
+ * means the absence of thinking. They are three spellings of one intent, and the
+ * gateway has to read all three because it does not choose which client calls
+ * it — only where the request goes next.
+ */
+const OFF_SPELLINGS = ["off", "disabled", "none"];
+
+/** Whether any of the spellings says "no thinking". */
+function asksToTurnThinkingOff(body: Json): boolean {
+  if (body.thinking?.type === "disabled") return true;
+  // The tier name may arrive in any of the three slots a level goes in: an agent
+  // that learned the name from one client library writes it into another's
+  // field, so all three are read. `output_config.effort` is the Anthropic
+  // spelling opencode and pi use, `effort` is explicit, `reasoning_effort` is
+  // OpenAI's.
+  return [body.output_config?.effort, body.effort, body.reasoning_effort].some(
+    (value) => typeof value === "string" && OFF_SPELLINGS.includes(value.trim().toLowerCase()),
+  );
+}
+
+/**
+ * Read the thinking intent out of a request, whichever dialect spelled it.
+ *
+ * "Off" is read first and wins over a level: a body that carries both (an
+ * Anthropic `thinking.type=disabled` next to an `output_config.effort`) is
+ * contradictory, and the caller who switched thinking off is the cheaper one to
+ * be wrong about — honouring the level instead would bill them for thinking
+ * they said they did not want.
+ */
+export function thinkingIntentOf(body: Json): ThinkingIntent | undefined {
+  if (asksToTurnThinkingOff(body)) return { off: true };
+  const effort = effortOf(body);
+  return effort ? { off: false, effort } : undefined;
+}
+
+/**
+ * The thinking fields to send upstream for one target dialect.
+ *
+ * Both spellings go out on the OpenAI side — `reasoning_effort` and `thinking`:
+ * an upstream reads fields by name and the gateway does not know which name it
+ * reads, so both are sent. That duplicate is deliberate and it is the whole
+ * point of this function: `reasoning_effort: "none"` alone is what an
+ * OpenAI-native upstream (xinghuo's spark) needs to stop thinking, while
+ * `thinking: {type: "disabled"}` is what an Anthropic-shaped body says. The
+ * cost is that a strictly validating server would reject the field it does not
+ * know about — the upstream's own body is in the log when that happens, so it is
+ * diagnosable rather than mysterious.
+ *
+ * The Anthropic side gets only its own spelling: it has no `none` effort level,
+ * and sending one is a rejection rather than a hint.
+ */
+export function thinkingFields(body: Json, dialect: "openai" | "anthropic"): Json {
+  const intent = thinkingIntentOf(body);
+  if (!intent) return {};
+  if (dialect === "anthropic") {
+    if (intent.off) return { thinking: { type: "disabled" } };
+    return { thinking: { type: "enabled", budget_tokens: budgetFromEffort(intent.effort) } };
+  }
+  return {
+    reasoning_effort: intent.off ? "none" : intent.effort,
+    thinking: { type: intent.off ? "disabled" : "enabled" },
+  };
 }
 
 /**
@@ -135,8 +212,15 @@ export function anthropicToOpenAI(body: Json): Json {
  * The level comes first: a budget cannot say which level it meant (two levels
  * share a budget), so a request that carries the level keeps it — that is the
  * only way the top level survives the Anthropic dialect.
+ *
+ * The off spellings (`off` / `disabled` / `none`) are not levels this returns:
+ * they say "no thinking at all", which is an intent rather than a depth, and
+ * `thinkingIntentOf` answers that before a level is ever asked for. Returning
+ * them as if they were a depth would put `off` into a tier table that has no
+ * such tier.
  */
 export function effortOf(body: Json): string | undefined {
+  if (asksToTurnThinkingOff(body)) return undefined;
   for (const value of [body.output_config?.effort, body.effort, body.reasoning_effort]) {
     if (typeof value === "string" && value.trim()) return value.trim().toLowerCase();
   }
@@ -272,10 +356,7 @@ export function openaiToAnthropic(body: Json, defaultMaxTokens: number): Json {
       out.tool_choice = { type: "tool", name: tc.function.name };
     }
   }
-  const effort = effortOf(body);
-  if (effort) {
-    out.thinking = { type: "enabled", budget_tokens: budgetFromEffort(effort) };
-  }
+  Object.assign(out, thinkingFields(body, "anthropic"));
   if (typeof body.stream === "boolean") out.stream = body.stream;
   return out;
 }

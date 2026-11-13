@@ -221,6 +221,68 @@ try {
 }
 
 /* ------------------------------------------------------------------ *
+ * 5) 发布层：推理关掉就只有 `off` 这一档
+ *
+ * `off` 是一个档位，不是布尔开关，它在阶梯的最浅处。一个关掉推理的主路由
+ * 模型本来就只有这一档，可库里那列 `effort_options` 是推理还开着的时候写的，
+ * 不会跟着开关变 —— 照它发布 `low/high/max`，客户端会以为能调，选出来的是这个
+ * 模型没有的档位。发布层因此把这两件事对齐：`reasoning:false` 就只发 `["off"]`。
+ *
+ * 库里的列一个字不动（重新打开推理时那些档位还要用），`reasoning` 为 NULL
+ * （没写）的模型也不是「关」，照旧发库里那列。
+ * ------------------------------------------------------------------ */
+
+section("发布层：推理关掉就只有 off 一档");
+
+const { aggregateCatalog, aggregateAnthropicCatalog } = await import("../lib/router/catalog.ts");
+
+const TIERS = ["low", "high", "max"];
+
+/** 一个目标，上游目录里带 TIERS 那几档。 */
+function publishOne(model: { reasoning: boolean | null; effortOptions: string[] | null }, targetReasoning = true): any {
+  const groups = [
+    {
+      group: "minimax",
+      models: [{ id: "m", displayName: "M", reasoning: targetReasoning, toolCall: true, effortOptions: TIERS }],
+    },
+  ];
+  const entries = aggregateCatalog(groups as any, [
+    {
+      id: "m",
+      displayName: "M",
+      enabled: true,
+      strategy: "single",
+      contextWindow: null,
+      maxOutputTokens: null,
+      reasoning: model.reasoning,
+      toolCall: null,
+      effortOptions: model.effortOptions,
+      targets: [{ group: "minimax", upstreamModel: "m", enabled: true, weight: 1 }],
+      createdAt: 0,
+      updatedAt: 0,
+    },
+  ]);
+  return aggregateAnthropicCatalog(entries).data[0];
+}
+
+const offPublished = publishOne({ reasoning: false, effortOptions: TIERS });
+check("关掉推理：档位只剩 off", JSON.stringify(offPublished.effort_options) === '["off"]', JSON.stringify(offPublished.effort_options));
+check("关掉推理：仍然说 reasoning:false", offPublished.reasoning === false, JSON.stringify(offPublished.reasoning));
+
+const onPublished = publishOne({ reasoning: true, effortOptions: TIERS });
+check("开着推理：库里那列原样", JSON.stringify(onPublished.effort_options) === JSON.stringify(TIERS), JSON.stringify(onPublished.effort_options));
+
+const noneSaid = publishOne({ reasoning: null, effortOptions: ["low", "high"] });
+check(
+  "没写 reasoning（NULL）不算关：照旧发库里那列",
+  JSON.stringify(noneSaid.effort_options) === '["low","high"]',
+  JSON.stringify(noneSaid.effort_options),
+);
+
+const noColumn = publishOne({ reasoning: false, effortOptions: null });
+check("关掉推理且库里没有档位列：也是 off，不是不发", JSON.stringify(noColumn.effort_options) === '["off"]', JSON.stringify(noColumn.effort_options));
+
+/* ------------------------------------------------------------------ *
  * 结果
  * ------------------------------------------------------------------ */
 

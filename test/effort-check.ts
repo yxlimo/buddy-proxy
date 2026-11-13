@@ -9,7 +9,14 @@
 // 档位要么原样到上游，要么明确地降一级。预算数字推不出顶档 —— 但预算
 // 太大时可以当成顶档。
 
-import { effortFromBudget, effortOf, anthropicToOpenAI, openaiToAnthropic } from "../lib/dialect/request.ts";
+import {
+  effortFromBudget,
+  effortOf,
+  anthropicToOpenAI,
+  openaiToAnthropic,
+  thinkingFields,
+  thinkingIntentOf,
+} from "../lib/dialect/request.ts";
 
 let pass = 0;
 let fail = 0;
@@ -99,6 +106,101 @@ check(
   "max 是一个大预算",
   Number(toAnthropic.thinking?.budget_tokens) > 16384,
   JSON.stringify(toAnthropic.thinking),
+);
+
+// 关掉思考：两个方向都得过同一层。
+//
+// 网关不知道上游按哪个名字读思考开关，所以 OpenAI 方言那边两种拼法一起发；
+// 「什么都没写」必须一个字段都不多给 —— 那是调用方没意见，不是关。
+console.log("");
+console.log("读意图");
+
+const offIntent = (body: Record<string, unknown>) => thinkingIntentOf(body)?.off === true;
+
+check("thinking.type=disabled 是关", offIntent({ thinking: { type: "disabled" } }));
+check("reasoning_effort=none 是关", offIntent({ reasoning_effort: "none" }));
+check("大小写和空格不影响", offIntent({ reasoning_effort: " NONE " }));
+check("自相矛盾时以关为准", offIntent({ thinking: { type: "disabled" }, output_config: { effort: "high" } }));
+check(
+  "分级是档位不是关",
+  thinkingIntentOf({ thinking: { type: "adaptive" }, output_config: { effort: "high" } })?.off === false,
+);
+check("什么都没写是没有意图", thinkingIntentOf({ model: "m" }) === undefined);
+
+// 「关」有三个拼法，从哪个字段进来都得认：pi 的档位名是 off，opencode 的
+// 变体名将来也是 off，Anthropic 形状写 disabled，OpenAI 的档位里写 none。
+console.log("");
+console.log("三个拼法、三个字段");
+
+for (const [field, value] of [
+  ["output_config.effort", "off"],
+  ["effort", "off"],
+  ["reasoning_effort", "disabled"],
+  ["reasoning_effort", "off"],
+  ["effort", "disabled"],
+  ["output_config.effort", "none"],
+] as const) {
+  const body: Record<string, any> = field === "output_config.effort" ? { output_config: { effort: value } } : { [field]: value };
+  const sent = thinkingFields(body, "openai");
+  check(
+    `${field}="${value}" 是关，且 OpenAI 方言两种字段一起发`,
+    thinkingIntentOf(body)?.off === true && sent.reasoning_effort === "none" && sent.thinking?.type === "disabled",
+    JSON.stringify(sent),
+  );
+}
+check("off 不是档位：effortOf 不把它当层级返回", effortOf({ output_config: { effort: "off" } }) === undefined, String(effortOf({ output_config: { effort: "off" } })));
+check(
+  "off 压过同一请求里的预算",
+  effortOf({ reasoning_effort: "off", thinking: { budget_tokens: 8192 } }) === undefined,
+  String(effortOf({ reasoning_effort: "off", thinking: { budget_tokens: 8192 } })),
+);
+
+console.log("");
+console.log("兼容层：Anthropic → OpenAI 方言");
+
+const offToOpenAI = anthropicToOpenAI({ model: "m", messages: [], thinking: { type: "disabled" } });
+check("关：发 reasoning_effort=none", offToOpenAI.reasoning_effort === "none", String(offToOpenAI.reasoning_effort));
+check("关：同时发 thinking disabled", offToOpenAI.thinking?.type === "disabled", JSON.stringify(offToOpenAI.thinking));
+
+const levelToOpenAI = anthropicToOpenAI({
+  model: "m",
+  messages: [],
+  thinking: { type: "adaptive" },
+  output_config: { effort: "high" },
+});
+check("分级：档位原样", levelToOpenAI.reasoning_effort === "high", String(levelToOpenAI.reasoning_effort));
+check("分级：同时发 thinking enabled", levelToOpenAI.thinking?.type === "enabled", JSON.stringify(levelToOpenAI.thinking));
+
+const bareToOpenAI = anthropicToOpenAI({ model: "m", messages: [] });
+check("没写：不强加 reasoning_effort", !("reasoning_effort" in bareToOpenAI), JSON.stringify(bareToOpenAI));
+check("没写：不强加 thinking", !("thinking" in bareToOpenAI), JSON.stringify(bareToOpenAI));
+
+console.log("");
+console.log("兼容层：OpenAI → Anthropic 方言");
+
+const offToAnthropic = openaiToAnthropic({ model: "m", messages: [], reasoning_effort: "none" });
+check("关：发 thinking disabled", offToAnthropic.thinking?.type === "disabled", JSON.stringify(offToAnthropic.thinking));
+check("关：不发 output_config（Anthropic 没有 none 这档）", !("output_config" in offToAnthropic), JSON.stringify(offToAnthropic));
+check("关：不发 reasoning_effort", !("reasoning_effort" in offToAnthropic), JSON.stringify(offToAnthropic));
+
+const anthropicSpelledOff = openaiToAnthropic({ model: "m", messages: [], thinking: { type: "disabled" } });
+check("关：Anthropic 拼法也认", anthropicSpelledOff.thinking?.type === "disabled", JSON.stringify(anthropicSpelledOff.thinking));
+
+const lowToAnthropic = openaiToAnthropic({ model: "m", messages: [], reasoning_effort: "low" });
+check("分级：换成预算", lowToAnthropic.thinking?.type === "enabled" && Number(lowToAnthropic.thinking?.budget_tokens) > 0, JSON.stringify(lowToAnthropic.thinking));
+
+const bareToAnthropic = openaiToAnthropic({ model: "m", messages: [] }, 4096);
+check("没写：不强加 thinking", !("thinking" in bareToAnthropic), JSON.stringify(bareToAnthropic));
+
+console.log("");
+console.log("兼容层本身");
+
+check("没意图时两个方向都是空", JSON.stringify(thinkingFields({}, "openai")) === "{}" && JSON.stringify(thinkingFields({}, "anthropic")) === "{}");
+check(
+  "关：OpenAI 那边两个字段一起",
+  thinkingFields({ thinking: { type: "disabled" } }, "openai").reasoning_effort === "none" &&
+    thinkingFields({ thinking: { type: "disabled" } }, "openai").thinking?.type === "disabled",
+  JSON.stringify(thinkingFields({ thinking: { type: "disabled" } }, "openai")),
 );
 
 console.log("");

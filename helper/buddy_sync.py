@@ -74,7 +74,10 @@ EFFORTS = ["low", "medium", "high", "max"]
 
 # pi 的思考档位 → 上游实际有的档位。上游不一定四档齐全（DeepSeek 的思考模式
 # 只有 low/high/max），所以按已有的档位映射，而不是照抄。
-PI_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"]
+#
+# off 是阶梯最浅的一档（off < minimal < low < … < max），不是布尔开关：
+# 网关那边「模型没有思考能力」就只发布 off 这一档。
+PI_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 # 三个目标：(显示用的名字, 路径, 是不是 JSONC)
 # Windows 那份不写死用户名：WSL 里 Windows 用户名跟 Linux 用户名常常不是
@@ -154,25 +157,92 @@ def sort_efforts(efforts: list) -> list:
 
 
 def level_map(efforts: list) -> dict:
-    """把 pi 的思考档位映到上游有的档位上。"""
+    """把 pi 的思考档位映到上游有的档位上。
+
+    往**下**取，不往**上**取。档位是成本与延迟的旋钮，客户端没指定档位时
+    不该被抬高档：pi 的默认档位是 medium，往上取等于把「配置里不写档位」
+    变成「思考拉满」，2026-11-13 magic-context dreamer 的空答复就是这么来的
+    （输出全烧在思考里，正文一个字没有）。
+
+    唯一例外：上游没有更低的档位时只能往上取（没有更低的可取）。
+
+    off 是阶梯最浅的一档，不是「没有思考」的意思：
+      - 只有 off 一档 → 每个 pi 档位都只能映到 off（没有别的可发）。
+        off 那一格必须是 "off" 而不是 None：pi 靠 map.off !== null 才允许
+        thinkingEnabled: false。
+      - off 与其它档并存 → off 只映到 off，其它档位照常往下取，
+        且没有任何思考档位被映到 off（想思考的客户端不该被静默关掉思考）。
+      - 没有 off → 关不掉思考（off 那一格是 None），与以前的规则一样。
+    """
     if not efforts:
         return dict.fromkeys(PI_LEVELS)
+    if "off" in efforts:
+        rest = [e for e in efforts if e != "off"]
+        if not rest:
+            return dict.fromkeys(PI_LEVELS, "off")
+        mapping = _level_map_without_off(rest)
+        mapping["off"] = "off"
+        return mapping
+    return _level_map_without_off(efforts)
+
+
+def _level_map_without_off(efforts: list) -> dict:
+    """off 之外的档位怎么映（往下取，不往上取）。"""
     if sorted(efforts) == sorted(EFFORTS):
-        return {"minimal": None, "low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "max"}
+        return {
+            "off": None,
+            "minimal": None,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+            "max": "max",
+        }
     # 档位要按强弱排，不是按字母（"high" 在字母上排在 "low" 前面）。
-    rank = {"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
-    ordered = sorted(efforts, key=lambda e: rank.get(e, 99))
+    rank = {level: i for i, level in enumerate(PI_LEVELS)}
+    ordered = sorted(efforts, key=lambda e: (rank.get(e, len(PI_LEVELS)), e))
     lowest = ordered[0]
     highest = ordered[-1]
-    middle = ordered[len(ordered) // 2]
+
+    def at_or_below(level: str) -> str:
+        """不高于 level 的最近一档。没有更低的档位时只能往上取最低的那档。"""
+        limit = rank.get(level, len(PI_LEVELS))
+        below = [e for e in ordered if rank.get(e, len(PI_LEVELS)) <= limit]
+        return below[-1] if below else lowest
+
     return {
+        "off": None,
         "minimal": lowest,
         "low": lowest,
-        "medium": middle,
-        "high": middle,
-        "xhigh": middle,
+        "medium": at_or_below("medium"),
+        "high": at_or_below("high"),
+        "xhigh": at_or_below("xhigh"),
         "max": highest,
     }
+
+
+def effective_efforts(efforts, reasoning) -> list:
+    """网关给的档位 + 「这个模型支不支持思考」→ 实际可用的档位。
+
+    网关那边说模型没有思考能力（reasoning = false）就只发布 off 这一档；
+    万一它没给档位（老网关 / 字段缺失），按同样的规矩兜底成 ["off"] ——
+    宁可多给一档，也不要把「不知道」当成「不支持」。
+    """
+    if efforts:
+        return list(efforts)
+    if reasoning is False:
+        return ["off"]
+    return []
+
+
+def model_fields(model) -> tuple:
+    """一条模型 → (id, 显示名, 档位, 上下文, 输出上限, reasoning)。
+
+    老的五元组（没有 reasoning）也算：reasoning 按 None（不知道）处理。
+    """
+    mid, display, efforts, context, output = model[:5]
+    reasoning = model[5] if len(model) > 5 else None
+    return mid, display, efforts, context, output, reasoning
 
 
 # ------------------------------------------------------------------ 模型清单
@@ -212,12 +282,16 @@ def fetch_providers(gateway: str) -> tuple:
 def fetch_models(gateway: str, base_path: str) -> tuple:
     """问网关某个路径现在有哪些模型。
 
-        返回 (模型表, 错误信息)。模型表是 (id, 显示名, 档位, 上下文, 输出上限) 的列表。
+        返回 (模型表, 错误信息)。模型表是
+        (id, 显示名, 档位, 上下文, 输出上限, reasoning) 的列表。
     拉不到就返回 (None, 错误信息) —— 不用内置表兜底，写进去的是旧清单，
     比写空更麻烦。
 
     档位那一格：网关没给 `effort_options` 就是 None（= 这套模型没有档位），
     不是空列表。比对时要分清「没有这一格」和「有几个档位」，写配置时两者一样。
+
+    reasoning 那一格：网关说这个模型支不支持思考。字段缺失就是 None
+    （不知道）—— 不能当成 False，不知道就按老规矩给（宁可多给一档）。
     """
     url = f"{gateway}{base_path}/v1/models"
     data, err = common.http_get_json(url)
@@ -234,6 +308,9 @@ def fetch_models(gateway: str, base_path: str) -> tuple:
         efforts = m.get("effort_options")
         if not isinstance(efforts, list) or not efforts:
             efforts = None
+        reasoning = m.get("reasoning")
+        if not isinstance(reasoning, bool):
+            reasoning = None
         out.append(
             (
                 mid,
@@ -241,6 +318,7 @@ def fetch_models(gateway: str, base_path: str) -> tuple:
                 efforts,
                 int(m.get("context_window") or DEFAULT_CONTEXT),
                 int(m.get("max_output_tokens") or DEFAULT_OUTPUT),
+                reasoning,
             )
         )
     return out, None
@@ -288,12 +366,17 @@ def collect_sources(gateway: str, with_providers: bool) -> tuple:
 def opencode_provider(models: list, name: str, label: str) -> dict:
     """一个 provider 的 opencode 形状。"""
     entries = {}
-    for mid, display, efforts, context, output in models:
-        reasoning = {"supported": True}
+    for model in models:
+        mid, display, efforts, context, output, reasoning = model_fields(model)
+        efforts = effective_efforts(efforts, reasoning)
+        # 支不支持思考按网关说的来；没说就按支持（不知道不等于不支持）。
+        supported = True if reasoning is None else reasoning
+        reasoning_cap = {"supported": supported}
         if efforts:
             # opencode 据此生成档位变体，用 -m provider/model#high 选。
             # 用模型自己有的档位，别把上游没有的也报上去。
-            reasoning["effort"] = efforts
+            # 只有 off 的模型，变体名就是 off（magic-context 写 variant: "off"）。
+            reasoning_cap["effort"] = efforts
         entries[mid] = {
             "name": display,
             "limit": {"context": context, "output": output},
@@ -301,7 +384,7 @@ def opencode_provider(models: list, name: str, label: str) -> dict:
                 "tools": True,
                 "input": ["text", "image"],
                 "output": ["text"],
-                "reasoning": reasoning,
+                "reasoning": reasoning_cap,
             },
         }
     return {
@@ -319,19 +402,19 @@ def opencode_provider(models: list, name: str, label: str) -> dict:
 def pi_provider(models: list, name: str, label: str) -> dict:
     """一个 provider 的 pi 形状。"""
     entries = []
-    for mid, display, efforts, context, output in models:
+    for model in models:
+        mid, display, efforts, context, output, reasoning = model_fields(model)
+        efforts = effective_efforts(efforts, reasoning)
         entry = {
             "id": mid,
             "name": display,
-            "reasoning": True,
+            # 支不支持思考按网关说的来；没说就按支持（不知道不等于不支持）。
+            "reasoning": True if reasoning is None else reasoning,
             "input": ["text", "image"],
             "contextWindow": context,
             "maxTokens": output,
             "thinkingLevelMap": level_map(efforts),
         }
-        if not efforts:
-            # 固定模型不能调思考强度，pi 不该生成档位变体。
-            entry["thinkingLevelMap"] = dict.fromkeys(PI_LEVELS)
         entries.append(entry)
     return {
         "name": label,
@@ -678,12 +761,15 @@ def canonical_gateway_models(models: list) -> dict:
     不该报差异。
     """
     out = {}
-    for mid, display, efforts, context, output in models:
+    for model in models:
+        mid, display, efforts, context, output, reasoning = model_fields(model)
+        eff = effective_efforts(efforts, reasoning)
         out[mid] = {
             "display_name": display,
             "context_window": context,
             "max_output_tokens": output,
-            "efforts": sort_efforts(efforts) if efforts else None,
+            "efforts": sort_efforts(eff) if eff else None,
+            "reasoning": reasoning,
         }
     return out
 
@@ -700,12 +786,14 @@ def canonical_opencode_models(cfg: dict, provider: str) -> dict:
         limit = (model or {}).get("limit") or {}
         reasoning = ((model or {}).get("capabilities") or {}).get("reasoning") or {}
         effort = reasoning.get("effort")
+        supported = reasoning.get("supported")
         out[mid] = {
             "display_name": (model or {}).get("name"),
             "context_window": limit.get("context"),
             "max_output_tokens": limit.get("output"),
             # 写进去的是模型自己的档位，没写这一格就是没有档位。
             "efforts": sort_efforts(effort) if isinstance(effort, list) and effort else None,
+            "reasoning": supported if isinstance(supported, bool) else None,
         }
     return out
 
@@ -732,6 +820,7 @@ def canonical_pi_models(cfg: dict, provider: str) -> dict:
             # 能问到的档位就是映射值里出现过的那些（去重排序）；全是 None
             # 的映射（固定档/不能调）等于没有档位。
             "efforts": _pi_efforts(model.get("thinkingLevelMap")),
+            "reasoning": model.get("reasoning") if isinstance(model.get("reasoning"), bool) else None,
         }
     return out
 
@@ -758,9 +847,12 @@ def compare_models(gateway_models: dict, local_models: dict) -> list:
         if local is None:
             diffs.append(f"{mid} model: 网关有 / 本地没有")
             continue
-        for field in ("display_name", "context_window", "max_output_tokens", "efforts"):
+        for field in ("display_name", "context_window", "max_output_tokens", "efforts", "reasoning"):
             want = gw.get(field)
             have = local.get(field)
+            # 网关没说支不支持思考（None）就不比这一格：不知道不等于不支持。
+            if field == "reasoning" and want is None:
+                continue
             if want == have:
                 continue
             if field == "efforts":

@@ -150,6 +150,25 @@ function findModel(groups: CatalogGroup[], group: UpstreamGroup, id: string): Ca
 }
 
 /**
+ * The thinking tiers a published model advertises.
+ *
+ * Turning reasoning off leaves exactly one tier, `off`, so that is the only
+ * thing worth publishing. The `effort_options` column is history at that point —
+ * the tiers were written while reasoning was on, and the column does not follow
+ * the switch — and publishing them next to `reasoning: false` would tell the
+ * client it may choose a tier this model does not have. Only the published value
+ * is overridden: the column keeps its tiers, so switching reasoning back on
+ * brings them back with it.
+ *
+ * `reasoning` NULL stays out of this: NULL is "nobody said", not "off", and that
+ * model keeps the column (or its targets' common tiers) untouched.
+ */
+function publishedEfforts(model: AggregateModel, commonEfforts: string[] | undefined): string[] | undefined {
+  if (model.reasoning === false) return ["off"];
+  return model.effortOptions ?? (commonEfforts?.length ? commonEfforts : undefined);
+}
+
+/**
  * The models the root route publishes.
  *
  * The database is the catalog: the panel decides which models exist, what they
@@ -196,7 +215,7 @@ export function aggregateCatalog(groups: CatalogGroup[], configured: AggregateMo
       toolCall: model.toolCall ?? found.every((m) => m.toolCall),
       contextWindow: model.contextWindow ?? (contexts.length ? Math.min(...contexts) : undefined),
       maxOutputTokens: model.maxOutputTokens ?? (outputs.length ? Math.min(...outputs) : undefined),
-      effortOptions: model.effortOptions ?? (commonEfforts?.length ? commonEfforts : undefined),
+      effortOptions: publishedEfforts(model, commonEfforts),
       strategy: model.strategy,
       targets,
     });
