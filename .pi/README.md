@@ -22,6 +22,22 @@ pi 侧再配一个 agent 定义，让它只出现在 subagent 的提示里。
 | `.agents/skills/hello-js-reverse-skill/` | 技能正文。frontmatter 里带 `subagent-only: true`。 |
 | `.pi/agents/js-reverse.md` | pi-subagents 的 agent 定义：`inheritSkills: false` + `skills: hello-js-reverse-skill` + `skillPath: ../../.agents/skills`，所以只有这个 subagent 的提示里带该技能。 |
 | `.pi/check-subagent-only-skill.mjs` | 不调模型的回归检查（见下）。 |
+| `.pi/extensions/` | 项目级扩展（本机软链，不入 git）：`pi-subagent-permission`、`pi-wake`。 |
+
+## 项目级扩展
+
+`.pi/extensions/` 是 pi 的项目级自动加载目录（项目被信任后生效），本机放两个软链：
+
+```text
+pi-subagent-permission -> ~/extensions/pi-subagent-permission/packages/pi-plugin
+pi-wake                -> ~/extensions/pi-wake/packages/pi-plugin
+```
+
+两个扩展各自随包带一个 skill，经 `resources_discover` 注册，所以本项目的会话能直接看到
+「怎么传 subagent 范围」与「怎么定时唤醒自己继续干活」，不用写进 AGENTS.md。
+
+`pi-wake` 只加在这里，没写进 `.pi/agents/*.md` 的 `subagentOnlyExtensions`：子代理是等结果返回的，
+自己排定时唤醒没有意义；需要定时续做的场景在主会话里。
 
 主 agent 那一侧的过滤不在本仓库：扩展装在用户目录里——
 
