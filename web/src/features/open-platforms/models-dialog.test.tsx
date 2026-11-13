@@ -15,6 +15,7 @@ import {
   ListPublishedModelsResponseSchema,
   ListQuotaPluginsResponseSchema,
   ListUpstreamsResponseSchema,
+  ModelBillingSchema,
   ModelOverrideSchema,
   SetModelOverridesRequestSchema,
   SetModelOverridesResponseSchema,
@@ -57,7 +58,10 @@ const PLATFORM = create(UpstreamSchema, {
  * 目录里的两个模型。
  *
  * 第一条的倍率是 0：给了 0 就是免费，格子该写 0。第二条没给倍率：那是不知道，
- * 格子空着、格子里那句说「没报」。
+ * 格子空着。
+ *
+ * 两条的 thinking 不一样：第一条推理但不报档位（固定档位），第二条推理且报了两档
+ * （档位可选）。
  */
 function catalog(): CatalogModel[] {
   return [
@@ -75,9 +79,22 @@ function catalog(): CatalogModel[] {
       displayName: 'GLM-4.5 Air',
       contextWindow: 128000,
       maxOutputTokens: 16384,
-      reasoning: false,
+      reasoning: true,
       toolCall: true,
       effortOptions: ['low', 'high'],
+    }),
+  ]
+}
+
+/** 目录里报了三档的一个模型：勾选就是照它报的那几档摆。 */
+function leveledCatalog(): CatalogModel[] {
+  return [
+    create(CatalogModelSchema, {
+      id: 'glm-4.6-max',
+      displayName: 'GLM-4.6 Max',
+      contextWindow: 200000,
+      reasoning: true,
+      effortOptions: ['low', 'high', 'max'],
     }),
   ]
 }
@@ -198,6 +215,21 @@ async function chooseModel(
   await user.click(await screen.findByRole('option', { name: id }))
 }
 
+/** 在某个下拉里选一项（下拉里的条目是 option）。 */
+async function chooseOption(
+  user: ReturnType<typeof userEvent.setup>,
+  selectName: string,
+  option: string
+) {
+  await user.click(selectOf(selectName))
+  await user.click(await screen.findByRole('option', { name: option }))
+}
+
+/** 「可选档位」那几档的勾选框（目录报了档位时的形态）。 */
+function levelBoxes(): HTMLElement[] {
+  return screen.queryAllByRole('checkbox')
+}
+
 function saveButton(): HTMLElement {
   return screen.getByRole('button', { name: '保存' })
 }
@@ -272,11 +304,11 @@ describe('自定义模型弹窗', () => {
     expect(field('上下文')).toHaveValue('200000')
     expect(field('输出上限')).toHaveValue('128000')
     expect(field('倍率')).toHaveValue('0')
-    expect(selectOf('是否推理')).toHaveTextContent('是')
-    expect(selectOf('是否工具')).toHaveTextContent('是')
-    // 目录里档位那一格是空的：不设置，也就没有档位输入框。
-    expect(selectOf('档位模式')).toHaveTextContent('不设置')
+    // 目录里那条模型是「支持 thinking、但不报档位」：固定档位，没有档位那一块。
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('固定档位')
+    expect(selectOf('是否支持 Tool Call')).toHaveTextContent('是')
     expect(screen.queryByLabelText('可选档位')).toBeNull()
+    expect(levelBoxes()).toEqual([])
     // 别的模型那几格不摆。
     expect(screen.queryByDisplayValue('GLM-4.5 Air')).toBeNull()
   })
@@ -415,12 +447,13 @@ describe('自定义模型弹窗', () => {
     expect(field('显示名')).toHaveValue('GLM-4.5 Air')
     expect(field('上下文')).toHaveValue('128000')
     expect(field('输出上限')).toHaveValue('16384')
-    // 目录里没给倍率：格子空着，格子里那句说「没报」。
+    // 目录里没给倍率：格子空着，格子里也不写「没报」。
     expect(field('倍率')).toHaveValue('')
-    expect(field('倍率').placeholder).toBe('没报')
-    expect(selectOf('是否推理')).toHaveTextContent('否')
-    expect(selectOf('档位模式')).toHaveTextContent('指定档位')
-    expect(field('可选档位')).toHaveValue('low, high')
+    expect(field('倍率').placeholder).toBe('')
+    // 目录报了两档：档位可选，两档都勾着。
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
+    expect(screen.getByRole('checkbox', { name: 'low' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'high' })).toBeChecked()
     // 第一条的那几格已经不在界面上了。
     expect(screen.queryByDisplayValue('200000')).toBeNull()
   })
@@ -686,16 +719,57 @@ describe('自定义模型弹窗', () => {
     expect(saveButton()).toBeDisabled()
   })
 
-  it('档位里多打的逗号不算一档', async () => {
+  it('目录报了档位：选「档位可选」时那三档都能勾上', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ models: leveledCatalog(), sent }))
+
+    await ready()
+    // 目录报了三档：一进来就是「档位可选」，三档都勾着。
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
+    const low = screen.getByRole('checkbox', { name: 'low' })
+    const high = screen.getByRole('checkbox', { name: 'high' })
+    const max = screen.getByRole('checkbox', { name: 'max' })
+    expect([low, high, max].map((box) => box.getAttribute('aria-checked'))).toEqual(
+      ['true', 'true', 'true']
+    )
+    // 每一档都能勾掉、也能再勾上。
+    await user.click(high)
+    expect(high).toHaveAttribute('aria-checked', 'false')
+    await user.click(high)
+    expect(high).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(max)
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    // 勾着的那两档写进去，剩下的那档不写。
+    expect(sentOverride(sent[0])).toMatchObject({
+      id: 'glm-4.6-max',
+      reasoning: true,
+      effortOptions: { levels: ['low', 'high'] },
+    })
+    expect(sentEffort(sent[0])).toEqual(['low', 'high'])
+  })
+
+  it('目录没报档位：退回自己填，填进去的照样存', async () => {
     const user = setup()
     const sent: SaveInput[] = []
     openDialog(client({ sent }))
 
     await ready()
-    await chooseModel(user, 'glm-4.5-air')
-    expect(selectOf('档位模式')).toHaveTextContent('指定档位')
+    // 目录里 glm-4.6 只说了支持 thinking，一档都没报：先摆成固定档位，
+    // 没有勾选、也没有输入框。
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('固定档位')
+    expect(levelBoxes()).toEqual([])
+    expect(screen.queryByLabelText('可选档位')).toBeNull()
+
+    await chooseOption(user, '是否支持 thinking', '档位可选')
+    // 这时才是自己填的那一格，没有档位可预填。
     const tiers = field('可选档位')
-    await user.clear(tiers)
+    expect(tiers).toHaveValue('')
     await user.type(tiers, 'low,,high')
 
     await user.click(saveButton())
@@ -703,57 +777,108 @@ describe('自定义模型弹窗', () => {
     await waitFor(() => {
       expect(sent).toHaveLength(1)
     })
-    // 空段与空白不算一档，但这一格是写了的：不能丢成「不设置」。
+    // 空段与空白不算一档。
     expect(sentEffort(sent[0])).toEqual(['low', 'high'])
-    expect(sentOverride(sent[0])).toHaveProperty('effortOptions')
-  })
-
-  it('档位选「不能选档」：发上去是写了的空列表', async () => {
-    const user = setup()
-    const sent: SaveInput[] = []
-    openDialog(client({ sent }))
-
-    await ready()
-    // 初值是「不设置」：这一格没写。
-    expect(selectOf('档位模式')).toHaveTextContent('不设置')
-
-    await user.click(selectOf('档位模式'))
-    await user.click(await screen.findByRole('option', { name: '不能选档' }))
-    expect(screen.queryByLabelText('可选档位')).toBeNull()
-
-    await user.click(saveButton())
-
-    await waitFor(() => {
-      expect(sent).toHaveLength(1)
+    expect(sentOverride(sent[0])).toMatchObject({
+      id: 'glm-4.6',
+      reasoning: true,
+      effortOptions: { levels: ['low', 'high'] },
     })
-    // 写了、一档都没有：跟「不设置」不是一回事。
-    expect(sentOverride(sent[0])).toHaveProperty('effortOptions')
-    expect(sentEffort(sent[0])).toEqual([])
   })
 
-  it('档位选「不设置」：发上去干脆不带这一格', async () => {
+  it('选「不支持 thinking」：档位那一块整块不摆，也不写档位', async () => {
     const user = setup()
     const sent: SaveInput[] = []
     openDialog(client({ sent }))
 
     await ready()
     await chooseModel(user, 'glm-4.5-air')
-    // 目录里有几档：初值就是那几档。改成「不设置」= 回到原来的那份。
-    expect(selectOf('档位模式')).toHaveTextContent('指定档位')
-    await user.click(selectOf('档位模式'))
-    await user.click(await screen.findByRole('option', { name: '不设置' }))
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
+    expect(levelBoxes()).toHaveLength(2)
+
+    await chooseOption(user, '是否支持 thinking', '不支持 thinking')
+
+    // 不是灰掉，是根本不渲染：勾选与「自己填」都没有。
+    expect(levelBoxes()).toEqual([])
+    expect(screen.queryByLabelText('可选档位')).toBeNull()
+    expect(screen.queryByRole('group', { name: '可选档位' })).toBeNull()
 
     await user.click(saveButton())
 
     await waitFor(() => {
       expect(sent).toHaveLength(1)
     })
-    expect(sentOverride(sent[0]).id).toBe('glm-4.5-air')
-    expect(sentOverride(sent[0])).not.toHaveProperty('effortOptions')
+    // 只说一句「不支持 thinking」：档位那一格不写。
+    expect(sentOverride(sent[0])).toEqual({
+      id: 'glm-4.5-air',
+      reasoning: false,
+    })
     expect(sentEffort(sent[0])).toBeUndefined()
   })
 
-  it('读回「写了、一档都没有」的人工条目：那一格是「不能选档」', async () => {
+  it('从「不支持 thinking」切回「档位可选」：档位仍来自目录', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ sent }))
+
+    await ready()
+    await chooseModel(user, 'glm-4.5-air')
+    // 先勾掉一档：这一行上就只剩下 low。
+    await user.click(screen.getByRole('checkbox', { name: 'high' }))
+    expect(screen.getByRole('checkbox', { name: 'high' })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
+
+    await chooseOption(user, '是否支持 thinking', '不支持 thinking')
+    await chooseOption(user, '是否支持 thinking', '档位可选')
+
+    // 回来的不是上一回剩下的那一档，而是目录里那两档。
+    expect(screen.getByRole('checkbox', { name: 'low' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    expect(screen.getByRole('checkbox', { name: 'high' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+
+    // 再勾掉一档：这一下是真的改了，可以存。
+    await user.click(screen.getByRole('checkbox', { name: 'high' }))
+    await user.click(saveButton())
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    expect(sentEffort(sent[0])).toEqual(['low'])
+  })
+
+  it('档位选「固定档位」：发上去是写了的空列表', async () => {
+    const user = setup()
+    const sent: SaveInput[] = []
+    openDialog(client({ sent }))
+
+    await ready()
+    await chooseModel(user, 'glm-4.5-air')
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
+
+    await chooseOption(user, '是否支持 thinking', '固定档位')
+    expect(screen.queryByLabelText('可选档位')).toBeNull()
+    expect(levelBoxes()).toEqual([])
+
+    await user.click(saveButton())
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1)
+    })
+    // 支持 thinking 但明确不能选档：跟「没写档位」不是一回事。
+    expect(sentOverride(sent[0])).toMatchObject({
+      id: 'glm-4.5-air',
+      reasoning: true,
+    })
+    expect(sentEffort(sent[0])).toEqual([])
+  })
+
+  it('读回「写了、一档都没有」的人工条目：那一格是「固定档位」', async () => {
     const user = setup()
     const sent: SaveInput[] = []
     openDialog(
@@ -770,11 +895,12 @@ describe('自定义模型弹窗', () => {
 
     await ready()
     await chooseModel(user, 'glm-4.5-air')
-    // 读回来不能显示成「不设置」，也不能冒出个空输入框。
-    expect(selectOf('档位模式')).toHaveTextContent('不能选档')
+    // 目录说这条报了两档，人工说一档都没有：人工那份说得算，不能摆成「档位可选」。
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('固定档位')
     expect(screen.queryByLabelText('可选档位')).toBeNull()
+    expect(levelBoxes()).toEqual([])
 
-    // 这一格没碰：原样带回去，不然改个名字就把它淡成「不设置」了。
+    // 这一格没碰：原样带回去，不然改个名字就把它淡成「没写档位」了。
     await user.type(field('显示名'), ' 改')
     await user.click(saveButton())
     await waitFor(() => {
@@ -784,12 +910,13 @@ describe('自定义模型弹窗', () => {
     expect(sentEffort(sent[0])).toEqual([])
   })
 
-  it('档位选「指定档位」却一档都没填：保存禁用，那一格报错', async () => {
+  it('档位可选却一档都没填：保存禁用，那一格报错', async () => {
     const user = setup()
     openDialog(
       client({
         overrides: [
-          // 人工写下的那几档，清空了就是没填。
+          // 人工写下的那几档，清空了就是没填。目录里 glm-4.6 没报档位，
+          // 所以摆的是自己填的那一格。
           create(ModelOverrideSchema, {
             id: 'glm-4.6',
             effortOptions: { levels: ['low'] },
@@ -799,15 +926,44 @@ describe('自定义模型弹窗', () => {
     )
 
     await ready()
-    expect(selectOf('档位模式')).toHaveTextContent('指定档位')
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
     const tiers = field('可选档位')
     await user.clear(tiers)
 
     const message = await screen.findByText(
-      'glm-4.6 · 选了指定档位，就至少填一档'
+      'glm-4.6 · 档位可选，就至少勾一档'
     )
     expect(saveButton()).toBeDisabled()
     expect(describedError(tiers)).toBe(message)
+  })
+
+  it('人工条目只写了「支持 thinking」：档位仍从目录取', async () => {
+    const user = setup()
+    openDialog(
+      client({
+        overrides: [
+          // 自定义模型表那一份只说了支持 thinking，一档都没写：档位不该因此
+          // 变成「不能选档」，目录里报的那两档仍要摆出来。
+          create(ModelOverrideSchema, { id: 'glm-4.5-air', reasoning: true }),
+        ],
+      })
+    )
+
+    await ready()
+    await chooseModel(user, 'glm-4.5-air')
+    expect(selectOf('是否支持 thinking')).toHaveTextContent('档位可选')
+    expect(screen.getByRole('checkbox', { name: 'low' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'high' })).toBeChecked()
+  })
+
+  it('倍率没报：那一格空着，不写「没报」', async () => {
+    const user = setup()
+    openDialog(client({}))
+
+    await ready()
+    await chooseModel(user, 'glm-4.5-air')
+    expect(field('倍率')).toHaveValue('')
+    expect(field('倍率').placeholder).toBe('')
   })
 
   it('倍率留空：那一条里没有 credits 字段', async () => {
@@ -1117,5 +1273,161 @@ describe('自定义模型弹窗', () => {
     expect(box).toHaveTextContent('glm-global')
     expect(askedModels).toEqual(['workbuddy-global'])
     expect(askedOverrides).toEqual(['workbuddy-global'])
+  })
+})
+
+/**
+ * 上游报的计费摆成什么样。
+ *
+ * 只看 `billing` 自己那几个字段：换平台、换方言都不该改动这一行的写法，所以这一组
+ * 用例全用同一个平台的目录，只换 `billing`。
+ */
+describe('自定义模型弹窗：上游报的计费', () => {
+  /** 弹窗这一整块的文字（含那些格子里的值）。 */
+  function dialogText(): string {
+    return document.body.textContent ?? ''
+  }
+
+  /** 目录里就一条模型，带上传入的计费。 */
+  function withBilling(billing: MessageInitShape<typeof ModelBillingSchema>) {
+    return [
+      create(CatalogModelSchema, {
+        id: 'glm-4.6',
+        displayName: 'GLM-4.6',
+        reasoning: true,
+        toolCall: true,
+        billing: create(ModelBillingSchema, billing),
+      }),
+    ]
+  }
+
+  /** 打开弹窗、等目录到手。 */
+  async function openWith(
+    billing: MessageInitShape<typeof ModelBillingSchema>
+  ) {
+    openDialog(client({ models: withBilling(billing) }))
+    await ready()
+    // 摆的是选中的第一条：它那几格出来了才算这一轮摆完。
+    expect(field('显示名')).toHaveValue('GLM-4.6')
+  }
+
+  it('CNY 的三项都报了就摆三项，带 ¥ 与单位', async () => {
+    await openWith({
+      mode: 'token',
+      currency: 'CNY',
+      inputPerMillion: 8,
+      outputPerMillion: 28,
+      cacheReadPerMillion: 2,
+    })
+
+    expect(dialogText()).toContain('输入 ¥8 / 输出 ¥28 / 缓存读 ¥2 每百万 token')
+  })
+
+  it('上游没报缓存读：只摆输入与输出两项', async () => {
+    await openWith({
+      mode: 'token',
+      currency: 'CNY',
+      inputPerMillion: 8,
+      outputPerMillion: 28,
+    })
+
+    expect(dialogText()).toContain('输入 ¥8 / 输出 ¥28 每百万 token')
+    expect(dialogText()).not.toContain('缓存读')
+  })
+
+  it('没有币种就只摆数字，不带符号', async () => {
+    await openWith({
+      mode: 'token',
+      inputPerMillion: 8,
+      outputPerMillion: 28,
+    })
+
+    expect(dialogText()).toContain('输入 8 / 输出 28 每百万 token')
+    expect(dialogText()).not.toContain('¥')
+    expect(dialogText()).not.toContain('$')
+  })
+
+  it('上游没报价（全 0 又没币种、unknown）就一个字都不摆', async () => {
+    await openWith({
+      mode: 'token',
+      inputPerMillion: 0,
+      outputPerMillion: 0,
+      cacheReadPerMillion: 0,
+      unknown: true,
+    })
+
+    // 全 0 也是「不知道」：摆成 ¥0 等于把不知道说成免费。
+    expect(dialogText()).not.toContain('¥')
+    expect(dialogText()).not.toContain('每百万 token')
+    expect(dialogText()).not.toContain('上游报价')
+    expect(dialogText()).not.toContain('输入')
+  })
+
+  it('mode 是 none 就什么都不摆', async () => {
+    await openWith({
+      mode: 'none',
+      currency: 'CNY',
+      inputPerMillion: 8,
+      outputPerMillion: 28,
+    })
+
+    expect(dialogText()).not.toContain('¥')
+    expect(dialogText()).not.toContain('每百万 token')
+    expect(dialogText()).not.toContain('上游报价')
+  })
+
+  it('倍率计费的摆 ×，分时段倍率补在后面', async () => {
+    await openWith({
+      mode: 'multiplier',
+      credits: 0.15,
+      multipliers: [2, 0.5],
+    })
+
+    expect(dialogText()).toContain('倍率 ×0.15')
+    expect(dialogText()).toContain('分时段倍率 ×2/×0.5')
+  })
+
+  it('USD 写 $，不写 ¥', async () => {
+    await openWith({
+      mode: 'token',
+      currency: 'USD',
+      inputPerMillion: 1.5,
+      outputPerMillion: 6,
+    })
+
+    expect(dialogText()).toContain('输入 $1.5 / 输出 $6 每百万 token')
+    expect(dialogText()).not.toContain('¥')
+  })
+
+  it('换到没报计费的模型：那一行跟着不见', async () => {
+    const user = setup()
+    openDialog(
+      client({
+        models: [
+          create(CatalogModelSchema, {
+            id: 'glm-4.6',
+            displayName: 'GLM-4.6',
+            billing: create(ModelBillingSchema, {
+              mode: 'token',
+              currency: 'CNY',
+              inputPerMillion: 8,
+              outputPerMillion: 28,
+            }),
+          }),
+          create(CatalogModelSchema, {
+            id: 'glm-4.5-air',
+            displayName: 'GLM-4.5 Air',
+          }),
+        ],
+      })
+    )
+
+    await ready()
+    expect(dialogText()).toContain('输入 ¥8 / 输出 ¥28 每百万 token')
+
+    await chooseModel(user, 'glm-4.5-air')
+    expect(field('显示名')).toHaveValue('GLM-4.5 Air')
+    expect(dialogText()).not.toContain('¥')
+    expect(dialogText()).not.toContain('每百万 token')
   })
 })

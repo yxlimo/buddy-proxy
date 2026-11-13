@@ -1,0 +1,8 @@
+{
+  "upstream": "(concocted for the panel e2e — NOT a recording) https://probe.example/efforts/v1/models",
+  "status": 200,
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "body": "{\"object\":\"list\",\"data\":[{\"id\":\"effort-probe-large\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"context_length\":200000,\"max_tokens\":64000,\"supports_reasoning\":true,\"supported_efforts\":[\"low\",\"medium\",\"high\"],\"supports_tools\":true,\"service_status\":\"available\"},{\"id\":\"effort-probe-small\",\"object\":\"model\",\"created\":0,\"owned_by\":\"system\",\"context_length\":128000,\"max_tokens\":32000,\"supports_reasoning\":true,\"supported_efforts\":[\"low\",\"high\"],\"supports_tools\":true,\"service_status\":\"available\"}]}"
+}

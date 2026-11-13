@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
 import type { Upstream } from '@/gen/buddy/admin/v1/admin_pb'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,8 @@ import {
 } from '@/components/ui/select'
 import { useCatalogModels } from '@/features/models/catalog-api'
 import { describeError } from '@/lib/errors'
+import type { ModelBilling } from '@/gen/buddy/admin/v1/admin_pb'
+import { billingLine } from './model-billing'
 import {
   useDeleteModelOverride,
   useModelOverrides,
@@ -34,13 +37,13 @@ import {
   modelRows,
   newRow,
   overridesFromRows,
+  splitLevels,
   touchField,
   withId,
-  type EffortMode,
+  type EditableText,
   type ModelRow,
-  type OverrideField,
   type ProblemField,
-  type TextField,
+  type ThinkingMode,
   type TriState,
 } from './model-overrides'
 
@@ -98,6 +101,13 @@ export function PlatformModelsDialog({
    * 就等于当场多出一条、还会在下拉里冒出来。敲完了（保存时）才算。
    */
   const [idText, setIdText] = useState('')
+  /**
+   * 这一轮开窗里已经因为「目录里没这条」重取过的 id。
+   *
+   * 档位只听目录的：要摆的那几档从目录现取。目录里压根没这个模型时（人工加的
+   * 一条，或者目录还是上次那份），就重取一次；一个 id 只取一次，不跟着渲染转圈。
+   */
+  const refetched = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     // 每次打开都从服务端那两份重新摆：上一次改到一半关掉的不留着。
@@ -110,6 +120,7 @@ export function PlatformModelsDialog({
     setPristine({})
     setSelected('')
     setIdText('')
+    refetched.current.clear()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
@@ -127,6 +138,23 @@ export function PlatformModelsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, rows, catalog.data, overrides.data])
 
+  /**
+   * 要摆档位、而目录里没有这一行这个模型：重取一次目录。
+   *
+   * 上面那个 effect 只看 catalog.data 换来摆行，这里看的则是「这一行要的档位目录
+   * 里没有」—— 不拿行上存的文本完事。一个 id 一次开窗只取一次。
+   */
+  useEffect(() => {
+    if (!open) return
+    const target = (rows ?? []).find((item) => item.key === selected)
+    if (!target || target.thinking !== 'levels') return
+    const id = target.id.trim()
+    const known = (catalog.data?.models ?? []).some((item) => item.id === id)
+    if (id === '' || known || refetched.current.has(id)) return
+    refetched.current.add(id)
+    void catalog.refetch()
+  }, [open, rows, selected, catalog])
+
   const data: ModelData =
     catalog.isPending || overrides.isPending
       ? { status: 'loading' }
@@ -143,6 +171,23 @@ export function PlatformModelsDialog({
           : { status: 'ready' }
 
   const list = rows ?? []
+  /** 目录里现在这份（每次渲染现成的那份，不存副本）。 */
+  const catalogModels = catalog.data?.models ?? []
+  /**
+   * 目录里那条模型报的档位。
+   *
+   * 每次现取：不把这个列表写进这一行的文本当成唯一来源 —— 目录里那份才是真的，
+   * 一旦目录改了（或者这一行换了模型），摆出来的就是新的。
+   */
+  const levelsOf = (id: string): string[] =>
+    catalogModels.find((item) => item.id === id.trim())?.effortOptions ?? []
+  /**
+   * 目录里那条模型报的计费（上游自己在 /models 里报的那份）。
+   *
+   * 跟下面「倍率」那一格的人工覆盖值是两回事：这一份只读，改了也不发请求。
+   */
+  const billingOf = (id: string): ModelBilling | undefined =>
+    catalogModels.find((item) => item.id === id.trim())?.billing
   const index = list.findIndex((row) => row.key === selected)
   const row = index >= 0 ? list[index] : undefined
   /** 选中的这一条刚进来时的样子：保存前跟它比。 */
@@ -213,26 +258,59 @@ export function PlatformModelsDialog({
     )
   }
 
-  const patchText = (field: TextField, value: string) =>
+  const patchText = (field: EditableText, value: string) =>
     patch((target) => ({
       ...target,
       text: { ...target.text, [field]: value },
       touched: touchField(target.touched, field),
     }))
 
-  const patchTri = (field: OverrideField, value: TriState) =>
+  const patchToolCall = (value: TriState) =>
     patch((target) => ({
       ...target,
-      reasoning: field === 'reasoning' ? value : target.reasoning,
-      toolCall: field === 'toolCall' ? value : target.toolCall,
-      touched: touchField(target.touched, field),
+      toolCall: value,
+      touched: touchField(target.touched, 'toolCall'),
     }))
 
-  const patchEffort = (value: EffortMode) =>
+  /**
+   * 改「是否支持 thinking」那一格。
+   *
+   * 选到「档位可选」时要把档位摆出来：那几档现从目录里按 id 取（`levelsOf`），
+   * 不拿这一行上一回留下的那串文本 —— 目录里没报档位才用这一行自己的（人工写在
+   * 自定义条目里的那几档）。
+   */
+  const patchThinking = (value: ThinkingMode) =>
+    patch((target) => {
+      const fromCatalog = levelsOf(target.id)
+      const tiers =
+        fromCatalog.length > 0
+          ? fromCatalog
+          : splitLevels(target.text.effortOptions)
+      return {
+        ...target,
+        thinking: value,
+        text:
+          value === 'levels'
+            ? { ...target.text, effortOptions: tiers.join(', ') }
+            : target.text,
+        touched: touchField(target.touched, 'thinking'),
+      }
+    })
+
+  /** 勾上的那几档。勾选归在 `thinking` 这一格：契约里它跟 reasoning 是一件事。 */
+  const patchEfforts = (levels: string[]) =>
     patch((target) => ({
       ...target,
-      effortMode: value,
-      touched: touchField(target.touched, 'effortOptions'),
+      text: { ...target.text, effortOptions: levels.join(', ') },
+      touched: touchField(target.touched, 'thinking'),
+    }))
+
+  /** 目录没报档位时自己填的那一串原文（原样留着，不在敲的时候拆）。 */
+  const patchEffortsText = (value: string) =>
+    patch((target) => ({
+      ...target,
+      text: { ...target.text, effortOptions: value },
+      touched: touchField(target.touched, 'thinking'),
     }))
 
   /**
@@ -420,10 +498,14 @@ export function PlatformModelsDialog({
             {row && base ? (
               <ModelFields
                 row={row}
+                catalogLevels={levelsOf(draft?.id ?? row.id)}
+                billing={billingOf(draft?.id ?? row.id)}
                 problemId={(field) => problemIds.get(field)}
                 onChangeText={patchText}
-                onChangeTri={patchTri}
-                onChangeEffort={patchEffort}
+                onChangeToolCall={patchToolCall}
+                onChangeThinking={patchThinking}
+                onChangeEfforts={patchEfforts}
+                onChangeEffortsText={patchEffortsText}
               />
             ) : (
               <p className='py-6 text-center text-sm text-muted-foreground'>
@@ -469,23 +551,55 @@ export function PlatformModelsDialog({
 /** 选中那一条的几格。 */
 function ModelFields({
   row,
+  catalogLevels,
+  billing,
   problemId,
   onChangeText,
-  onChangeTri,
-  onChangeEffort,
+  onChangeToolCall,
+  onChangeThinking,
+  onChangeEfforts,
+  onChangeEffortsText,
 }: {
   row: ModelRow
+  /** 目录里这条模型报的档位。空 = 目录没报，这一格退回自己填。 */
+  catalogLevels: string[]
+  /** 目录里这条模型报的计费。写不成一句话就什么都不摆（见 billingLine）。 */
+  billing: ModelBilling | undefined
   /** 这一格的错误在界面上的位置：传给 aria-describedby。 */
   problemId: (field: ProblemField) => string | undefined
-  onChangeText: (field: TextField, value: string) => void
-  onChangeTri: (field: OverrideField, value: TriState) => void
-  onChangeEffort: (value: EffortMode) => void
+  onChangeText: (field: EditableText, value: string) => void
+  onChangeToolCall: (value: TriState) => void
+  onChangeThinking: (value: ThinkingMode) => void
+  onChangeEfforts: (levels: string[]) => void
+  onChangeEffortsText: (value: string) => void
 }) {
   // 哪几格现在有毛病：标红并指到下面那句话。
   const contextProblem = problemId('contextWindow')
   const outputProblem = problemId('maxOutputTokens')
   const creditsProblem = problemId('credits')
   const effortProblem = problemId('effortOptions')
+  /** 上游报的计费，一行；写不出来时是 `null`。 */
+  const billingText = billingLine(billing)
+
+  /** 现在勾着的档位（原文就是逗号分隔的那一串）。 */
+  const picked = splitLevels(row.text.effortOptions)
+  const pickedSet = new Set(picked)
+  // 摆出来的是目录报的那几档；人工写下的档位不在目录里也摆出来 —— 不然它们
+  // 看不见，也就勾不掉、发不回去。目录一档都没报时才是「自己填」（见下面）。
+  const levelOptions =
+    catalogLevels.length > 0
+      ? [
+          ...catalogLevels,
+          ...picked.filter((level) => !catalogLevels.includes(level)),
+        ]
+      : []
+  /** 勾上 / 取消一档：按摆出来的顺序重新写一遍，不是就着原来的字符串改。 */
+  const toggle = (level: string, on: boolean) =>
+    onChangeEfforts(
+      levelOptions.filter((item) =>
+        item === level ? on : pickedSet.has(item)
+      )
+    )
 
   return (
     <div className='grid gap-2 rounded-md border p-3'>
@@ -533,71 +647,95 @@ function ModelFields({
             inputMode='decimal'
             aria-invalid={creditsProblem ? true : undefined}
             aria-describedby={creditsProblem}
-            placeholder='没报'
             value={row.text.credits}
             onChange={(event) => onChangeText('credits', event.target.value)}
           />
         </div>
       </div>
 
+      {/* 上游报的那份只读摆出来，跟上面人工填的「倍率」分开：两者不合并、不互算。 */}
+      {billingText === null ? null : (
+        <p className='text-sm text-muted-foreground'>
+          <span className='me-1 text-xs'>上游报价</span>
+          {billingText}
+        </p>
+      )}
+
       <div className='grid gap-2 sm:grid-cols-2'>
         <div className='grid gap-1'>
-          <Label htmlFor='model-reasoning'>是否推理</Label>
+          <Label htmlFor='model-thinking'>是否支持 thinking</Label>
           <Select
-            value={row.reasoning}
+            // `unset`（人工新填的一条，目录里没有它）摆成「不支持 thinking」：
+            // 没动过就不写进人工条目，用户选了才真写下去。
+            value={row.thinking === 'unset' ? 'none' : row.thinking}
             onValueChange={(value) =>
-              onChangeTri('reasoning', value as TriState)
+              onChangeThinking(value as ThinkingMode)
             }
-          >
-            <SelectTrigger id='model-reasoning' aria-label='是否推理'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='inherit'>用原来的值</SelectItem>
-              <SelectItem value='yes'>是</SelectItem>
-              <SelectItem value='no'>否</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className='grid gap-1'>
-          <Label htmlFor='model-tool-call'>是否工具</Label>
-          <Select
-            value={row.toolCall}
-            onValueChange={(value) =>
-              onChangeTri('toolCall', value as TriState)
-            }
-          >
-            <SelectTrigger id='model-tool-call' aria-label='是否工具'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='inherit'>用原来的值</SelectItem>
-              <SelectItem value='yes'>是</SelectItem>
-              <SelectItem value='no'>否</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className='grid gap-1'>
-          <Label htmlFor='model-effort-mode'>档位模式</Label>
-          <Select
-            value={row.effortMode}
-            onValueChange={(value) => onChangeEffort(value as EffortMode)}
           >
             <SelectTrigger
-              id='model-effort-mode'
-              aria-label='档位模式'
-              aria-invalid={effortProblem ? true : undefined}
-              aria-describedby={effortProblem}
+              id='model-thinking'
+              aria-label='是否支持 thinking'
             >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value='inherit'>不设置</SelectItem>
-              <SelectItem value='none'>不能选档</SelectItem>
-              <SelectItem value='levels'>指定档位</SelectItem>
+              <SelectItem value='none'>不支持 thinking</SelectItem>
+              <SelectItem value='fixed'>固定档位</SelectItem>
+              <SelectItem value='levels'>档位可选</SelectItem>
             </SelectContent>
           </Select>
-          {row.effortMode === 'levels' ? (
+        </div>
+        <div className='grid gap-1'>
+          <Label htmlFor='model-tool-call'>是否支持 Tool Call</Label>
+          <Select
+            value={row.toolCall}
+            onValueChange={(value) => onChangeToolCall(value as TriState)}
+          >
+            <SelectTrigger
+              id='model-tool-call'
+              aria-label='是否支持 Tool Call'
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='inherit'>用原来的值</SelectItem>
+              <SelectItem value='yes'>是</SelectItem>
+              <SelectItem value='no'>否</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* 不支持 thinking 的时候，档位这一块（包括自己填）整块不摆。 */}
+      {row.thinking === 'levels' ? (
+        <div className='grid gap-1'>
+          {levelOptions.length > 0 ? (
+            <>
+              <Label>可选档位</Label>
+              <div
+                role='group'
+                aria-label='可选档位'
+                aria-invalid={effortProblem ? true : undefined}
+                aria-describedby={effortProblem}
+                className='flex flex-wrap gap-x-4 gap-y-2'
+              >
+                {levelOptions.map((level) => (
+                  <label
+                    key={level}
+                    className='flex items-center gap-1.5 text-sm'
+                  >
+                    <Checkbox
+                      aria-label={level}
+                      checked={pickedSet.has(level)}
+                      onCheckedChange={(value) => toggle(level, value === true)}
+                    />
+                    <span className='font-mono'>{level}</span>
+                  </label>
+                ))}
+              </div>
+              <p className='text-xs text-muted-foreground'>档位来自模型目录</p>
+            </>
+          ) : (
             <>
               <Label htmlFor='model-efforts'>可选档位</Label>
               <Input
@@ -607,14 +745,15 @@ function ModelFields({
                 aria-describedby={effortProblem}
                 placeholder='逗号分隔，比如 low, high'
                 value={row.text.effortOptions}
-                onChange={(event) =>
-                  onChangeText('effortOptions', event.target.value)
-                }
+                onChange={(event) => onChangeEffortsText(event.target.value)}
               />
+              <p className='text-xs text-muted-foreground'>
+                目录没报这个模型的档位，自己填
+              </p>
             </>
-          ) : null}
+          )}
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }

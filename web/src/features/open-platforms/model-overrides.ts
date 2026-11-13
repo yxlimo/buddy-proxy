@@ -17,14 +17,19 @@ import { intFieldProblem } from '@/lib/int-field'
  *    「没改动」，那一次保存不发请求。
  */
 
-/** 一行上能改的字段：与契约里 ModelOverride 那几格一一对应。 */
+/**
+ * 一行上能改的字段。
+ *
+ * 与契约里 ModelOverride 那几格基本一一对应，只差 `thinking`：它一格管着契约里
+ * 的 `reasoning` 与 `effort_options` 两格 —— 面板上是一件事（这个模型支不支持
+ * thinking、支不支持选档），写下去才是两格。
+ */
 export type OverrideField =
   | 'displayName'
   | 'contextWindow'
   | 'maxOutputTokens'
-  | 'reasoning'
+  | 'thinking'
   | 'toolCall'
-  | 'effortOptions'
   | 'credits'
 
 /** 上面那几格，全部。 */
@@ -32,9 +37,8 @@ const ALL_FIELDS: OverrideField[] = [
   'displayName',
   'contextWindow',
   'maxOutputTokens',
-  'reasoning',
+  'thinking',
   'toolCall',
-  'effortOptions',
   'credits',
 ]
 
@@ -52,21 +56,34 @@ export type OverrideInput = {
 }
 
 /**
- * 「可选档位」这一格的三态。
+ * 「是否支持 thinking」这一格的几态。
  *
- * `inherit` 是「没写这一格」，沿用原来的档位；`none` 是「写了、一档都没有」——
- * 这个模型明确不能选档；`levels` 是写下的那几档。
+ * 契约里这是两格（`reasoning` 与 `effort_options`），面板上是一件事：
+ *
+ * - `none`：不支持 thinking —— `reasoning: false`，档位就没意义了；
+ * - `fixed`：支持 thinking，但不能选档 —— `reasoning: true` + 空的档位列表；
+ * - `levels`：支持 thinking，档位可选 —— `reasoning: true` + 那几档。
+ *
+ * 上面三个就是下拉里那三项。`unset` 不是第四项：它是「目录里没这个模型、人工也
+ * 没写过」时的那一格 —— 没来源可推，不拿任何一个值冒充，也不写进人工条目。界面上
+ * 它摆成「不支持 thinking」，用户选了才真的写下去。
  */
-export type EffortMode = 'inherit' | 'none' | 'levels'
+export type ThinkingMode = 'unset' | 'none' | 'fixed' | 'levels'
 
-/** 输入框里那几格：值都是原文。空着表示「不写这一格」；档位这一格的空写成
- * 什么由 `EffortMode` 说。 */
+/** 输入框里那几格：值都是原文。空着表示「不写这一格」；档位那一格的空写成
+ * 什么由 `ThinkingMode` 说。 */
 export type TextField =
   | 'displayName'
   | 'contextWindow'
   | 'maxOutputTokens'
   | 'effortOptions'
   | 'credits'
+
+/**
+ * 能自由填的那几格。档位那一格除外：它是勾选（目录报了档位时）或把自己填的
+ * 那串原文（目录没报时），两者都不是一个普通输入框。
+ */
+export type EditableText = Exclude<TextField, 'effortOptions'>
 
 /**
  * 三态的开关：`inherit` 是「用原来的值」—— 不写这一格，也就是不上人工值。
@@ -87,12 +104,11 @@ export interface ModelRow {
   id: string
   /** 目录里没有这一条：人工加的。 */
   added: boolean
-  /** 输入框里的原文。 */
+  /** 输入框里的原文。`effortOptions` 是档位那一格的逗号原文（勾选也写在这里）。 */
   text: Record<TextField, string>
-  reasoning: TriState
+  /** 是否支持 thinking、能不能选档（见 `ThinkingMode`）。 */
+  thinking: ThinkingMode
   toolCall: TriState
-  /** 档位这一格现在是哪一态（见 `EffortMode`）。 */
-  effortMode: EffortMode
   /** 这一轮改过哪几格。没改的格不写进人工条目。 */
   touched: OverrideField[]
   /**
@@ -186,13 +202,15 @@ export function changedFields(
   if (row.text.credits.trim() !== pristine.text.credits.trim()) {
     out.push('credits')
   }
-  if (row.reasoning !== pristine.reasoning) out.push('reasoning')
   if (row.toolCall !== pristine.toolCall) out.push('toolCall')
+  // 档位那一格也归在 `thinking` 下：勾了哪几档、和不支持 thinking 是同一件事的
+  // 两个说法。比的是分好的那几档：多打的逗号、空白不算改动。
   if (
-    row.effortMode !== pristine.effortMode ||
-    row.text.effortOptions.trim() !== pristine.text.effortOptions.trim()
+    row.thinking !== pristine.thinking ||
+    splitLevels(row.text.effortOptions).join('\u0000') !==
+      splitLevels(pristine.text.effortOptions).join('\u0000')
   ) {
-    out.push('effortOptions')
+    out.push('thinking')
   }
   return out
 }
@@ -222,7 +240,11 @@ export function withId(
       id,
       added: true,
       saved: undefined,
-      touched: [...ALL_FIELDS],
+      // 看得见的那些值都写成新的这一条的。只有一格例外：thinking 还是 `unset`
+      // （本来就没来源），不能把「看不见的不知道」写成「已经写了」。
+      touched: ALL_FIELDS.filter(
+        (field) => field !== 'thinking' || row.thinking !== 'unset'
+      ),
     }
   }
   return {
@@ -243,9 +265,8 @@ export function newRow(): ModelRow {
     id: '',
     added: true,
     text: emptyText(),
-    reasoning: 'inherit',
+    thinking: 'unset',
     toolCall: 'inherit',
-    effortMode: 'inherit',
     touched: [],
   }
 }
@@ -284,17 +305,19 @@ function rowOf(
 ): ModelRow {
   const savedLevels = saved?.effortOptions?.levels
   const catalogLevels = model?.effortOptions ?? []
-  // 人工写下的那一份说得最准：没写 = 不设置，写了空的 = 不能选档。目录里那一
-  // 格是 repeated，空表示不知道，所以只有当它真有几档时才算「指定档位」。
-  const effortMode: EffortMode =
-    savedLevels === undefined
-      ? catalogLevels.length > 0
-        ? 'levels'
-        : 'inherit'
-      : savedLevels.length > 0
-        ? 'levels'
-        : 'none'
-  const tiers = savedLevels?.length ? savedLevels : catalogLevels
+  // 人工写下的那一份说得最准；没写就看目录里那条模型。两处都没有（人工新填的
+  // 一条）就是不知道 —— 摆成 `unset`，不拿任何一个值冒充。
+  const reasoning = saved?.reasoning ?? model?.reasoning
+  // 人工写了档位就用人工的；目录那一格是 repeated，空表示不知道。
+  const tiers = savedLevels ?? catalogLevels
+  const thinking: ThinkingMode =
+    reasoning === undefined
+      ? 'unset'
+      : !reasoning
+        ? 'none'
+        : tiers.length > 0
+          ? 'levels'
+          : 'fixed'
   return {
     key: model ? `目录:${id}` : `人工:${id}`,
     id,
@@ -306,9 +329,8 @@ function rowOf(
       effortOptions: tiers.join(', '),
       credits: creditsText(saved?.credits, model?.credits),
     },
-    reasoning: triState(saved?.reasoning, model?.reasoning),
+    thinking,
     toolCall: triState(saved?.toolCall, model?.toolCall),
-    effortMode,
     touched: [],
     saved,
   }
@@ -329,8 +351,8 @@ function numberText(saved?: number, fromCatalog?: number): string {
 /**
  * 倍率那一格的原文。
  *
- * 目录里这一格分得清「没给」与「给了 0」：没给就是不知道（空着，格子里的字说
- * 「没报」），给了 0 就是免费，要写成 0 —— 空着会被读成不知道。
+ * 目录里这一格分得清「没给」与「给了 0」：没给就是不知道（格子空着），给了 0
+ * 就是免费，要写成 0 —— 空着会被读成不知道。
  */
 function creditsText(saved?: number, fromCatalog?: number): string {
   if (saved !== undefined) return String(saved)
@@ -382,14 +404,14 @@ export function overridesFromRows(rows: ModelRow[]): OverrideInput[] {
       ) {
         entry.maxOutputTokens = base.maxOutputTokens
       }
-      if (!row.touched.includes('reasoning') && base.reasoning !== undefined) {
+      if (!row.touched.includes('thinking') && base.reasoning !== undefined) {
         entry.reasoning = base.reasoning
       }
       if (!row.touched.includes('toolCall') && base.toolCall !== undefined) {
         entry.toolCall = base.toolCall
       }
       if (
-        !row.touched.includes('effortOptions') &&
+        !row.touched.includes('thinking') &&
         base.effortOptions !== undefined
       ) {
         entry.effortOptions = { levels: [...base.effortOptions.levels] }
@@ -410,22 +432,19 @@ export function overridesFromRows(rows: ModelRow[]): OverrideInput[] {
       const value = numberValue(row.text.maxOutputTokens)
       if (value !== undefined) entry.maxOutputTokens = value
     }
-    if (row.touched.includes('reasoning') && row.reasoning !== 'inherit') {
-      entry.reasoning = row.reasoning === 'yes'
-    }
-    if (row.touched.includes('toolCall') && row.toolCall !== 'inherit') {
-      entry.toolCall = row.toolCall === 'yes'
-    }
-    if (row.touched.includes('effortOptions')) {
-      // 三态各自发什么：不设置 = 不带这一格（沿用原来的档位）；不能选档 = 空
-      // 列表（契约上跟没写分得开）；指定档位 = 那几档。
-      if (row.effortMode === 'none') {
-        entry.effortOptions = { levels: [] }
-      } else if (row.effortMode === 'levels') {
+    if (row.touched.includes('thinking') && row.thinking !== 'unset') {
+      // 一格多态 → 契约里那两格。不支持 thinking 就只说不支持：档位那一格
+      // 不带，也就不会把它回写成「能选档、一档都没有」。
+      entry.reasoning = row.thinking !== 'none'
+      if (row.thinking === 'fixed') entry.effortOptions = { levels: [] }
+      if (row.thinking === 'levels') {
         const tiers = splitLevels(row.text.effortOptions)
         // 空的下不了（校验会拦），真到这一步也不拿空列表冒充「不能选档」。
         if (tiers.length) entry.effortOptions = { levels: tiers }
       }
+    }
+    if (row.touched.includes('toolCall') && row.toolCall !== 'inherit') {
+      entry.toolCall = row.toolCall === 'yes'
     }
     if (row.touched.includes('credits')) {
       const value = numberValue(row.text.credits)
@@ -532,10 +551,10 @@ export function listProblems(rows: readonly ModelRow[]): RowProblem[] {
     const credits = creditsMessage(row.text.credits)
     if (credits) add(index, 'credits', credits)
     if (
-      row.effortMode === 'levels' &&
+      row.thinking === 'levels' &&
       splitLevels(row.text.effortOptions).length === 0
     ) {
-      add(index, 'effortOptions', '选了指定档位，就至少填一档')
+      add(index, 'effortOptions', '档位可选，就至少勾一档')
     }
   })
   return out
