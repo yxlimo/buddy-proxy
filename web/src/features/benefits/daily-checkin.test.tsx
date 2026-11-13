@@ -28,7 +28,7 @@ vi.mock('sonner', () => ({
 /** 一条签到状态。 */
 function benefit(overrides: Partial<BenefitStatus> = {}): BenefitStatus {
   return create(BenefitStatusSchema, {
-    upstreamId: 'minimax',
+    upstreamId: 'minimax', accountId: 'a1',
     summary: '签到成功',
     lines: [],
     checkedAt: 0n,
@@ -88,22 +88,22 @@ describe('DailyCheckinPanel', () => {
   it('不同平台的账号平铺在同一个可换行的容器里', async () => {
     const { client } = setup({
       benefits: [
-        benefit({ upstreamId: 'minimax' }),
-        benefit({ upstreamId: 'qoder-cn' }),
+        benefit({ upstreamId: 'minimax', accountId: 'a1' }),
+        benefit({ upstreamId: 'qoder-cn', accountId: 'a2' }),
       ],
     })
 
     renderPanel(client)
 
-    expect(await screen.findByText('minimax')).toBeTruthy()
-    expect(screen.getByText('qoder-cn')).toBeTruthy()
+    expect(await screen.findByText('a1')).toBeTruthy()
+    expect(screen.getByText('a2')).toBeTruthy()
     expect(screen.getByText('每日签到')).toBeTruthy()
     // checkedAt = 0 的账号显示「还没签过」
     expect(screen.getAllByText('还没签过')).toHaveLength(2)
 
     // 布局：两个账号在同一个 flex-wrap 容器里，宽度不够时自动折行
-    const minimax = screen.getByText('minimax')
-    const qoder = screen.getByText('qoder-cn')
+    const minimax = screen.getByText('a1')
+    const qoder = screen.getByText('a2')
     const container = minimax.closest('.flex-wrap')
     expect(container).toBeTruthy()
     expect(qoder.closest('.flex-wrap')).toBe(container)
@@ -111,7 +111,7 @@ describe('DailyCheckinPanel', () => {
 
   it('签到加了 12 积分时显示 +12 点', async () => {
     const { client } = setup({
-      benefits: [benefit({ upstreamId: 'minimax', credits: 12 })],
+      benefits: [benefit({ upstreamId: 'minimax', accountId: 'a1', credits: 12 })],
     })
 
     renderPanel(client)
@@ -133,7 +133,7 @@ describe('DailyCheckinPanel', () => {
 
   it('点「现在签到」会调 RunBenefitNow 并显示本次输出', async () => {
     const { client, runCalls, statusCalls } = setup({
-      benefits: [benefit({ upstreamId: 'minimax' })],
+      benefits: [benefit({ upstreamId: 'minimax', accountId: 'a1' })],
       runLines: ['minimax: +12 点'],
     })
 

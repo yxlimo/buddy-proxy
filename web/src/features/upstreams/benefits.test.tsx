@@ -67,6 +67,7 @@ function benefit(
 ): BenefitStatus {
   return create(BenefitStatusSchema, {
     upstreamId: 'minimax',
+    accountId: 'a1',
     summary: '今日已签到 +400',
     lines: ['签到 +400 点', '连签 2 天'],
     checkedAt: BigInt(Date.now()),

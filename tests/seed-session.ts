@@ -19,6 +19,7 @@
 // 只碰 BUDDY_DATA_DIR 那一份库；令牌是编造的，假上游不看它们。
 
 import { saveSession as saveQoderSession } from '../lib/qoder/auth.ts';
+import { saveSession as saveWorkBuddySession } from '../lib/workbuddy/auth.ts';
 
 const [platform, accountId, accessToken] = process.argv.slice(2);
 
@@ -54,12 +55,32 @@ function qoder(region: 'global' | 'cn') {
   };
 }
 
+/** WorkBuddy 的会话：字段与 test/fake-sessions.ts 那份一致，值是编造的样例。 */
+function workBuddy() {
+  return {
+    accessToken: TOKEN, // privacy:allow — 编造的样例
+    refreshToken: 'drt-E2E-TESTONLY-refresh', // privacy:allow — 编造的样例
+    uid: '00000000-0000-0000-0000-000000000000',
+    nickname: 'e2e',
+    domain: 'www.workbuddy.cn',
+    region: 'cn' as const,
+    generation: 1,
+    expiresAtMs: year,
+    refreshExpiresAtMs: year,
+    loginAtMs: now,
+    refreshedAtMs: now,
+  };
+}
+
 switch (platform) {
   case 'qoder':
     saveQoderSession(qoder('global'), accountId, { force: true });
     break;
   case 'qoder-cn':
     saveQoderSession(qoder('cn'), accountId, { force: true });
+    break;
+  case 'workbuddy-cn':
+    saveWorkBuddySession(workBuddy(), accountId, { force: true });
     break;
   default:
     throw new Error(`这个平台没有可铺的会话：${platform}`);

@@ -1,5 +1,6 @@
 import {
   Boxes,
+  CalendarCheck,
   CircleDollarSign,
   LayoutDashboard,
   Layers,
@@ -32,6 +33,11 @@ export const sidebarData: SidebarData = {
           title: '额度',
           url: '/balance',
           icon: Wallet,
+        },
+        {
+          title: '签到',
+          url: '/checkin',
+          icon: CalendarCheck,
         },
         {
           title: '用量',

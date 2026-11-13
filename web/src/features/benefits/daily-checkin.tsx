@@ -49,11 +49,12 @@ export function DailyCheckinPanel() {
         <div className='flex flex-wrap gap-2'>
           {benefits.map((benefit) => (
             <div
-              key={benefit.upstreamId}
+              key={benefit.accountId}
               className='grid w-fit min-w-0 max-w-full gap-1 rounded-lg border p-3'
             >
               <div className='flex items-center justify-between gap-3'>
-                <span className='text-sm font-medium'>{benefit.upstreamId}</span>
+                {/* 签到是账号的事：这张卡按账号一行，写账号 id。 */}
+                <span className='text-sm font-medium'>{benefit.accountId}</span>
                 <div className='flex items-center gap-2'>
                   {benefit.credits > 0 ? (
                     <Badge>+{benefit.credits} 点</Badge>
